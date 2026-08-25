@@ -1,0 +1,71 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE and operating system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build and runtime
+build/
+dist/
+runtime/
+storage/
+cache/
+logs/
+tmp/
+temp/
+*.log
+*.tmp
+
+# Databases and graph stores
+*.db
+*.sqlite
+*.sqlite3
+neo4j_data/
+graph_store/
+vector_store/
+vector_db/
+chroma_db/
+qdrant_storage/
+
+# Local models and embedding cache
+models/
+embedding_cache/
+*.gguf
+*.safetensors
+*.pt
+*.pth
+*.bin
+
+# User profiles, learning history, and copyrighted papers
+user_data/
+profiles/
+learning_history/
+papers/
+documents/
+
+# Mini Project local data: allow public samples only
+mini-projects/*/data/*
+!mini-projects/*/data/samples/
+!mini-projects/*/data/samples/**
+
