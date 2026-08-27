@@ -3,3 +3,6 @@
 .bkit-codex
 .codex
 AGENTS.md
+
+# PDCA runtime state (generated locally)
+**/.pdca-status.json
