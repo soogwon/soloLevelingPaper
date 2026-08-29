@@ -104,7 +104,10 @@ export type TraceConceptPathInput = {
 
 export type RequestUsage = {
   requestCount: number;
+  cacheHitCount: number;
   creditsUsed: number;
+  rateLimitRemaining: number | null;
+  creditEstimateDelta: number;
   estimatedCostUsd: number;
 };
 

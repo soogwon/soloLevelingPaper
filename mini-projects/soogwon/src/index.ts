@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { loadConfig } from "./config.js";
+import { StructuredLogger } from "./infrastructure/logger.js";
 import { createServer } from "./server.js";
 
-const handle = serveStdio(() => createServer(), {
-  onerror: (error) => console.error("MCP stdio 오류:", error.message),
+const config = loadConfig();
+const logger = new StructuredLogger(config.logLevel);
+const handle = serveStdio(() => createServer({ config, logger }), {
+  onerror: () => logger.system("mcp_stdio_error", "error"),
 });
 
 const shutdown = async (): Promise<void> => {
@@ -13,4 +17,4 @@ const shutdown = async (): Promise<void> => {
 
 process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
-console.error("paper-concept-path-mcp가 stdio에서 실행 중입니다.");
+logger.system("mcp_stdio_started", "info");

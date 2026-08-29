@@ -9,10 +9,10 @@ export type ProviderSearchInput = {
 };
 
 export interface ScholarlyProvider {
-  searchWorks(input: ProviderSearchInput, signal?: AbortSignal): Promise<SearchResult>;
-  getWork(identifier: string, signal?: AbortSignal): Promise<PaperDetail | null>;
-  getWorksByIds(ids: string[], signal?: AbortSignal): Promise<PaperDetail[]>;
-  getCitingWorks(id: string, limit: number, signal?: AbortSignal): Promise<PaperDetail[]>;
+  searchWorks(input: ProviderSearchInput, signal?: AbortSignal, deadlineAt?: number): Promise<SearchResult>;
+  getWork(identifier: string, signal?: AbortSignal, deadlineAt?: number): Promise<PaperDetail | null>;
+  getWorksByIds(ids: string[], signal?: AbortSignal, deadlineAt?: number): Promise<PaperDetail[]>;
+  getCitingWorks(id: string, limit: number, signal?: AbortSignal, deadlineAt?: number): Promise<PaperDetail[]>;
   getUsage(): RequestUsage;
   resetUsage(): void;
 }

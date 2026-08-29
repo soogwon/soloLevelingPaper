@@ -23,7 +23,9 @@ class DuplicateTitleProvider implements ScholarlyProvider {
   }
   public async getWorksByIds(): Promise<PaperDetail[]> { return []; }
   public async getCitingWorks(): Promise<PaperDetail[]> { return []; }
-  public getUsage(): RequestUsage { return { requestCount: 0, creditsUsed: 0, estimatedCostUsd: 0 }; }
+  public getUsage(): RequestUsage {
+    return { requestCount: 0, cacheHitCount: 0, creditsUsed: 0, rateLimitRemaining: null, creditEstimateDelta: 0, estimatedCostUsd: 0 };
+  }
   public resetUsage(): void {}
 }
 

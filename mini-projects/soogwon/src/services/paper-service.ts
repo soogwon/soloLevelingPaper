@@ -24,7 +24,7 @@ const looksLikeStableIdentifier = (value: string): boolean => (
 export class PaperService {
   public constructor(private readonly provider: ScholarlyProvider) {}
 
-  public async search(input: SearchPapersInput, signal?: AbortSignal): Promise<SearchPapersOutput> {
+  public async search(input: SearchPapersInput, signal?: AbortSignal, deadlineAt?: number): Promise<SearchPapersOutput> {
     const providerQuery = input.queryEn?.trim() || input.query.trim();
     const result = await this.provider.searchWorks({
       query: providerQuery,
@@ -32,7 +32,7 @@ export class PaperService {
       ...(input.toYear !== undefined ? { toYear: input.toYear } : {}),
       limit: input.limit,
       semantic: input.semantic,
-    }, signal);
+    }, signal, deadlineAt);
     const warnings: Warning[] = [];
     if (input.queryEn) {
       warnings.push({ code: "QUERY_EN_USED", message: "OpenAlex 검색에는 사용자가 제공한 영어 검색어를 사용했습니다." });
@@ -45,15 +45,15 @@ export class PaperService {
     };
   }
 
-  public async resolve(identifier: string, signal?: AbortSignal): Promise<ResolvePaperOutput> {
+  public async resolve(identifier: string, signal?: AbortSignal, deadlineAt?: number): Promise<ResolvePaperOutput> {
     if (looksLikeStableIdentifier(identifier)) {
-      const paper = await this.provider.getWork(identifier, signal);
+      const paper = await this.provider.getWork(identifier, signal, deadlineAt);
       return paper
         ? { status: "exact", paper, warnings: this.#paperWarnings(paper) }
         : { status: "not_found", warnings: [{ code: "PAPER_NOT_FOUND", message: "논문을 찾을 수 없습니다." }] };
     }
 
-    const result = await this.provider.searchWorks({ query: identifier, limit: 5, semantic: false }, signal);
+    const result = await this.provider.searchWorks({ query: identifier, limit: 5, semantic: false }, signal, deadlineAt);
     const ranked = result.papers
       .map((paper) => ({ paper, similarity: titleSimilarity(identifier, paper.title) }))
       .sort((a, b) => b.similarity - a.similarity || a.paper.id.localeCompare(b.paper.id));

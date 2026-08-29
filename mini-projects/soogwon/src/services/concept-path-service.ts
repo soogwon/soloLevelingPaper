@@ -24,13 +24,14 @@ export class ConceptPathService {
 
   public async trace(input: TraceConceptPathInput, signal?: AbortSignal): Promise<TraceConceptPathOutput> {
     this.provider.resetUsage();
+    const startedAt = Date.now();
+    const deadlineAt = startedAt + WORK_BUDGET_MS;
     const deadlineSignal = signal
       ? AbortSignal.any([signal, AbortSignal.timeout(WORK_BUDGET_MS)])
       : AbortSignal.timeout(WORK_BUDGET_MS);
-    const startedAt = Date.now();
     const warnings: Warning[] = [];
     let truncated = false;
-    const resolved = await this.#paperService.resolve(input.seed, deadlineSignal);
+    const resolved = await this.#paperService.resolve(input.seed, deadlineSignal, deadlineAt);
     if (resolved.status === "ambiguous") {
       throw new AppError("AMBIGUOUS_PAPER", "시작 논문이 모호합니다. DOI 또는 OpenAlex ID를 사용하세요.", {
         details: { candidates: resolved.candidates },
@@ -57,7 +58,7 @@ export class ConceptPathService {
             truncated = true;
             break;
           }
-          const candidates = await this.#neighbors(current, input, depth === 0, deadlineSignal);
+          const candidates = await this.#neighbors(current, input, depth === 0, deadlineSignal, deadlineAt);
           const scored = candidates
             .filter((paper) => paper.id !== current.id && !paper.isRetracted)
             .map((paper) => ({ paper, edge: scoreEdge(current, paper, input.targetQuery) }))
@@ -163,25 +164,27 @@ export class ConceptPathService {
     input: TraceConceptPathInput,
     includeTargetSearch: boolean,
     signal?: AbortSignal,
+    deadlineAt?: number,
   ): Promise<PaperDetail[]> {
     const candidates: PaperDetail[] = [];
     if (input.direction === "backward" || input.direction === "both") {
       candidates.push(...await this.provider.getWorksByIds(
         [...paper.referencedWorkIds, ...paper.relatedWorkIds].slice(0, 100),
         signal,
+        deadlineAt,
       ));
     } else if (paper.relatedWorkIds.length > 0) {
-      candidates.push(...await this.provider.getWorksByIds(paper.relatedWorkIds.slice(0, 100), signal));
+      candidates.push(...await this.provider.getWorksByIds(paper.relatedWorkIds.slice(0, 100), signal, deadlineAt));
     }
     if (input.direction === "forward" || input.direction === "both") {
-      candidates.push(...await this.provider.getCitingWorks(paper.id, input.candidatesPerNode * 2, signal));
+      candidates.push(...await this.provider.getCitingWorks(paper.id, input.candidatesPerNode * 2, signal, deadlineAt));
     }
     if (includeTargetSearch && input.targetQuery) {
       const target = await this.provider.searchWorks({
         query: input.targetQuery,
         limit: input.candidatesPerNode,
         semantic: false,
-      }, signal);
+      }, signal, deadlineAt);
       candidates.push(...target.papers);
     }
     const unique = new Map<string, PaperDetail>();

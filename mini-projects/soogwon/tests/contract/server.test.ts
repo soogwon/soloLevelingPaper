@@ -5,6 +5,7 @@ import type { AppConfig } from "../../src/config.js";
 import type { PaperDetail, RequestUsage, SearchResult } from "../../src/domain/models.js";
 import type { ProviderSearchInput, ScholarlyProvider } from "../../src/providers/scholarly-provider.js";
 import { createServer } from "../../src/server.js";
+import { serverInternals } from "../../src/server.js";
 
 const config: AppConfig = {
   openAlexBaseUrl: "https://api.openalex.org",
@@ -38,7 +39,7 @@ const paper = (id: string, referencedWorkIds: string[] = []): PaperDetail => ({
 });
 
 class MockProvider implements ScholarlyProvider {
-  #usage: RequestUsage = { requestCount: 0, creditsUsed: 0, estimatedCostUsd: 0 };
+  #usage: RequestUsage = { requestCount: 0, cacheHitCount: 0, creditsUsed: 0, rateLimitRemaining: null, creditEstimateDelta: 0, estimatedCostUsd: 0 };
   readonly #papers = new Map([paper("W1"), paper("W2", ["W1"]), paper("W3", ["W2"])].map((item) => [item.id, item]));
 
   public async searchWorks(_input: ProviderSearchInput): Promise<SearchResult> {
@@ -58,7 +59,9 @@ class MockProvider implements ScholarlyProvider {
     return [...this.#papers.values()].filter((item) => item.referencedWorkIds.includes(id));
   }
   public getUsage(): RequestUsage { return { ...this.#usage }; }
-  public resetUsage(): void { this.#usage = { requestCount: 0, creditsUsed: 0, estimatedCostUsd: 0 }; }
+  public resetUsage(): void {
+    this.#usage = { requestCount: 0, cacheHitCount: 0, creditsUsed: 0, rateLimitRemaining: null, creditEstimateDelta: 0, estimatedCostUsd: 0 };
+  }
 }
 
 describe("MCP server contract", () => {
@@ -85,6 +88,9 @@ describe("MCP server contract", () => {
       "search_papers",
       "trace_concept_path",
     ]);
+    const serializedSchema = JSON.stringify(result.tools.map((tool) => tool.outputSchema));
+    expect(serializedSchema).toContain("publication_year");
+    expect(serializedSchema).toContain("score_margin");
   });
 
   it("논문 확인 도구가 structuredContent를 반환한다", async () => {
@@ -100,5 +106,35 @@ describe("MCP server contract", () => {
     const result = await client.callTool({ name: "search_papers", arguments: { query: "x" } });
     expect(result.isError).toBe(true);
     expect(result.content[0]).toMatchObject({ type: "text" });
+  });
+
+  it("text 제한 시 structuredContent에 생략 경고를 추가한다", () => {
+    const result = serverInternals.successResult({
+      query: "large",
+      papers: [{ title: "x".repeat(21_000) }],
+      warnings: [],
+    });
+    expect(result.content[0]?.text.length).toBeLessThan(20_000);
+    expect(result.structuredContent.warnings).toContainEqual(expect.objectContaining({ code: "CONTENT_TRUNCATED" }));
+  });
+
+  it("외부 로거가 실패해도 도구 결과를 반환한다", async () => {
+    await client.close();
+    await server.close();
+    client = new Client({ name: "test-client", version: "1.0.0" });
+    server = createServer({
+      config,
+      provider: new MockProvider(),
+      logger: {
+        createRequestId: () => { throw new Error("logger unavailable"); },
+        tool: () => { throw new Error("logger unavailable"); },
+      },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const result = await client.callTool({ name: "resolve_paper", arguments: { identifier: "https://openalex.org/W1" } });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({ status: "exact", paper: { id: "W1" } });
   });
 });

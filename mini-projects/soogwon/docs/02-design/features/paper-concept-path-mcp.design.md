@@ -402,7 +402,10 @@ interface ScholarlyProvider {
 - API 키는 `Authorization: Bearer ...` 헤더로만 전송한다. URL 쿼리, 캐시 키, 로그, 오류 및 재현성 메타데이터에 포함하지 않는다.
 - `OPENALEX_BASE_URL`은 테스트용 모의 서버를 위해 설정 가능하게 한다.
 - 요청마다 5초 타임아웃을 적용한다.
-- 429와 일시적인 5xx는 `Retry-After`를 존중하며 최대 2회 지수 백오프로 재시도한다.
+- `search_papers`와 `resolve_paper`에는 10초, `trace_concept_path`에는 8초의 전체 도구 실행 deadline을 적용한다.
+- 429와 일시적인 5xx는 `Retry-After`를 존중하며 최대 2회 지수 백오프로 재시도한다. `Retry-After`는 숫자 초와 HTTP 날짜를 모두 지원한다.
+- 임의의 짧은 대기 상한을 두지 않는다. `Retry-After` 대기와 다음 요청의 5초 타임아웃을 모두 전체 deadline 안에 완료할 수 있을 때만 재시도한다. 불가능하면 조기 재시도하지 않고 부분 결과 또는 재시도 가능한 오류를 반환한다.
+- `X-RateLimit-Remaining=0`인 429는 일일 예산 소진으로 보고 호출 내부에서 재시도하지 않으며, `X-RateLimit-Reset`을 재시도 가능 시각 정보로 사용한다.
 - 400·403·404는 자동 재시도하지 않는다.
 - 한 번의 `trace_concept_path` 호출에서 외부 요청은 기본 20회, 최대 40회로 제한한다.
 - 요청 수와 별도로 기본 `max_credits=100` 및 예상 비용 `max_estimated_cost_usd=0.01`을 적용한다. 둘 중 하나라도 초과할 것으로 예상되면 추가 탐색을 중단하고 부분 결과를 반환한다.
