@@ -50,6 +50,7 @@ class MockProvider implements ScholarlyProvider {
     this.#usage.requestCount += 1;
     return this.#papers.get(identifier.match(/W\d+/)?.[0] ?? "") ?? null;
   }
+  public async findWorksByLocationDoi(): Promise<PaperDetail[]> { return []; }
   public async getWorksByIds(ids: string[]): Promise<PaperDetail[]> {
     this.#usage.requestCount += 1;
     return ids.map((id) => this.#papers.get(id)).filter((item): item is PaperDetail => Boolean(item));
@@ -91,6 +92,11 @@ describe("MCP server contract", () => {
     const serializedSchema = JSON.stringify(result.tools.map((tool) => tool.outputSchema));
     expect(serializedSchema).toContain("publication_year");
     expect(serializedSchema).toContain("score_margin");
+    expect(serializedSchema).toContain("matched_via");
+    for (const matchedVia of ["openalex_id", "primary_doi", "location_doi", "title"]) {
+      expect(serializedSchema).toContain(matchedVia);
+    }
+    expect(serializedSchema).toContain("provider_primary_doi");
 
     const hasBareAdditionalProperties = (value: unknown): boolean => {
       if (Array.isArray(value)) return value.some(hasBareAdditionalProperties);
@@ -112,6 +118,15 @@ describe("MCP server contract", () => {
     expect(result.structuredContent).toMatchObject({
       status: "exact",
       paper: { id: "W1", publication_year: 2021, source_url: "https://openalex.org/W1" },
+      resolution: { normalized_identifier: "W1", matched_via: "openalex_id" },
+    });
+  });
+
+  it("불완전한 DOI를 공개 INVALID_INPUT 오류로 반환한다", async () => {
+    const result = await client.callTool({ name: "resolve_paper", arguments: { identifier: "10.65215" } });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: "INVALID_INPUT", retryable: false, details: { expected_format: "10.xxxx/suffix" } },
     });
   });
 

@@ -86,6 +86,41 @@ describe("OpenAlexProvider", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("위치 DOI를 정확 일치 filter와 최대 2건으로 조회한다", async () => {
+    const fetchMock = vi.fn(async (_input: URL | RequestInfo) => new Response(JSON.stringify({ meta: { count: 1 }, results: [rawWork] }), { status: 200 }));
+    const provider = new OpenAlexProvider(config, fetchMock as typeof fetch);
+    const result = await provider.findWorksByLocationDoi("https://doi.org/10.48550/arXiv.1706.03762");
+    expect(result).toHaveLength(1);
+    const [input] = fetchMock.mock.calls[0]!;
+    const url = new URL(String(input));
+    expect(url.searchParams.get("filter")).toBe("locations.landing_page_url:https://doi.org/10.48550/arxiv.1706.03762");
+    expect(url.searchParams.get("per_page")).toBe("2");
+    expect(url.searchParams.get("select")).toContain("referenced_works");
+  });
+
+  it("다음 요청 시간이 deadline 안에 없으면 위치 fallback fetch 전에 중단한다", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ results: [rawWork] }), { status: 200 }));
+    const provider = new OpenAlexProvider(config, fetchMock as typeof fetch);
+    provider.resetUsage();
+    await expect(provider.findWorksByLocationDoi(
+      "https://doi.org/10.48550/arxiv.1706.03762",
+      undefined,
+      Date.now() + 500,
+    )).rejects.toMatchObject({ code: "PROVIDER_TIMEOUT", retryable: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(provider.getUsage().requestCount).toBe(0);
+  });
+
+  it("위치 DOI 조회가 filter 크레딧과 성공 캐시를 공유한다", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ results: [rawWork] }), { status: 200 }));
+    const provider = new OpenAlexProvider(config, fetchMock as typeof fetch);
+    provider.resetUsage();
+    await provider.findWorksByLocationDoi("10.48550/arXiv.1706.03762");
+    await provider.findWorksByLocationDoi("10.48550/arXiv.1706.03762");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(provider.getUsage()).toMatchObject({ requestCount: 1, creditsUsed: 1, cacheHitCount: 1 });
+  });
+
   it("재시도를 포함해 요청 수 20회를 넘지 않는다", async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 500 }));
     const provider = new OpenAlexProvider(config, fetchMock as typeof fetch);

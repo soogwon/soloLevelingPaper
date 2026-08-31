@@ -79,7 +79,13 @@ const searchOutputSchema = z.union([z.object({
 }), errorOutputSchema]);
 const resolveOutputSchema = z.union([z.object({
   status: z.enum(["exact", "ambiguous", "not_found"]), paper: paperDetailOutputSchema.optional(),
-  candidates: z.array(paperSummaryOutputSchema).optional(), warnings: z.array(warningOutputSchema),
+  candidates: z.array(paperSummaryOutputSchema).optional(),
+  resolution: z.object({
+    requested_identifier: z.string(), normalized_identifier: z.string(),
+    matched_via: z.enum(["openalex_id", "primary_doi", "location_doi", "title"]),
+    provider_primary_doi: z.string().nullable(),
+  }).optional(),
+  warnings: z.array(warningOutputSchema),
 }), errorOutputSchema]);
 const traceOutputSchema = z.union([z.object({
   seed: paperSummaryOutputSchema, target_query: z.string().optional(), path: pathOutputSchema.nullable(),

@@ -11,6 +11,7 @@ export type ProviderSearchInput = {
 export interface ScholarlyProvider {
   searchWorks(input: ProviderSearchInput, signal?: AbortSignal, deadlineAt?: number): Promise<SearchResult>;
   getWork(identifier: string, signal?: AbortSignal, deadlineAt?: number): Promise<PaperDetail | null>;
+  findWorksByLocationDoi(normalizedDoiUrl: string, signal?: AbortSignal, deadlineAt?: number): Promise<PaperDetail[]>;
   getWorksByIds(ids: string[], signal?: AbortSignal, deadlineAt?: number): Promise<PaperDetail[]>;
   getCitingWorks(id: string, limit: number, signal?: AbortSignal, deadlineAt?: number): Promise<PaperDetail[]>;
   getUsage(): RequestUsage;

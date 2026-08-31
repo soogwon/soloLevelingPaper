@@ -90,7 +90,15 @@ export type ResolvePaperOutput = {
   status: "exact" | "ambiguous" | "not_found";
   paper?: PaperDetail;
   candidates?: PaperSummary[];
+  resolution?: PaperResolution;
   warnings: Warning[];
+};
+
+export type PaperResolution = {
+  requestedIdentifier: string;
+  normalizedIdentifier: string;
+  matchedVia: "openalex_id" | "primary_doi" | "location_doi" | "title";
+  providerPrimaryDoi: string | null;
 };
 
 export type TraceConceptPathInput = {

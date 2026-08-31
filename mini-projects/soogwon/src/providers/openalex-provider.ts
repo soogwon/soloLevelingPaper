@@ -208,6 +208,20 @@ export class OpenAlexProvider implements ScholarlyProvider {
     }
   }
 
+  public async findWorksByLocationDoi(
+    normalizedDoiUrl: string,
+    signal?: AbortSignal,
+    deadlineAt?: number,
+  ): Promise<PaperDetail[]> {
+    const normalized = normalizeDoi(normalizedDoiUrl);
+    if (!normalized) throw new AppError("INVALID_INPUT", "위치 조회에 사용할 DOI가 올바르지 않습니다.");
+    const url = new URL(`${this.config.openAlexBaseUrl}/works`);
+    url.searchParams.set("filter", `locations.landing_page_url:${normalized}`);
+    url.searchParams.set("per_page", "2");
+    const data = listResponseSchema.parse(await this.#request(url, "filter", signal, deadlineAt));
+    return data.results.map(normalizeOpenAlexWork);
+  }
+
   public async getWorksByIds(ids: string[], signal?: AbortSignal, deadlineAt?: number): Promise<PaperDetail[]> {
     const uniqueIds = [...new Set(ids.map(normalizeOpenAlexId).filter((id) => /^W\d+$/.test(id)))].slice(0, 100);
     if (uniqueIds.length === 0) return [];
@@ -243,6 +257,11 @@ export class OpenAlexProvider implements ScholarlyProvider {
 
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (deadlineAt !== undefined && Date.now() + this.config.requestTimeoutMs > deadlineAt) {
+        throw new AppError("PROVIDER_TIMEOUT", "남은 도구 실행 시간 안에 다음 제공자 요청을 완료할 수 없어 요청을 중단했습니다.", {
+          retryable: true,
+        });
+      }
       if (
         usage.requestCount + 1 > MAX_REQUESTS_PER_TOOL
         || usage.creditsUsed + credits > this.config.maxCreditsPerTool

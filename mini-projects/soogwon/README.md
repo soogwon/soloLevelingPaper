@@ -112,6 +112,18 @@ API 키는 설정 파일 대신 호스트의 비밀값 저장 기능이나 운�
 
 제목 검색이 모호하면 서버는 임의로 하나를 선택하지 않고 최대 5개 후보를 반환합니다.
 
+완전한 DOI는 `10.xxxx/suffix` 형식으로 입력해야 합니다. `10.65215`처럼 suffix가 없는 DOI 접두사는 제목 검색으로 처리하지 않고 입력 오류를 반환합니다.
+
+OpenAlex의 대표 DOI 직접 조회가 404인 경우 서버는 동일 Work의 `locations.landing_page_url`에서 DOI를 정확히 한 번 더 확인합니다. 위치 DOI로 확인되면 응답의 `resolution.matched_via`가 `location_doi`가 되고 `DOI_RESOLVED_VIA_LOCATION` 경고가 포함됩니다. 입력 DOI와 OpenAlex 대표 DOI가 다르면 두 값을 `IDENTIFIER_CONFLICT` 경고로 함께 제공하며 어느 DOI가 공식적인지는 자동으로 판단하지 않습니다.
+
+예시:
+
+```json
+{
+  "identifier": "10.48550/arXiv.1706.03762"
+}
+```
+
 ### 개념 경로 생성
 
 ```json
