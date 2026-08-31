@@ -91,6 +91,19 @@ describe("MCP server contract", () => {
     const serializedSchema = JSON.stringify(result.tools.map((tool) => tool.outputSchema));
     expect(serializedSchema).toContain("publication_year");
     expect(serializedSchema).toContain("score_margin");
+
+    const hasBareAdditionalProperties = (value: unknown): boolean => {
+      if (Array.isArray(value)) return value.some(hasBareAdditionalProperties);
+      if (value === null || typeof value !== "object") return false;
+      return Object.entries(value).some(([key, child]) => (
+        key === "additionalProperties"
+        && child !== null
+        && typeof child === "object"
+        && !Array.isArray(child)
+        && Object.keys(child).length === 0
+      ) || hasBareAdditionalProperties(child));
+    };
+    expect(result.tools.some((tool) => hasBareAdditionalProperties(tool.outputSchema))).toBe(false);
   });
 
   it("논문 확인 도구가 structuredContent를 반환한다", async () => {

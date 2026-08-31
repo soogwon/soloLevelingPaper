@@ -40,7 +40,7 @@ const traceInputSchema = z.object({
 const warningOutputSchema = z.object({
   code: z.string(),
   message: z.string(),
-  details: z.record(z.string(), z.unknown()).optional(),
+  details: z.record(z.string(), z.json()).optional(),
 });
 const weightedTermOutputSchema = z.object({ id: z.string().optional(), display_name: z.string(), score: z.number() });
 const topicOutputSchema = weightedTermOutputSchema.extend({
@@ -71,7 +71,7 @@ const pathOutputSchema = z.object({
 const errorOutputSchema = z.object({
   error: z.object({
     code: z.string(), message: z.string(), retryable: z.boolean(),
-    details: z.record(z.string(), z.unknown()).optional(),
+    details: z.record(z.string(), z.json()).optional(),
   }),
 });
 const searchOutputSchema = z.union([z.object({
