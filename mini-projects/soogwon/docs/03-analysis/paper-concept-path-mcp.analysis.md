@@ -2,6 +2,8 @@
 
 > Date: 2026-08-29 | Iteration: 2 | Design: `docs/02-design/features/paper-concept-path-mcp.design.md`
 
+> 이 문서의 35개 테스트와 90.0% 수치는 2026-08-29 분석 시점의 스냅샷이다. 이후 `path`를 `paths`로 확장하고 출력 계약·OpenAlex 불완전 후보 회귀 테스트를 보강했다. 최신 검증 결과와 완료 상태는 완료 보고서를 따른다.
+
 ---
 
 ## Match Rate: 90.0%
@@ -140,6 +142,6 @@
 
 - [x] `$pdca iterate paper-concept-path-mcp` 2차 반복 완료
 - [x] 재분석 일치율 90.0% 달성
-- [ ] `$pdca report paper-concept-path-mcp`로 완료 보고서 작성
+- [x] `$pdca report paper-concept-path-mcp`로 완료 보고서 작성
 
-현재 일치율은 90.0%이므로 Report 단계로 진행할 수 있다.
+분석 당시 일치율은 90.0%였으며 이후 Report 단계와 후속 계약 보강을 완료했다.

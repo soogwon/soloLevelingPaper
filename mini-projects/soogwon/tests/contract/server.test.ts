@@ -48,6 +48,7 @@ class MockProvider implements ScholarlyProvider {
   }
   public async getWork(identifier: string): Promise<PaperDetail | null> {
     this.#usage.requestCount += 1;
+    if (identifier.match(/W\d+/)?.[0] === "W9") return paper("W9");
     return this.#papers.get(identifier.match(/W\d+/)?.[0] ?? "") ?? null;
   }
   public async findWorksByLocationDoi(): Promise<PaperDetail[]> { return []; }
@@ -147,6 +148,21 @@ describe("MCP server contract", () => {
       expect(node.paper).not.toHaveProperty("referenced_work_ids");
       expect(node.paper).not.toHaveProperty("related_work_ids");
     }
+  });
+
+  it("유효한 경로가 없으면 빈 paths와 PATH_NOT_FOUND 경고를 반환한다", async () => {
+    const result = await client.callTool({
+      name: "trace_concept_path",
+      arguments: { seed: "https://openalex.org/W9", direction: "both" },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      seed: { id: "W9" },
+      paths: [],
+      warnings: expect.arrayContaining([expect.objectContaining({ code: "PATH_NOT_FOUND" })]),
+    });
+    expect(result.structuredContent).not.toHaveProperty("path");
   });
 
   it("불완전한 DOI를 공개 INVALID_INPUT 오류로 반환한다", async () => {

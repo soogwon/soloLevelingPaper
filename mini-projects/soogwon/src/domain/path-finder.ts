@@ -24,6 +24,7 @@ export const findTopPaths = (
   targetQuery?: string,
   limit = 3,
 ): ConceptPath[] => {
+  if (!graph.papers.has(seedId)) return [];
   const candidates: CandidatePath[] = [];
 
   const visit = (currentId: string, ids: string[], edges: PathEdge[]): void => {
@@ -34,7 +35,7 @@ export const findTopPaths = (
     }
     if (ids.length >= maxPathLength) return;
     for (const edge of graph.edges.get(currentId) ?? []) {
-      if (edge.score < 0.25 || ids.includes(edge.toId)) continue;
+      if (edge.score < 0.25 || ids.includes(edge.toId) || !graph.papers.has(edge.toId)) continue;
       visit(edge.toId, [...ids, edge.toId], [...edges, edge]);
     }
   };

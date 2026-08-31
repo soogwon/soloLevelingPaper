@@ -241,7 +241,7 @@ type TraceConceptPathOutput = {
     nodes: PathNode[];
     edges: PathEdge[];
     score: number;              // 0~1
-    score_margin: number | null; // 1위와 2위 후보 경로 점수 차이
+    score_margin: number | null; // 대표 경로에서 다른 첫 분기를 가진 최선 대안과의 점수 차이; 그 외 경로는 null
   }>;                          // 점수순 최대 3개
   explored: {
     node_count: number;
@@ -450,7 +450,10 @@ interface ScholarlyProvider {
 - 최고 점수가 같은 경우 직접 인용 간선 수, 목표 관련도, 최신 또는 방향상 적합한 연도, ID 오름차순으로 결정한다.
 - 최종 점수가 0.35 미만이면 근거가 부족한 것으로 보고 `paths: []`를 반환한다.
 - 단계별 가지치기를 사용하므로 전체 OpenAlex 그래프의 전역 최적 경로를 보장하지 않는다. 이 한계를 `methodology.limitations`와 사용자용 경고에 포함한다.
-- 첫 버전은 최고 점수 경로 하나만 반환하되 1위와 2위 후보 경로의 점수 차이인 `score_margin`을 결과와 디버그 통계에 기록한다. 비교할 두 번째 경로가 없으면 `null`이다. 점수 차이가 0.05 미만이면 대안 경로가 비슷한 신뢰도를 가진다는 경고를 추가한다.
+- 첫 버전은 유효한 후보 중 점수가 높은 순서로 최대 3개 경로를 반환하며 `paths[0]`을 대표 경로로 정의한다.
+- 대표 경로의 `score_margin`은 첫 번째 분기가 다른 최선 대안과의 점수 차이다. 그런 대안이 없거나 대표 경로가 아닌 항목의 `score_margin`은 `null`이다.
+- 대표 경로의 점수 차이가 0.05 미만이면 대안 경로가 비슷한 신뢰도를 가진다는 경고를 추가한다.
+- 개발 중 공개 응답을 `path: ConceptPath | null`에서 `paths: ConceptPath[]`로 변경했다. 소비자는 경로 유무를 `paths.length > 0`으로 판단한다.
 
 ### 7.4 설명 생성
 

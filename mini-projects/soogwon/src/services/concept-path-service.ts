@@ -65,17 +65,21 @@ export class ConceptPathService {
             .filter(({ edge }) => edge.score >= 0.25)
             .sort((a, b) => b.edge.score - a.edge.score || a.paper.id.localeCompare(b.paper.id))
             .slice(0, input.candidatesPerNode);
-          graph.edges.set(current.id, scored.map(({ edge }) => edge));
-          for (const { paper } of scored) {
+          const admittedEdges = [];
+          for (const { paper, edge } of scored) {
+            if (graph.papers.has(paper.id)) {
+              admittedEdges.push(edge);
+              continue;
+            }
             if (graph.papers.size >= MAX_NODES) {
               truncated = true;
-              break;
+              continue;
             }
-            if (!graph.papers.has(paper.id)) {
-              graph.papers.set(paper.id, paper);
-              next.push(paper);
-            }
+            graph.papers.set(paper.id, paper);
+            next.push(paper);
+            admittedEdges.push(edge);
           }
+          graph.edges.set(current.id, admittedEdges);
         }
         frontier = next;
         if (frontier.length === 0 || truncated) break;

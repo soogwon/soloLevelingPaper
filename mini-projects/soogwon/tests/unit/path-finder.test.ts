@@ -33,6 +33,18 @@ const edge = (fromId: string, toId: string, score: number): PathEdge => ({
 });
 
 describe("findTopPaths", () => {
+  it("논문 Map에 없는 노드를 가리키는 간선을 안전하게 건너뛴다", () => {
+    const graph: Graph = {
+      papers: new Map([["W1", paper("W1")], ["W2", paper("W2")]]),
+      edges: new Map([["W1", [edge("W1", "W999", 0.99), edge("W1", "W2", 0.8)]]]),
+    };
+
+    const results = findTopPaths(graph, "W1", 3);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.nodes.map((node) => node.paper.id)).toEqual(["W1", "W2"]);
+  });
+
   it("점수순으로 상위 3개 경로를 반환한다", () => {
     const graph: Graph = {
       papers: new Map(["W1", "W2", "W3", "W4", "W5", "W6", "W7"].map((id) => [id, paper(id)])),
