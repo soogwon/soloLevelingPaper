@@ -1,4 +1,4 @@
-import type { ConceptPath, PaperDetail, PathEdge, PathNode } from "./models.js";
+import { toPaperSummary, type ConceptPath, type PaperDetail, type PathEdge, type PathNode } from "./models.js";
 import { matchedTerms } from "./scoring.js";
 
 export type Graph = {
@@ -17,12 +17,13 @@ const scorePath = (edges: PathEdge[], targetMatchCount: number): number => {
   return Number(Math.max(0, Math.min(1, geometricMean - lengthPenalty + targetBonus)).toFixed(6));
 };
 
-export const findBestPath = (
+export const findTopPaths = (
   graph: Graph,
   seedId: string,
   maxPathLength: number,
   targetQuery?: string,
-): ConceptPath | null => {
+  limit = 3,
+): ConceptPath[] => {
   const candidates: CandidatePath[] = [];
 
   const visit = (currentId: string, ids: string[], edges: PathEdge[]): void => {
@@ -50,21 +51,22 @@ export const findBestPath = (
   const longCandidates = candidates.filter((candidate) => candidate.ids.length >= 3);
   const preferredCandidates = longCandidates.filter((candidate) => candidate.score >= 0.35);
   const comparableCandidates = preferredCandidates.length > 0 ? preferredCandidates : candidates;
-  const best = comparableCandidates[0];
-  if (!best || best.score < 0.35) return null;
-  const second = comparableCandidates.find((candidate) => (
-    candidate !== best
-    && candidate.ids[1] !== best.ids[1]
-  ));
-  const nodes: PathNode[] = best.ids.map((id, index) => ({
-    index,
-    paper: graph.papers.get(id)!,
-    matchedTerms: matchedTerms(graph.papers.get(id)!, targetQuery),
-  }));
-  return {
-    nodes,
-    edges: best.edges,
-    score: best.score,
-    scoreMargin: second ? Number((best.score - second.score).toFixed(6)) : null,
-  };
+  const validCandidates = comparableCandidates.filter((candidate) => candidate.score >= 0.35);
+  const selected = validCandidates.slice(0, Math.max(0, limit));
+  return selected.map((candidate, index) => {
+    const alternative = index === 0
+      ? validCandidates.find((item) => item !== candidate && item.ids[1] !== candidate.ids[1])
+      : undefined;
+    const nodes: PathNode[] = candidate.ids.map((id, nodeIndex) => ({
+      index: nodeIndex,
+      paper: toPaperSummary(graph.papers.get(id)!),
+      matchedTerms: matchedTerms(graph.papers.get(id)!, targetQuery),
+    }));
+    return {
+      nodes,
+      edges: candidate.edges,
+      score: candidate.score,
+      scoreMargin: alternative ? Number((candidate.score - alternative.score).toFixed(6)) : null,
+    };
+  });
 };

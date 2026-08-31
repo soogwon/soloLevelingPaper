@@ -237,12 +237,12 @@ type TraceConceptPathInput = {
 type TraceConceptPathOutput = {
   seed: PaperSummary;
   target_query?: string;
-  path: {
+  paths: Array<{
     nodes: PathNode[];
     edges: PathEdge[];
     score: number;              // 0~1
     score_margin: number | null; // 1위와 2위 후보 경로 점수 차이
-  } | null;
+  }>;                          // 점수순 최대 3개
   explored: {
     node_count: number;
     edge_count: number;
@@ -281,8 +281,8 @@ API 키, Authorization 헤더 및 사용자의 전체 검색어는 재현성 메
 
 #### 부분 결과
 
-- 시작 논문은 확인됐지만 2개 이상의 노드로 구성된 경로를 만들 수 없으면 `path: null`과 원인 경고를 반환한다.
-- 제한 시간에 도달했지만 유효한 경로가 있으면 `truncated: true` 및 경고와 함께 최선의 경로를 반환한다.
+- 시작 논문은 확인됐지만 2개 이상의 노드로 구성된 경로를 만들 수 없으면 `paths: []`와 원인 경고를 반환한다.
+- 제한 시간에 도달했지만 유효한 경로가 있으면 `truncated: true` 및 경고와 함께 점수순 최대 3개 경로를 반환한다.
 
 ## 5. 데이터 모델
 
@@ -448,7 +448,7 @@ interface ScholarlyProvider {
 - `target_query`가 있으면 마지막 노드의 목표 관련도를 추가 보너스로 반영한다.
 - 최소 간선 점수 0.25 미만의 관계는 경로에서 제외한다.
 - 최고 점수가 같은 경우 직접 인용 간선 수, 목표 관련도, 최신 또는 방향상 적합한 연도, ID 오름차순으로 결정한다.
-- 최종 점수가 0.35 미만이면 근거가 부족한 것으로 보고 `path: null`을 반환한다.
+- 최종 점수가 0.35 미만이면 근거가 부족한 것으로 보고 `paths: []`를 반환한다.
 - 단계별 가지치기를 사용하므로 전체 OpenAlex 그래프의 전역 최적 경로를 보장하지 않는다. 이 한계를 `methodology.limitations`와 사용자용 경고에 포함한다.
 - 첫 버전은 최고 점수 경로 하나만 반환하되 1위와 2위 후보 경로의 점수 차이인 `score_margin`을 결과와 디버그 통계에 기록한다. 비교할 두 번째 경로가 없으면 `null`이다. 점수 차이가 0.05 미만이면 대안 경로가 비슷한 신뢰도를 가진다는 경고를 추가한다.
 

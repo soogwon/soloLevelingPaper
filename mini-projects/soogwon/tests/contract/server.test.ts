@@ -122,6 +122,33 @@ describe("MCP server contract", () => {
     });
   });
 
+  it("개념 경로 노드의 paper가 선언된 summary 스키마와 일치한다", async () => {
+    const result = await client.callTool({
+      name: "trace_concept_path",
+      arguments: { seed: "https://openalex.org/W1", target_query: "explainability", direction: "both" },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      seed: { id: "W1" },
+      paths: expect.any(Array),
+    });
+    const structured = result.structuredContent as {
+      paths: Array<{ nodes: Array<{ paper: Record<string, unknown> }> }>;
+    };
+    expect(structured.paths.length).toBeGreaterThan(0);
+    expect(structured.paths.length).toBeLessThanOrEqual(3);
+    expect(result.structuredContent).not.toHaveProperty("path");
+    const nodes = structured.paths[0]!.nodes;
+    expect(nodes.map((node) => node.paper.id)).toEqual(["W1", "W2", "W3"]);
+    for (const node of nodes) {
+      expect(node.paper).not.toHaveProperty("abstract");
+      expect(node.paper).not.toHaveProperty("topics");
+      expect(node.paper).not.toHaveProperty("referenced_work_ids");
+      expect(node.paper).not.toHaveProperty("related_work_ids");
+    }
+  });
+
   it("불완전한 DOI를 공개 INVALID_INPUT 오류로 반환한다", async () => {
     const result = await client.callTool({ name: "resolve_paper", arguments: { identifier: "10.65215" } });
     expect(result.isError).toBe(true);

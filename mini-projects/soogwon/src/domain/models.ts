@@ -141,7 +141,7 @@ export type MethodologySummary = {
 export type TraceConceptPathOutput = {
   seed: PaperSummary;
   targetQuery?: string;
-  path: ConceptPath | null;
+  paths: ConceptPath[];
   explored: {
     nodeCount: number;
     edgeCount: number;

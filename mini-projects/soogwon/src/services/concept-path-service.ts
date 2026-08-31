@@ -1,7 +1,7 @@
 import type { AppConfig } from "../config.js";
 import type { PaperDetail, TraceConceptPathInput, TraceConceptPathOutput, Warning } from "../domain/models.js";
 import { toPaperSummary } from "../domain/models.js";
-import { findBestPath, type Graph } from "../domain/path-finder.js";
+import { findTopPaths, type Graph } from "../domain/path-finder.js";
 import { SCORING_WEIGHTS, scoreEdge } from "../domain/scoring.js";
 import { AppError } from "../infrastructure/errors.js";
 import type { ScholarlyProvider } from "../providers/scholarly-provider.js";
@@ -89,16 +89,17 @@ export class ConceptPathService {
       }
     }
 
-    const path = findBestPath(graph, seed.id, input.maxPathLength, input.targetQuery);
-    if (!path) warnings.push({ code: "PATH_NOT_FOUND", message: "현재 제한과 근거 기준에서 유효한 논문 경로를 찾지 못했습니다." });
-    if (path?.nodes.length === 2) {
+    const paths = findTopPaths(graph, seed.id, input.maxPathLength, input.targetQuery, 3);
+    const bestPath = paths[0];
+    if (!bestPath) warnings.push({ code: "PATH_NOT_FOUND", message: "현재 제한과 근거 기준에서 유효한 논문 경로를 찾지 못했습니다." });
+    if (bestPath?.nodes.length === 2) {
       warnings.push({ code: "SHORT_PARTIAL_PATH", message: "근거 기준을 충족한 3편 이상의 경로를 찾지 못해 2편의 부분 경로를 반환합니다." });
     }
-    if (path && path.scoreMargin !== null && path.scoreMargin < 0.05) {
+    if (bestPath && bestPath.scoreMargin !== null && bestPath.scoreMargin < 0.05) {
       warnings.push({
         code: "SIMILAR_ALTERNATIVE_PATH",
         message: "점수가 비슷한 대안 경로가 있어 이 결과를 유일한 경로로 해석하면 안 됩니다.",
-        details: { scoreMargin: path.scoreMargin },
+        details: { scoreMargin: bestPath.scoreMargin },
       });
     }
     if (truncated) warnings.push({ code: "SEARCH_TRUNCATED", message: "시간·노드·요청 또는 비용 제한으로 탐색이 조기에 종료됐습니다." });
@@ -112,7 +113,7 @@ export class ConceptPathService {
     return {
       seed: toPaperSummary(seed),
       ...(input.targetQuery ? { targetQuery: input.targetQuery } : {}),
-      path,
+      paths,
       explored: {
         nodeCount: graph.papers.size,
         edgeCount,

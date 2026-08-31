@@ -40,6 +40,42 @@ describe("OpenAlexProvider", () => {
     expect(result.referencedWorkIds).toEqual(["W100"]);
   });
 
+  it("직접 조회한 논문에 제목이 없으면 제공자 응답 오류를 유지한다", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ...rawWork, title: null }), { status: 200 }));
+    const provider = new OpenAlexProvider(config, fetchMock as typeof fetch);
+
+    await expect(provider.getWork("W123")).rejects.toMatchObject({
+      code: "PROVIDER_RESPONSE_INVALID",
+      retryable: false,
+    });
+  });
+
+  it("복수 후보 조회에서는 제목 없는 Work만 제외하고 정상 후보를 반환한다", async () => {
+    const untitledWork = { ...rawWork, id: "https://openalex.org/W999", title: null, display_name: null };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      meta: { count: 2 },
+      results: [untitledWork, rawWork],
+    }), { status: 200 }));
+    const provider = new OpenAlexProvider(config, fetchMock as typeof fetch);
+
+    await expect(provider.getWorksByIds(["W999", "W123"])).resolves.toEqual([
+      expect.objectContaining({ id: "W123", title: "A Test Paper" }),
+    ]);
+  });
+
+  it("검색 결과가 모두 제목 없으면 빈 후보 목록으로 정상 처리한다", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      meta: { count: 1 },
+      results: [{ ...rawWork, title: "", display_name: null }],
+    }), { status: 200 }));
+    const provider = new OpenAlexProvider(config, fetchMock as typeof fetch);
+
+    await expect(provider.searchWorks({ query: "test", limit: 1, semantic: false })).resolves.toMatchObject({
+      papers: [],
+      totalCandidates: 1,
+    });
+  });
+
   it("API 키를 URL이 아닌 Authorization 헤더로 전송한다", async () => {
     const fetchMock = vi.fn(async (_input: URL | RequestInfo, _init?: RequestInit) => new Response(JSON.stringify(rawWork), {
       status: 200,

@@ -153,6 +153,10 @@ export const normalizeOpenAlexWork = (input: unknown): PaperDetail => {
   };
 };
 
+const normalizeOpenAlexWorkList = (works: z.infer<typeof workSchema>[]): PaperDetail[] => works
+  .filter((work) => Boolean((work.title ?? work.display_name ?? "").trim()))
+  .map(normalizeOpenAlexWork);
+
 type FetchKind = "singleton" | "filter" | "search";
 
 export class OpenAlexProvider implements ScholarlyProvider {
@@ -192,7 +196,7 @@ export class OpenAlexProvider implements ScholarlyProvider {
     url.searchParams.set("filter", filters.join(","));
     const data = listResponseSchema.parse(await this.#request(url, "search", signal, deadlineAt));
     return {
-      papers: data.results.map(normalizeOpenAlexWork),
+      papers: normalizeOpenAlexWorkList(data.results),
       ...(data.meta?.count !== undefined ? { totalCandidates: data.meta.count } : {}),
     };
   }
@@ -219,7 +223,7 @@ export class OpenAlexProvider implements ScholarlyProvider {
     url.searchParams.set("filter", `locations.landing_page_url:${normalized}`);
     url.searchParams.set("per_page", "2");
     const data = listResponseSchema.parse(await this.#request(url, "filter", signal, deadlineAt));
-    return data.results.map(normalizeOpenAlexWork);
+    return normalizeOpenAlexWorkList(data.results);
   }
 
   public async getWorksByIds(ids: string[], signal?: AbortSignal, deadlineAt?: number): Promise<PaperDetail[]> {
@@ -229,7 +233,7 @@ export class OpenAlexProvider implements ScholarlyProvider {
     url.searchParams.set("filter", `openalex:${uniqueIds.join("|")}`);
     url.searchParams.set("per_page", String(uniqueIds.length));
     const data = listResponseSchema.parse(await this.#request(url, "filter", signal, deadlineAt));
-    return data.results.map(normalizeOpenAlexWork);
+    return normalizeOpenAlexWorkList(data.results);
   }
 
   public async getCitingWorks(id: string, limit: number, signal?: AbortSignal, deadlineAt?: number): Promise<PaperDetail[]> {
@@ -238,7 +242,7 @@ export class OpenAlexProvider implements ScholarlyProvider {
     url.searchParams.set("sort", "publication_date:desc");
     url.searchParams.set("per_page", String(Math.min(100, Math.max(1, limit))));
     const data = listResponseSchema.parse(await this.#request(url, "filter", signal, deadlineAt));
-    return data.results.map(normalizeOpenAlexWork);
+    return normalizeOpenAlexWorkList(data.results);
   }
 
   async #request(url: URL, kind: FetchKind, parentSignal?: AbortSignal, deadlineAt?: number): Promise<unknown> {

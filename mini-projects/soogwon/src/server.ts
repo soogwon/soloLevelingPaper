@@ -88,7 +88,7 @@ const resolveOutputSchema = z.union([z.object({
   warnings: z.array(warningOutputSchema),
 }), errorOutputSchema]);
 const traceOutputSchema = z.union([z.object({
-  seed: paperSummaryOutputSchema, target_query: z.string().optional(), path: pathOutputSchema.nullable(),
+  seed: paperSummaryOutputSchema, target_query: z.string().optional(), paths: z.array(pathOutputSchema).max(3),
   explored: z.object({
     node_count: z.number(), edge_count: z.number(), request_count: z.number(), credits_used: z.number(),
     estimated_cost_usd: z.number(), truncated: z.boolean(),
@@ -137,7 +137,7 @@ const successResult = (value: unknown) => {
       summary: {
         status: structured.status,
         paper_count: Array.isArray(structured.papers) ? structured.papers.length : undefined,
-        has_path: structured.path !== null && structured.path !== undefined,
+        path_count: Array.isArray(structured.paths) ? structured.paths.length : undefined,
       },
     }, null, 2) }],
     structuredContent: enriched,

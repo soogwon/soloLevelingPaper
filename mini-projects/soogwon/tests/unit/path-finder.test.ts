@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PaperDetail, PathEdge } from "../../src/domain/models.js";
-import { findBestPath, type Graph } from "../../src/domain/path-finder.js";
+import { findTopPaths, type Graph } from "../../src/domain/path-finder.js";
 
 const paper = (id: string): PaperDetail => ({
   id,
@@ -32,7 +32,30 @@ const edge = (fromId: string, toId: string, score: number): PathEdge => ({
   rationale: "direct citation",
 });
 
-describe("findBestPath", () => {
+describe("findTopPaths", () => {
+  it("점수순으로 상위 3개 경로를 반환한다", () => {
+    const graph: Graph = {
+      papers: new Map(["W1", "W2", "W3", "W4", "W5", "W6", "W7"].map((id) => [id, paper(id)])),
+      edges: new Map([
+        ["W1", [edge("W1", "W2", 0.9), edge("W1", "W3", 0.8), edge("W1", "W4", 0.7), edge("W1", "W5", 0.6)]],
+        ["W2", [edge("W2", "W6", 0.9)]],
+        ["W3", [edge("W3", "W6", 0.8)]],
+        ["W4", [edge("W4", "W7", 0.7)]],
+        ["W5", [edge("W5", "W7", 0.6)]],
+      ]),
+    };
+
+    const results = findTopPaths(graph, "W1", 4);
+
+    expect(results).toHaveLength(3);
+    expect(results.map((result) => result.nodes.map((node) => node.paper.id))).toEqual([
+      ["W1", "W2", "W6"],
+      ["W1", "W3", "W6"],
+      ["W1", "W4", "W7"],
+    ]);
+    expect(results.map((result) => result.score)).toEqual([0.9, 0.8, 0.7]);
+  });
+
   it("점수가 높은 결정론적 경로를 선택한다", () => {
     const graph: Graph = {
       papers: new Map(["W1", "W2", "W3", "W4", "W5"].map((id) => [id, paper(id)])),
@@ -42,7 +65,7 @@ describe("findBestPath", () => {
         ["W3", [edge("W3", "W4", 0.5)]],
       ]),
     };
-    const result = findBestPath(graph, "W1", 4);
+    const result = findTopPaths(graph, "W1", 4, undefined, 1)[0];
     expect(result?.nodes.map((node) => node.paper.id)).toEqual(["W1", "W2", "W4"]);
     expect(result?.scoreMargin).not.toBeNull();
   });
@@ -55,7 +78,7 @@ describe("findBestPath", () => {
         ["W2", [edge("W2", "W1", 0.8)]],
       ]),
     };
-    expect(findBestPath(graph, "W1", 5)?.nodes).toHaveLength(2);
+    expect(findTopPaths(graph, "W1", 5, undefined, 1)[0]?.nodes).toHaveLength(2);
   });
 
   it("최선 경로의 접두 경로를 대안 점수 차이에 사용하지 않는다", () => {
@@ -67,7 +90,7 @@ describe("findBestPath", () => {
         ["W4", [edge("W4", "W5", 0.5)]],
       ]),
     };
-    const result = findBestPath(graph, "W1", 4);
+    const result = findTopPaths(graph, "W1", 4, undefined, 1)[0];
     expect(result?.nodes.map((node) => node.paper.id)).toEqual(["W1", "W2", "W3"]);
     expect(result?.scoreMargin).toBeGreaterThan(0.2);
   });
@@ -80,7 +103,7 @@ describe("findBestPath", () => {
         ["W2", [edge("W2", "W3", 0.7)]],
       ]),
     };
-    const result = findBestPath(graph, "W1", 4);
+    const result = findTopPaths(graph, "W1", 4, undefined, 1)[0];
     expect(result?.nodes.map((node) => node.paper.id)).toEqual(["W1", "W2", "W3"]);
     expect(result?.scoreMargin).toBeNull();
   });
