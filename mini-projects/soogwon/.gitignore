@@ -1,0 +1,16 @@
+# bkit-codex
+.agents
+.bkit-codex
+.codex
+AGENTS.md
+
+# PDCA runtime state (generated locally)
+**/.pdca-status.json
+
+# Node.js build and local secrets
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example

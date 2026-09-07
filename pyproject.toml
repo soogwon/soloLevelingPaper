@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "solo-leveling-paper"
+version = "0.1.0"
+description = "MCP-based paper learning service"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+local = [
+    "mcp",
+    "pdfplumber",
+    "chromadb",
+    "sentence-transformers",
+    "requests",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

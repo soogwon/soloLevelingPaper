@@ -13,6 +13,7 @@ env/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
 .coverage
 htmlcov/
 
@@ -69,3 +70,5 @@ mini-projects/*/data/*
 !mini-projects/*/data/samples/
 !mini-projects/*/data/samples/**
 
+# Local architecture and planning documents
+/docs/

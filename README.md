@@ -1,5 +1,7 @@
 # Solo Leveling Paper
 
+> **현재 M1은 로컬 실행형입니다.** Python MCP(stdio)·pdfplumber·SQLite·ChromaDB·sentence-transformers를 사용하고 생성 API 모델은 추후 선정합니다. [로컬 M1 기준](docs/architecture/22-local-m1-baseline.md)과 [개발 시작 안내](docs/setup/development.md)를 우선 참고하세요. 아래는 이전 장기 기획·Mini Project 설명이며 기존 코드를 재사용하지 않습니다.
+
 > MCP·Skill 기반 개인화 AI 논문 학습 어시스턴트
 
 AI/ML 논문의 개념, 방법론, 과제와 논문 간 관계를 Ontology 기반 Knowledge Graph로 구축하고, 사용자가 기존 AI 챗봇 안에서 자신의 수준에 맞게 논문을 학습하도록 지원하는 프로젝트입니다.
@@ -104,4 +106,3 @@ docs/{topic}
 ## Status
 
 현재 프로젝트 초기 구성 단계입니다. 기획서의 필수 기능(MVP), 추가 고려 기능, 데이터 수집 계획, 세부 일정과 역할 분담은 팀 협의 후 문서에 반영합니다.
-
