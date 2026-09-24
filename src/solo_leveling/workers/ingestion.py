@@ -14,6 +14,7 @@ from solo_leveling.application.translation.service import TranslationService
 from solo_leveling.domain.translation import TranslationSettings
 from solo_leveling.domain.models import (
     EmbeddingSet, JobStage, JobStatus, Paper, ParseRevision, PaperVersion, ProcessingJob,
+    IngestionDisposition,
 )
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.database.schema import init_db
@@ -42,8 +43,28 @@ def _published_result(index: dict, reused: bool, db_path: str) -> dict:
         'translation_revision_id': index['translation_revision_id'],
         'embedding_set_id': index['embedding_set_id'], 'chunk_count': index['chunk_count'],
         'reused_existing': reused,
+        'result_available': True,
         'limitations': repo.get_job(db_path, index['job_id']).limitations,
     }
+
+
+def get_ingestion_status(db_path: str, job_id: str) -> dict:
+    """작업 상태를 조회하고 완료된 경우 검증된 색인 결과를 함께 반환한다."""
+    job = repo.get_job(db_path, job_id)
+    if job is None:
+        raise ValueError('작업을 찾을 수 없습니다.')
+    response = {
+        'job_id': job.job_id, 'version_id': job.version_id,
+        'status': job.status.value, 'stage': job.stage.value if job.stage else None,
+        'limitations': job.limitations, 'result_available': False,
+    }
+    if job.status == JobStatus.READY:
+        index = repo.get_search_index(db_path, job.version_id)
+        if index is None or index['job_id'] != job.job_id:
+            raise ValueError('완료 작업과 색인 정보가 일치하지 않습니다.')
+        response['result_available'] = True
+        response['result'] = _published_result(index, True, db_path)
+    return response
 
 
 def register_and_ingest(
@@ -61,23 +82,22 @@ def register_and_ingest(
     init_db(db_path)
     paper_id = paper_id or str(uuid.uuid4())
     original_filename = original_filename or Path(pdf_path).name
-    with closing(repo.get_connection(db_path)) as conn:
-        exists = conn.execute('SELECT 1 FROM papers WHERE paper_id=?', (paper_id,)).fetchone()
-    if not exists:
-        repo.insert_paper(db_path, Paper(paper_id=paper_id, source_kind='local_file'))
     file_hash = compute_file_hash(pdf_path)
-    version = repo.find_version_by_hash(db_path, paper_id, file_hash)
-    reused = version is not None
-    if version:
-        index = repo.get_search_index(db_path, version.version_id)
-        if index:
-            return _published_result(index, True, db_path)
-    else:
-        version = PaperVersion(str(uuid.uuid4()), paper_id, file_hash, pdf_path, original_filename)
-        repo.insert_version(db_path, version)
+    registration = repo.prepare_ingestion(
+        db_path, Paper(paper_id=paper_id, source_kind='local_file'),
+        PaperVersion(str(uuid.uuid4()), paper_id, file_hash, pdf_path, original_filename),
+        str(uuid.uuid4()),
+    )
+    if registration.disposition != IngestionDisposition.STARTED:
+        # 상태 조회 직전에 완료된 경우에도 최신 완료 결과를 반환한다.
+        status = get_ingestion_status(db_path, registration.job_id)
+        if status['result_available']:
+            return status['result']
+        return {**status, 'reused_existing': True}
 
-    job = ProcessingJob(str(uuid.uuid4()), version.version_id)
-    repo.claim_ingestion_job(db_path, job)
+    version_id = registration.version_id
+    reused = registration.reused_existing
+    job = ProcessingJob(registration.job_id, version_id)
     client = None
     embedding_set = None
     parse_revision = None
@@ -85,16 +105,16 @@ def register_and_ingest(
     limitations = []
     published = False
     try:
-        parse_revision = repo.get_latest_parse_revision(db_path, version.version_id)
+        parse_revision = repo.get_latest_parse_revision(db_path, version_id)
         chunks = repo.get_chunks_by_parse_revision(db_path, parse_revision.parse_revision_id) if parse_revision else []
         if not chunks:
             pages = extract_pages(pdf_path)
-            parse_revision = ParseRevision(str(uuid.uuid4()), version.version_id, len(pages))
+            parse_revision = ParseRevision(str(uuid.uuid4()), version_id, len(pages))
             chunks = chunk_pages(parse_revision.parse_revision_id, pages)
             # 파싱 결과 전체를 원자적으로 저장하여 중단 시 일부 청크만 남는 것을 막는다.
             with closing(repo.get_connection(db_path)) as conn, conn:
                 conn.execute('INSERT INTO parse_revisions VALUES (?, ?, ?, ?)',
-                             (parse_revision.parse_revision_id, version.version_id, len(pages), parse_revision.created_at))
+                             (parse_revision.parse_revision_id, version_id, len(pages), parse_revision.created_at))
                 conn.executemany('''INSERT INTO chunks
                     (chunk_id, parse_revision_id, chunk_index, original_text, text,
                      translation_revision_id, printed_page_label, pdf_page, section_id)
@@ -136,21 +156,22 @@ def register_and_ingest(
                 collection = f'chunks-{embedding_set.embedding_set_id}'
                 upsert_chunk_embeddings(
                     client, [c.chunk_id for c in translated], vectors,
-                    embedding_set.embedding_set_id, paper_id, version.version_id, texts,
+                    embedding_set.embedding_set_id, paper_id, version_id, texts,
                     collection_name=collection,
                 )
                 verify_chunk_embeddings(
                     client, [c.chunk_id for c in translated], texts, embedding_set.embedding_set_id,
-                    paper_id, version.version_id, dim, collection_name=collection,
+                    paper_id, version_id, dim, collection_name=collection,
                 )
-                repo.publish_search_index(db_path, version.version_id, parse_revision.parse_revision_id,
+                repo.publish_search_index(db_path, version_id, parse_revision.parse_revision_id,
                                           embedding_set, job.job_id, len(translated), limitations)
                 published = True
-                return _published_result(repo.get_search_index(db_path, version.version_id), reused, db_path)
+                return _published_result(repo.get_search_index(db_path, version_id), reused, db_path)
             limitations = ['translation_failed', *limitations]
         repo.update_job_status(db_path, job.job_id, JobStatus.FAILED, limitations=limitations)
         return {
-            'job_id': job.job_id, 'status': 'failed', 'version_id': version.version_id,
+            'job_id': job.job_id, 'status': 'failed', 'version_id': version_id,
+            'result_available': False,
             'parse_revision_id': parse_revision.parse_revision_id,
             'translation_revision_id': translation_id, 'embedding_set_id': None,
             'chunk_count': 0, 'reused_existing': reused, 'limitations': limitations,

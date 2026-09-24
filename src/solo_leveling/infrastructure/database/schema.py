@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS processing_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_chunks_parse_revision ON chunks(parse_revision_id);
 CREATE INDEX IF NOT EXISTS idx_versions_paper ON paper_versions(paper_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_versions_paper_hash ON paper_versions(paper_id, file_hash);
 CREATE INDEX IF NOT EXISTS idx_jobs_version ON processing_jobs(version_id);
 
 CREATE TABLE IF NOT EXISTS translation_results (

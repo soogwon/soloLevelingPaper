@@ -17,6 +17,8 @@ from solo_leveling.domain.models import (
     ParseRevision,
     PaperVersion,
     ProcessingJob,
+    IngestionDisposition,
+    IngestionRegistration,
     TranslationRevision,
     EmbeddingSet,
     LearningContext,
@@ -340,6 +342,51 @@ def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
                       embedding_set.translation_revision_id, job_id, chunk_count))
         conn.execute("UPDATE processing_jobs SET status='ready', stage='index', limitations=?, updated_at=? WHERE job_id=?",
                      (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
+
+
+def prepare_ingestion(db_path: str, paper: Paper, candidate: PaperVersion,
+                      new_job_id: str) -> IngestionRegistration:
+    """버전 조회·생성과 기존 작업 재사용 여부를 하나의 트랜잭션에서 결정한다."""
+    if paper.paper_id != candidate.paper_id:
+        raise ValueError('논문 ID가 일치하지 않습니다.')
+    for name, value in (('paper_id', paper.paper_id), ('version_id', candidate.version_id),
+                        ('file_hash', candidate.file_hash), ('job_id', new_job_id)):
+        require_text(value, name)
+    with closing(get_connection(db_path)) as conn, conn:
+        # 조회·생성과 작업 확보 사이에 다른 쓰기 요청이 끼어들지 못하도록 한다.
+        conn.execute('BEGIN IMMEDIATE')
+        conn.execute('''INSERT INTO papers (paper_id, title, source_kind, created_at)
+                        VALUES (?, ?, ?, ?) ON CONFLICT(paper_id) DO NOTHING''',
+                     (paper.paper_id, paper.title, paper.source_kind, paper.created_at))
+        row = conn.execute('SELECT version_id FROM paper_versions WHERE paper_id=? AND file_hash=?',
+                           (paper.paper_id, candidate.file_hash)).fetchone()
+        reused = row is not None
+        version_id = row['version_id'] if row else candidate.version_id
+        if not row:
+            conn.execute('''INSERT INTO paper_versions
+                            (version_id, paper_id, file_hash, stored_path, original_filename, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?)''',
+                         (version_id, paper.paper_id, candidate.file_hash, candidate.stored_path,
+                          candidate.original_filename, candidate.created_at))
+        published = conn.execute('SELECT job_id FROM search_indexes WHERE version_id=?',
+                                 (version_id,)).fetchone()
+        if published:
+            return IngestionRegistration(IngestionDisposition.COMPLETED, version_id,
+                                         published['job_id'], True)
+        active = conn.execute('''SELECT job_id FROM processing_jobs WHERE version_id=?
+                                 AND status IN ('queued','processing')
+                                 ORDER BY created_at DESC, rowid DESC LIMIT 1''', (version_id,)).fetchone()
+        if active:
+            return IngestionRegistration(IngestionDisposition.IN_PROGRESS, version_id,
+                                         active['job_id'], True)
+        # 실패·중단 이력은 남기고 새 작업을 시작한다.
+        timestamp = now_iso()
+        conn.execute('''INSERT INTO processing_jobs
+                        (job_id, version_id, status, stage, limitations, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                     (new_job_id, version_id, JobStatus.PROCESSING.value, JobStage.PARSE.value,
+                      '[]', timestamp, timestamp))
+        return IngestionRegistration(IngestionDisposition.STARTED, version_id, new_job_id, reused)
 
 
 def claim_ingestion_job(db_path: str, job: ProcessingJob) -> None:

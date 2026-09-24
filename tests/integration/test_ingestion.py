@@ -156,12 +156,16 @@ def test_all_translation_failure_then_retry_same_version(tmp_path):
     service = TranslationService(provider)
     first = register_and_ingest(db, vectors, str(pdf), paper_id='p', translation_service=service)
     assert first['status'] == 'failed'
+    failed_status = ingestion_module.get_ingestion_status(db, first['job_id'])
+    assert failed_status['status'] == 'failed'
+    assert not failed_status['result_available']
     assert repo.get_search_index(db, first['version_id']) is None
     assert repo.get_job(db, first['job_id']).status == JobStatus.FAILED
     assert 'private' not in str(first)
     provider.fail = False
     second = register_and_ingest(db, vectors, str(pdf), paper_id='p', translation_service=service)
     assert second['status'] == 'ready'
+    assert second['job_id'] != first['job_id']
     assert second['version_id'] == first['version_id']
     assert second['parse_revision_id'] == first['parse_revision_id']
     assert second['translation_revision_id'] == first['translation_revision_id']
@@ -283,6 +287,52 @@ def test_retry_only_missing_translations_after_index_failure(tmp_path, monkeypat
     assert result['chunk_count'] == 2
     assert [r.original_text for r in provider.calls] == ['First page.', 'Second page.', 'Second page.']
     assert result['limitations'] == []
+
+
+def test_duplicate_registration_returns_active_job_then_completed_result(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from solo_leveling.workers.ingestion import get_ingestion_status
+
+    entered, release = Event(), Event()
+
+    class BlockingProvider(FixtureProvider):
+        def translate(self, request, settings):
+            entered.set()
+            if not release.wait(timeout=30):
+                raise TimeoutError('테스트 번역 대기 시간 초과')
+            return super().translate(request, settings)
+
+    pdf = tmp_path / 'concurrent.pdf'
+    write_minimal_pdf(str(pdf), ['First page.'])
+    db, vectors = str(tmp_path / 'db.sqlite'), str(tmp_path / 'chroma')
+    provider = BlockingProvider()
+    service = TranslationService(provider)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        first = pool.submit(register_and_ingest, db, vectors, str(pdf),
+                            paper_id='p', translation_service=service)
+        try:
+            assert entered.wait(timeout=15)
+            active = register_and_ingest(db, vectors, str(pdf), paper_id='p', translation_service=service)
+            assert active['status'] == 'processing'
+            assert active['reused_existing']
+            assert not active['result_available']
+            assert get_ingestion_status(db, active['job_id'])['stage'] == 'translate'
+        finally:
+            release.set()
+        completed = first.result(timeout=30)
+    assert completed['job_id'] == active['job_id']
+    assert completed['result_available']
+    assert len(provider.calls) == 1
+    status = get_ingestion_status(db, active['job_id'])
+    assert status['status'] == 'ready'
+    assert status['result']['embedding_set_id'] == completed['embedding_set_id']
+    reused = register_and_ingest(db, vectors, str(pdf), paper_id='p', translation_service=service)
+    assert reused['job_id'] == completed['job_id']
+    assert reused['reused_existing']
+    assert len(provider.calls) == 1
+    with pytest.raises(ValueError, match='작업을 찾을 수 없습니다'):
+        get_ingestion_status(db, 'missing')
 
 
 def test_vector_sets_isolate_dimensions_and_detect_corruption(tmp_path):
