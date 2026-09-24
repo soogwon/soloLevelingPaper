@@ -135,3 +135,4 @@ class LearningContext:
     goal: str = "understand"  # understand | implement | skim
     known_concepts: list = field(default_factory=list)
     created_at: str = field(default_factory=now_iso)
+    embedding_set_id: Optional[str] = None  #검색에 사용할 임베딩 색인 ID. DB 저장 시 필수

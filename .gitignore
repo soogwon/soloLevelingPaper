@@ -31,6 +31,7 @@ build/
 dist/
 runtime/
 storage/
+!/src/solo_leveling/infrastructure/storage/
 cache/
 logs/
 tmp/

@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
+dev = ["pytest", "pdfplumber", "chromadb"]
 local = [
     "mcp",
     "pdfplumber",
@@ -20,3 +21,7 @@ local = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]

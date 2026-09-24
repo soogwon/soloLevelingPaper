@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS translation_revisions (
     parse_revision_id TEXT NOT NULL REFERENCES parse_revisions(parse_revision_id),
     provider TEXT,
     model TEXT,
+    prompt_version TEXT,
+    target_language TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -76,6 +78,44 @@ CREATE TABLE IF NOT EXISTS processing_jobs (
 CREATE INDEX IF NOT EXISTS idx_chunks_parse_revision ON chunks(parse_revision_id);
 CREATE INDEX IF NOT EXISTS idx_versions_paper ON paper_versions(paper_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_version ON processing_jobs(version_id);
+
+CREATE TABLE IF NOT EXISTS translation_results (
+    translation_revision_id TEXT NOT NULL REFERENCES translation_revisions(translation_revision_id),
+    chunk_id TEXT NOT NULL REFERENCES chunks(chunk_id),
+    failure_code TEXT,
+    PRIMARY KEY (translation_revision_id, chunk_id)
+);
+
+-- 저장된 벡터를 다시 읽어 검증한 후에만 색인 정보를 게시한다.
+CREATE TABLE IF NOT EXISTS search_indexes (
+    embedding_set_id TEXT PRIMARY KEY REFERENCES embedding_sets(embedding_set_id),
+    version_id TEXT NOT NULL UNIQUE REFERENCES paper_versions(version_id),
+    parse_revision_id TEXT NOT NULL REFERENCES parse_revisions(parse_revision_id),
+    translation_revision_id TEXT NOT NULL REFERENCES translation_revisions(translation_revision_id),
+    job_id TEXT NOT NULL REFERENCES processing_jobs(job_id),
+    chunk_count INTEGER NOT NULL CHECK (chunk_count > 0)
+);
+
+CREATE TABLE IF NOT EXISTS learning_contexts (
+    context_id TEXT PRIMARY KEY,
+    version_id TEXT NOT NULL REFERENCES paper_versions(version_id),
+    parse_revision_id TEXT NOT NULL REFERENCES parse_revisions(parse_revision_id),
+    translation_revision_id TEXT NOT NULL REFERENCES translation_revisions(translation_revision_id),
+    embedding_set_id TEXT NOT NULL REFERENCES search_indexes(embedding_set_id),
+    goal TEXT NOT NULL CHECK (goal IN ('understand', 'implement', 'skim')),
+    known_concepts TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS evidences (
+    evidence_id TEXT PRIMARY KEY,
+    context_id TEXT NOT NULL REFERENCES learning_contexts(context_id),
+    chunk_id TEXT NOT NULL REFERENCES chunks(chunk_id),
+    quote_ko TEXT,
+    quote_original TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_evidences_context ON evidences(context_id);
 """
 
 
@@ -89,6 +129,14 @@ def get_connection(db_path: str) -> sqlite3.Connection:
 def init_db(db_path: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection(db_path)
-    conn.executescript(SCHEMA_SQL)
-    conn.commit()
-    conn.close()
+    try:
+        conn.executescript(SCHEMA_SQL)
+        # 기존 생성된 DB에 컬럼을 추가하는 형식.
+        # 초기값은 NULL로 번역 설정을 임의로 채우지 않는다.
+        with conn:
+            columns = {row['name'] for row in conn.execute('PRAGMA table_info(translation_revisions)')}
+            for name in ('prompt_version', 'target_language'):
+                if name not in columns:
+                    conn.execute(f'ALTER TABLE translation_revisions ADD COLUMN {name} TEXT')
+    finally:
+        conn.close()
