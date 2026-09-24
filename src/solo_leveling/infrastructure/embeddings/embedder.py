@@ -8,7 +8,10 @@ infrastructure/embeddings — sentence-transformers 래퍼
 """
 from typing import List
 
-from sentence_transformers import SentenceTransformer
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 # TODO(팀 합의 필요): 정확한 모델 ID·리비전 확정 전까지의 잠정값.
 DEFAULT_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
@@ -16,8 +19,10 @@ DEFAULT_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
 _model_cache: dict = {}
 
 
-def _get_model(model_name: str) -> SentenceTransformer:
+def _get_model(model_name: str) -> "SentenceTransformer":
     if model_name not in _model_cache:
+        from sentence_transformers import SentenceTransformer
+
         _model_cache[model_name] = SentenceTransformer(model_name)
     return _model_cache[model_name]
 

@@ -23,6 +23,22 @@ class JobStatus(str, Enum):
     INTERRUPTED = "interrupted"
 
 
+class IngestionDisposition(str, Enum):
+    """등록 요청의 신규 작업 시작 또는 기존 작업 재사용 구분."""
+    STARTED = "started"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+
+
+@dataclass(frozen=True)
+class IngestionRegistration:
+    """등록 요청에서 확보하거나 재사용한 버전과 작업 정보."""
+    disposition: IngestionDisposition
+    version_id: str
+    job_id: str
+    reused_existing: bool
+
+
 class JobStage(str, Enum):
     """10번 문서: download/parse/translate/index"""
     DOWNLOAD = "download"
@@ -135,3 +151,4 @@ class LearningContext:
     goal: str = "understand"  # understand | implement | skim
     known_concepts: list = field(default_factory=list)
     created_at: str = field(default_factory=now_iso)
+    embedding_set_id: Optional[str] = None  #검색에 사용할 임베딩 색인 ID. DB 저장 시 필수

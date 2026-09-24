@@ -5,6 +5,9 @@ infrastructure/database — 리포지토리
 processing_jobs.limitations는 JSON 문자열로 저장한다(SQLite에 배열 타입이 없어서).
 """
 import json
+from uuid import uuid4
+from contextlib import closing
+from pathlib import PureWindowsPath, PurePosixPath
 from typing import List, Optional
 
 from solo_leveling.domain.models import (
@@ -15,12 +18,21 @@ from solo_leveling.domain.models import (
     ParseRevision,
     PaperVersion,
     ProcessingJob,
+    IngestionDisposition,
+    IngestionRegistration,
     TranslationRevision,
+    EmbeddingSet,
+    LearningContext,
+    Evidence,
+    now_iso,
 )
+from solo_leveling.domain.translation import TranslationBatchResult
+from solo_leveling.domain.context import ContextNotReadyError
+from solo_leveling.domain.evidence_qa import EvidenceDetail, GetEvidenceResult, require_text
 from solo_leveling.infrastructure.database.schema import get_connection
 
 
-# ── papers / versions / parse revisions ─────────────────────────
+# ── 논문 / 버전 / 파싱 리비전 ───────────────────────────────────
 def insert_paper(db_path: str, paper: Paper) -> None:
     conn = get_connection(db_path)
     conn.execute(
@@ -73,7 +85,7 @@ def insert_parse_revision(db_path: str, revision: ParseRevision) -> None:
     conn.close()
 
 
-# ── chunks ───────────────────────────────────────────────────────
+# ── 청크 ─────────────────────────────────────────────────────────
 def insert_chunks(db_path: str, chunks: List[Chunk]) -> None:
     conn = get_connection(db_path)
     conn.executemany(
@@ -117,7 +129,7 @@ def get_chunk(db_path: str, chunk_id: str) -> Optional[Chunk]:
     return Chunk(**dict(row)) if row else None
 
 
-# ── processing jobs ──────────────────────────────────────────────
+# ── 처리 작업 ────────────────────────────────────────────────────
 def insert_job(db_path: str, job: ProcessingJob) -> None:
     conn = get_connection(db_path)
     conn.execute(
@@ -193,3 +205,336 @@ def mark_interrupted_jobs_on_startup(db_path: str) -> int:
     count = cur.rowcount
     conn.close()
     return count
+
+
+def get_latest_parse_revision(db_path: str, version_id: str) -> Optional[ParseRevision]:
+    with closing(get_connection(db_path)) as conn:
+        row = conn.execute(
+            'SELECT * FROM parse_revisions WHERE version_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+            (version_id,),
+        ).fetchone()
+        return ParseRevision(**dict(row)) if row else None
+
+
+def get_translation_metadata(db_path: str, parse_revision_id: str) -> Optional[dict]:
+    with closing(get_connection(db_path)) as conn:
+        rows = conn.execute('SELECT * FROM translation_revisions WHERE parse_revision_id=?',
+                            (parse_revision_id,)).fetchall()
+        if len(rows) > 1:
+            raise ValueError('multiple translations are not supported by the initial-translation policy')
+        return dict(rows[0]) if rows else None
+
+
+def save_translation_batch(db_path: str, batch: TranslationBatchResult) -> None:
+    """최초 번역을 원자적으로 저장하고, 재시도 시 실패한 청크만 채운다.
+
+    동일한 내용은 반복 저장해도 결과가 같다. 게시된 번역과 성공한 번역문은
+    변경할 수 없다. SQLite BEGIN IMMEDIATE로 동시 쓰기를 순차 처리한다.
+    """
+    batch.validate()
+    rev, settings = batch.revision, batch.settings
+    metadata = (rev.parse_revision_id, settings.provider, settings.model,
+                settings.prompt_version, settings.target_language)
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        existing = conn.execute('SELECT * FROM translation_revisions WHERE translation_revision_id=?',
+                                (rev.translation_revision_id,)).fetchone()
+        if existing:
+            if tuple(existing[k] for k in ('parse_revision_id', 'provider', 'model', 'prompt_version', 'target_language')) != metadata:
+                raise ValueError('translation metadata conflict')
+        else:
+            if conn.execute('SELECT 1 FROM translation_revisions WHERE parse_revision_id=?',
+                            (rev.parse_revision_id,)).fetchone():
+                raise ValueError('initial translation already exists; automatic retranslation is disabled')
+            conn.execute(
+                '''INSERT INTO translation_revisions
+                   (translation_revision_id, parse_revision_id, provider, model, prompt_version, target_language, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (rev.translation_revision_id, *metadata, rev.created_at),
+            )
+        published = conn.execute('SELECT 1 FROM search_indexes WHERE translation_revision_id=?',
+                                 (rev.translation_revision_id,)).fetchone()
+        for item in batch.items:
+            row = conn.execute('SELECT * FROM chunks WHERE chunk_id=?', (item.request.chunk_id,)).fetchone()
+            if not row or (row['parse_revision_id'], row['original_text']) != (
+                rev.parse_revision_id, item.request.original_text,
+            ):
+                raise ValueError('translation source does not match database')
+            prior = conn.execute('SELECT failure_code FROM translation_results WHERE translation_revision_id=? AND chunk_id=?',
+                                 (rev.translation_revision_id, row['chunk_id'])).fetchone()
+            code = item.failure_code.value if item.failure_code else None
+            identical = (prior is not None and prior['failure_code'] == code
+                         and (not item.succeeded or (row['text'], row['translation_revision_id']) == (item.text, rev.translation_revision_id)))
+            if identical:
+                continue
+            if published:
+                raise ValueError('published translation cannot be changed')
+            if row['text'] is not None or row['translation_revision_id'] is not None:
+                raise ValueError('successful translation cannot be overwritten')
+            if item.succeeded:
+                count = conn.execute('UPDATE chunks SET text=?, translation_revision_id=? WHERE chunk_id=? AND text IS NULL AND translation_revision_id IS NULL',
+                                     (item.text, rev.translation_revision_id, row['chunk_id'])).rowcount
+                if count != 1:
+                    raise ValueError('translation update conflict')
+            conn.execute('''INSERT INTO translation_results VALUES (?, ?, ?)
+                            ON CONFLICT(translation_revision_id, chunk_id) DO UPDATE SET failure_code=excluded.failure_code''',
+                         (rev.translation_revision_id, row['chunk_id'], code))
+
+
+def get_translation_failures(db_path: str, translation_revision_id: str) -> list[dict]:
+    with closing(get_connection(db_path)) as conn:
+        return [dict(r) for r in conn.execute(
+            'SELECT chunk_id, failure_code FROM translation_results WHERE translation_revision_id=? AND failure_code IS NOT NULL ORDER BY chunk_id',
+            (translation_revision_id,),
+        )]
+
+
+def get_translated_chunks(db_path: str, parse_revision_id: str, translation_revision_id: str) -> List[Chunk]:
+    with closing(get_connection(db_path)) as conn:
+        if not conn.execute('SELECT 1 FROM translation_revisions WHERE translation_revision_id=? AND parse_revision_id=?',
+                            (translation_revision_id, parse_revision_id)).fetchone():
+            raise ValueError('translation does not belong to parse revision')
+        return [Chunk(**dict(row)) for row in conn.execute(
+            'SELECT * FROM chunks WHERE parse_revision_id=? AND translation_revision_id=? AND text IS NOT NULL ORDER BY chunk_index',
+            (parse_revision_id, translation_revision_id),
+        )]
+
+
+def get_search_index(db_path: str, version_id: str, parse_revision_id: str | None = None,
+                     translation_revision_id: str | None = None) -> Optional[dict]:
+    """게시된 색인만 조회하며, 리비전을 지정하면 정확히 일치하는 경우만 반환한다."""
+    with closing(get_connection(db_path)) as conn:
+        row = conn.execute('''SELECT s.*, e.model_name, e.dimension FROM search_indexes s
+                              JOIN embedding_sets e USING(embedding_set_id) WHERE s.version_id=?''',
+                           (version_id,)).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        if ((parse_revision_id is not None and result['parse_revision_id'] != parse_revision_id)
+                or (translation_revision_id is not None and result['translation_revision_id'] != translation_revision_id)):
+            return None
+        return result
+
+
+def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
+                         embedding_set: EmbeddingSet, job_id: str, chunk_count: int,
+                         limitations: list[str]) -> None:
+    """벡터 검증 후 색인 게시와 READY 상태 전환을 하나의 트랜잭션으로 처리한다."""
+    if type(chunk_count) is not int or chunk_count < 1 or type(embedding_set.dimension) is not int or embedding_set.dimension < 1:
+        raise ValueError('positive chunk count and embedding dimension required')
+    require_text(embedding_set.embedding_set_id, 'embedding_set_id')
+    require_text(embedding_set.model_name, 'model_name')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        valid = conn.execute('''SELECT 1 FROM translation_revisions t
+                                JOIN parse_revisions p USING(parse_revision_id)
+                                JOIN processing_jobs j ON j.version_id=p.version_id
+                                WHERE t.translation_revision_id=? AND p.parse_revision_id=?
+                                AND p.version_id=? AND j.job_id=? AND j.status='processing' ''',
+                             (embedding_set.translation_revision_id, parse_revision_id, version_id, job_id)).fetchone()
+        actual = conn.execute('SELECT COUNT(*) FROM chunks WHERE parse_revision_id=? AND translation_revision_id=? AND text IS NOT NULL',
+                              (parse_revision_id, embedding_set.translation_revision_id)).fetchone()[0]
+        if not valid or actual != chunk_count:
+            raise ValueError('index does not match the job and translated chunks')
+        conn.execute('INSERT INTO embedding_sets VALUES (?, ?, ?, ?, ?)',
+                     (embedding_set.embedding_set_id, embedding_set.translation_revision_id,
+                      embedding_set.model_name, embedding_set.dimension, embedding_set.created_at))
+        conn.execute('INSERT INTO search_indexes VALUES (?, ?, ?, ?, ?, ?)',
+                     (embedding_set.embedding_set_id, version_id, parse_revision_id,
+                      embedding_set.translation_revision_id, job_id, chunk_count))
+        conn.execute("UPDATE processing_jobs SET status='ready', stage='index', limitations=?, updated_at=? WHERE job_id=?",
+                     (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
+
+
+def prepare_ingestion(db_path: str, paper: Paper, candidate: PaperVersion,
+                      new_job_id: str) -> IngestionRegistration:
+    """버전 조회·생성과 기존 작업 재사용 여부를 하나의 트랜잭션에서 결정한다."""
+    if paper.paper_id != candidate.paper_id:
+        raise ValueError('논문 ID가 일치하지 않습니다.')
+    for name, value in (('paper_id', paper.paper_id), ('version_id', candidate.version_id),
+                        ('file_hash', candidate.file_hash), ('job_id', new_job_id)):
+        require_text(value, name)
+    with closing(get_connection(db_path)) as conn, conn:
+        # 조회·생성과 작업 확보 사이에 다른 쓰기 요청이 끼어들지 못하도록 한다.
+        conn.execute('BEGIN IMMEDIATE')
+        conn.execute('''INSERT INTO papers (paper_id, title, source_kind, created_at)
+                        VALUES (?, ?, ?, ?) ON CONFLICT(paper_id) DO NOTHING''',
+                     (paper.paper_id, paper.title, paper.source_kind, paper.created_at))
+        row = conn.execute('SELECT version_id FROM paper_versions WHERE paper_id=? AND file_hash=?',
+                           (paper.paper_id, candidate.file_hash)).fetchone()
+        reused = row is not None
+        version_id = row['version_id'] if row else candidate.version_id
+        if not row:
+            conn.execute('''INSERT INTO paper_versions
+                            (version_id, paper_id, file_hash, stored_path, original_filename, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?)''',
+                         (version_id, paper.paper_id, candidate.file_hash, candidate.stored_path,
+                          candidate.original_filename, candidate.created_at))
+        published = conn.execute('SELECT job_id FROM search_indexes WHERE version_id=?',
+                                 (version_id,)).fetchone()
+        if published:
+            return IngestionRegistration(IngestionDisposition.COMPLETED, version_id,
+                                         published['job_id'], True)
+        active = conn.execute('''SELECT job_id FROM processing_jobs WHERE version_id=?
+                                 AND status IN ('queued','processing')
+                                 ORDER BY created_at DESC, rowid DESC LIMIT 1''', (version_id,)).fetchone()
+        if active:
+            return IngestionRegistration(IngestionDisposition.IN_PROGRESS, version_id,
+                                         active['job_id'], True)
+        # 실패·중단 이력은 남기고 새 작업을 시작한다.
+        timestamp = now_iso()
+        conn.execute('''INSERT INTO processing_jobs
+                        (job_id, version_id, status, stage, limitations, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                     (new_job_id, version_id, JobStatus.PROCESSING.value, JobStage.PARSE.value,
+                      '[]', timestamp, timestamp))
+        return IngestionRegistration(IngestionDisposition.STARTED, version_id, new_job_id, reused)
+
+
+def claim_ingestion_job(db_path: str, job: ProcessingJob) -> None:
+    """동일 버전의 동시 등록을 거부한다. 시작 시 중단된 작업의 상태 정리가 필요하다."""
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        if conn.execute("SELECT 1 FROM processing_jobs WHERE version_id=? AND status IN ('queued','processing')",
+                        (job.version_id,)).fetchone():
+            raise ValueError('REQUEST_IN_PROGRESS')
+        if conn.execute('SELECT 1 FROM search_indexes WHERE version_id=?', (job.version_id,)).fetchone():
+            raise ValueError('version already published')
+        conn.execute('INSERT INTO processing_jobs VALUES (?, ?, ?, ?, ?, ?, ?)',
+                     (job.job_id, job.version_id, 'processing', 'parse', '[]', job.created_at, job.updated_at))
+
+
+def create_learning_context(db_path: str, context: LearningContext) -> None:
+    require_text(context.context_id, 'context_id')
+    if context.goal not in ('understand', 'implement', 'skim'):
+        raise ValueError('invalid learning goal')
+    if not isinstance(context.known_concepts, list) or any(not isinstance(c, str) or not c.strip() for c in context.known_concepts):
+        raise ValueError('known_concepts must contain nonempty strings')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        if not conn.execute('''SELECT 1 FROM search_indexes WHERE embedding_set_id=? AND version_id=?
+                               AND parse_revision_id=? AND translation_revision_id=?''',
+                            (context.embedding_set_id, context.version_id, context.parse_revision_id,
+                             context.translation_revision_id)).fetchone():
+            raise ValueError('context must reference a published index with matching revisions')
+        conn.execute('''INSERT INTO learning_contexts
+                        (context_id, version_id, parse_revision_id, translation_revision_id,
+                         embedding_set_id, goal, known_concepts, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                     (context.context_id, context.version_id, context.parse_revision_id,
+                      context.translation_revision_id, context.embedding_set_id, context.goal,
+                      json.dumps(context.known_concepts, ensure_ascii=False), context.created_at))
+
+
+def get_or_create_default_context(db_path: str, version_id: str) -> LearningContext:
+    """게시 색인별 기본 학습 맥락을 원자적으로 생성하거나 재사용한다."""
+    require_text(version_id, 'version_id')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        if not conn.execute('SELECT 1 FROM paper_versions WHERE version_id=?', (version_id,)).fetchone():
+            raise ValueError('논문 버전을 찾을 수 없습니다.')
+        index = conn.execute('''SELECT s.* FROM search_indexes s
+            JOIN parse_revisions p ON p.parse_revision_id=s.parse_revision_id AND p.version_id=s.version_id
+            JOIN translation_revisions t ON t.translation_revision_id=s.translation_revision_id
+                AND t.parse_revision_id=p.parse_revision_id
+            JOIN embedding_sets e ON e.embedding_set_id=s.embedding_set_id
+                AND e.translation_revision_id=t.translation_revision_id
+            JOIN processing_jobs j ON j.job_id=s.job_id AND j.version_id=s.version_id AND j.status='ready'
+            WHERE s.version_id=?''', (version_id,)).fetchone()
+        if index is None:
+            # 손상된 게시 기록을 단순한 등록 대기로 안내하지 않는다.
+            if conn.execute('SELECT 1 FROM search_indexes WHERE version_id=?', (version_id,)).fetchone():
+                raise ValueError('게시된 색인의 연결 정보가 올바르지 않습니다.')
+            job = conn.execute('''SELECT job_id, status FROM processing_jobs WHERE version_id=?
+                ORDER BY created_at DESC, rowid DESC LIMIT 1''', (version_id,)).fetchone()
+            raise ContextNotReadyError(version_id, job['job_id'] if job else None,
+                                       JobStatus(job['status']) if job else None)
+        link = conn.execute('SELECT context_id FROM default_learning_contexts WHERE embedding_set_id=?',
+                            (index['embedding_set_id'],)).fetchone()
+        if link:
+            row = conn.execute('SELECT * FROM learning_contexts WHERE context_id=?', (link['context_id'],)).fetchone()
+            if row is None:
+                raise ValueError('기본 학습 맥락의 연결이 올바르지 않습니다.')
+            values = dict(row)
+            values['known_concepts'] = json.loads(values['known_concepts'])
+            context = LearningContext(**values)
+            if (any(getattr(context, key) != index[key] for key in
+                    ('version_id', 'parse_revision_id', 'translation_revision_id', 'embedding_set_id'))
+                    or context.goal != 'understand' or context.known_concepts != []):
+                raise ValueError('기본 학습 맥락의 연결 또는 설정이 올바르지 않습니다.')
+            return context
+        # 같은 설정의 사용자 지정 맥락이 있어도 기본 맥락으로 임의 전환하지 않는다.
+        context = LearningContext(str(uuid4()), version_id, index['parse_revision_id'],
+            index['translation_revision_id'], embedding_set_id=index['embedding_set_id'])
+        conn.execute('''INSERT INTO learning_contexts
+            (context_id, version_id, parse_revision_id, translation_revision_id,
+             embedding_set_id, goal, known_concepts, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            (context.context_id, version_id, context.parse_revision_id, context.translation_revision_id,
+             context.embedding_set_id, context.goal, '[]', context.created_at))
+        conn.execute('INSERT INTO default_learning_contexts (embedding_set_id, context_id) VALUES (?, ?)',
+                     (context.embedding_set_id, context.context_id))
+        return context
+
+
+def get_learning_context(db_path: str, context_id: str) -> Optional[LearningContext]:
+    with closing(get_connection(db_path)) as conn:
+        row = conn.execute('SELECT * FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone()
+        if not row:
+            return None
+        values = dict(row)
+        values['known_concepts'] = json.loads(values['known_concepts'])
+        return LearningContext(**values)
+
+
+def _evidence_detail(conn, context_id: str, evidence: Evidence) -> EvidenceDetail:
+    row = conn.execute('''SELECT c.*, p.original_filename, l.version_id FROM learning_contexts l
+                          JOIN chunks c ON c.parse_revision_id=l.parse_revision_id
+                                       AND c.translation_revision_id=l.translation_revision_id
+                          JOIN paper_versions p ON p.version_id=l.version_id
+                          WHERE l.context_id=? AND c.chunk_id=?''',
+                       (context_id, evidence.chunk_id)).fetchone()
+    if not row:
+        raise ValueError('evidence chunk is outside context')
+    # Windows와 Unix 경로 모두에서 파일명만 추출하여 경로 노출을 막는다.
+    filename = PureWindowsPath(PurePosixPath(row['original_filename']).name).name
+    detail = EvidenceDetail(
+        evidence_id=evidence.evidence_id, chunk_id=evidence.chunk_id, version_id=row['version_id'],
+        parse_revision_id=row['parse_revision_id'], translation_revision_id=row['translation_revision_id'],
+        printed_page_label=row['printed_page_label'], pdf_page=row['pdf_page'],
+        quote_ko=evidence.quote_ko, quote_original=evidence.quote_original, file_display_name=filename,
+    )
+    if detail.quote_original not in row['original_text']:
+        raise ValueError('original quote not found')
+    if detail.quote_ko is not None and (row['text'] is None or detail.quote_ko not in row['text']):
+        raise ValueError('translated quote not found')
+    return detail
+
+
+def save_evidences(db_path: str, context_id: str, evidences: List[Evidence]) -> None:
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
+            raise ValueError('context not found')
+        for evidence in evidences:
+            _evidence_detail(conn, context_id, evidence)
+            conn.execute('INSERT INTO evidences VALUES (?, ?, ?, ?, ?, ?)',
+                         (evidence.evidence_id, context_id, evidence.chunk_id,
+                          evidence.quote_ko, evidence.quote_original, now_iso()))
+
+
+def get_evidences(db_path: str, context_id: str, evidence_ids: List[str]) -> GetEvidenceResult:
+    if len(set(evidence_ids)) != len(evidence_ids):
+        raise ValueError('duplicate evidence IDs')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN')
+        if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
+            raise ValueError('context not found')
+        details = []
+        for evidence_id in evidence_ids:
+            row = conn.execute('SELECT * FROM evidences WHERE context_id=? AND evidence_id=?',
+                               (context_id, evidence_id)).fetchone()
+            if not row:
+                raise ValueError('evidence not found in context')
+            details.append(_evidence_detail(conn, context_id, Evidence(
+                row['evidence_id'], row['chunk_id'], row['quote_ko'], row['quote_original'],
+            )))
+        return GetEvidenceResult(tuple(details))
