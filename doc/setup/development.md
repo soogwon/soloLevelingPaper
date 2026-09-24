@@ -1,4 +1,4 @@
-작성·갱신 일시: 2026-09-24 11:40:02 (KST, UTC+09:00)
+작성·갱신 일시: 2026-09-24 13:11:52 (KST, UTC+09:00)
 
 # 개발 안내
 
@@ -42,6 +42,7 @@
 | embedding_sets | 번역 리비전과 임베딩 모델·차원 연결 |
 | search_indexes | 벡터 검증 후 게시된 색인과 버전·리비전·job 연결 |
 | learning_contexts | 게시 색인에 고정한 학습 목적·known_concepts |
+| default_learning_contexts | 게시 색인별 기본 context의 명시적 연결. 사용자 지정 context와 구분 |
 | evidences | context별 청크 및 당시 원문·번역 인용문 |
 
 주요 repository API:
@@ -57,6 +58,7 @@
   embedding set·색인 참조 저장과 job ready 전환을 한 SQLite 트랜잭션으로 처리.
 - `create_learning_context`, `get_learning_context`: context 영속 저장·조회.
   기존 LearningContext에 선택적 embedding_set_id를 추가했으며 저장 시에는 필수다.
+- `get_or_create_default_context`: 게시 완료된 논문 버전의 기본 context를 원자적으로 생성·재사용.
 - `save_evidences`, `get_evidences`: context 범위·실제 인용문을 검사하고 근거 저장·조회.
   조회는 요청 순서를 보존하며 하나라도 없거나 context 밖이면 전체 요청을 거부한다.
 
@@ -67,7 +69,75 @@ context를 바꾸는 API는 없으며, 같은 context ID로 새 설정을 덮어
 Chroma는 `chunks-{embedding_set_id}` 컬렉션에 저장한다. 논문별 모델 차원 변경이
 다른 등록의 색인과 충돌하지 않도록 분리하며, query_similar는 이 이름을 기본으로 사용한다.
 SQLite의 get_search_index로 고정 리비전의 embedding_set_id·모델·차원을 얻어 검색해야 한다.
-현재 B의 실제 검색 서비스와 MCP 도구는 아직 연결되지 않았다.
+현재 B의 context 기반 검색 서비스는 SQLite·Chroma에 연결되어 있으며, MCP 도구 노출은 아직 없다.
+
+## 학습 맥락 기반 범위 검색
+
+`SearchEntryService`는 context 선택 없이 논문 버전으로 기본 context를 준비한다.
+내부 `ContextSearchService`는 `context_id`를 고정된 논문·파싱·번역 범위로 해석한다.
+`SQLiteChromaRetriever`는 게시된 색인의 모델로 질문을 임베딩하고, 검색된 청크의
+원문·번역문·페이지 정보를 SQLite에서 가져와 `SearchResult`로 반환한다.
+
+```python
+from solo_leveling.application.evidence_qa.entry import SearchEntryService
+from solo_leveling.application.evidence_qa.serialization import serialize_search_result
+from solo_leveling.infrastructure.retrieval.sqlite_chroma import (
+    SQLiteChromaRetriever, SQLiteContextReader,
+)
+from solo_leveling.infrastructure.storage.vector_store import get_client
+
+# 등록을 완료한 동일 DB·Chroma 경로를 사용한다. 기존 DB는 init_db로 신규 테이블을 준비한다.
+service = SearchEntryService(
+    SQLiteContextReader(db_path),
+    SQLiteChromaRetriever(db_path, get_client(chroma_dir)),
+)
+response = service.search("어텐션은 어떻게 작동하는가?", version_id=version_id, top_k=5)
+payload = {"context_id": response.context_id, "result": serialize_search_result(response.result)}
+
+# 사용자가 지정한 맥락이 있으면 그대로 사용한다.
+response = service.search("더 설명해줘", context_id=response.context_id)
+```
+
+- 선택 인자 `pdf_pages=(2, 3)`, `section_ids=("method",)`로 범위를 좁힐 수 있다.
+  두 조건을 함께 주면 AND로 적용하며, 비어 있으면 해당 조건으로 제한하지 않는다.
+- context에 고정한 색인 ID와 실제 결과가 일치해야 한다. 번역이 없는 청크는 검색하지 않는다.
+- DB의 리비전 연결, 청크 수, Chroma의 청크 구성·번역문·메타데이터·벡터 차원을 검증한다.
+  누락되거나 불일치하는 색인은 오류로 처리하며, 정상적인 빈 검색 결과로 숨기지 않는다.
+  검색 중 누락된 컬렉션을 자동 생성하거나 색인을 복구하지 않는다.
+- 정상 색인에서 페이지·섹션에 해당하는 청크가 없으면 빈 `items`를 반환한다.
+- 현재 등록 색인은 Chroma 기본 L2 거리 기반이며 점수는 `1 / (1 + distance)`다.
+  높은 점수가 더 가까운 결과를 뜻하지만 확률이나 답변의 정확도를 뜻하지 않는다.
+  점수 동점은 `chunk_id`로 정렬하고 순위는 1부터 부여한다.
+- 초기 소규모 구현은 색인 전체를 읽어 검증하고 전체 후보를 검색한 뒤 범위 필터와
+  `top_k`를 적용한다. 범위 안 후보 누락을 피하는 대신 비용이 크므로 대규모 사용 전
+  메타데이터 사전 필터·검증 캐시·배치 조회 등을 검토해야 한다.
+- 질문 임베딩은 기본적으로 실제 모델을 사용한다. 테스트에서는 고정 벡터 함수를 주입하여
+  네트워크 호출 없이 실제 SQLite·Chroma 연결과 범위 계약을 검증한다.
+- 검색 점수와 순위는 DB에 저장하지 않는다. 내부 검색기는 context나 근거를 새로 만들지 않는다.
+  검색 진입점은 context가 생략된 경우에만 기본 context를 준비하며, 근거 생성은 하지 않는다.
+  답변·claim 생성, 관련도 임계값, 실제 모델의 검색 품질 평가, API·MCP 연결은 후속 작업이다.
+
+### 기본 context 준비 규칙
+
+- `context_id`를 생략하거나 `None`으로 전달하면 `version_id`가 필수다.
+  게시 완료된 색인에서 리비전을 가져오고, UUID로 새 context ID를 만든다.
+  기본값은 `goal="understand"`, `known_concepts=[]`이며 같은 색인에서는 재사용한다.
+- `default_learning_contexts`의 색인 ID 기본키와 생성 트랜잭션으로 동시 생성 중복을 막는다.
+  같은 기본값을 가진 사용자 지정 context가 있어도 임의로 선택하거나 덮어쓰지 않는다.
+- 명시한 `context_id`가 빈 문자열이거나 존재하지 않으면 오류다. 기본 context로 대체하지 않는다.
+  context와 논문 버전을 함께 지정하면 두 정보의 소속이 일치해야 한다.
+- 색인이 준비되지 않았으면 context를 생성하거나 검색하지 않고 `ContextNotReadyError`를 전달한다.
+  예외의 `version_id`, `job_id`, `status`로 API·MCP 계층에서 진행·실패·중단 상태를 안내할 수 있다.
+  등록 작업이 없으면 `job_id`와 `status`는 `None`이다. 없는 논문이나 손상된 색인은 별도 오류다.
+- 응답은 사용한 `context_id`와 `SearchResult`를 포함한다. 후속 질문과 근거 저장에 해당 ID를 사용한다.
+- 현재는 사용자 구분 없는 로컬 기본 맥락이다. 다중 사용자 서비스에서는 사용자 소유권과
+  접근 권한을 별도로 설계해야 한다. 사용자 화면과 API·MCP의 안내 연결은 아직 남아 있다.
+
+검색 기능만 검증하려면 다음을 실행한다.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/unit/test_context_search.py tests/unit/test_default_context.py tests/integration/test_scoped_search.py -v
+```
 
 ## 설치·테스트
 

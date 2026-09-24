@@ -108,6 +108,11 @@ CREATE TABLE IF NOT EXISTS learning_contexts (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS default_learning_contexts (
+    embedding_set_id TEXT PRIMARY KEY REFERENCES search_indexes(embedding_set_id),
+    context_id TEXT NOT NULL UNIQUE REFERENCES learning_contexts(context_id)
+);
+
 CREATE TABLE IF NOT EXISTS evidences (
     evidence_id TEXT PRIMARY KEY,
     context_id TEXT NOT NULL REFERENCES learning_contexts(context_id),

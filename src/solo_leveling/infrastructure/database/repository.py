@@ -5,6 +5,7 @@ infrastructure/database — 리포지토리
 processing_jobs.limitations는 JSON 문자열로 저장한다(SQLite에 배열 타입이 없어서).
 """
 import json
+from uuid import uuid4
 from contextlib import closing
 from pathlib import PureWindowsPath, PurePosixPath
 from typing import List, Optional
@@ -26,6 +27,7 @@ from solo_leveling.domain.models import (
     now_iso,
 )
 from solo_leveling.domain.translation import TranslationBatchResult
+from solo_leveling.domain.context import ContextNotReadyError
 from solo_leveling.domain.evidence_qa import EvidenceDetail, GetEvidenceResult, require_text
 from solo_leveling.infrastructure.database.schema import get_connection
 
@@ -421,6 +423,56 @@ def create_learning_context(db_path: str, context: LearningContext) -> None:
                      (context.context_id, context.version_id, context.parse_revision_id,
                       context.translation_revision_id, context.embedding_set_id, context.goal,
                       json.dumps(context.known_concepts, ensure_ascii=False), context.created_at))
+
+
+def get_or_create_default_context(db_path: str, version_id: str) -> LearningContext:
+    """게시 색인별 기본 학습 맥락을 원자적으로 생성하거나 재사용한다."""
+    require_text(version_id, 'version_id')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        if not conn.execute('SELECT 1 FROM paper_versions WHERE version_id=?', (version_id,)).fetchone():
+            raise ValueError('논문 버전을 찾을 수 없습니다.')
+        index = conn.execute('''SELECT s.* FROM search_indexes s
+            JOIN parse_revisions p ON p.parse_revision_id=s.parse_revision_id AND p.version_id=s.version_id
+            JOIN translation_revisions t ON t.translation_revision_id=s.translation_revision_id
+                AND t.parse_revision_id=p.parse_revision_id
+            JOIN embedding_sets e ON e.embedding_set_id=s.embedding_set_id
+                AND e.translation_revision_id=t.translation_revision_id
+            JOIN processing_jobs j ON j.job_id=s.job_id AND j.version_id=s.version_id AND j.status='ready'
+            WHERE s.version_id=?''', (version_id,)).fetchone()
+        if index is None:
+            # 손상된 게시 기록을 단순한 등록 대기로 안내하지 않는다.
+            if conn.execute('SELECT 1 FROM search_indexes WHERE version_id=?', (version_id,)).fetchone():
+                raise ValueError('게시된 색인의 연결 정보가 올바르지 않습니다.')
+            job = conn.execute('''SELECT job_id, status FROM processing_jobs WHERE version_id=?
+                ORDER BY created_at DESC, rowid DESC LIMIT 1''', (version_id,)).fetchone()
+            raise ContextNotReadyError(version_id, job['job_id'] if job else None,
+                                       JobStatus(job['status']) if job else None)
+        link = conn.execute('SELECT context_id FROM default_learning_contexts WHERE embedding_set_id=?',
+                            (index['embedding_set_id'],)).fetchone()
+        if link:
+            row = conn.execute('SELECT * FROM learning_contexts WHERE context_id=?', (link['context_id'],)).fetchone()
+            if row is None:
+                raise ValueError('기본 학습 맥락의 연결이 올바르지 않습니다.')
+            values = dict(row)
+            values['known_concepts'] = json.loads(values['known_concepts'])
+            context = LearningContext(**values)
+            if (any(getattr(context, key) != index[key] for key in
+                    ('version_id', 'parse_revision_id', 'translation_revision_id', 'embedding_set_id'))
+                    or context.goal != 'understand' or context.known_concepts != []):
+                raise ValueError('기본 학습 맥락의 연결 또는 설정이 올바르지 않습니다.')
+            return context
+        # 같은 설정의 사용자 지정 맥락이 있어도 기본 맥락으로 임의 전환하지 않는다.
+        context = LearningContext(str(uuid4()), version_id, index['parse_revision_id'],
+            index['translation_revision_id'], embedding_set_id=index['embedding_set_id'])
+        conn.execute('''INSERT INTO learning_contexts
+            (context_id, version_id, parse_revision_id, translation_revision_id,
+             embedding_set_id, goal, known_concepts, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            (context.context_id, version_id, context.parse_revision_id, context.translation_revision_id,
+             context.embedding_set_id, context.goal, '[]', context.created_at))
+        conn.execute('INSERT INTO default_learning_contexts (embedding_set_id, context_id) VALUES (?, ?)',
+                     (context.embedding_set_id, context.context_id))
+        return context
 
 
 def get_learning_context(db_path: str, context_id: str) -> Optional[LearningContext]:
