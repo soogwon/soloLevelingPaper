@@ -1,4 +1,4 @@
-"""PDF 최초 등록: 한국어 번역 저장 → 벡터 검증 → READY 상태 게시.
+"""PDF/URL 최초 등록: 한국어 번역 → 벡터 저장 → 검증 → READY 상태 게시.
 
 게시된 등록 결과는 변경하지 않는다. 게시 전 실패한 등록은 저장된 성공 번역을
 재사용하고, 번역이 없는 청크만 재시도한다.
@@ -8,7 +8,7 @@ import hashlib
 import uuid
 from contextlib import closing
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from solo_leveling.application.translation.service import TranslationService
 from solo_leveling.domain.translation import TranslationSettings
@@ -22,7 +22,7 @@ from solo_leveling.infrastructure.embeddings.embedder import (
     DEFAULT_MODEL_NAME, embed_texts, embedding_dimension,
 )
 from solo_leveling.infrastructure.parsing.chunker import chunk_pages
-from solo_leveling.infrastructure.parsing.pdf_extractor import extract_pages
+from solo_leveling.infrastructure.parsing.pdf_extractor import extract_pages, ExtractedPage
 from solo_leveling.infrastructure.storage.vector_store import (
     get_client, upsert_chunk_embeddings, verify_chunk_embeddings, delete_by_embedding_set,
 )
@@ -67,37 +67,18 @@ def get_ingestion_status(db_path: str, job_id: str) -> dict:
     return response
 
 
-def register_and_ingest(
-    db_path: str, chroma_dir: str, pdf_path: str,
-    original_filename: Optional[str] = None, paper_id: Optional[str] = None,
-    embedding_model: str = DEFAULT_MODEL_NAME, *,
-    translation_service: TranslationService, translation_settings: TranslationSettings,
+def _ingest_pages(
+    db_path: str, chroma_dir: str, pages_provider: Callable[[], list],
+    version_id: str, job: ProcessingJob, paper_id: str, reused: bool,
+    embedding_model: str, translation_service: TranslationService,
+    translation_settings: TranslationSettings,
 ) -> dict:
-    """번역 설정을 명시적으로 받아야 하며, 원문으로 자동 대체하지 않는다.
+    """파싱 이후(번역→임베딩→게시) 공통 로직.
 
-    중복 확인 범위는 paper_id와 파일 해시다. 호출자가 가져오기 루트의 접근 권한을
-    검증해야 한다. 게시된 부분 번역은 그대로 재사용하며, 게시 후 누락 구간을
-    재시도하는 기능은 별도 후속 작업이다.
+    PDF 직접 등록, URL-PDF, URL-HTML 세 경로가 모두 이 함수를 공유한다.
+    각 호출부는 pages_provider로 "아직 파싱 안 됐을 때만 호출되는" 페이지
+    추출 함수를 넘기면 된다 (이미 파싱된 청크가 있으면 재사용하고 호출 안 함).
     """
-    init_db(db_path)
-    paper_id = paper_id or str(uuid.uuid4())
-    original_filename = original_filename or Path(pdf_path).name
-    file_hash = compute_file_hash(pdf_path)
-    registration = repo.prepare_ingestion(
-        db_path, Paper(paper_id=paper_id, source_kind='local_file'),
-        PaperVersion(str(uuid.uuid4()), paper_id, file_hash, pdf_path, original_filename),
-        str(uuid.uuid4()),
-    )
-    if registration.disposition != IngestionDisposition.STARTED:
-        # 상태 조회 직전에 완료된 경우에도 최신 완료 결과를 반환한다.
-        status = get_ingestion_status(db_path, registration.job_id)
-        if status['result_available']:
-            return status['result']
-        return {**status, 'reused_existing': True}
-
-    version_id = registration.version_id
-    reused = registration.reused_existing
-    job = ProcessingJob(registration.job_id, version_id)
     client = None
     embedding_set = None
     parse_revision = None
@@ -108,10 +89,10 @@ def register_and_ingest(
         parse_revision = repo.get_latest_parse_revision(db_path, version_id)
         chunks = repo.get_chunks_by_parse_revision(db_path, parse_revision.parse_revision_id) if parse_revision else []
         if not chunks:
-            pages = extract_pages(pdf_path)
+            pages = pages_provider()
             parse_revision = ParseRevision(str(uuid.uuid4()), version_id, len(pages))
             chunks = chunk_pages(parse_revision.parse_revision_id, pages)
-            # 파싱 결과 전체를 원자적으로 저장하여 중단 시 일부 청크만 남는 것을 막는다.
+            # 파싱 결과 전체를 원자적으로 저장해 중단 시 절반만 남는 것을 막는다.
             with closing(repo.get_connection(db_path)) as conn, conn:
                 conn.execute('INSERT INTO parse_revisions VALUES (?, ?, ?, ?)',
                              (parse_revision.parse_revision_id, version_id, len(pages), parse_revision.created_at))
@@ -152,7 +133,7 @@ def register_and_ingest(
                 dim = embedding_dimension(embedding_model)
                 embedding_set = EmbeddingSet(str(uuid.uuid4()), translation_id, embedding_model, dim)
                 client = get_client(chroma_dir)
-                # 임베딩 세트별 컬렉션을 사용하여 향후 모델 간 차원이 달라도 저장할 수 있다.
+                # 임베딩 세트별 컬렉션을 사용해 이후 모델 차원이 달라져도 공존 저장 가능
                 collection = f'chunks-{embedding_set.embedding_set_id}'
                 upsert_chunk_embeddings(
                     client, [c.chunk_id for c in translated], vectors,
@@ -187,3 +168,112 @@ def register_and_ingest(
             repo.update_job_status(db_path, job.job_id, JobStatus.FAILED,
                                    limitations=[*limitations, 'ingestion_failed'])
         raise
+
+
+def register_and_ingest(
+    db_path: str, chroma_dir: str, pdf_path: str,
+    original_filename: Optional[str] = None, paper_id: Optional[str] = None,
+    embedding_model: str = DEFAULT_MODEL_NAME, *,
+    translation_service: TranslationService, translation_settings: TranslationSettings,
+) -> dict:
+    """번역 설정을 명시적으로 받아야 하며, 원문으로 자동 폴백하지 않는다.
+
+    중복 확인 범위는 paper_id와 파일 해시. 호출자가 가져오기 루트의 접근 권한을
+    검증해야 한다. 게시된 부분 번역은 그대로 재사용하며, 게시 전 미완 구간을
+    재시도하는 기능은 별도 후속 작업이다.
+    """
+    init_db(db_path)
+    paper_id = paper_id or str(uuid.uuid4())
+    original_filename = original_filename or Path(pdf_path).name
+    file_hash = compute_file_hash(pdf_path)
+    registration = repo.prepare_ingestion(
+        db_path, Paper(paper_id=paper_id, source_kind='local_file'),
+        PaperVersion(str(uuid.uuid4()), paper_id, file_hash, pdf_path, original_filename),
+        str(uuid.uuid4()),
+    )
+    if registration.disposition != IngestionDisposition.STARTED:
+        # 상태 조회 직전에 완료된 경우에도 최신 완료 결과를 반환한다.
+        status = get_ingestion_status(db_path, registration.job_id)
+        if status['result_available']:
+            return status['result']
+        return {**status, 'reused_existing': True}
+
+    version_id = registration.version_id
+    reused = registration.reused_existing
+    job = ProcessingJob(registration.job_id, version_id)
+    return _ingest_pages(
+        db_path, chroma_dir, lambda: extract_pages(pdf_path),
+        version_id, job, paper_id, reused, embedding_model,
+        translation_service, translation_settings,
+    )
+
+
+def register_and_ingest_url(
+    db_path: str, chroma_dir: str, url: str, tmp_pdf_dir: str,
+    paper_id: Optional[str] = None, embedding_model: str = DEFAULT_MODEL_NAME, *,
+    translation_service: TranslationService, translation_settings: TranslationSettings,
+) -> dict:
+    """URL로 논문을 등록한다(M1 기능 ①의 URL 부분).
+
+    PDF 링크면 다운로드해 register_and_ingest를 그대로 재사용한다(중복 로직 없음).
+    일반 웹페이지(HTML)면 본문을 추출해 "페이지 1개"로 취급하고, register_and_ingest와
+    동일한 번역·임베딩·게시 파이프라인(_ingest_pages)을 공유한다.
+
+    주의: HTML로 등록된 논문은 pdf_page가 항상 1이고 printed_page_label도 항상
+    None이다 — 실제 인쇄 페이지 개념이 없기 때문이다.
+
+    tmp_pdf_dir: PDF로 판별된 경우 다운로드한 바이트를 저장할 임시 폴더.
+    URL 사설망 차단은 infrastructure/parsing/url_ingest.py에서 처리하며, 이는
+    최소 방어선이다 — 정식 네트워크 정책은 C 담당 영역과 통합이 필요하다.
+    """
+    from solo_leveling.infrastructure.parsing.url_ingest import fetch_and_classify, extract_html_text
+
+    kind, response = fetch_and_classify(url)
+
+    if kind == 'pdf':
+        Path(tmp_pdf_dir).mkdir(parents=True, exist_ok=True)
+        tmp_path = Path(tmp_pdf_dir) / f'{uuid.uuid4()}.pdf'
+        with open(tmp_path, 'wb') as f:
+            f.write(response.content)
+        result = register_and_ingest(
+            db_path, chroma_dir, str(tmp_path),
+            original_filename=Path(url).name or 'downloaded.pdf', paper_id=paper_id,
+            embedding_model=embedding_model,
+            translation_service=translation_service, translation_settings=translation_settings,
+        )
+        result['source_kind'] = 'url_pdf'
+        return result
+
+    if kind != 'html':
+        raise ValueError(f'지원하지 않는 콘텐츠 타입입니다(kind={kind}): {url}')
+
+    text = extract_html_text(response.text)
+    file_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+    init_db(db_path)
+    paper_id = paper_id or str(uuid.uuid4())
+    registration = repo.prepare_ingestion(
+        db_path, Paper(paper_id=paper_id, source_kind='url'),
+        PaperVersion(str(uuid.uuid4()), paper_id, file_hash, url, url),
+        str(uuid.uuid4()),
+    )
+    if registration.disposition != IngestionDisposition.STARTED:
+        status = get_ingestion_status(db_path, registration.job_id)
+        if status['result_available']:
+            result = status['result']
+        else:
+            result = {**status, 'reused_existing': True}
+        result['source_kind'] = 'url_html'
+        return result
+
+    version_id = registration.version_id
+    reused = registration.reused_existing
+    job = ProcessingJob(registration.job_id, version_id)
+    result = _ingest_pages(
+        db_path, chroma_dir,
+        lambda: [ExtractedPage(pdf_page=1, text=text, printed_page_label=None)],
+        version_id, job, paper_id, reused, embedding_model,
+        translation_service, translation_settings,
+    )
+    result['source_kind'] = 'url_html'
+    return result
