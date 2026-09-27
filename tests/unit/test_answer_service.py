@@ -121,3 +121,36 @@ def test_duplicate_generated_ids_fail_before_saving(parts):
     with pytest.raises(ValueError, match='ID가 중복'):
         service.answer('질문', context_id='ctx')
     assert not saved
+
+
+def test_parser_failure_is_verification_failure_and_saves_nothing(parts):
+    from solo_leveling.application.evidence_qa.response_parser import parse_generated_answer
+    service, _, saved, _ = parts
+    service.generator = SimpleNamespace(generate_claims=lambda *args: parse_generated_answer('{'))
+    result = service.answer('질문', context_id='ctx').result
+    assert result.reason_code == ReasonCode.VERIFICATION_FAILED
+    assert result.claims == result.citations == ()
+    assert not saved
+
+
+@pytest.mark.parametrize('case', ['valid', 'empty', 'unknown', 'duplicate'])
+def test_parsed_response_passes_through_reference_checks(parts, case):
+    import json
+    from solo_leveling.application.evidence_qa.response_parser import parse_generated_answer
+    service, _, saved, _ = parts
+
+    def generate(question, evidence):
+        eid = evidence[0].evidence_id
+        ids = {'valid': [eid], 'empty': [], 'unknown': ['unknown'], 'duplicate': [eid, eid]}[case]
+        return parse_generated_answer(json.dumps({'claims': [
+            {'text': '주장', 'evidence_ids': ids},
+        ]}))
+
+    service.generator = SimpleNamespace(generate_claims=generate)
+    result = service.answer('질문', context_id='ctx').result
+    if case == 'valid':
+        assert result.status == AnswerStatus.OK
+        assert len(saved) == 1
+    else:
+        assert result.reason_code == ReasonCode.VERIFICATION_FAILED
+        assert not saved

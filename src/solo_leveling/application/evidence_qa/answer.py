@@ -11,6 +11,7 @@ from solo_leveling.domain.evidence_qa import (
 from solo_leveling.domain.models import Evidence
 from .entry import SearchEntryService
 from .ports import ClaimGenerator, EvidenceWriter, GenerationUnavailable
+from .response_parser import GenerationFormatError
 from .validators import citation_from_evidence, validate_answer_against_search, validate_search_result
 
 
@@ -77,6 +78,8 @@ class AnswerService:
             evidence_by_id[evidence_id] = Evidence(evidence_id, chunk.chunk_id, chunk.text, chunk.original_text)
         try:
             draft = self.generator.generate_claims(search.query, tuple(inputs))
+        except GenerationFormatError:
+            return insufficient(ReasonCode.VERIFICATION_FAILED, '생성된 답변의 응답 형식을 확인하지 못했습니다.')
         except GenerationUnavailable:
             raise AnswerGenerationError('답변 생성 서비스를 사용할 수 없습니다.') from None
 
