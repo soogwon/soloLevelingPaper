@@ -10,6 +10,15 @@ from .validators import (
 )
 
 
+def serialize_answer_response(response) -> dict:
+    """구조 검증만 수행했다는 사실을 명시하고 내부 검색 스냅샷은 노출하지 않는다."""
+    return {
+        'context_id': response.context_id,
+        'verification_level': 'structural_only',
+        'answer': serialize_answer_result(response.result, search=response.search),
+    }
+
+
 def _citation(citation: Citation) -> dict:
     return {
         "evidence_id": citation.evidence_id, "chunk_id": citation.chunk_id,
@@ -60,4 +69,14 @@ def serialize_answer_result(result: AnswerResult, *, search: SearchResult) -> di
 
 def serialize_get_evidence_result(result: GetEvidenceResult, *, search: SearchResult) -> dict:
     validate_get_evidence_result(result, search)
+    return {"evidence": [dict(_citation(d), file_display_name=d.file_display_name) for d in result.evidence]}
+
+
+def serialize_stored_evidence_result(result: GetEvidenceResult) -> dict:
+    """EvidenceService가 DB 출처 검증을 마친 결과만 전달한다. 재검색하지 않는다."""
+    if not isinstance(result, GetEvidenceResult):
+        raise ValueError('근거 조회 결과가 필요합니다.')
+    ids = [detail.evidence_id for detail in result.evidence]
+    if len(ids) != len(set(ids)):
+        raise ValueError('근거 ID가 중복됩니다.')
     return {"evidence": [dict(_citation(d), file_display_name=d.file_display_name) for d in result.evidence]}

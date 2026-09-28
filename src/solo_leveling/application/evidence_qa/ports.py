@@ -2,7 +2,7 @@
 
 from typing import Protocol, Sequence
 
-from solo_leveling.domain.models import LearningContext
+from solo_leveling.domain.models import Evidence, LearningContext
 
 from solo_leveling.domain.evidence_qa import (
     EvidenceInput, GeneratedAnswerDraft, SearchResult, SearchScope,
@@ -25,6 +25,16 @@ class ScopedRetriever(Protocol):
     def search(self, question: str, scope: SearchScope, top_k: int) -> SearchResult:
         """Search using a positive top_k and a pre-resolved revision scope."""
         ...
+
+
+class EvidenceWriter(Protocol):
+    def save(self, context_id: str, evidence: Sequence[Evidence]) -> None:
+        """검증된 근거 전체를 원자적으로 저장한다. 실패하면 예외를 전달한다."""
+        ...
+
+
+class GenerationUnavailable(RuntimeError):
+    """생성 제공자를 사용할 수 없는 경우 어댑터가 전달하는 오류."""
 
 
 class ClaimGenerator(Protocol):

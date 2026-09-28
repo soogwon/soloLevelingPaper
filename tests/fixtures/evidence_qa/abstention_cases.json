@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "missing_accuracy",
+      "question": "방법 A의 정확도는 몇 퍼센트인가?",
+      "evidence": [
+        {
+          "evidence_id": "ev-1",
+          "text_ko": "방법 A는 병렬 계산을 지원한다."
+        }
+      ],
+      "expected_behavior": "abstain",
+      "allowed_evidence_ids": [],
+      "required_points": [
+        "빈 주장 반환"
+      ],
+      "forbidden_points": [
+        "정확도 추정",
+        "정보 부족 안내를 claim으로 반환"
+      ],
+      "reference_response": {
+        "claims": []
+      }
+    },
+    {
+      "id": "explicit_unmeasured",
+      "question": "방법 A의 정확도 측정 결과는?",
+      "evidence": [
+        {
+          "evidence_id": "ev-1",
+          "text_ko": "이 실험에서는 방법 A의 정확도를 측정하지 않았다."
+        }
+      ],
+      "expected_behavior": "answer",
+      "allowed_evidence_ids": [
+        "ev-1"
+      ],
+      "required_points": [
+        "정확도를 측정하지 않았다고 설명"
+      ],
+      "forbidden_points": [
+        "측정값 추정",
+        "빈 주장 반환"
+      ],
+      "reference_response": {
+        "claims": [
+          {
+            "text": "이 실험에서는 방법 A의 정확도를 측정하지 않았다.",
+            "evidence_ids": [
+              "ev-1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "explicit_limit",
+      "question": "방법 A가 모든 조건에서 더 빠르다고 할 수 있나?",
+      "evidence": [
+        {
+          "evidence_id": "ev-1",
+          "text_ko": "배치 크기 32에서 방법 A가 더 빨랐다. 다른 조건은 평가하지 않았다."
+        }
+      ],
+      "expected_behavior": "answer",
+      "allowed_evidence_ids": [
+        "ev-1"
+      ],
+      "required_points": [
+        "배치 크기 32 조건",
+        "다른 조건 미평가로 일반화 불가"
+      ],
+      "forbidden_points": [
+        "모든 조건에서 더 빠름",
+        "빈 주장 반환"
+      ],
+      "reference_response": {
+        "claims": [
+          {
+            "text": "배치 크기 32에서는 더 빨랐지만 다른 조건은 평가하지 않아 일반화할 수 없다.",
+            "evidence_ids": [
+              "ev-1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "unrelated_answer",
+      "question": "방법 A의 학습 데이터는 몇 개인가?",
+      "evidence": [
+        {
+          "evidence_id": "ev-1",
+          "text_ko": "방법 A는 병렬 처리를 사용하고 메모리를 2GB 사용한다."
+        }
+      ],
+      "expected_behavior": "abstain",
+      "allowed_evidence_ids": [],
+      "required_points": [
+        "빈 주장 반환"
+      ],
+      "forbidden_points": [
+        "데이터 수 추정",
+        "메모리 양을 데이터 수로 해석",
+        "정보 부족 안내를 claim으로 반환"
+      ],
+      "reference_response": {
+        "claims": []
+      }
+    }
+  ]
+}

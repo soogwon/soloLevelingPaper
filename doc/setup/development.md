@@ -1,4 +1,4 @@
-작성·갱신 일시: 2026-09-24 13:11:52 (KST, UTC+09:00)
+작성·갱신 일시: 2026-09-24 13:59:02 (KST, UTC+09:00)
 
 # 개발 안내
 
@@ -8,7 +8,8 @@
 → 번역 결과 저장 → 성공한 번역문 임베딩 → Chroma 읽기 검증 → SQLite ready 게시 순서다.
 
 - `register_and_ingest`에는 키워드 인자 `translation_service`, `translation_settings`가 필수다.
-- 실제 번역 API 어댑터는 아직 없다. 테스트는 fake 제공자를 명시적으로 주입한다.
+- OpenAI 번역 어댑터를 명시적으로 주입할 수 있다. 설정·사용 방법은 [openai-translation.md](openai-translation.md)를 참고한다.
+- 자동 테스트는 fake 제공자 또는 HTTP 대체 응답을 사용하며 실제 API를 호출하지 않는다.
 - 원문을 한국어 번역으로 복사하거나 원문 임베딩으로 자동 fallback하지 않는다.
 - 등록된 논문은 당시 번역·색인을 계속 사용한다. 모델·프롬프트 변경은 새 등록부터 적용한다.
 - 같은 `paper_id`와 파일 해시의 게시 완료 등록은 기존 job·리비전·색인 ID를 반환한다.
@@ -115,7 +116,7 @@ response = service.search("더 설명해줘", context_id=response.context_id)
   네트워크 호출 없이 실제 SQLite·Chroma 연결과 범위 계약을 검증한다.
 - 검색 점수와 순위는 DB에 저장하지 않는다. 내부 검색기는 context나 근거를 새로 만들지 않는다.
   검색 진입점은 context가 생략된 경우에만 기본 context를 준비하며, 근거 생성은 하지 않는다.
-  답변·claim 생성, 관련도 임계값, 실제 모델의 검색 품질 평가, API·MCP 연결은 후속 작업이다.
+  실제 생성 API·내용 검증, 관련도 임계값, 실제 모델의 검색 품질 평가, API·MCP 연결은 후속 작업이다.
 
 ### 기본 context 준비 규칙
 
@@ -137,6 +138,48 @@ response = service.search("더 설명해줘", context_id=response.context_id)
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/unit/test_context_search.py tests/unit/test_default_context.py tests/integration/test_scoped_search.py -v
+```
+
+## 테스트용 답변 생성·근거 저장
+
+`AnswerService`는 기존 `SearchEntryService`를 사용해 검색하고, 서버가 발급한 근거 ID와
+한국어 번역문·원문·페이지를 `EvidenceInput`으로 생성기에 전달한다. 생성기는 주장 텍스트와
+참조 근거 ID만 반환하며, 인용문·페이지·리비전은 서버가 검색 결과로부터 조립한다.
+
+```python
+from solo_leveling.application.evidence_qa.answer import AnswerService
+from solo_leveling.application.evidence_qa.serialization import serialize_answer_response
+from solo_leveling.infrastructure.generation.fake_generator import FakeClaimGenerator
+from solo_leveling.infrastructure.generation.evidence_store import SQLiteEvidenceWriter
+
+# 위에서 만든 SearchEntryService와 동일 DB를 사용한다.
+answer_service = AnswerService(service, FakeClaimGenerator(), SQLiteEvidenceWriter(db_path))
+response = answer_service.answer("어텐션은 어떻게 작동하는가?", version_id=version_id)
+payload = serialize_answer_response(response)
+```
+
+- `FakeClaimGenerator`는 테스트 전용이다. 검색된 한국어 본문을 그대로 주장 초안으로 사용하며,
+  질문 이해·요약·추론이나 외부 API 호출을 수행하지 않는다. 실제 답변 품질을 의미하지 않는다.
+- 현재는 청크 전체 원문·번역을 인용한다. 문장 단위 발췌와 번역·원문 문장의 정렬은 후속 작업이다.
+- 생성 결과에 근거 없는 주장, 중복 참조, 알 수 없는 근거 ID 또는 잘못된 반환 형식이 있으면
+  초안 전체를 거부한다. 일부 주장만 살려 `partial`로 반환하는 정책은 아직 구현하지 않았다.
+- 검색 결과나 생성된 주장이 없으면 `insufficient_evidence`와 `evidence_not_found`를 반환한다.
+  잘못된 생성 구조는 `insufficient_evidence`와 `verification_failed`로 반환한다.
+  이 경우 claim·citation은 비어 있으며 근거를 저장하지 않는다.
+- 제공자가 `GenerationUnavailable`을 전달하면 공개 가능한 메시지의 `AnswerGenerationError`로
+  변환한다. DB·검색 오류와 그 밖의 예상하지 못한 예외는 호출부로 전달하며 성공 응답으로 숨기지 않는다.
+- 정상 구조의 주장 텍스트를 줄바꿈으로 연결하여 답변을 조립하고 실제 사용한 근거만
+  context에 원자적으로 저장한다. 저장 실패 시 성공 응답을 반환하지 않는다.
+- `ok`는 검색·생성 구조·저장 흐름의 성공만 의미한다. 응답의 `verification_level`은
+  항상 `structural_only`이며, 주장의 사실성·근거의 의미적 뒷받침은 검증하지 않는다.
+- 응답에는 `context_id`와 답변·claim·citation이 포함된다. 답변 본문·claim 이력을 DB에
+  저장하지 않으며, 응답 전송 실패 후 재요청의 멱등성·중복 근거 정리는 후속 과제다.
+- 기본 context는 생성 또는 저장 실패 후에도 남을 수 있다. 근거 배치의 원자성과 구분한다.
+  부분 번역·검색 관련도 제한은 기존 검색 정책을 따르며, 이 구현은 번역 누락을 해소하지 않는다.
+- 실제 생성 API, 내용 검증, 요약·가이드 및 API·MCP 노출은 아직 구현하지 않았다.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/unit/test_answer_service.py tests/integration/test_answer_flow.py -v
 ```
 
 ## 설치·테스트

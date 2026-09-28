@@ -11,6 +11,8 @@ from solo_leveling.domain.models import Chunk
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.database.schema import get_connection
 from solo_leveling.infrastructure.embeddings.embedder import embed_texts
+from solo_leveling.application.evidence_qa.errors import DataIntegrityError, ResourceNotFoundError
+from solo_leveling.domain.context import ContextNotReadyError
 
 
 class SQLiteContextReader:
@@ -21,7 +23,12 @@ class SQLiteContextReader:
         return repo.get_learning_context(self.db_path, context_id)
 
     def get_or_create_default_context(self, version_id: str):
-        return repo.get_or_create_default_context(self.db_path, version_id)
+        try:
+            return repo.get_or_create_default_context(self.db_path, version_id)
+        except (ResourceNotFoundError, ContextNotReadyError):
+            raise
+        except ValueError:
+            raise DataIntegrityError('기본 학습 맥락의 저장 정보가 올바르지 않습니다.') from None
 
 
 class SQLiteChromaRetriever:

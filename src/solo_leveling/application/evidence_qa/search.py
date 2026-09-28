@@ -3,6 +3,7 @@
 from solo_leveling.domain.evidence_qa import SearchResult, SearchScope, positive_int, require_text
 from .ports import LearningContextReader, ScopedRetriever
 from .validators import validate_search_result
+from .errors import ResourceNotFoundError
 
 
 class ContextSearchService:
@@ -18,7 +19,7 @@ class ContextSearchService:
         positive_int(top_k, 'top_k')
         context = self.contexts.get_context(context_id)
         if context is None:
-            raise ValueError('학습 맥락을 찾을 수 없습니다.')
+            raise ResourceNotFoundError('학습 맥락을 찾을 수 없습니다.')
         require_text(context.translation_revision_id, 'translation_revision_id')
         require_text(context.embedding_set_id, 'embedding_set_id')
         scope = SearchScope(context.version_id, context.parse_revision_id,
