@@ -26,6 +26,7 @@ from solo_leveling.domain.models import (
     LearningContext,
     Evidence,
     now_iso,
+    RequestConflictError,
 )
 from solo_leveling.domain.translation import TranslationBatchResult
 from solo_leveling.domain.context import ContextNotReadyError
@@ -348,16 +349,34 @@ def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
 
 
 def prepare_ingestion(db_path: str, paper: Paper, candidate: PaperVersion,
-                      new_job_id: str) -> IngestionRegistration:
+                      new_job_id: str, *, request_key: str | None = None,
+                      input_fingerprint: str | None = None) -> IngestionRegistration:
     """버전 조회·생성과 기존 작업 재사용 여부를 하나의 트랜잭션에서 결정한다."""
     if paper.paper_id != candidate.paper_id:
         raise ValueError('논문 ID가 일치하지 않습니다.')
     for name, value in (('paper_id', paper.paper_id), ('version_id', candidate.version_id),
                         ('file_hash', candidate.file_hash), ('job_id', new_job_id)):
         require_text(value, name)
+    if (request_key is None) != (input_fingerprint is None):
+        raise ValueError('request_key와 input_fingerprint는 함께 지정해야 합니다.')
+    if request_key is not None:
+        require_text(request_key, 'request_key')
+        require_text(input_fingerprint, 'input_fingerprint')
     with closing(get_connection(db_path)) as conn, conn:
         # 조회·생성과 작업 확보 사이에 다른 쓰기 요청이 끼어들지 못하도록 한다.
         conn.execute('BEGIN IMMEDIATE')
+        if request_key is not None:
+            request = conn.execute('SELECT * FROM ingestion_requests WHERE request_key=?',
+                                   (request_key,)).fetchone()
+            if request:
+                if request['input_fingerprint'] != input_fingerprint:
+                    raise RequestConflictError('같은 request_key가 다른 입력에 사용되었습니다.')
+                published = conn.execute('SELECT 1 FROM search_indexes WHERE job_id=?',
+                                         (request['job_id'],)).fetchone()
+                disposition = (IngestionDisposition.COMPLETED if published
+                               else IngestionDisposition.IN_PROGRESS)
+                return IngestionRegistration(disposition, request['version_id'],
+                                             request['job_id'], True)
         conn.execute('''INSERT INTO papers (paper_id, title, source_kind, created_at)
                         VALUES (?, ?, ?, ?) ON CONFLICT(paper_id) DO NOTHING''',
                      (paper.paper_id, paper.title, paper.source_kind, paper.created_at))
@@ -374,14 +393,24 @@ def prepare_ingestion(db_path: str, paper: Paper, candidate: PaperVersion,
         published = conn.execute('SELECT job_id FROM search_indexes WHERE version_id=?',
                                  (version_id,)).fetchone()
         if published:
-            return IngestionRegistration(IngestionDisposition.COMPLETED, version_id,
-                                         published['job_id'], True)
+            registration = IngestionRegistration(IngestionDisposition.COMPLETED, version_id,
+                                                 published['job_id'], True)
+            if request_key is not None:
+                conn.execute('INSERT INTO ingestion_requests VALUES (?, ?, ?, ?, ?, ?)',
+                    (request_key, input_fingerprint, paper.paper_id, version_id,
+                     published['job_id'], now_iso()))
+            return registration
         active = conn.execute('''SELECT job_id FROM processing_jobs WHERE version_id=?
                                  AND status IN ('queued','processing')
                                  ORDER BY created_at DESC, rowid DESC LIMIT 1''', (version_id,)).fetchone()
         if active:
-            return IngestionRegistration(IngestionDisposition.IN_PROGRESS, version_id,
-                                         active['job_id'], True)
+            registration = IngestionRegistration(IngestionDisposition.IN_PROGRESS, version_id,
+                                                 active['job_id'], True)
+            if request_key is not None:
+                conn.execute('INSERT INTO ingestion_requests VALUES (?, ?, ?, ?, ?, ?)',
+                    (request_key, input_fingerprint, paper.paper_id, version_id,
+                     active['job_id'], now_iso()))
+            return registration
         # 실패·중단 이력은 남기고 새 작업을 시작한다.
         timestamp = now_iso()
         conn.execute('''INSERT INTO processing_jobs
@@ -389,7 +418,18 @@ def prepare_ingestion(db_path: str, paper: Paper, candidate: PaperVersion,
                         VALUES (?, ?, ?, ?, ?, ?, ?)''',
                      (new_job_id, version_id, JobStatus.PROCESSING.value, JobStage.PARSE.value,
                       '[]', timestamp, timestamp))
+        if request_key is not None:
+            conn.execute('INSERT INTO ingestion_requests VALUES (?, ?, ?, ?, ?, ?)',
+                (request_key, input_fingerprint, paper.paper_id, version_id, new_job_id, timestamp))
         return IngestionRegistration(IngestionDisposition.STARTED, version_id, new_job_id, reused)
+
+
+def get_ingestion_request(db_path: str, request_key: str) -> Optional[dict]:
+    require_text(request_key, 'request_key')
+    with closing(get_connection(db_path)) as conn:
+        row = conn.execute('SELECT * FROM ingestion_requests WHERE request_key=?',
+                           (request_key,)).fetchone()
+        return dict(row) if row else None
 
 
 def claim_ingestion_job(db_path: str, job: ProcessingJob) -> None:

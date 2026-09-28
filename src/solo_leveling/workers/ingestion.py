@@ -7,14 +7,16 @@
 import hashlib
 import uuid
 from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
 from solo_leveling.application.translation.service import TranslationService
+from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
 from solo_leveling.domain.translation import TranslationSettings
 from solo_leveling.domain.models import (
     EmbeddingSet, JobStage, JobStatus, Paper, ParseRevision, PaperVersion, ProcessingJob,
-    IngestionDisposition,
+    IngestionDisposition, IngestionRegistration,
 )
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.database.schema import init_db
@@ -36,6 +38,66 @@ def compute_file_hash(pdf_path: str) -> str:
     return h.hexdigest()
 
 
+@dataclass(frozen=True)
+class PreparedLocalIngestion:
+    """DB 등록을 끝내고 파싱·번역·색인 실행 여부를 확정한 작업."""
+    db_path: str
+    chroma_dir: str
+    pdf_path: str
+    original_filename: str
+    paper_id: str
+    registration: IngestionRegistration
+    embedding_model: str
+
+
+def prepare_local_ingestion(
+    db_path: str, chroma_dir: str, pdf_path: str,
+    original_filename: Optional[str] = None, paper_id: Optional[str] = None,
+    embedding_model: str = DEFAULT_MODEL_NAME, *, request_key: str | None = None,
+    input_fingerprint: str | None = None,
+) -> PreparedLocalIngestion:
+    """파일 해시와 작업을 원자적으로 등록하며 PDF 본문 처리는 시작하지 않는다."""
+    init_db(db_path)
+    candidate_paper_id = paper_id or str(uuid.uuid4())
+    original_filename = original_filename or Path(pdf_path).name
+    registration = repo.prepare_ingestion(
+        db_path, Paper(paper_id=candidate_paper_id, source_kind='local_file'),
+        PaperVersion(str(uuid.uuid4()), candidate_paper_id, compute_file_hash(pdf_path),
+                     pdf_path, original_filename), str(uuid.uuid4()),
+        request_key=request_key, input_fingerprint=input_fingerprint,
+    )
+    if request_key is not None:
+        request = repo.get_ingestion_request(db_path, request_key)
+        if request is None:
+            raise ValueError('등록 요청 연결 정보를 찾을 수 없습니다.')
+        actual_paper_id = request['paper_id']
+    else:
+        actual_paper_id = candidate_paper_id
+    return PreparedLocalIngestion(db_path, chroma_dir, pdf_path, original_filename,
+                                  actual_paper_id, registration, embedding_model)
+
+
+def run_prepared_local_ingestion(
+    prepared: PreparedLocalIngestion, *, translation_service: TranslationService,
+    translation_settings: TranslationSettings,
+) -> dict:
+    """새로 확보한 작업만 실행하고 기존 작업·결과는 상태 조회로 반환한다."""
+    registration = prepared.registration
+    if registration.disposition != IngestionDisposition.STARTED:
+        status = get_ingestion_status(prepared.db_path, registration.job_id)
+        if status['result_available']:
+            return status['result']
+        return {**status, 'reused_existing': True}
+    job = ProcessingJob(registration.job_id, registration.version_id,
+                        status=JobStatus.PROCESSING, stage=JobStage.PARSE)
+    return _ingest_pages(
+        prepared.db_path, prepared.chroma_dir,
+        lambda: extract_pages(prepared.pdf_path), registration.version_id, job,
+        prepared.paper_id, registration.reused_existing, prepared.embedding_model,
+        translation_service, translation_settings,
+    )
+
+
 def _published_result(index: dict, reused: bool, db_path: str) -> dict:
     return {
         'job_id': index['job_id'], 'status': 'ready', 'version_id': index['version_id'],
@@ -52,7 +114,7 @@ def get_ingestion_status(db_path: str, job_id: str) -> dict:
     """작업 상태를 조회하고 완료된 경우 검증된 색인 결과를 함께 반환한다."""
     job = repo.get_job(db_path, job_id)
     if job is None:
-        raise ValueError('작업을 찾을 수 없습니다.')
+        raise ResourceNotFoundError('작업을 찾을 수 없습니다.')
     response = {
         'job_id': job.job_id, 'version_id': job.version_id,
         'status': job.status.value, 'stage': job.stage.value if job.stage else None,
@@ -182,30 +244,10 @@ def register_and_ingest(
     검증해야 한다. 게시된 부분 번역은 그대로 재사용하며, 게시 전 미완 구간을
     재시도하는 기능은 별도 후속 작업이다.
     """
-    init_db(db_path)
-    paper_id = paper_id or str(uuid.uuid4())
-    original_filename = original_filename or Path(pdf_path).name
-    file_hash = compute_file_hash(pdf_path)
-    registration = repo.prepare_ingestion(
-        db_path, Paper(paper_id=paper_id, source_kind='local_file'),
-        PaperVersion(str(uuid.uuid4()), paper_id, file_hash, pdf_path, original_filename),
-        str(uuid.uuid4()),
-    )
-    if registration.disposition != IngestionDisposition.STARTED:
-        # 상태 조회 직전에 완료된 경우에도 최신 완료 결과를 반환한다.
-        status = get_ingestion_status(db_path, registration.job_id)
-        if status['result_available']:
-            return status['result']
-        return {**status, 'reused_existing': True}
-
-    version_id = registration.version_id
-    reused = registration.reused_existing
-    job = ProcessingJob(registration.job_id, version_id)
-    return _ingest_pages(
-        db_path, chroma_dir, lambda: extract_pages(pdf_path),
-        version_id, job, paper_id, reused, embedding_model,
-        translation_service, translation_settings,
-    )
+    prepared = prepare_local_ingestion(db_path, chroma_dir, pdf_path,
+        original_filename, paper_id, embedding_model)
+    return run_prepared_local_ingestion(prepared,
+        translation_service=translation_service, translation_settings=translation_settings)
 
 
 def register_and_ingest_url(

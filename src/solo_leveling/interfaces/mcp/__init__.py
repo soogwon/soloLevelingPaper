@@ -1,1 +1,5 @@
-"""MCP tools and their input/output validation (team C)."""
+"""로컬 stdio MCP 서버와 도구 계약."""
+
+from .server import create_server
+
+__all__ = ['create_server']
