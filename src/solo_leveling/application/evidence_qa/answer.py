@@ -12,6 +12,7 @@ from solo_leveling.domain.models import Evidence
 from .entry import SearchEntryService
 from .ports import ClaimGenerator, EvidenceWriter, GenerationUnavailable
 from .response_parser import GenerationFormatError
+from .errors import InvalidArgumentError
 from .validators import citation_from_evidence, validate_answer_against_search, validate_search_result
 
 
@@ -41,7 +42,10 @@ class AnswerService:
     def answer(self, question: str, *, context_id: str | None = None,
                version_id: str | None = None, top_k: int = 5,
                pdf_pages: tuple[int, ...] = (), section_ids: tuple[str, ...] = ()) -> AnswerResponse:
-        positive_int(top_k, 'top_k')
+        try:
+            positive_int(top_k, 'top_k')
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from None
         found = self.search.search(question, context_id=context_id, version_id=version_id,
                                    top_k=top_k, pdf_pages=pdf_pages, section_ids=section_ids)
         search = self._snapshot(found.result)

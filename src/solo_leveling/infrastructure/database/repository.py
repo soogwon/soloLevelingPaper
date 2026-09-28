@@ -10,6 +10,7 @@ from contextlib import closing
 from pathlib import PureWindowsPath, PurePosixPath
 from typing import List, Optional
 
+from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
 from solo_leveling.domain.models import (
     Chunk,
     JobStage,
@@ -431,7 +432,7 @@ def get_or_create_default_context(db_path: str, version_id: str) -> LearningCont
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
         if not conn.execute('SELECT 1 FROM paper_versions WHERE version_id=?', (version_id,)).fetchone():
-            raise ValueError('논문 버전을 찾을 수 없습니다.')
+            raise ResourceNotFoundError('논문 버전을 찾을 수 없습니다.')
         index = conn.execute('''SELECT s.* FROM search_indexes s
             JOIN parse_revisions p ON p.parse_revision_id=s.parse_revision_id AND p.version_id=s.version_id
             JOIN translation_revisions t ON t.translation_revision_id=s.translation_revision_id
@@ -527,13 +528,13 @@ def get_evidences(db_path: str, context_id: str, evidence_ids: List[str]) -> Get
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN')
         if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
-            raise ValueError('context not found')
+            raise ResourceNotFoundError('context not found')
         details = []
         for evidence_id in evidence_ids:
             row = conn.execute('SELECT * FROM evidences WHERE context_id=? AND evidence_id=?',
                                (context_id, evidence_id)).fetchone()
             if not row:
-                raise ValueError('evidence not found in context')
+                raise ResourceNotFoundError('evidence not found in context')
             details.append(_evidence_detail(conn, context_id, Evidence(
                 row['evidence_id'], row['chunk_id'], row['quote_ko'], row['quote_original'],
             )))
