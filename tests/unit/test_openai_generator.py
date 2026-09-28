@@ -44,6 +44,8 @@ def test_request_contract_and_normal_conversion(setup):
     payload = kwargs['json']
     assert payload['model'] == 'gpt-5.4-mini'
     assert payload['store'] is False
+    assert '답변 보류 안내문은 서버가 작성한다' in payload['instructions']
+    assert '근거에 명시된 한계나 부정적 결과' in payload['instructions']
     assert payload['max_output_tokens'] == 2048
     assert payload['text']['format']['strict'] is True
     assert payload['text']['format']['schema']['additionalProperties'] is False

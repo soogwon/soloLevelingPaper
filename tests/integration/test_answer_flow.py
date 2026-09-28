@@ -55,3 +55,43 @@ def test_changed_quote_causes_atomic_save_rollback(setup_search):
         service.answer('질문', context_id='ctx')
     with closing(get_connection(db)) as conn:
         assert conn.execute('SELECT COUNT(*) FROM evidences').fetchone()[0] == 0
+
+
+def test_expansion_finds_additional_evidence_and_persists_only_used(setup_search):
+    db, _, retriever, _, calls = setup_search
+    inputs = []
+
+    def generate(question, evidence):
+        inputs.append(evidence)
+        if len(evidence) == 1:
+            return GeneratedAnswerDraft(())
+        return GeneratedAnswerDraft((GeneratedClaim('병렬 처리', (evidence[1].evidence_id,)),))
+
+    service = AnswerService(SearchEntryService(SQLiteContextReader(db), retriever),
+        SimpleNamespace(generate_claims=generate), SQLiteEvidenceWriter(db))
+    response = service.answer('질문', version_id='v', top_k=1)
+    assert len(inputs) == len(calls) == 2
+    assert [item.chunk.chunk_id for item in response.search.items] == ['a', 'b']
+    details = repo.get_evidences(db, response.context_id, [response.result.citations[0].evidence_id])
+    assert details.evidence[0].chunk_id == 'b'
+    with closing(get_connection(db)) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM evidences').fetchone()[0] == 1
+        assert conn.execute('SELECT COUNT(*) FROM default_learning_contexts').fetchone()[0] == 1
+
+
+def test_expansion_does_not_escape_selected_page(setup_search):
+    db, _, retriever, _, calls = setup_search
+    inputs = []
+
+    def generate(question, evidence):
+        inputs.append(evidence)
+        return GeneratedAnswerDraft(())
+
+    service = AnswerService(SearchEntryService(SQLiteContextReader(db), retriever),
+        SimpleNamespace(generate_claims=generate), SQLiteEvidenceWriter(db))
+    response = service.answer('질문', version_id='v', top_k=1, pdf_pages=(1,))
+    assert len(calls) == 2 and len(inputs) == 1
+    assert response.result.reason_code.value == 'evidence_not_found'
+    assert [item.chunk.pdf_page for item in response.search.items] == [1]
+    with closing(get_connection(db)) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM evidences').fetchone()[0] == 0

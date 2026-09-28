@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from solo_leveling.domain.evidence_qa import (
     AnswerResult, AnswerStatus, Claim, EvidenceInput, GeneratedAnswerDraft, GeneratedClaim,
-    ReasonCode, SearchResult, require_text,
+    ReasonCode, SearchResult, positive_int, require_text,
 )
 from solo_leveling.domain.models import Evidence
 from .entry import SearchEntryService
@@ -29,33 +29,69 @@ class AnswerResponse:
 
 class AnswerService:
     def __init__(self, search: SearchEntryService, generator: ClaimGenerator,
-                 evidence_writer: EvidenceWriter, *, id_factory: Callable[[], str] | None = None):
+                 evidence_writer: EvidenceWriter, *, id_factory: Callable[[], str] | None = None,
+                 max_expanded_top_k: int = 20):
+        positive_int(max_expanded_top_k, 'max_expanded_top_k')
         self.search = search
         self.generator = generator
         self.evidence_writer = evidence_writer
         self.id_factory = id_factory or (lambda: str(uuid4()))
+        self.max_expanded_top_k = max_expanded_top_k
 
     def answer(self, question: str, *, context_id: str | None = None,
                version_id: str | None = None, top_k: int = 5,
                pdf_pages: tuple[int, ...] = (), section_ids: tuple[str, ...] = ()) -> AnswerResponse:
+        positive_int(top_k, 'top_k')
         found = self.search.search(question, context_id=context_id, version_id=version_id,
                                    top_k=top_k, pdf_pages=pdf_pages, section_ids=section_ids)
+        search = self._snapshot(found.result)
+        allocated = set()
+        response = self._answer_from_search(found.context_id, search, allocated)
+        expanded_k = min(top_k * 2, self.max_expanded_top_k)
+        # 정상적인 빈 초안만 추가 검색한다. 오류·형식 실패·이미 소진한 범위는 재시도하지 않는다.
+        if (response.result.reason_code != ReasonCode.EVIDENCE_NOT_FOUND
+                or not search.items or len(search.items) < top_k or expanded_k <= top_k):
+            return response
+
+        expanded = self.search.search(question, context_id=found.context_id,
+            version_id=search.scope.version_id, top_k=expanded_k,
+            pdf_pages=search.scope.pdf_pages, section_ids=search.scope.section_ids)
+        expanded_search = self._snapshot(expanded.result)
+        if (expanded.context_id != found.context_id or expanded_search.scope != search.scope
+                or expanded_search.query != search.query
+                or expanded_search.embedding_set_id != search.embedding_set_id
+                or expanded_search.retrieval_method != search.retrieval_method):
+            raise ValueError('추가 검색이 최초 검색의 맥락·범위·색인과 일치하지 않습니다.')
+        previous = {item.chunk.chunk_id: item.chunk for item in search.items}
+        current = {item.chunk.chunk_id: item.chunk for item in expanded_search.items}
+        if any(current.get(key) != chunk for key, chunk in previous.items()):
+            raise ValueError('추가 검색 중 기존 근거가 변경되거나 누락되었습니다.')
+        if not current.keys() - previous.keys():
+            return response
+        # 새 청크가 추가된 경우에만 전체 확장 근거로 한 번 더 생성한다. 저장은 성공한 최종 근거만 한다.
+        return self._answer_from_search(found.context_id, expanded_search, allocated)
+
+    @staticmethod
+    def _snapshot(result: SearchResult) -> SearchResult:
         # 가변 Chunk를 복사해 검색 시점의 본문·페이지를 답변 조립 동안 보존한다.
-        search = replace(found.result, items=tuple(replace(item, chunk=replace(item.chunk))
-                                                  for item in found.result.items))
+        search = replace(result, items=tuple(replace(item, chunk=replace(item.chunk))
+                                             for item in result.items))
         validate_search_result(search)
+        return search
+
+    def _answer_from_search(self, context_id: str, search: SearchResult,
+                            allocated: set[str]) -> AnswerResponse:
 
         def insufficient(reason, message):
             result = AnswerResult(AnswerStatus.INSUFFICIENT_EVIDENCE, message, (), (), reason)
             validate_answer_against_search(result, search)
-            return AnswerResponse(found.context_id, search, result)
+            return AnswerResponse(context_id, search, result)
 
         if not search.items:
             return insufficient(ReasonCode.EVIDENCE_NOT_FOUND, '선택한 범위에서 답변에 사용할 근거를 찾지 못했습니다.')
         require_text(search.scope.translation_revision_id, 'translation_revision_id')
         inputs, evidence_by_id = [], {}
         chunk_ids = set()
-        allocated = set()
 
         def new_id():
             value = self.id_factory()
@@ -104,5 +140,5 @@ class AnswerService:
         result = AnswerResult(AnswerStatus.OK, '\n'.join(c.text for c in claims), claims, citations, None)
         validate_answer_against_search(result, search)
         # 저장 성공 전에는 성공 응답을 반환하지 않는다. DB 오류는 숨기지 않는다.
-        self.evidence_writer.save(found.context_id, used)
-        return AnswerResponse(found.context_id, search, result)
+        self.evidence_writer.save(context_id, used)
+        return AnswerResponse(context_id, search, result)

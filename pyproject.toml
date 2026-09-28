@@ -10,8 +10,8 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest", "pdfplumber", "chromadb", "requests>=2.32,<3"]
-generation = ["requests>=2.32,<3"]
+dev = ["pytest", "pdfplumber", "chromadb", "requests>=2.32,<3", "python-dotenv>=1,<2"]
+generation = ["requests>=2.32,<3", "python-dotenv>=1,<2"]
 local = [
     "mcp",
     "pdfplumber",

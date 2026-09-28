@@ -2,16 +2,18 @@
 
 import json
 from pathlib import Path
+import pytest
 
 from solo_leveling.application.evidence_qa.response_parser import parse_generated_answer
 
 
-def test_generation_cases_are_consistent():
-    path = Path(__file__).resolve().parents[1] / 'fixtures/evidence_qa/generation_cases.json'
+@pytest.mark.parametrize('filename,count', [('generation_cases.json', 8), ('abstention_cases.json', 4)])
+def test_generation_cases_are_consistent(filename, count):
+    path = Path(__file__).resolve().parents[1] / 'fixtures/evidence_qa' / filename
     data = json.loads(path.read_text(encoding='utf-8'))
     assert data['schema_version'] == 1 and data['synthetic'] is True
     cases = data['cases']
-    assert len(cases) == 8
+    assert len(cases) == count
     assert len({case['id'] for case in cases}) == len(cases)
     for case in cases:
         assert case['question'].strip()
