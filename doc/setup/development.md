@@ -8,7 +8,8 @@
 → 번역 결과 저장 → 성공한 번역문 임베딩 → Chroma 읽기 검증 → SQLite ready 게시 순서다.
 
 - `register_and_ingest`에는 키워드 인자 `translation_service`, `translation_settings`가 필수다.
-- 실제 번역 API 어댑터는 아직 없다. 테스트는 fake 제공자를 명시적으로 주입한다.
+- OpenAI 번역 어댑터를 명시적으로 주입할 수 있다. 설정·사용 방법은 [openai-translation.md](openai-translation.md)를 참고한다.
+- 자동 테스트는 fake 제공자 또는 HTTP 대체 응답을 사용하며 실제 API를 호출하지 않는다.
 - 원문을 한국어 번역으로 복사하거나 원문 임베딩으로 자동 fallback하지 않는다.
 - 등록된 논문은 당시 번역·색인을 계속 사용한다. 모델·프롬프트 변경은 새 등록부터 적용한다.
 - 같은 `paper_id`와 파일 해시의 게시 완료 등록은 기존 job·리비전·색인 ID를 반환한다.

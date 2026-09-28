@@ -12,6 +12,7 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest", "pdfplumber", "chromadb", "requests>=2.32,<3", "python-dotenv>=1,<2"]
 generation = ["requests>=2.32,<3", "python-dotenv>=1,<2"]
+translation = ["requests>=2.32,<3", "python-dotenv>=1,<2"]
 local = [
     "mcp",
     "pdfplumber",
