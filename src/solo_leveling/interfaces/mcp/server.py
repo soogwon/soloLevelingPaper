@@ -12,6 +12,7 @@ from solo_leveling.application.evidence_qa.serialization import (
     serialize_answer_response, serialize_stored_evidence_result,
 )
 from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
+from solo_leveling.application.evidence_qa.ports import DefaultContextStore
 from solo_leveling.domain.evidence_qa import require_text
 from .errors import to_tool_error
 
@@ -36,6 +37,7 @@ class MCPServices:
     answer: AnswerService
     evidence: EvidenceService
     ingestion: IngestionService | None = None
+    contexts: DefaultContextStore | None = None
 
 
 class Focus(BaseModel):
@@ -107,6 +109,15 @@ class PaperStatusOutput(TypedDict):
     result_available: bool
 
 
+class StartLearningOutput(TypedDict):
+    context_id: str
+    version_id: str
+    goal: str
+    known_concepts: list[str]
+    status: Literal['ready']
+    capabilities: list[str]
+
+
 def _answer_payload(response) -> AskPaperOutput:
     serialized = serialize_answer_response(response)
     return {
@@ -143,13 +154,49 @@ def create_server(services: MCPServices) -> FastMCP:
             try:
                 result = await anyio.to_thread.run_sync(
                     lambda: services.ingestion.get_status(job_id))
-                capabilities = (['ask_paper', 'get_evidence']
+                capabilities = (['start_learning']
                                 if result['status'] == 'ready' else [])
                 return {
                     'job_id': result['job_id'], 'version_id': result['version_id'],
                     'status': result['status'], 'stage': result['stage'],
                     'capabilities': capabilities, 'limitations': result['limitations'],
                     'result_available': result['result_available'],
+                }
+            except Exception as error:
+                raise to_tool_error(error) from None
+
+    if services.contexts is not None:
+        @server.tool(name='start_learning', structured_output=True,
+            annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                        idempotentHint=True, openWorldHint=False))
+        async def start_learning(
+            version_id: str,
+            goal: Literal['understand', 'implement', 'skim'] = 'understand',
+            known_concepts: list[str] | None = None,
+        ) -> StartLearningOutput:
+            """게시 완료된 논문 버전의 기본 학습 맥락을 생성하거나 재사용합니다."""
+            try:
+                try:
+                    require_text(version_id, 'version_id')
+                    concepts = []
+                    for value in known_concepts or []:
+                        require_text(value, 'known_concept')
+                        concepts.append(value.strip())
+                    if len(set(concepts)) != len(concepts):
+                        raise ValueError('known_concepts에 중복 값이 있습니다.')
+                except ValueError as error:
+                    raise InvalidArgumentError(str(error)) from None
+                context = await anyio.to_thread.run_sync(
+                    lambda: services.contexts.get_or_create_learning_context(
+                        version_id, goal, concepts,
+                    ))
+                return {
+                    'context_id': context.context_id,
+                    'version_id': context.version_id,
+                    'goal': context.goal,
+                    'known_concepts': list(context.known_concepts),
+                    'status': 'ready',
+                    'capabilities': ['ask_paper', 'get_evidence'],
                 }
             except Exception as error:
                 raise to_tool_error(error) from None

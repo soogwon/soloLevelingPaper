@@ -84,7 +84,9 @@ def build_runtime_server(values: Mapping[str, str]):
         LocalPdfStore(paths.import_dir, paths.pdf_dir, max_bytes),
         IngestionServices(services.translation, services.translation_settings),
         max_workers=max_workers)
-    return create_server(MCPServices(services.answer, services.evidence, ingestion))
+    return create_server(MCPServices(
+        services.answer, services.evidence, ingestion, services.search.contexts,
+    ))
 
 
 def main() -> None:

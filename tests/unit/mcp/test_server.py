@@ -16,7 +16,9 @@ from solo_leveling.domain.evidence_qa import (
     AnswerResult, AnswerStatus, Citation, Claim, EvidenceDetail, GetEvidenceResult,
     RetrievalMethod, RetrievedChunk, SearchResult, SearchScope,
 )
-from solo_leveling.domain.models import Chunk, JobStatus, RequestConflictError
+from solo_leveling.domain.models import (
+    Chunk, JobStatus, LearningContext, RequestConflictError,
+)
 from solo_leveling.interfaces.mcp.errors import UnsupportedDocumentError
 from solo_leveling.interfaces.mcp.server import MCPServices, create_server
 
@@ -42,10 +44,10 @@ def answer_response():
     return SimpleNamespace(context_id='context', search=search, result=result)
 
 
-def make_server(answer=None, evidence=None, ingestion=None):
+def make_server(answer=None, evidence=None, ingestion=None, contexts=None):
     answer = answer or Mock()
     evidence = evidence or Mock()
-    return create_server(MCPServices(answer, evidence, ingestion)), answer, evidence
+    return create_server(MCPServices(answer, evidence, ingestion, contexts)), answer, evidence
 
 
 def test_tools_and_annotations():
@@ -136,10 +138,15 @@ def test_registration_tools_and_status_contract():
         'limitations': ['translation_failed:chunk:provider_unavailable'],
         'result_available': True,
     }
-    server, _, _ = make_server(ingestion=ingestion)
+    contexts = Mock()
+    server, _, _ = make_server(ingestion=ingestion, contexts=contexts)
     tools = {tool.name: tool for tool in run(server.list_tools())}
-    assert set(tools) == {'add_paper', 'get_paper_status', 'ask_paper', 'get_evidence'}
+    assert set(tools) == {
+        'add_paper', 'get_paper_status', 'start_learning', 'ask_paper', 'get_evidence',
+    }
     assert tools['add_paper'].annotations.idempotentHint is True
+    assert tools['start_learning'].annotations.idempotentHint is True
+    assert tools['start_learning'].annotations.openWorldHint is False
     added = payload(run(server.call_tool('add_paper', {
         'source': {'kind': 'local_file', 'relative_path': 'paper.pdf'},
         'request_key': 'request-1',
@@ -147,8 +154,59 @@ def test_registration_tools_and_status_contract():
     assert added == {'paper_id': 'paper', 'version_id': 'version',
                      'job_id': 'job', 'status': 'processing'}
     status = payload(run(server.call_tool('get_paper_status', {'job_id': 'job'})))
-    assert status['capabilities'] == ['ask_paper', 'get_evidence']
+    assert status['capabilities'] == ['start_learning']
     assert status['limitations'] == ['translation_failed:chunk:provider_unavailable']
+
+
+def test_start_learning_returns_context_for_selected_goal_and_concepts():
+    contexts = Mock()
+    contexts.get_or_create_learning_context.return_value = LearningContext(
+        'context', 'version', 'parse', 'translation', goal='implement',
+        known_concepts=['Transformer'], embedding_set_id='embedding',
+    )
+    server, _, _ = make_server(contexts=contexts)
+
+    result = payload(run(server.call_tool('start_learning', {
+        'version_id': 'version',
+        'goal': 'implement',
+        'known_concepts': ['Transformer'],
+    })))
+
+    assert result == {
+        'context_id': 'context',
+        'version_id': 'version',
+        'goal': 'implement',
+        'known_concepts': ['Transformer'],
+        'status': 'ready',
+        'capabilities': ['ask_paper', 'get_evidence'],
+    }
+    contexts.get_or_create_learning_context.assert_called_once_with(
+        'version', 'implement', ['Transformer'],
+    )
+
+
+def test_start_learning_rejects_blank_version_without_storage_call():
+    contexts = Mock()
+    server, _, _ = make_server(contexts=contexts)
+
+    with pytest.raises(ToolError) as caught:
+        run(server.call_tool('start_learning', {'version_id': ' '}))
+
+    assert 'INVALID_ARGUMENT' in str(caught.value)
+    contexts.get_or_create_learning_context.assert_not_called()
+
+
+def test_start_learning_rejects_invalid_known_concepts_without_storage_call():
+    contexts = Mock()
+    server, _, _ = make_server(contexts=contexts)
+
+    with pytest.raises(ToolError) as caught:
+        run(server.call_tool('start_learning', {
+            'version_id': 'version', 'known_concepts': ['Transformer', 'Transformer'],
+        }))
+
+    assert 'INVALID_ARGUMENT' in str(caught.value)
+    contexts.get_or_create_learning_context.assert_not_called()
 
 
 def test_nonready_status_has_no_capabilities():

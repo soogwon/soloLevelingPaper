@@ -29,7 +29,8 @@ def test_stdio_server_lists_tools(tmp_path):
                     await session.initialize()
                     tools = await session.list_tools()
                     assert {tool.name for tool in tools.tools} == {
-                        'add_paper', 'get_paper_status', 'ask_paper', 'get_evidence',
+                        'add_paper', 'get_paper_status', 'start_learning',
+                        'ask_paper', 'get_evidence',
                     }
                     ask = next(tool for tool in tools.tools if tool.name == 'ask_paper')
                     assert ask.outputSchema is not None
