@@ -20,6 +20,12 @@ class DefaultContextStore(LearningContextReader, Protocol):
         """게시 완료된 논문 버전의 기본 맥락을 준비한다."""
         ...
 
+    def get_or_create_learning_context(
+        self, version_id: str, goal: str, known_concepts: list[str],
+    ) -> LearningContext:
+        """게시 완료된 논문 버전에서 같은 학습 설정의 맥락을 준비한다."""
+        ...
+
 
 class ScopedRetriever(Protocol):
     def search(self, question: str, scope: SearchScope, top_k: int) -> SearchResult:
