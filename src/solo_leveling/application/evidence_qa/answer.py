@@ -3,6 +3,7 @@
 from dataclasses import dataclass, replace
 from typing import Callable
 from uuid import uuid4
+from solo_leveling.diagnostics import traced, stage
 
 from solo_leveling.domain.evidence_qa import (
     AnswerResult, AnswerStatus, Claim, EvidenceInput, GeneratedAnswerDraft, GeneratedClaim,
@@ -39,6 +40,7 @@ class AnswerService:
         self.id_factory = id_factory or (lambda: str(uuid4()))
         self.max_expanded_top_k = max_expanded_top_k
 
+    @traced('answer', request=True)
     def answer(self, question: str, *, context_id: str | None = None,
                version_id: str | None = None, top_k: int = 5,
                pdf_pages: tuple[int, ...] = (), section_ids: tuple[str, ...] = ()) -> AnswerResponse:
@@ -117,7 +119,8 @@ class AnswerService:
             # 현재는 청크 전체를 인용한다. 문장 단위 발췌와 내용 검증은 후속 작업이다.
             evidence_by_id[evidence_id] = Evidence(evidence_id, chunk.chunk_id, chunk.text, chunk.original_text)
         try:
-            draft = self.generator.generate_claims(search.query, tuple(inputs))
+            with stage('generation'):
+                draft = self.generator.generate_claims(search.query, tuple(inputs))
         except GenerationFormatError:
             return insufficient(ReasonCode.VERIFICATION_FAILED, '생성된 답변의 응답 형식을 확인하지 못했습니다.')
         except GenerationUnavailable:
@@ -140,9 +143,11 @@ class AnswerService:
         claims = tuple(Claim(new_id(), claim.text, claim.evidence_ids) for claim in draft.claims)
         used_ids = dict.fromkeys(eid for claim in claims for eid in claim.evidence_ids)
         used = tuple(evidence_by_id[eid] for eid in used_ids)
-        citations = tuple(citation_from_evidence(evidence, search) for evidence in used)
-        result = AnswerResult(AnswerStatus.OK, '\n'.join(c.text for c in claims), claims, citations, None)
-        validate_answer_against_search(result, search)
+        with stage('evidence_validation'):
+            citations = tuple(citation_from_evidence(evidence, search) for evidence in used)
+            result = AnswerResult(AnswerStatus.OK, '\n'.join(c.text for c in claims), claims, citations, None)
+            validate_answer_against_search(result, search)
         # 저장 성공 전에는 성공 응답을 반환하지 않는다. DB 오류는 숨기지 않는다.
-        self.evidence_writer.save(context_id, used)
+        with stage('evidence_save'):
+            self.evidence_writer.save(context_id, used)
         return AnswerResponse(context_id, search, result)

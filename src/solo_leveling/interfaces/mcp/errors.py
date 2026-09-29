@@ -8,6 +8,7 @@ from solo_leveling.application.evidence_qa.errors import (
 )
 from solo_leveling.domain.context import ContextNotReadyError
 from solo_leveling.domain.models import RequestConflictError
+from solo_leveling.infrastructure.embeddings.process_embedder import EmbeddingProcessError
 
 
 class UnsupportedDocumentError(ValueError):
@@ -16,6 +17,8 @@ class UnsupportedDocumentError(ValueError):
 
 def to_tool_error(error: Exception) -> ToolError:
     """원래 예외 메시지·경로·스택을 MCP 응답에 포함하지 않는다."""
+    if isinstance(error, EmbeddingProcessError):
+        return ToolError(f'UPSTREAM_UNAVAILABLE: {error.code.value}: 임베딩 처리를 완료하지 못했습니다.')
     if isinstance(error, InvalidArgumentError):
         return ToolError('INVALID_ARGUMENT: 입력값을 확인해주세요.')
     if isinstance(error, ResourceNotFoundError):

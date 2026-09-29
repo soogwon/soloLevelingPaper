@@ -7,6 +7,7 @@ infrastructure/embeddings — sentence-transformers 래퍼
 명확히 한다.
 """
 from typing import List
+from solo_leveling.diagnostics import traced, stage, import_watchdog
 
 from typing import TYPE_CHECKING
 
@@ -19,11 +20,17 @@ DEFAULT_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
 _model_cache: dict = {}
 
 
+@traced('embedding_model_load')
 def _get_model(model_name: str) -> "SentenceTransformer":
     if model_name not in _model_cache:
-        from sentence_transformers import SentenceTransformer
+        with stage('embedding_library_import'), import_watchdog():
+            from sentence_transformers import SentenceTransformer
 
-        _model_cache[model_name] = SentenceTransformer(model_name)
+        with stage('embedding_model_construct'):
+            _model_cache[model_name] = SentenceTransformer(model_name)
+    else:
+        with stage('embedding_memory_cache_hit'):
+            pass
     return _model_cache[model_name]
 
 
@@ -31,7 +38,8 @@ def embed_texts(texts: List[str], model_name: str = DEFAULT_MODEL_NAME) -> List[
     if not texts:
         return []
     model = _get_model(model_name)
-    vectors = model.encode(texts, convert_to_numpy=True)
+    with stage('embedding_encode'):
+        vectors = model.encode(texts, convert_to_numpy=True)
     return [v.tolist() for v in vectors]
 
 

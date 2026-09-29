@@ -2,6 +2,7 @@
 
 from contextlib import closing
 import math
+from solo_leveling.diagnostics import traced, stage
 
 from solo_leveling.application.evidence_qa.validators import validate_chunk, validate_search_result
 from solo_leveling.domain.evidence_qa import (
@@ -19,9 +20,11 @@ class SQLiteContextReader:
     def __init__(self, db_path: str):
         self.db_path = db_path
 
+    @traced('context_lookup')
     def get_context(self, context_id: str):
         return repo.get_learning_context(self.db_path, context_id)
 
+    @traced('default_context_lookup')
     def get_or_create_default_context(self, version_id: str):
         try:
             return repo.get_or_create_default_context(self.db_path, version_id)
@@ -48,6 +51,7 @@ class SQLiteChromaRetriever:
         self.client = client
         self.embedder = embedder
 
+    @traced('index_lookup')
     def _snapshot(self, scope: SearchScope):
         # 논문·파싱·번역·작업의 연결과 청크를 같은 DB 스냅샷에서 확인한다.
         with closing(get_connection(self.db_path)) as conn, conn:
@@ -103,22 +107,25 @@ class SQLiteChromaRetriever:
         require_text(scope.translation_revision_id, 'translation_revision_id')
         index, chunks = self._snapshot(scope)
         # 조회 중 누락된 컬렉션을 새로 만들지 않는다.
-        collection = self.client.get_collection(f"chunks-{index['embedding_set_id']}")
-        self._verify_vectors(collection, chunks, index)
+        with stage('chroma_validation'):
+            collection = self.client.get_collection(f"chunks-{index['embedding_set_id']}")
+            self._verify_vectors(collection, chunks, index)
         eligible = {key: c for key, c in chunks.items()
                     if (not scope.pdf_pages or c.pdf_page in scope.pdf_pages)
                     and (not scope.section_ids or c.section_id in scope.section_ids)}
         items = ()
         if eligible:
-            vectors = self.embedder([question], model_name=index['model_name'])
+            with stage('query_embedding'):
+                vectors = self.embedder([question], model_name=index['model_name'])
             if len(vectors) != 1 or len(vectors[0]) != index['dimension'] or any(not math.isfinite(x) for x in vectors[0]):
                 raise ValueError('질문 벡터의 차원 또는 값이 색인과 일치하지 않습니다.')
             # 범위 밖 상위 결과 때문에 범위 안 결과가 누락되지 않도록 전체 후보를 검색한다.
             # 초기 소규모 구현이며, 대규모 색인의 사전 필터·페이지 처리는 후속 최적화다.
-            hits = collection.query(query_embeddings=vectors, n_results=len(chunks),
-                where={'$and': [{'embedding_set_id': index['embedding_set_id']},
-                                {'paper_id': index['paper_id']}, {'version_id': scope.version_id}]},
-                include=['documents', 'distances'])
+            with stage('vector_search'):
+                hits = collection.query(query_embeddings=vectors, n_results=len(chunks),
+                    where={'$and': [{'embedding_set_id': index['embedding_set_id']},
+                                    {'paper_id': index['paper_id']}, {'version_id': scope.version_id}]},
+                    include=['documents', 'distances'])
             ids, docs, distances = hits['ids'][0], hits['documents'][0], hits['distances'][0]
             if len(ids) != len(chunks) or set(ids) != set(chunks) or len(docs) != len(ids) or len(distances) != len(ids):
                 raise ValueError('검색 중 벡터 색인 구성이 변경되었거나 결과가 누락되었습니다.')

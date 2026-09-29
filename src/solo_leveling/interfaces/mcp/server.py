@@ -5,6 +5,7 @@ from typing import Annotated, Literal, Protocol
 from typing_extensions import TypedDict
 
 import anyio
+from solo_leveling.diagnostics import traced
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
@@ -149,11 +150,11 @@ def _answer_payload(response) -> AskPaperOutput:
     }
 
 
-def create_server(services: MCPServices) -> FastMCP:
+def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
     """저장소 수명이나 환경 설정에 관여하지 않고 MCP 도구만 구성한다."""
     server = FastMCP('solo-leveling-paper',
         instructions=HOST_INSTRUCTIONS,
-        log_level='ERROR')
+        log_level='ERROR', lifespan=lifespan)
 
     if services.ingestion is not None:
         @server.tool(name='add_paper', structured_output=True,
@@ -230,6 +231,7 @@ def create_server(services: MCPServices) -> FastMCP:
     @server.tool(name='ask_paper', structured_output=True,
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                     idempotentHint=False, openWorldHint=True))
+    @traced('ask_paper', request=True)
     async def ask_paper(context_id: str, question: str,
                         standalone_question: str | None = None,
                         focus: Focus | None = None,

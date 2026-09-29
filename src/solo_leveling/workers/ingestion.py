@@ -23,6 +23,7 @@ from solo_leveling.infrastructure.database.schema import init_db
 from solo_leveling.infrastructure.embeddings.embedder import (
     DEFAULT_MODEL_NAME, embed_texts, embedding_dimension,
 )
+from solo_leveling.infrastructure.embeddings.process_embedder import EmbeddingProcessError
 from solo_leveling.infrastructure.parsing.chunker import chunk_pages
 from solo_leveling.infrastructure.parsing.pdf_extractor import extract_pages, ExtractedPage
 from solo_leveling.infrastructure.storage.vector_store import (
@@ -79,7 +80,7 @@ def prepare_local_ingestion(
 
 def run_prepared_local_ingestion(
     prepared: PreparedLocalIngestion, *, translation_service: TranslationService,
-    translation_settings: TranslationSettings,
+    translation_settings: TranslationSettings, embedder=None,
 ) -> dict:
     """새로 확보한 작업만 실행하고 기존 작업·결과는 상태 조회로 반환한다."""
     registration = prepared.registration
@@ -94,7 +95,7 @@ def run_prepared_local_ingestion(
         prepared.db_path, prepared.chroma_dir,
         lambda: extract_pages(prepared.pdf_path), registration.version_id, job,
         prepared.paper_id, registration.reused_existing, prepared.embedding_model,
-        translation_service, translation_settings,
+        translation_service, translation_settings, embedder=embedder,
     )
 
 
@@ -133,7 +134,7 @@ def _ingest_pages(
     db_path: str, chroma_dir: str, pages_provider: Callable[[], list],
     version_id: str, job: ProcessingJob, paper_id: str, reused: bool,
     embedding_model: str, translation_service: TranslationService,
-    translation_settings: TranslationSettings,
+    translation_settings: TranslationSettings, *, embedder=None,
 ) -> dict:
     """파싱 이후(번역→임베딩→게시) 공통 로직.
 
@@ -191,8 +192,8 @@ def _ingest_pages(
             if translated:
                 repo.update_job_status(db_path, job.job_id, JobStatus.PROCESSING, JobStage.INDEX)
                 texts = [c.text for c in translated]
-                vectors = embed_texts(texts, model_name=embedding_model)
-                dim = embedding_dimension(embedding_model)
+                vectors = (embedder or embed_texts)(texts, model_name=embedding_model)
+                dim = len(vectors[0]) if embedder is not None else embedding_dimension(embedding_model)
                 embedding_set = EmbeddingSet(str(uuid.uuid4()), translation_id, embedding_model, dim)
                 client = get_client(chroma_dir)
                 # 임베딩 세트별 컬렉션을 사용해 이후 모델 차원이 달라져도 공존 저장 가능
@@ -219,7 +220,7 @@ def _ingest_pages(
             'translation_revision_id': translation_id, 'embedding_set_id': None,
             'chunk_count': 0, 'reused_existing': reused, 'limitations': limitations,
         }
-    except Exception:
+    except Exception as error:
         if not published:
             if client is not None and embedding_set is not None:
                 try:
@@ -228,7 +229,8 @@ def _ingest_pages(
                 except Exception:
                     limitations.append('index_cleanup_failed')
             repo.update_job_status(db_path, job.job_id, JobStatus.FAILED,
-                                   limitations=[*limitations, 'ingestion_failed'])
+                                   limitations=[*limitations,
+                                       error.code.value if isinstance(error, EmbeddingProcessError) else 'ingestion_failed'])
         raise
 
 

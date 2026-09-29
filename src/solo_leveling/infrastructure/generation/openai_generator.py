@@ -8,6 +8,7 @@ import os
 from typing import Mapping
 
 import requests
+from solo_leveling.diagnostics import stage
 
 from solo_leveling.application.evidence_qa.ports import GenerationUnavailable
 from solo_leveling.application.evidence_qa.response_parser import GenerationFormatError, parse_generated_answer
@@ -129,9 +130,10 @@ class OpenAIClaimGenerator:
         }
         try:
             # 자동 재시도하지 않는다. 불명확한 실패 뒤 중복 과금을 피하기 위한 초기 정책이다.
-            response = requests.post('https://api.openai.com/v1/responses', json=payload,
-                headers={'Authorization': f'Bearer {self.settings.api_key}'},
-                timeout=(5.0, self.settings.timeout_seconds), allow_redirects=False)
+            with stage('generation_api_call'):
+                response = requests.post('https://api.openai.com/v1/responses', json=payload,
+                    headers={'Authorization': f'Bearer {self.settings.api_key}'},
+                    timeout=(5.0, self.settings.timeout_seconds), allow_redirects=False)
         except requests.Timeout:
             raise OpenAIGenerationError(FailureKind.TIMEOUT) from None
         except requests.RequestException:
