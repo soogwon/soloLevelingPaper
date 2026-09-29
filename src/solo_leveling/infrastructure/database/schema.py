@@ -80,6 +80,15 @@ CREATE INDEX IF NOT EXISTS idx_versions_paper ON paper_versions(paper_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_versions_paper_hash ON paper_versions(paper_id, file_hash);
 CREATE INDEX IF NOT EXISTS idx_jobs_version ON processing_jobs(version_id);
 
+CREATE TABLE IF NOT EXISTS ingestion_requests (
+    request_key TEXT PRIMARY KEY,
+    input_fingerprint TEXT NOT NULL,
+    paper_id TEXT NOT NULL REFERENCES papers(paper_id),
+    version_id TEXT NOT NULL REFERENCES paper_versions(version_id),
+    job_id TEXT NOT NULL REFERENCES processing_jobs(job_id),
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS translation_results (
     translation_revision_id TEXT NOT NULL REFERENCES translation_revisions(translation_revision_id),
     chunk_id TEXT NOT NULL REFERENCES chunks(chunk_id),

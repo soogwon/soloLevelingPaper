@@ -30,6 +30,17 @@ class SQLiteContextReader:
         except ValueError:
             raise DataIntegrityError('기본 학습 맥락의 저장 정보가 올바르지 않습니다.') from None
 
+    def get_or_create_learning_context(self, version_id: str, goal: str,
+                                       known_concepts: list[str]):
+        try:
+            return repo.get_or_create_learning_context(
+                self.db_path, version_id, goal, known_concepts,
+            )
+        except (ResourceNotFoundError, ContextNotReadyError):
+            raise
+        except ValueError:
+            raise DataIntegrityError('학습 맥락의 저장 정보가 올바르지 않습니다.') from None
+
 
 class SQLiteChromaRetriever:
     def __init__(self, db_path: str, client, *, embedder=embed_texts):

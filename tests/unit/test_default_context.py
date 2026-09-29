@@ -98,6 +98,30 @@ def test_default_contexts_are_separate_for_different_versions(setup_db):
     assert second.embedding_set_id == 'idx2'
 
 
+def test_learning_context_reuses_same_settings_and_separates_different_goals(setup_db):
+    db, chunks = setup_db
+    publish(db, chunks)
+
+    first = repo.get_or_create_learning_context(db, 'v1', 'implement', ['Transformer'])
+    reused = repo.get_or_create_learning_context(db, 'v1', 'implement', ['Transformer'])
+    skim = repo.get_or_create_learning_context(db, 'v1', 'skim', ['Transformer'])
+
+    assert reused == first
+    assert skim.context_id != first.context_id
+    assert first.goal == 'implement'
+    assert first.known_concepts == ['Transformer']
+
+
+def test_learning_context_default_settings_reuse_default_context(setup_db):
+    db, chunks = setup_db
+    publish(db, chunks)
+    default = repo.get_or_create_default_context(db, 'v1')
+
+    selected = repo.get_or_create_learning_context(db, 'v1', 'understand', [])
+
+    assert selected == default
+
+
 @pytest.fixture
 def entry_parts():
     context = LearningContext('ctx', 'v', 'p', 't', embedding_set_id='idx')

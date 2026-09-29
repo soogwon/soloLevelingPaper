@@ -10,6 +10,7 @@ from solo_leveling.domain.models import (
 )
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.database.schema import init_db, get_connection
+from solo_leveling.domain.models import RequestConflictError
 
 
 def test_concurrent_registration_shares_version_and_job(tmp_path):
@@ -94,3 +95,21 @@ def test_failed_job_insertion_rolls_back_new_paper_and_version(tmp_path):
     with closing(get_connection(db)) as conn:
         assert conn.execute("SELECT 1 FROM papers WHERE paper_id='p2'").fetchone() is None
         assert conn.execute("SELECT 1 FROM paper_versions WHERE version_id='v2'").fetchone() is None
+
+
+def test_request_key_reuses_same_job_and_rejects_changed_input(tmp_path):
+    db = str(tmp_path / 'db.sqlite')
+    init_db(db)
+    first = repo.prepare_ingestion(db, Paper('p'),
+        PaperVersion('v1', 'p', 'hash', 'a', 'a'), 'j1',
+        request_key='request', input_fingerprint='fingerprint')
+    repeated = repo.prepare_ingestion(db, Paper('other'),
+        PaperVersion('other-v', 'other', 'other-hash', 'b', 'b'), 'other-job',
+        request_key='request', input_fingerprint='fingerprint')
+    assert repeated.version_id == first.version_id
+    assert repeated.job_id == first.job_id
+    assert repo.get_ingestion_request(db, 'request')['paper_id'] == 'p'
+    with pytest.raises(RequestConflictError):
+        repo.prepare_ingestion(db, Paper('p'),
+            PaperVersion('v2', 'p', 'hash', 'a', 'a'), 'j2',
+            request_key='request', input_fingerprint='changed')

@@ -26,6 +26,7 @@ from solo_leveling.domain.models import (
     LearningContext,
     Evidence,
     now_iso,
+    RequestConflictError,
 )
 from solo_leveling.domain.translation import TranslationBatchResult
 from solo_leveling.domain.context import ContextNotReadyError
@@ -348,16 +349,34 @@ def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
 
 
 def prepare_ingestion(db_path: str, paper: Paper, candidate: PaperVersion,
-                      new_job_id: str) -> IngestionRegistration:
+                      new_job_id: str, *, request_key: str | None = None,
+                      input_fingerprint: str | None = None) -> IngestionRegistration:
     """버전 조회·생성과 기존 작업 재사용 여부를 하나의 트랜잭션에서 결정한다."""
     if paper.paper_id != candidate.paper_id:
         raise ValueError('논문 ID가 일치하지 않습니다.')
     for name, value in (('paper_id', paper.paper_id), ('version_id', candidate.version_id),
                         ('file_hash', candidate.file_hash), ('job_id', new_job_id)):
         require_text(value, name)
+    if (request_key is None) != (input_fingerprint is None):
+        raise ValueError('request_key와 input_fingerprint는 함께 지정해야 합니다.')
+    if request_key is not None:
+        require_text(request_key, 'request_key')
+        require_text(input_fingerprint, 'input_fingerprint')
     with closing(get_connection(db_path)) as conn, conn:
         # 조회·생성과 작업 확보 사이에 다른 쓰기 요청이 끼어들지 못하도록 한다.
         conn.execute('BEGIN IMMEDIATE')
+        if request_key is not None:
+            request = conn.execute('SELECT * FROM ingestion_requests WHERE request_key=?',
+                                   (request_key,)).fetchone()
+            if request:
+                if request['input_fingerprint'] != input_fingerprint:
+                    raise RequestConflictError('같은 request_key가 다른 입력에 사용되었습니다.')
+                published = conn.execute('SELECT 1 FROM search_indexes WHERE job_id=?',
+                                         (request['job_id'],)).fetchone()
+                disposition = (IngestionDisposition.COMPLETED if published
+                               else IngestionDisposition.IN_PROGRESS)
+                return IngestionRegistration(disposition, request['version_id'],
+                                             request['job_id'], True)
         conn.execute('''INSERT INTO papers (paper_id, title, source_kind, created_at)
                         VALUES (?, ?, ?, ?) ON CONFLICT(paper_id) DO NOTHING''',
                      (paper.paper_id, paper.title, paper.source_kind, paper.created_at))
@@ -374,14 +393,24 @@ def prepare_ingestion(db_path: str, paper: Paper, candidate: PaperVersion,
         published = conn.execute('SELECT job_id FROM search_indexes WHERE version_id=?',
                                  (version_id,)).fetchone()
         if published:
-            return IngestionRegistration(IngestionDisposition.COMPLETED, version_id,
-                                         published['job_id'], True)
+            registration = IngestionRegistration(IngestionDisposition.COMPLETED, version_id,
+                                                 published['job_id'], True)
+            if request_key is not None:
+                conn.execute('INSERT INTO ingestion_requests VALUES (?, ?, ?, ?, ?, ?)',
+                    (request_key, input_fingerprint, paper.paper_id, version_id,
+                     published['job_id'], now_iso()))
+            return registration
         active = conn.execute('''SELECT job_id FROM processing_jobs WHERE version_id=?
                                  AND status IN ('queued','processing')
                                  ORDER BY created_at DESC, rowid DESC LIMIT 1''', (version_id,)).fetchone()
         if active:
-            return IngestionRegistration(IngestionDisposition.IN_PROGRESS, version_id,
-                                         active['job_id'], True)
+            registration = IngestionRegistration(IngestionDisposition.IN_PROGRESS, version_id,
+                                                 active['job_id'], True)
+            if request_key is not None:
+                conn.execute('INSERT INTO ingestion_requests VALUES (?, ?, ?, ?, ?, ?)',
+                    (request_key, input_fingerprint, paper.paper_id, version_id,
+                     active['job_id'], now_iso()))
+            return registration
         # 실패·중단 이력은 남기고 새 작업을 시작한다.
         timestamp = now_iso()
         conn.execute('''INSERT INTO processing_jobs
@@ -389,7 +418,18 @@ def prepare_ingestion(db_path: str, paper: Paper, candidate: PaperVersion,
                         VALUES (?, ?, ?, ?, ?, ?, ?)''',
                      (new_job_id, version_id, JobStatus.PROCESSING.value, JobStage.PARSE.value,
                       '[]', timestamp, timestamp))
+        if request_key is not None:
+            conn.execute('INSERT INTO ingestion_requests VALUES (?, ?, ?, ?, ?, ?)',
+                (request_key, input_fingerprint, paper.paper_id, version_id, new_job_id, timestamp))
         return IngestionRegistration(IngestionDisposition.STARTED, version_id, new_job_id, reused)
+
+
+def get_ingestion_request(db_path: str, request_key: str) -> Optional[dict]:
+    require_text(request_key, 'request_key')
+    with closing(get_connection(db_path)) as conn:
+        row = conn.execute('SELECT * FROM ingestion_requests WHERE request_key=?',
+                           (request_key,)).fetchone()
+        return dict(row) if row else None
 
 
 def claim_ingestion_job(db_path: str, job: ProcessingJob) -> None:
@@ -473,6 +513,68 @@ def get_or_create_default_context(db_path: str, version_id: str) -> LearningCont
              context.embedding_set_id, context.goal, '[]', context.created_at))
         conn.execute('INSERT INTO default_learning_contexts (embedding_set_id, context_id) VALUES (?, ?)',
                      (context.embedding_set_id, context.context_id))
+        return context
+
+
+def get_or_create_learning_context(db_path: str, version_id: str, goal: str,
+                                   known_concepts: list[str]) -> LearningContext:
+    """같은 논문 색인·학습 목적·기존 지식의 맥락을 원자적으로 재사용한다."""
+    require_text(version_id, 'version_id')
+    if goal not in ('understand', 'implement', 'skim'):
+        raise ValueError('invalid learning goal')
+    if (not isinstance(known_concepts, list)
+            or any(not isinstance(value, str) or not value.strip()
+                   for value in known_concepts)):
+        raise ValueError('known_concepts must contain nonempty strings')
+    if len(set(known_concepts)) != len(known_concepts):
+        raise ValueError('known_concepts must not contain duplicates')
+    serialized_concepts = json.dumps(known_concepts, ensure_ascii=False)
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        if not conn.execute(
+            'SELECT 1 FROM paper_versions WHERE version_id=?', (version_id,),
+        ).fetchone():
+            raise ResourceNotFoundError('논문 버전을 찾을 수 없습니다.')
+        index = conn.execute('''SELECT s.* FROM search_indexes s
+            JOIN parse_revisions p ON p.parse_revision_id=s.parse_revision_id AND p.version_id=s.version_id
+            JOIN translation_revisions t ON t.translation_revision_id=s.translation_revision_id
+                AND t.parse_revision_id=p.parse_revision_id
+            JOIN embedding_sets e ON e.embedding_set_id=s.embedding_set_id
+                AND e.translation_revision_id=t.translation_revision_id
+            JOIN processing_jobs j ON j.job_id=s.job_id AND j.version_id=s.version_id AND j.status='ready'
+            WHERE s.version_id=?''', (version_id,)).fetchone()
+        if index is None:
+            if conn.execute(
+                'SELECT 1 FROM search_indexes WHERE version_id=?', (version_id,),
+            ).fetchone():
+                raise ValueError('게시된 색인의 연결 정보가 올바르지 않습니다.')
+            job = conn.execute('''SELECT job_id, status FROM processing_jobs WHERE version_id=?
+                ORDER BY created_at DESC, rowid DESC LIMIT 1''', (version_id,)).fetchone()
+            raise ContextNotReadyError(
+                version_id, job['job_id'] if job else None,
+                JobStatus(job['status']) if job else None,
+            )
+        row = conn.execute('''SELECT * FROM learning_contexts
+            WHERE version_id=? AND parse_revision_id=? AND translation_revision_id=?
+              AND embedding_set_id=? AND goal=? AND known_concepts=?
+            ORDER BY created_at, context_id LIMIT 1''',
+            (version_id, index['parse_revision_id'], index['translation_revision_id'],
+             index['embedding_set_id'], goal, serialized_concepts)).fetchone()
+        if row is not None:
+            values = dict(row)
+            values['known_concepts'] = json.loads(values['known_concepts'])
+            return LearningContext(**values)
+        context = LearningContext(
+            str(uuid4()), version_id, index['parse_revision_id'],
+            index['translation_revision_id'], goal=goal,
+            known_concepts=list(known_concepts), embedding_set_id=index['embedding_set_id'],
+        )
+        conn.execute('''INSERT INTO learning_contexts
+            (context_id, version_id, parse_revision_id, translation_revision_id,
+             embedding_set_id, goal, known_concepts, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            (context.context_id, context.version_id, context.parse_revision_id,
+             context.translation_revision_id, context.embedding_set_id, context.goal,
+             serialized_concepts, context.created_at))
         return context
 
 

@@ -30,6 +30,10 @@ class IngestionDisposition(str, Enum):
     COMPLETED = "completed"
 
 
+class RequestConflictError(ValueError):
+    """같은 등록 요청 키가 이전과 다른 입력에 사용되었다."""
+
+
 @dataclass(frozen=True)
 class IngestionRegistration:
     """등록 요청에서 확보하거나 재사용한 버전과 작업 정보."""
