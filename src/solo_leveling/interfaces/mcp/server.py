@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Annotated, Literal, Protocol, TypedDict
 
 import anyio
+from solo_leveling.diagnostics import traced
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
@@ -229,6 +230,7 @@ def create_server(services: MCPServices) -> FastMCP:
     @server.tool(name='ask_paper', structured_output=True,
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                     idempotentHint=False, openWorldHint=True))
+    @traced('ask_paper', request=True)
     async def ask_paper(context_id: str, question: str,
                         standalone_question: str | None = None,
                         focus: Focus | None = None,
