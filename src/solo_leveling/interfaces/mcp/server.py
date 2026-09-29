@@ -17,6 +17,27 @@ from solo_leveling.domain.evidence_qa import require_text
 from .errors import to_tool_error
 
 
+HOST_INSTRUCTIONS = '''등록된 논문에서 한국어 근거 답변과 원문 근거를 조회합니다.
+add_paper → get_paper_status → start_learning → ask_paper → get_evidence 순서로 사용합니다.
+반환된 version_id, job_id, context_id, evidence_id를 다음 호출에 그대로 전달합니다.
+학습 목적은 understand(이해), implement(구현), skim(훑어보기)이며 known_concepts는
+사용자가 알려준 기존 지식입니다. 질문 내용과 구분하고 목적·지식을 임의로 추측하지 마세요.
+같은 학습 맥락의 후속 질문과 일시적 오류 후 재호출에는 기존 context_id를 유지하세요.
+ready는 검색 가능 상태이며 전체 번역 완료를 보장하지 않습니다. limitations를 확인하세요.
+provider_unavailable만으로 연결 실패 등 구체적인 원인을 단정하지 마세요.
+status=ok는 질문 전체의 완전한 답변을 보장하지 않습니다. structural_only는 구조 검증이며
+주장과 근거의 의미 일치나 수식의 정확성을 검증했다는 뜻이 아닙니다.
+근거가 문장 중간에서 끊기면 get_evidence로 저장 근거를 확인하세요. 이 도구는 재검색하거나
+누락 문장을 복구하지 않습니다. 검색된 근거에 없다고 논문 전체에 없다고 단정하지 마세요.
+사용자가 지정한 페이지·섹션 범위를 유지하고, 범위 밖 문맥이 필요하면 범위 확장을 안내하세요.
+printed_page_label이 없으면 pdf_page를 'PDF 기준 N페이지'로 표시하세요.
+추출 수식을 배경지식으로 보완하고 검증된 원문처럼 제시하지 마세요.
+MCP 호출 또는 호스트 권한 검사가 실패하면 실패 사실을 안내하고, DB·벡터 저장소·PDF 직접
+조회로 우회해 MCP 결과를 대체하지 마세요. 이전 근거를 사용하면 이전 호출의 결과임을 밝히고,
+배경지식을 설명하면 이번 검색에서 검증된 근거와 명확히 구분하세요.
+호스트 권한 검사 오류는 서버 오류와 구분하고, 서버 도달 여부나 차단 범위를 추측하지 마세요.'''
+
+
 class AnswerService(Protocol):
     def answer(self, question: str, *, context_id: str, top_k: int,
                pdf_pages: tuple[int, ...], section_ids: tuple[str, ...]): ...
@@ -130,7 +151,7 @@ def _answer_payload(response) -> AskPaperOutput:
 def create_server(services: MCPServices) -> FastMCP:
     """저장소 수명이나 환경 설정에 관여하지 않고 MCP 도구만 구성한다."""
     server = FastMCP('solo-leveling-paper',
-        instructions='등록된 논문에서 한국어 근거 답변과 원문 근거를 조회합니다.',
+        instructions=HOST_INSTRUCTIONS,
         log_level='ERROR')
 
     if services.ingestion is not None:
@@ -150,7 +171,7 @@ def create_server(services: MCPServices) -> FastMCP:
             annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                         idempotentHint=True, openWorldHint=False))
         async def get_paper_status(job_id: str) -> PaperStatusOutput:
-            """등록·파싱·번역·색인 작업 상태와 사용 가능한 기능을 조회합니다."""
+            """등록 작업 상태와 limitations를 조회합니다. ready도 일부 번역이 누락될 수 있습니다."""
             try:
                 result = await anyio.to_thread.run_sync(
                     lambda: services.ingestion.get_status(job_id))
@@ -174,7 +195,11 @@ def create_server(services: MCPServices) -> FastMCP:
             goal: Literal['understand', 'implement', 'skim'] = 'understand',
             known_concepts: list[str] | None = None,
         ) -> StartLearningOutput:
-            """게시 완료된 논문 버전의 기본 학습 맥락을 생성하거나 재사용합니다."""
+            """학습 목적과 기존 지식을 저장한 맥락을 생성하거나 재사용합니다.
+
+            goal은 understand(이해), implement(구현), skim(훑어보기)입니다.
+            known_concepts는 사용자 자기보고입니다. 후속 질문은 반환된 context_id를 사용합니다.
+            """
             try:
                 try:
                     require_text(version_id, 'version_id')
@@ -208,7 +233,11 @@ def create_server(services: MCPServices) -> FastMCP:
                         standalone_question: str | None = None,
                         focus: Focus | None = None,
                         top_k: Annotated[int, Field(strict=True, ge=1, le=20)] = 5) -> AskPaperOutput:
-        """고정된 학습 맥락에서 질문하고 주장별 한국어·원문 근거를 반환합니다."""
+        """기존 context로 질문하고 주장별 한국어·원문 근거를 반환합니다.
+
+        ok는 답변 완전성 보증이 아니며 structural_only는 의미 검증을 포함하지 않습니다.
+        focus는 사용자 지정 범위를 유지하세요. pdf_pages는 인쇄 번호가 아닌 물리 PDF 페이지입니다.
+        """
         try:
             try:
                 require_text(question, 'question')
@@ -230,7 +259,11 @@ def create_server(services: MCPServices) -> FastMCP:
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                     idempotentHint=True, openWorldHint=False))
     async def get_evidence(context_id: str, evidence_ids: list[str]) -> GetEvidenceOutput:
-        """답변에 저장된 근거의 한국어 번역·원문·페이지·파일명을 재검색 없이 조회합니다."""
+        """같은 context의 답변에 저장된 근거·페이지·파일명을 조회합니다.
+
+        답변이 반환한 evidence_ids를 사용합니다. 재검색이나 끊긴 문장의 복구는 하지 않습니다.
+        printed_page_label이 없으면 pdf_page를 'PDF 기준 N페이지'로 안내합니다.
+        """
         try:
             result = await anyio.to_thread.run_sync(
                 lambda: services.evidence.get(context_id, evidence_ids))
