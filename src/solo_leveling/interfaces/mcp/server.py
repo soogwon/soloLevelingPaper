@@ -1,7 +1,8 @@
 """B 서비스를 읽기 중심 MCP 도구로 노출한다."""
 
 from dataclasses import dataclass
-from typing import Annotated, Literal, Protocol, TypedDict
+from typing import Annotated, Literal, Protocol
+from typing_extensions import TypedDict
 
 import anyio
 from mcp.server.fastmcp import FastMCP
