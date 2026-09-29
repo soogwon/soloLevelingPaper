@@ -20,6 +20,7 @@ from .local_files import LocalPdfStore
 class IngestionServices:
     translation: TranslationService
     translation_settings: TranslationSettings
+    embedder: object = None
 
 
 class LocalIngestionManager:
@@ -54,7 +55,8 @@ class LocalIngestionManager:
                 try:
                     future = self.executor.submit(run_prepared_local_ingestion, prepared,
                         translation_service=self.services.translation,
-                        translation_settings=self.services.translation_settings)
+                        translation_settings=self.services.translation_settings,
+                        embedder=self.services.embedder)
                     # 완료 결과는 DB가 기준이며, 예외를 소비해 실행기 경고만 방지한다.
                     future.add_done_callback(lambda completed: completed.exception())
                 except Exception:

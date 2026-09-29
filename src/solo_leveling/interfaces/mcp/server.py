@@ -149,11 +149,11 @@ def _answer_payload(response) -> AskPaperOutput:
     }
 
 
-def create_server(services: MCPServices) -> FastMCP:
+def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
     """저장소 수명이나 환경 설정에 관여하지 않고 MCP 도구만 구성한다."""
     server = FastMCP('solo-leveling-paper',
         instructions=HOST_INSTRUCTIONS,
-        log_level='ERROR')
+        log_level='ERROR', lifespan=lifespan)
 
     if services.ingestion is not None:
         @server.tool(name='add_paper', structured_output=True,

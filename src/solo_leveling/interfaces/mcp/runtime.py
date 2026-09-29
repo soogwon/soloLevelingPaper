@@ -1,6 +1,7 @@
 """환경 설정으로 로컬 저장소와 stdio MCP 서버를 준비한다."""
 
 from dataclasses import dataclass
+from contextlib import asynccontextmanager
 import os
 from pathlib import Path
 from typing import Mapping
@@ -8,6 +9,7 @@ from typing import Mapping
 from dotenv import dotenv_values
 
 from solo_leveling.infrastructure.bootstrap import build_services
+from solo_leveling.infrastructure.embeddings.process_embedder import ProcessEmbedder
 from solo_leveling.infrastructure.database.repository import mark_interrupted_jobs_on_startup
 from solo_leveling.infrastructure.database.schema import init_db
 from solo_leveling.infrastructure.generation.openai_generator import OpenAIGenerationSettings
@@ -63,6 +65,8 @@ def runtime_paths(values: Mapping[str, str]) -> RuntimePaths:
 def build_runtime_server(values: Mapping[str, str]):
     """저장소를 초기화하고 이전 실행에서 남은 처리 중 작업을 중단 상태로 바꾼다."""
     paths = runtime_paths(values)
+    embedder = ProcessEmbedder(float(values.get('EMBEDDING_PROCESS_TIMEOUT_SECONDS', '90')),
+                              log_dir=paths.data_root / 'diagnostics')
     paths.data_root.mkdir(parents=True, exist_ok=True)
     paths.db_path.parent.mkdir(parents=True, exist_ok=True)
     paths.chroma_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +76,7 @@ def build_runtime_server(values: Mapping[str, str]):
     mark_interrupted_jobs_on_startup(str(paths.db_path))
     services = build_services(str(paths.db_path), get_client(str(paths.chroma_dir)),
         generation=OpenAIGenerationSettings.from_env(values),
-        translation=OpenAITranslationConfig.from_env(values))
+        translation=OpenAITranslationConfig.from_env(values), embedder=embedder)
     try:
         max_bytes = int(values.get('MAX_UPLOAD_BYTES', '31457280'))
         max_workers = int(values.get('MAX_CONCURRENT_INGESTIONS', '1'))
@@ -82,11 +86,21 @@ def build_runtime_server(values: Mapping[str, str]):
         raise ValueError('현재 MAX_CONCURRENT_INGESTIONS는 1만 지원합니다.')
     ingestion = LocalIngestionManager(str(paths.db_path), str(paths.chroma_dir),
         LocalPdfStore(paths.import_dir, paths.pdf_dir, max_bytes),
-        IngestionServices(services.translation, services.translation_settings),
+        IngestionServices(services.translation, services.translation_settings, embedder),
         max_workers=max_workers)
+
+    @asynccontextmanager
+    async def lifespan(server):
+        try:
+            yield
+        finally:
+            # 새 임베딩 요청을 차단하고 실행 중인 전용 프로세스를 정리한다.
+            embedder.close()
+            ingestion.executor.shutdown(wait=False, cancel_futures=True)
+
     return create_server(MCPServices(
         services.answer, services.evidence, ingestion, services.search.contexts,
-    ))
+    ), lifespan=lifespan)
 
 
 def main() -> None:
