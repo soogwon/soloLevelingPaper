@@ -115,6 +115,26 @@ def test_only_used_evidence_is_saved_once(parts):
     assert saved[0][1][0].chunk_id == 'c1'
 
 
+def test_fragment_flags_are_passed_to_generator(parts):
+    from dataclasses import replace
+    service, result, _, _ = parts
+    chunks = ('ation of positions, the easier it is to learn.', 'Complete sentence [12].')
+    items = tuple(replace(item, chunk=replace(item.chunk, original_text=text))
+                  for item, text in zip(result.items, chunks))
+    service.search = SimpleNamespace(
+        search=lambda *a, **kw: ContextSearchResponse('ctx', replace(result, items=items)))
+    received = []
+
+    def generate(question, evidence):
+        received.extend(evidence)
+        return GeneratedAnswerDraft((GeneratedClaim('주장', (evidence[1].evidence_id,)),))
+
+    service.generator = SimpleNamespace(generate_claims=generate)
+    service.answer('질문', context_id='ctx')
+    flags = [(item.starts_mid_sentence, item.ends_mid_sentence) for item in received]
+    assert flags == [(True, False), (False, False)]
+
+
 def test_duplicate_generated_ids_fail_before_saving(parts):
     service, _, saved, _ = parts
     service.id_factory = lambda: 'same'

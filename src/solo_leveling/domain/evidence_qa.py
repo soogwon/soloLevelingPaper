@@ -191,6 +191,8 @@ class EvidenceInput:
     original_text: str
     printed_page_label: str | None
     pdf_page: int
+    starts_mid_sentence: bool = False
+    ends_mid_sentence: bool = False
 
     def __post_init__(self) -> None:
         for name in ("evidence_id", "chunk_id", "original_text"):
@@ -198,6 +200,8 @@ class EvidenceInput:
         optional_text(self.text_ko, "text_ko")
         optional_text(self.printed_page_label, "printed_page_label")
         positive_int(self.pdf_page, "pdf_page")
+        if type(self.starts_mid_sentence) is not bool or type(self.ends_mid_sentence) is not bool:
+            raise ValueError("fragment flags must be bool")
 
 
 @dataclass(frozen=True)
