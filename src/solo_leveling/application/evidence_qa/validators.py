@@ -35,8 +35,11 @@ def validate_search_result(result: SearchResult) -> None:
     ranks = [item.rank for item in result.items]
     if ranks != sorted(ranks) or len(set(ranks)) != len(ranks):
         raise ValueError("ranks must be sorted and unique")
-    for item in result.items:
-        validate_chunk(item.chunk, result.scope)
+    ids = [chunk.chunk_id for chunk in result.candidate_chunks]
+    if len(ids) != len(set(ids)):
+        raise ValueError('근거 후보의 청크 ID가 중복됩니다.')
+    for chunk in result.candidate_chunks:
+        validate_chunk(chunk, result.scope)
 
 
 def validate_answer_result(result: AnswerResult) -> None:
@@ -60,7 +63,7 @@ def validate_citation(citation: Citation, search: SearchResult) -> None:
         scope.version_id, scope.parse_revision_id, scope.translation_revision_id,
     ):
         raise ValueError("citation revision is outside scope")
-    candidates = [item.chunk for item in search.items if item.chunk.chunk_id == citation.chunk_id]
+    candidates = [chunk for chunk in search.candidate_chunks if chunk.chunk_id == citation.chunk_id]
     if not candidates:
         raise ValueError("citation references a chunk outside search results")
     for chunk in candidates:
@@ -94,7 +97,7 @@ def validate_get_evidence_result(result: GetEvidenceResult, search: SearchResult
 def citation_from_evidence(evidence: Evidence, search: SearchResult) -> Citation:
     """Reuse the existing Evidence model; metadata comes from validated chunks."""
     validate_search_result(search)
-    chunks = [item.chunk for item in search.items if item.chunk.chunk_id == evidence.chunk_id]
+    chunks = [chunk for chunk in search.candidate_chunks if chunk.chunk_id == evidence.chunk_id]
     if not chunks:
         raise ValueError("evidence chunk is outside search results")
     chunk = chunks[0]

@@ -11,7 +11,8 @@ from solo_leveling.domain.evidence_qa import (
 )
 from solo_leveling.domain.models import Evidence
 from .entry import SearchEntryService
-from .ports import ClaimGenerator, EvidenceWriter, GenerationUnavailable
+from .ports import ClaimGenerator, ContinuationReader, EvidenceWriter, GenerationUnavailable
+from .continuation import supplement_continuations
 from .response_parser import GenerationFormatError
 from .errors import InvalidArgumentError
 from .fragments import fragment_flags
@@ -33,8 +34,12 @@ class AnswerResponse:
 class AnswerService:
     def __init__(self, search: SearchEntryService, generator: ClaimGenerator,
                  evidence_writer: EvidenceWriter, *, id_factory: Callable[[], str] | None = None,
-                 max_expanded_top_k: int = 20):
+                 max_expanded_top_k: int = 20, continuation_reader: ContinuationReader | None = None,
+                 max_supplemental_chunks: int = 20):
         positive_int(max_expanded_top_k, 'max_expanded_top_k')
+        positive_int(max_supplemental_chunks, 'max_supplemental_chunks')
+        self.continuation_reader = continuation_reader
+        self.max_supplemental_chunks = max_supplemental_chunks
         self.search = search
         self.generator = generator
         self.evidence_writer = evidence_writer
@@ -82,12 +87,16 @@ class AnswerService:
     def _snapshot(result: SearchResult) -> SearchResult:
         # 가변 Chunk를 복사해 검색 시점의 본문·페이지를 답변 조립 동안 보존한다.
         search = replace(result, items=tuple(replace(item, chunk=replace(item.chunk))
-                                             for item in result.items))
+                                             for item in result.items),
+                         supplemental_chunks=tuple(replace(c) for c in result.supplemental_chunks))
         validate_search_result(search)
         return search
 
     def _answer_from_search(self, context_id: str, search: SearchResult,
                             allocated: set[str]) -> AnswerResponse:
+        if self.continuation_reader is not None and search.items:
+            search = supplement_continuations(search, self.continuation_reader,
+                                              self.max_supplemental_chunks)
 
         def insufficient(reason, message):
             result = AnswerResult(AnswerStatus.INSUFFICIENT_EVIDENCE, message, (), (), reason)
@@ -108,8 +117,7 @@ class AnswerService:
             allocated.add(value)
             return value
 
-        for item in search.items:
-            chunk = item.chunk
+        for chunk in search.candidate_chunks:
             if chunk.chunk_id in chunk_ids:
                 raise ValueError('검색 청크가 중복됩니다.')
             chunk_ids.add(chunk.chunk_id)
@@ -121,6 +129,12 @@ class AnswerService:
                                         starts_mid, ends_mid))
             # 현재는 청크 전체를 인용한다. 문장 단위 발췌와 내용 검증은 후속 작업이다.
             evidence_by_id[evidence_id] = Evidence(evidence_id, chunk.chunk_id, chunk.text, chunk.original_text)
+        # 검색 순서와 문서 순서는 다르므로, 이어지는 근거 관계를 명시적으로 전달한다.
+        by_index = {chunk.chunk_index: item for chunk, item in zip(search.candidate_chunks, inputs)}
+        inputs = [replace(item, follows_evidence_id=previous.evidence_id)
+                  if (previous := by_index.get(chunk.chunk_index - 1)) is not None
+                  and previous.ends_mid_sentence else item
+                  for chunk, item in zip(search.candidate_chunks, inputs)]
         try:
             with stage('generation'):
                 draft = self.generator.generate_claims(search.query, tuple(inputs))

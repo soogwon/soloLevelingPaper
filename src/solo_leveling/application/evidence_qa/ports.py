@@ -2,7 +2,7 @@
 
 from typing import Protocol, Sequence
 
-from solo_leveling.domain.models import Evidence, LearningContext
+from solo_leveling.domain.models import Chunk, Evidence, LearningContext
 
 from solo_leveling.domain.evidence_qa import (
     EvidenceInput, GeneratedAnswerDraft, SearchResult, SearchScope,
@@ -36,6 +36,12 @@ class ScopedRetriever(Protocol):
 class EvidenceWriter(Protocol):
     def save(self, context_id: str, evidence: Sequence[Evidence]) -> None:
         """검증된 근거 전체를 원자적으로 저장한다. 실패하면 예외를 전달한다."""
+        ...
+
+
+class ContinuationReader(Protocol):
+    def following_chunks(self, search: SearchResult, indices: tuple[int, ...]) -> tuple[Chunk, ...]:
+        """고정된 게시 색인과 사용자 범위 안의 지정 청크 번호를 조회한다."""
         ...
 
 

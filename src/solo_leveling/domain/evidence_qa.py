@@ -92,6 +92,8 @@ class SearchResult:
     retrieval_method: RetrievalMethod
     embedding_set_id: str | None
     items: tuple[RetrievedChunk, ...]
+    # 검색 순위와 분리된 문맥 보충 청크다. 점수·순위를 임의로 부여하지 않는다.
+    supplemental_chunks: tuple[Chunk, ...] = ()
 
     def __post_init__(self) -> None:
         require_text(self.query, "query")
@@ -99,6 +101,12 @@ class SearchResult:
             raise ValueError("invalid scope or retrieval method")
         optional_text(self.embedding_set_id, "embedding_set_id")
         require_tuple(self.items, RetrievedChunk, "items")
+        require_tuple(self.supplemental_chunks, Chunk, "supplemental_chunks")
+
+    @property
+    def candidate_chunks(self) -> tuple[Chunk, ...]:
+        """검색 청크와 문맥 보충 청크를 인용 검증의 후보로 제공한다."""
+        return tuple(item.chunk for item in self.items) + self.supplemental_chunks
 
 
 @dataclass(frozen=True)
@@ -193,12 +201,14 @@ class EvidenceInput:
     pdf_page: int
     starts_mid_sentence: bool = False
     ends_mid_sentence: bool = False
+    follows_evidence_id: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("evidence_id", "chunk_id", "original_text"):
             require_text(getattr(self, name), name)
         optional_text(self.text_ko, "text_ko")
         optional_text(self.printed_page_label, "printed_page_label")
+        optional_text(self.follows_evidence_id, 'follows_evidence_id')
         positive_int(self.pdf_page, "pdf_page")
         if type(self.starts_mid_sentence) is not bool or type(self.ends_mid_sentence) is not bool:
             raise ValueError("fragment flags must be bool")
