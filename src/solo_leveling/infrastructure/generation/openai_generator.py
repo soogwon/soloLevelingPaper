@@ -85,6 +85,9 @@ _INSTRUCTIONS = '''제공된 근거만 사용해 질문에 한국어로 답하�
 예: 근거가 "정확도는 측정하지 않았다"고 명시하면 측정하지 않았다고 답할 수 있다.
 예: 특정 조건에서만 실험했고 다른 조건은 평가하지 않았다고 명시하면 그 한계를 설명할 수 있다.
 충돌하는 결과는 각각의 출처와 조건을 구분하고 임의로 평균을 내거나 한쪽을 선택하지 마라.
+starts_mid_sentence가 true면 근거의 앞부분이, ends_mid_sentence가 true면 뒷부분이 문장 중간에서 잘린 조각이다.
+잘린 조각의 text_ko는 문맥 없이 번역되어 원문과 뜻이 다를 수 있으므로 original_text를 기준으로 판단하라.
+잘린 조각만으로 수치·조건·비교를 주장하지 마라. 같은 내용이 다른 근거에 온전한 문장으로 있으면 그 근거를 인용하라.
 인용문·페이지·리비전은 생성하지 말고 지정한 JSON 스키마로만 응답하라.'''
 
 _SCHEMA = {
@@ -117,7 +120,9 @@ class OpenAIClaimGenerator:
             ids.add(item.evidence_id)
             # 생성에 필요한 질문·근거만 전송하고 파일 경로나 DB 식별자는 보내지 않는다.
             inputs.append({'evidence_id': item.evidence_id, 'text_ko': item.text_ko,
-                           'original_text': item.original_text})
+                           'original_text': item.original_text,
+                           'starts_mid_sentence': item.starts_mid_sentence,
+                           'ends_mid_sentence': item.ends_mid_sentence})
         if not inputs:
             return GeneratedAnswerDraft(())
         payload = {

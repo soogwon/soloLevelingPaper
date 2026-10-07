@@ -14,6 +14,7 @@ from .entry import SearchEntryService
 from .ports import ClaimGenerator, EvidenceWriter, GenerationUnavailable
 from .response_parser import GenerationFormatError
 from .errors import InvalidArgumentError
+from .fragments import fragment_flags
 from .validators import citation_from_evidence, validate_answer_against_search, validate_search_result
 
 
@@ -114,8 +115,10 @@ class AnswerService:
             chunk_ids.add(chunk.chunk_id)
             require_text(chunk.text, 'text_ko')
             evidence_id = new_id()
+            starts_mid, ends_mid = fragment_flags(chunk.original_text)
             inputs.append(EvidenceInput(evidence_id, chunk.chunk_id, chunk.text,
-                                        chunk.original_text, chunk.printed_page_label, chunk.pdf_page))
+                                        chunk.original_text, chunk.printed_page_label, chunk.pdf_page,
+                                        starts_mid, ends_mid))
             # 현재는 청크 전체를 인용한다. 문장 단위 발췌와 내용 검증은 후속 작업이다.
             evidence_by_id[evidence_id] = Evidence(evidence_id, chunk.chunk_id, chunk.text, chunk.original_text)
         try:

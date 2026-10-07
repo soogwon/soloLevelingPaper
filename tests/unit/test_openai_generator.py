@@ -52,6 +52,9 @@ def test_request_contract_and_normal_conversion(setup):
     data = json.loads(payload['input'][0]['content'])
     assert data['question'] == '질문'
     assert data['evidence'][0]['evidence_id'] == 'ev-1'
+    assert data['evidence'][0]['starts_mid_sentence'] is False
+    assert data['evidence'][0]['ends_mid_sentence'] is False
+    assert 'original_text를 기준으로 판단하라' in payload['instructions']
     assert 'internal-chunk' not in json.dumps(payload)
     assert 'test-only-key' not in repr(generator.settings)
     response.close.assert_called_once()
