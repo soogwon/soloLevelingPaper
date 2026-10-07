@@ -88,6 +88,8 @@ _INSTRUCTIONS = '''제공된 근거만 사용해 질문에 한국어로 답하�
 starts_mid_sentence가 true면 근거의 앞부분이, ends_mid_sentence가 true면 뒷부분이 문장 중간에서 잘린 조각이다.
 잘린 조각의 text_ko는 문맥 없이 번역되어 원문과 뜻이 다를 수 있으므로 original_text를 기준으로 판단하라.
 잘린 조각만으로 수치·조건·비교를 주장하지 마라. 같은 내용이 다른 근거에 온전한 문장으로 있으면 그 근거를 인용하라.
+이어지는 조건이나 설명을 여러 근거에서 함께 확인해 주장을 만들었다면 해당 근거 ID들을 모두 인용하라. 연결을 확인할 수 없는 조각을 임의로 이어 붙이지 마라.
+follows_evidence_id는 문서 순서상 바로 앞의 잘린 근거 ID다. 인접 관계일 뿐 의미 연결을 보장하지 않으므로 원문을 함께 확인하라.
 인용문·페이지·리비전은 생성하지 말고 지정한 JSON 스키마로만 응답하라.'''
 
 _SCHEMA = {
@@ -122,7 +124,8 @@ class OpenAIClaimGenerator:
             inputs.append({'evidence_id': item.evidence_id, 'text_ko': item.text_ko,
                            'original_text': item.original_text,
                            'starts_mid_sentence': item.starts_mid_sentence,
-                           'ends_mid_sentence': item.ends_mid_sentence})
+                           'ends_mid_sentence': item.ends_mid_sentence,
+                           'follows_evidence_id': item.follows_evidence_id})
         if not inputs:
             return GeneratedAnswerDraft(())
         payload = {

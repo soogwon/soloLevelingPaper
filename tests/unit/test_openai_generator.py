@@ -54,10 +54,25 @@ def test_request_contract_and_normal_conversion(setup):
     assert data['evidence'][0]['evidence_id'] == 'ev-1'
     assert data['evidence'][0]['starts_mid_sentence'] is False
     assert data['evidence'][0]['ends_mid_sentence'] is False
+    assert data['evidence'][0]['follows_evidence_id'] is None
     assert 'original_text를 기준으로 판단하라' in payload['instructions']
     assert 'internal-chunk' not in json.dumps(payload)
     assert 'test-only-key' not in repr(generator.settings)
     response.close.assert_called_once()
+
+
+def test_continuation_relation_is_sent_to_provider(setup):
+    generator, _, post, _ = setup
+    evidence = (
+        EvidenceInput('first', 'c1', '조건 앞', 'Faster when', None, 6, False, True),
+        EvidenceInput('next', 'c2', '조건 뒤', 'the sequence is short.', None, 7,
+                      True, False, 'first'),
+    )
+    generator.generate_claims('조건은?', evidence)
+    payload = post.call_args.kwargs['json']
+    supplied = json.loads(payload['input'][0]['content'])['evidence']
+    assert supplied[1]['follows_evidence_id'] == 'first'
+    assert '해당 근거 ID들을 모두 인용하라' in payload['instructions']
 
 
 @pytest.mark.parametrize('allow,local', [(False, False), (True, True), (False, True)])

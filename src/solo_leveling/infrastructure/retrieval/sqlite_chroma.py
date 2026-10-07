@@ -51,6 +51,22 @@ class SQLiteChromaRetriever:
         self.client = client
         self.embedder = embedder
 
+    @traced('continuation_lookup')
+    def following_chunks(self, search: SearchResult, indices: tuple[int, ...]) -> tuple[Chunk, ...]:
+        """게시 색인을 다시 확인하고 정확히 지정된 다음 번호만 반환한다."""
+        index, chunks = self._snapshot(search.scope)
+        if index['embedding_set_id'] != search.embedding_set_id:
+            raise ValueError('보충 조회 중 검색 색인이 변경되었습니다.')
+        for item in search.items:
+            if chunks.get(item.chunk.chunk_id) != item.chunk:
+                raise ValueError('보충 조회 중 검색 청크가 변경되었습니다.')
+        collection = self.client.get_collection(f"chunks-{index['embedding_set_id']}")
+        self._verify_vectors(collection, chunks, index)
+        scope = search.scope
+        return tuple(c for c in chunks.values() if c.chunk_index in indices
+                     and (not scope.pdf_pages or c.pdf_page in scope.pdf_pages)
+                     and (not scope.section_ids or c.section_id in scope.section_ids))
+
     @traced('index_lookup')
     def _snapshot(self, scope: SearchScope):
         # 논문·파싱·번역·작업의 연결과 청크를 같은 DB 스냅샷에서 확인한다.

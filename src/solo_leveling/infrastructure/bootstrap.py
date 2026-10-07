@@ -26,9 +26,10 @@ class EvidenceQAServices:
 def build_services(db_path: str, chroma_client, *, generation: OpenAIGenerationSettings,
                    translation: OpenAITranslationConfig, embedder=embed_texts) -> EvidenceQAServices:
     """DB 초기화·모델 다운로드·외부 API 호출 없이 객체만 연결한다."""
-    search = SearchEntryService(SQLiteContextReader(db_path),
-        SQLiteChromaRetriever(db_path, chroma_client, embedder=embedder))
+    retriever = SQLiteChromaRetriever(db_path, chroma_client, embedder=embedder)
+    search = SearchEntryService(SQLiteContextReader(db_path), retriever)
     return EvidenceQAServices(search,
-        AnswerService(search, OpenAIClaimGenerator(generation), SQLiteEvidenceWriter(db_path)),
+        AnswerService(search, OpenAIClaimGenerator(generation), SQLiteEvidenceWriter(db_path),
+                      continuation_reader=retriever),
         EvidenceService(SQLiteEvidenceReader(db_path)),
         TranslationService(OpenAITranslationProvider(translation)), translation.translation_settings)
