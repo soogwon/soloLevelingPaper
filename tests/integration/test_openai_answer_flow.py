@@ -24,7 +24,8 @@ def test_openai_response_to_persisted_evidence(setup_search, monkeypatch, valid_
     def post(url, **kwargs):
         supplied = json.loads(kwargs['json']['input'][0]['content'])['evidence']
         eid = supplied[0]['evidence_id'] if valid_reference else 'not-supplied'
-        body = json.dumps({'claims': [{'text': '근거 기반 주장', 'evidence_ids': [eid]}]})
+        body = json.dumps({'claims': [{'text': '근거 기반 주장', 'evidence_ids': [eid],
+            'supports': [{'evidence_id': eid, 'quote_original': supplied[0]['original_text']}]}]})
         response = Mock(status_code=200)
         response.json.return_value = {'status': 'completed', 'output': [
             {'type': 'message', 'role': 'assistant', 'status': 'completed',
@@ -45,3 +46,30 @@ def test_openai_response_to_persisted_evidence(setup_search, monkeypatch, valid_
         assert answer.result.reason_code.value == 'verification_failed'
         with closing(get_connection(db)) as conn:
             assert conn.execute('SELECT COUNT(*) FROM evidences').fetchone()[0] == 0
+
+
+def test_provider_support_drives_partial_and_persists_real_quotes(setup_search, monkeypatch):
+    db, _, retriever, _, _ = setup_search
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute("UPDATE chunks SET original_text='Faster when the sequence\n6' WHERE chunk_id='a'")
+    def post(url, **kwargs):
+        item = json.loads(kwargs['json']['input'][0]['content'])['evidence'][0]
+        body = {'claims': [{'text': '시퀀스 길이 6에서 더 빠르다.',
+            'evidence_ids': [item['evidence_id']], 'supports': [{
+                'evidence_id': item['evidence_id'], 'quote_original': item['original_text'],
+            }]}]}
+        response = Mock(status_code=200)
+        response.json.return_value = {'status': 'completed', 'output': [{
+            'type': 'message', 'role': 'assistant', 'status': 'completed',
+            'content': [{'type': 'output_text', 'text': json.dumps(body)}],
+        }]}
+        return response
+    monkeypatch.setattr(requests, 'post', post)
+    service = AnswerService(SearchEntryService(SQLiteContextReader(db), retriever),
+        OpenAIClaimGenerator(OpenAIGenerationSettings('test-key', allow_external_api=True)),
+        SQLiteEvidenceWriter(db))
+    result = service.answer('조건은?', context_id='ctx', top_k=1)
+    assert result.result.status.value == 'partial'
+    assert result.result.reason_code.value == 'extraction_limited'
+    detail = repo.get_evidences(db, 'ctx', [result.result.citations[0].evidence_id]).evidence[0]
+    assert detail.quote_original == 'Faster when the sequence\n6'

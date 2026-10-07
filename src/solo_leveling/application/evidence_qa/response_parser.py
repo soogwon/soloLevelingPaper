@@ -2,7 +2,7 @@
 
 import json
 
-from solo_leveling.domain.evidence_qa import GeneratedAnswerDraft, GeneratedClaim
+from solo_leveling.domain.evidence_qa import ClaimSupport, GeneratedAnswerDraft, GeneratedClaim
 
 
 class GenerationFormatError(ValueError):
@@ -35,11 +35,22 @@ def parse_generated_answer(raw_text: str) -> GeneratedAnswerDraft:
             raise ValueError('주장 배열이 아님')
         claims = []
         for item in payload['claims']:
-            if not isinstance(item, dict) or set(item) != {'text', 'evidence_ids'}:
+            if not isinstance(item, dict) or set(item) not in (
+                {'text', 'evidence_ids'}, {'text', 'evidence_ids', 'supports'},
+            ):
                 raise ValueError('주장 필드 불일치')
             if not isinstance(item['evidence_ids'], list):
                 raise ValueError('근거 ID 배열이 아님')
-            claims.append(GeneratedClaim(item['text'], tuple(item['evidence_ids'])))
+            # 기존 제공자·샘플도 읽되, 구절 정보가 없으면 품질 검사에서 보수적으로 처리한다.
+            supports = item.get('supports', [])
+            if not isinstance(supports, list):
+                raise ValueError('근거 구절 배열이 아님')
+            parsed = []
+            for support in supports:
+                if not isinstance(support, dict) or set(support) != {'evidence_id', 'quote_original'}:
+                    raise ValueError('근거 구절 필드 불일치')
+                parsed.append(ClaimSupport(support['evidence_id'], support['quote_original']))
+            claims.append(GeneratedClaim(item['text'], tuple(item['evidence_ids']), tuple(parsed)))
         return GeneratedAnswerDraft(tuple(claims))
     except (ValueError, TypeError, RecursionError):
         # 원본 응답이나 제공자의 내부 정보는 오류 메시지에 포함하지 않는다.

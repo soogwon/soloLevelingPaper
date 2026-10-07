@@ -5,9 +5,33 @@
 본문을 고치거나 다른 청크와 합치지 않는다. 형식 기반 추정이며 문장 완결성을 보장하지 않는다.
 """
 
+import re
+
 _CLOSERS = ')]}"\'”’'
 _SENTENCE_ENDS = ('.', '!', '?')
 _LEADING_CONTINUATIONS = ',;:)]}'
+
+
+def evidence_body(text: str) -> str:
+    """경계 검사 전용: 숫자만 있는 줄을 제외하고 공백을 정규화한다. 저장 원문은 유지한다."""
+    return ' '.join(' '.join(line for line in text.splitlines()
+                            if not line.strip().isdigit()).split())
+
+
+def sentence_ends(text: str) -> tuple[int, ...]:
+    """소수점과 말줄임표를 제외한 문장 끝 후보다. 언어학적 완결성 검사는 아니다."""
+    return tuple(m.end() for m in re.finditer(r'''(?<![.])[.!?](?![.\d])[)\]}"'”’]*(?=\s|$)''', text))
+
+
+def incomplete_tail_start(text: str) -> int | None:
+    """정규화한 본문에서 마지막 미완결 구간의 시작 위치를 반환한다."""
+    ends = sentence_ends(text)
+    if ends and ends[-1] == len(text):
+        return None
+    start = ends[-1] if ends else 0
+    while start < len(text) and text[start].isspace():
+        start += 1
+    return start if text else None
 
 
 def fragment_flags(original_text: str) -> tuple[bool, bool]:

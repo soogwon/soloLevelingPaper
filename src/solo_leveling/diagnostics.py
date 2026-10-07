@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from functools import wraps
 import inspect
 import json
+import re
 import faulthandler
 from pathlib import Path
 from threading import Lock
@@ -56,16 +57,50 @@ def import_watchdog(timeout=30):
             _stack_lock.release()
 
 
-def _emit(request_id, span_id, stage, event, elapsed_ms, error_code=None):
+def _emit(request_id, span_id, stage, event, elapsed_ms, error_code=None, *, details=None):
     # 인자·반환값·예외 문자열을 받지 않는 고정 필드 출력이다.
     record = dict(request_id=request_id, span_id=span_id, stage=stage,
                   event=event, elapsed_ms=elapsed_ms, error_code=error_code)
     try:
+        if details is not None:
+            record.update(details)
         sys.stderr.write(json.dumps(record) + '\n')
         sys.stderr.flush()
     except Exception:
         # 진단 출력 실패가 실제 요청 결과를 바꾸지 않도록 한다.
         pass
+
+
+def evidence_diagnostic(event, *, attempt_id, evidence_id=None, chunk_id=None,
+                        follows_evidence_id=None, pdf_page=None, supplemental=None,
+                        claim_number=None, support_count=None, reason_code=None, round_number=0,
+                        next_evidence_id=None):
+    """본문을 받지 않는 고정 메타데이터만 출력하며, 잘못된 값은 출력하지 않는다."""
+    if _request.get() is None:
+        return
+    if event not in ('candidate', 'claim_selection', 'quality', 'repair_target', 'repair_outcome'):
+        return
+    reasons = {'NO_EXTRACTION_RISK', 'STANDALONE_NUMBER', 'EMPTY_BODY',
+               'SUPPORT_NOT_FOUND', 'SUPPORT_LOCATION_UNRESOLVED',
+               'UNFINISHED_TAIL', 'UNRESOLVED_PREFIX', 'REPAIR_ADOPTED',
+               'REPAIR_UNAVAILABLE', 'REPAIR_INVALID'}
+    if reason_code is not None and reason_code not in reasons:
+        return
+
+    def safe_id(value):
+        # 운영 ID와 테스트용 짧은 ID만 허용한다. 본문이나 임의 경로는 버린다.
+        return value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}', value) else None
+
+    def safe_number(value):
+        return value if type(value) is int and value >= 0 else None
+
+    _emit(_request.get(), uuid4().hex, 'evidence_trace', event, 0, details=dict(
+        attempt_id=safe_id(attempt_id), evidence_id=safe_id(evidence_id),
+        chunk_id=safe_id(chunk_id), follows_evidence_id=safe_id(follows_evidence_id),
+        pdf_page=safe_number(pdf_page), supplemental=supplemental if type(supplemental) is bool else None,
+        claim_number=safe_number(claim_number), support_count=safe_number(support_count),
+        reason_code=reason_code, round_number=safe_number(round_number),
+        next_evidence_id=safe_id(next_evidence_id)))
 
 
 @contextmanager

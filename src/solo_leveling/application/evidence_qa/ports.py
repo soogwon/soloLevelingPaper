@@ -1,6 +1,7 @@
 """Synchronous ports; callers must offload blocking implementations in async hosts."""
 
 from typing import Protocol, Sequence
+from dataclasses import dataclass
 
 from solo_leveling.domain.models import Chunk, Evidence, LearningContext
 
@@ -54,4 +55,20 @@ class ClaimGenerator(Protocol):
         self, question: str, evidence: Sequence[EvidenceInput],
     ) -> GeneratedAnswerDraft:
         """Return unverified claims referencing supplied evidence IDs."""
+        ...
+
+
+@dataclass(frozen=True)
+class ContinuationRepairTarget:
+    """서버가 확인한 미완결 주장과 미인용 다음 후보의 연결 정보."""
+    claim_number: int
+    evidence_id: str
+    next_evidence_id: str
+
+
+class ClaimRepairer(Protocol):
+    def repair_claims(self, question: str, evidence: Sequence[EvidenceInput],
+                      draft: GeneratedAnswerDraft,
+                      targets: Sequence[ContinuationRepairTarget]) -> GeneratedAnswerDraft:
+        """기존 후보로 전체 초안을 한 번 보완한다. 호출 제한은 답변 서비스가 관리한다."""
         ...

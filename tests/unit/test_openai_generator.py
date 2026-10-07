@@ -33,10 +33,12 @@ def setup(monkeypatch):
 def test_request_contract_and_normal_conversion(setup):
     generator, evidence, post, response = setup
     response.json.return_value = envelope(json.dumps({'claims': [
-        {'text': '주장', 'evidence_ids': ['ev-1']},
+        {'text': '주장', 'evidence_ids': ['ev-1'],
+         'supports': [{'evidence_id': 'ev-1', 'quote_original': 'Original.'}]},
     ]}))
     result = generator.generate_claims('질문', evidence)
     assert result.claims[0].evidence_ids == ('ev-1',)
+    assert result.claims[0].supports[0].quote_original == 'Original.'
     args, kwargs = post.call_args
     assert args == ('https://api.openai.com/v1/responses',)
     assert kwargs['allow_redirects'] is False
@@ -49,6 +51,10 @@ def test_request_contract_and_normal_conversion(setup):
     assert payload['max_output_tokens'] == 2048
     assert payload['text']['format']['strict'] is True
     assert payload['text']['format']['schema']['additionalProperties'] is False
+    claim_schema = payload['text']['format']['schema']['properties']['claims']['items']
+    assert 'supports' in claim_schema['required']
+    assert claim_schema['properties']['supports']['items']['additionalProperties'] is False
+    assert '원문 문장 전체' in payload['instructions']
     data = json.loads(payload['input'][0]['content'])
     assert data['question'] == '질문'
     assert data['evidence'][0]['evidence_id'] == 'ev-1'
@@ -73,6 +79,36 @@ def test_continuation_relation_is_sent_to_provider(setup):
     supplied = json.loads(payload['input'][0]['content'])['evidence']
     assert supplied[1]['follows_evidence_id'] == 'first'
     assert '해당 근거 ID들을 모두 인용하라' in payload['instructions']
+
+
+def test_repair_request_preserves_schema_timeout_and_private_fields(setup):
+    from solo_leveling.application.evidence_qa.ports import ContinuationRepairTarget
+    from solo_leveling.domain.evidence_qa import GeneratedAnswerDraft, GeneratedClaim
+    generator, evidence, post, _ = setup
+    draft = GeneratedAnswerDraft((GeneratedClaim('미완결 주장', ('ev-1',)),))
+    result = generator.repair_claims('조건은?', evidence, draft,
+                                    (ContinuationRepairTarget(1, 'ev-1', 'ev-2'),))
+    assert not result.claims
+    post.assert_called_once()
+    payload = post.call_args.kwargs['json']
+    data = json.loads(payload['input'][0]['content'])
+    assert data['draft']['claims'][0]['text'] == '미완결 주장'
+    assert data['repair_targets'] == [dict(claim_number=1, evidence_id='ev-1',
+        next_evidence_id='ev-2', reason_code='UNFINISHED_TAIL')]
+    assert 'ID만 추가해서는 안 된다' in payload['instructions']
+    assert payload['text']['format']['strict'] is True
+    assert post.call_args.kwargs['timeout'] == (5.0, 30.0)
+    assert 'internal-chunk' not in json.dumps(payload)
+
+
+def test_repair_timeout_has_no_transport_retry(setup):
+    from solo_leveling.domain.evidence_qa import GeneratedAnswerDraft
+    generator, evidence, post, _ = setup
+    post.side_effect = requests.Timeout('비공개')
+    with pytest.raises(OpenAIGenerationError) as caught:
+        generator.repair_claims('질문', evidence, GeneratedAnswerDraft(()), ())
+    assert caught.value.kind == FailureKind.TIMEOUT
+    post.assert_called_once()
 
 
 @pytest.mark.parametrize('allow,local', [(False, False), (True, True), (False, True)])

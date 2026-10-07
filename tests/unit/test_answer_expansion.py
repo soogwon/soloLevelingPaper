@@ -18,7 +18,7 @@ from solo_leveling.domain.models import Chunk
 
 @pytest.fixture
 def setup():
-    items = tuple(RetrievedChunk(Chunk(str(i), 'p', i, f'Original {i}', f'근거 {i}', 't',
+    items = tuple(RetrievedChunk(Chunk(str(i), 'p', i, f'Original {i}.', f'근거 {i}', 't',
         pdf_page=1, section_id='method'), 1.0, i + 1) for i in range(10))
     first = SearchResult('질문', SearchScope('v', 'p', 't', (1,), ('method',)),
                          RetrievalMethod.VECTOR, 'idx', items[:5])
@@ -38,7 +38,7 @@ def setup():
     return service, search, generator, writer, first, second, inputs
 
 
-def test_expands_once_with_same_context_and_scope_and_saves_only_final(setup):
+def test_expands_once_with_same_context_and_scope_and_saves_only_final(setup, capsys):
     service, search, generator, writer, first, second, inputs = setup
     response = service.answer('질문', version_id='v', pdf_pages=(1,), section_ids=('method',))
     assert [call.kwargs['top_k'] for call in search.call_args_list] == [5, 10]
@@ -51,6 +51,14 @@ def test_expands_once_with_same_context_and_scope_and_saves_only_final(setup):
     writer.save.assert_called_once()
     assert len(writer.save.call_args.args[1]) == 1
     assert not {e.evidence_id for e in inputs[0]} & {e.evidence_id for e in inputs[1]}
+    import json
+    logs = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    trace = [r for r in logs if r['stage'] == 'evidence_trace']
+    assert len({r['request_id'] for r in trace}) == 1
+    assert len({r['attempt_id'] for r in trace}) == 2
+    selected = next(r for r in trace if r['event'] == 'claim_selection')
+    assert {r['evidence_id'] for r in trace if r['event'] == 'candidate'
+            and r['attempt_id'] == selected['attempt_id']} == {e.evidence_id for e in inputs[1]}
 
 
 def test_second_empty_draft_stops_without_saving(setup):
