@@ -110,15 +110,28 @@ class SearchResult:
 
 
 @dataclass(frozen=True)
+class ClaimSupport:
+    """주장에 사용한 원문 구절이다. 실제 원문과의 일치는 서버가 다시 확인한다."""
+    evidence_id: str
+    quote_original: str
+
+    def __post_init__(self) -> None:
+        require_text(self.evidence_id, 'evidence_id')
+        require_text(self.quote_original, 'quote_original')
+
+
+@dataclass(frozen=True)
 class GeneratedClaim:
     text: str
     evidence_ids: tuple[str, ...]
+    supports: tuple[ClaimSupport, ...] = ()
 
     def __post_init__(self) -> None:
         require_text(self.text, "text")
         require_tuple(self.evidence_ids, str, "evidence_ids")
         for evidence_id in self.evidence_ids:
             require_text(evidence_id, "evidence_id")
+        require_tuple(self.supports, ClaimSupport, 'supports')
 
 
 @dataclass(frozen=True)

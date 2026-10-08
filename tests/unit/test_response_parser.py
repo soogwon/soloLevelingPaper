@@ -22,6 +22,24 @@ def test_empty_claims_is_valid_abstention():
     assert parse_generated_answer('{"claims": []}').claims == ()
 
 
+def test_support_spans_are_parsed_without_trusting_their_contents():
+    draft = parse_generated_answer(json.dumps({'claims': [{
+        'text': '주장', 'evidence_ids': ['e1'],
+        'supports': [{'evidence_id': 'e1', 'quote_original': 'A complete sentence.'}],
+    }]}))
+    assert draft.claims[0].supports[0].quote_original == 'A complete sentence.'
+
+
+@pytest.mark.parametrize('supports', [None, {}, [None], [{'evidence_id': 'e1'}],
+    [{'evidence_id': 'e1', 'quote_original': ''}],
+    [{'evidence_id': 'e1', 'quote_original': 'text', 'page': 6}]])
+def test_bad_support_format_is_rejected(supports):
+    with pytest.raises(GenerationFormatError):
+        parse_generated_answer(json.dumps({'claims': [{
+            'text': '주장', 'evidence_ids': ['e1'], 'supports': supports,
+        }]}))
+
+
 @pytest.mark.parametrize('raw', [
     None, b'{}', '', '{', 'null', '[]', '{}',
     '{"claims": null}', '{"claims": {}}',

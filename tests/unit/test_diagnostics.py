@@ -138,3 +138,30 @@ def test_model_construction_failure_is_not_cached(capsys, monkeypatch):
     assert any(r['stage'] == 'embedding_library_import' and r['event'] == 'end' for r in logs)
     assert any(r['stage'] == 'embedding_model_construct' and r['event'] == 'error' for r in logs)
     assert not embedder._model_cache
+
+
+def test_evidence_trace_is_fixed_metadata_and_best_effort(capsys, monkeypatch):
+    from solo_leveling.diagnostics import evidence_diagnostic
+    evidence_diagnostic('candidate', attempt_id='a1')
+    assert records(capsys) == []
+
+    @traced('answer', request=True)
+    def run():
+        evidence_diagnostic('candidate', attempt_id='a1', chunk_id='SECRET body/path',
+                            pdf_page='SECRET page', supplemental='SECRET', evidence_id='e1')
+        evidence_diagnostic('quality', attempt_id='a1', reason_code='SECRET reason')
+        return 42
+
+    assert run() == 42
+    logs = records(capsys)
+    trace = [r for r in logs if r['stage'] == 'evidence_trace']
+    assert len(trace) == 1
+    assert trace[0]['chunk_id'] is trace[0]['pdf_page'] is trace[0]['supplemental'] is None
+    assert trace[0]['evidence_id'] == 'e1'
+
+    class BrokenStream:
+        def write(self, value):
+            raise OSError('SECRET')
+
+    monkeypatch.setattr('sys.stderr', BrokenStream())
+    assert run() == 42

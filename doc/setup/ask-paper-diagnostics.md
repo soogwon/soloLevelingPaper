@@ -4,13 +4,16 @@
 스레드 대기, DB 조회, 전체 Chroma 검증, 임베딩 계산, 네트워크, 근거 저장을 구분한다.
 이 변경은 계측이며 시간 제한·자동 재시도·작업 중단 정책을 바꾸지 않는다.
 
+단, 아래의 미완결 주장 보완은 별도 기능으로, 조건에 맞을 때 생성 호출을 최대 한 번 추가한다.
+
 ## 출력
 
 활성 ask_paper/AnswerService 요청에서 stderr로 JSON 한 줄씩 즉시 출력한다.
 stdout에는 진단을 쓰지 않는다. 요청별 무작위 request_id와 단계별 span_id를 사용한다.
 추가 검색은 같은 request_id, 새로운 span_id로 기록한다.
-질문·원문·번역·키·모델 경로·DB ID·예외 메시지·스택은 기록하지 않는다.
-필드는 request_id, span_id, stage, event, elapsed_ms, error_code뿐이다.
+질문·원문·번역·주장 본문·키·모델 경로·예외 메시지는 단계 로그에 기록하지 않는다.
+시간 로그의 필드는 request_id, span_id, stage, event, elapsed_ms, error_code다.
+근거 선택 진단은 아래에 설명한 청크·근거 ID와 고정 메타데이터를 추가한다.
 시간은 단조 시계 기준이며 start는 0, end/error는 해당 단계의 소요 밀리초다.
 실패는 STAGE_FAILED, 취소·중단은 CANCELLED로 기록하고 기존 예외를 다시 전달한다.
 이 코드는 외부 라이브러리가 자체 출력하는 로그까지 정제하지 않는다.
@@ -32,9 +35,78 @@ stdout에는 진단을 쓰지 않는다. 요청별 무작위 request_id와 단�
 | embedding_encode | 실제 임베딩 encode 계산 |
 | vector_search | Chroma query 호출 |
 | generation | 생성 제공자 전체, 응답 파싱 포함 |
+| generation_repair | 미완결 주장 보완 호출·구조 검사·품질 재판정 |
 | generation_api_call | HTTP 요청부터 응답 본문 수신까지, HTTP 성공 판정은 아님 |
 | evidence_validation | 최종 인용문 조립·구조 검증 |
 | evidence_save | SQLite 근거 검증 및 저장 트랜잭션 |
+
+## 후보·선택·품질 판정 진단
+
+`stage=evidence_trace`는 시간 측정이 아닌 단일 사건 기록이다(`elapsed_ms=0`).
+같은 `request_id` 안에서도 추가 검색 후 재생성은 다른 `attempt_id`를 사용한다.
+다음 기록은 MCP 응답이나 DB 스키마를 바꾸지 않고 stderr에만 남는다.
+
+| event | 기록 내용 |
+|---|---|
+| candidate | 생성 직전 모든 후보의 chunk_id, evidence_id, pdf_page, supplemental, follows_evidence_id |
+| claim_selection | 구조 검증을 통과한 주장 번호(claim_number), 선택한 evidence_id, 해당 근거의 support_count |
+| quality | 주장 번호, 처음 발견한 위험 사유(reason_code), 특정 근거에 해당하면 evidence_id |
+
+`supplemental=true`는 다음 청크 조회로 보충된 후보다. `follows_evidence_id`는
+생성기에 전달한 앞뒤 연결 관계다. `support_count=0`이면 구절 정보 없이 청크 전체로
+보수적으로 평가했다. 실제 supports 문구는 기록하지 않는다.
+
+| reason_code | 의미 |
+|---|---|
+| NO_EXTRACTION_RISK | 이번 경계·숫자 검사에서 위험을 찾지 못함. 의미 일치 보장은 아님 |
+| STANDALONE_NUMBER | 주장 숫자가 인용 원문의 숫자 단독 줄에만 존재함(인용 근거 집합 기준) |
+| EMPTY_BODY | 숫자 단독 줄 등을 제외한 원문 본문이 비어 있음 |
+| SUPPORT_NOT_FOUND | 생성기가 선택한 구절이 원문에 없음 |
+| SUPPORT_LOCATION_UNRESOLVED | 구절 위치가 없거나 중복되어 위치를 특정하지 못함 |
+| UNFINISHED_TAIL | 미완결 끝부분을 사용했고 인용된 다음 조각으로 연결을 확인하지 못함 |
+| UNRESOLVED_PREFIX | 잘린 시작부분을 사용했고 인용된 앞 조각으로 연결을 확인하지 못함 |
+
+기존 판정 순서를 유지하므로 모든 위험 사유를 수집하지 않고 첫 사유만 기록한다.
+잘못된 생성 형식·근거 ID는 기존 구조 검증에서 거절되며 claim_selection/quality가 생기지 않는다.
+빈 초안도 두 기록이 없으므로 generation 종료만으로 정상 주장 생성을 단정하지 않는다.
+
+7페이지가 빠졌다면 같은 request_id와 attempt_id에서 확인한다.
+
+1. candidate에 7페이지가 없음: 생성 전 후보 구성·보충 경로를 조사한다.
+2. candidate에는 있으나 claim_selection에 해당 evidence_id가 없음: 생성기가 사용하지 않았다.
+3. 양쪽을 인용했는데 partial: quality 사유와 follows_evidence_id를 확인한다.
+
+이전 호출의 후보나 supports를 복원하지는 못한다. MCP를 재시작한 다음 호출부터 적용된다.
+청크·근거 ID도 운영 메타데이터이므로 로그 공유 시 필요한 요청만 선별한다.
+
+## 미완결 주장 한 번 보완
+
+`UNFINISHED_TAIL`로 판정된 근거에 이어지는 후보가 이미 전달되어 있고,
+그 주장이 다음 후보를 인용하지 않았을 때만 보완한다. 제공자가 `repair_claims`를
+지원하지 않으면 최초 결과를 그대로 사용한다. 실제 OpenAI 생성기는 보완을 지원한다.
+
+- 원래 질문·후보·초안·대상 주장 번호·양쪽 근거 ID를 같은 모델에 전달한다.
+- 근거 ID만 붙이지 않고 누락된 조건을 주장에 반영하거나 불완전한 주장을 제외하도록 요청한다.
+- 구조와 품질을 다시 검사한다. 위험이 남으면 partial, 위험이 없으면 기존 기준대로 ok다.
+- API 사용 불가·시간 초과·응답 형식이나 근거 연결 오류면 최초 partial을 유지한다.
+- 보완 후 claims가 비면 insufficient_evidence이며 근거를 저장하지 않는다.
+- 요청당 보완은 최대 한 번이다. 보완 후 빈 초안이 되어도 추가 검색을 시작하지 않는다.
+- 기존 빈 초안 추가 검색 뒤에 처음 보완 조건이 생긴 경우에는 그때 한 번 보완할 수 있다.
+- 최종 채택한 초안의 근거만 한 번 저장한다. 보완 전 결과는 저장하지 않는다.
+- 사용자 페이지·섹션 범위, 검색 방식, DB 스키마는 바꾸지 않는다.
+
+보완도 기존 연결 제한 5초와 `GENERATION_TIMEOUT_SECONDS` 읽기 제한을 사용한다.
+이 값은 전체 요청의 절대 종료 시간이 아니다. 추가 호출만큼 지연·비용이 늘 수 있다.
+실패한 HTTP 요청을 자동 재시도하는 것은 아니며, 정상 생성된 초안을 대상으로 하는 별도 호출이다.
+
+진단에서 같은 `attempt_id`의 `round_number=0`은 최초 초안, `1`은 보완 초안이다.
+후보 ID는 동일하게 유지한다. `repair_target`은 주장 번호·미완결 evidence_id·next_evidence_id를
+기록한다. `repair_outcome`은 REPAIR_ADOPTED, REPAIR_UNAVAILABLE, REPAIR_INVALID 중 하나다.
+REPAIR_ADOPTED는 보완 초안 채택이지 ok 보장이 아니다. round_number=1의 quality도 확인한다.
+보완 실패 시 최종 결과는 round_number=0의 초안이며, 품질 사유는 최초 기록을 참조한다.
+
+구조·구절 경계 검사는 의미 검증이 아니므로 verification_level은 structural_only를 유지한다.
+조건이 올바르게 주장에 반영되었는지는 실제 호출 결과로 별도 확인해야 한다.
 
 ## 재현·해석
 
