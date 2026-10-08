@@ -82,14 +82,17 @@ stdout에는 진단을 쓰지 않는다. 요청별 무작위 request_id와 단�
 ## 미완결 주장 한 번 보완
 
 `UNFINISHED_TAIL`로 판정된 근거에 이어지는 후보가 이미 전달되어 있고,
-그 주장이 다음 후보를 인용하지 않았을 때만 보완한다. 제공자가 `repair_claims`를
-지원하지 않으면 최초 결과를 그대로 사용한다. 실제 OpenAI 생성기는 보완을 지원한다.
+그 주장이 다음 후보를 인용하지 않았을 때 보완한다. `UNRESOLVED_PREFIX`와
+`SUPPORT_NOT_FOUND`도 다음 후보 유무와 관계없이 구절 재선택 대상으로 보완한다.
+실제 OpenAI 생성기는 보완을 지원한다. 미지원·실패 시에도 아래 제외 정책을 적용한다.
 
-- 원래 질문·후보·초안·대상 주장 번호·양쪽 근거 ID를 같은 모델에 전달한다.
+- 원래 질문·후보·보완 대상만 모은 초안·대상 주장 번호·근거 ID를 같은 모델에 전달한다.
+  비대상 주장은 서버에서 원래 문구·근거 ID·supports 그대로 보존한다.
 - 근거 ID만 붙이지 않고 누락된 조건을 주장에 반영하거나 불완전한 주장을 제외하도록 요청한다.
-- 구조와 품질을 다시 검사한다. 위험이 남으면 partial, 위험이 없으면 기존 기준대로 ok다.
-- API 사용 불가·시간 초과·응답 형식이나 근거 연결 오류면 최초 partial을 유지한다.
-- 보완 후 claims가 비면 insufficient_evidence이며 근거를 저장하지 않는다.
+- 구조와 품질을 다시 검사한다. 위험이 남은 보완 주장은 사유와 관계없이 제외한다.
+- API 사용 불가·시간 초과·응답 형식이나 근거 연결 오류면 보완 대상만 제외하고 비대상은 보존한다.
+- 보완 후 대상 claims가 비어도 비대상 주장은 유지한다. 최종 주장이 모두 없으면
+  insufficient_evidence / extraction_limited이며 근거를 저장하지 않는다.
 - 요청당 보완은 최대 한 번이다. 보완 후 빈 초안이 되어도 추가 검색을 시작하지 않는다.
 - 기존 빈 초안 추가 검색 뒤에 처음 보완 조건이 생긴 경우에는 그때 한 번 보완할 수 있다.
 - 최종 채택한 초안의 근거만 한 번 저장한다. 보완 전 결과는 저장하지 않는다.
@@ -103,10 +106,87 @@ stdout에는 진단을 쓰지 않는다. 요청별 무작위 request_id와 단�
 후보 ID는 동일하게 유지한다. `repair_target`은 주장 번호·미완결 evidence_id·next_evidence_id를
 기록한다. `repair_outcome`은 REPAIR_ADOPTED, REPAIR_UNAVAILABLE, REPAIR_INVALID 중 하나다.
 REPAIR_ADOPTED는 보완 초안 채택이지 ok 보장이 아니다. round_number=1의 quality도 확인한다.
-보완 실패 시 최종 결과는 round_number=0의 초안이며, 품질 사유는 최초 기록을 참조한다.
+보완 실패 시 round_number=0의 비대상 주장을 유지하고 대상은 제외한다.
+대상의 최초 품질 사유는 round_number=0을 참조한다.
 
 구조·구절 경계 검사는 의미 검증이 아니므로 verification_level은 structural_only를 유지한다.
 조건이 올바르게 주장에 반영되었는지는 실제 호출 결과로 별도 확인해야 한다.
+
+### 잘린 앞부분·원문 불일치 보완과 제외
+
+- UNRESOLVED_PREFIX: 주장과 무관한 잘린 앞 조각까지 복사했다면 실제 근거 문장으로
+  supports를 다시 선택한다. 그 조각에 주장이 의존하면 기존 후보에서 연결 근거를 찾거나 주장을 제외한다.
+- SUPPORT_NOT_FOUND: 지정된 원문에 실제 있는 구절로 수정하거나 정확한 후보 ID를 인용한다.
+  존재하지 않는 문장·조건은 생성하지 않도록 지시한다.
+- 필요한 조건절을 잘라 검사를 피하지 않도록 지시하며 기존 원문 일치·경계 판정은 느슨하게 바꾸지 않는다.
+- 두 사유의 보완도 기존 끝부분 보완과 합쳐 요청당 최대 한 번이다. 보완 응답에는 모든 인용 ID의
+  supports가 있어야 하며 비어 있거나 일부 누락되면 형식·연결 실패로 처리한다.
+- 최종 평가에 UNRESOLVED_PREFIX 또는 SUPPORT_NOT_FOUND가 남은 주장은 답변·claims에서 제외한다.
+  해당 주장만 사용한 근거도 저장·반환하지 않는다. 보완 미지원이나 API 실패 때도 적용한다.
+- 일부만 제외되면 partial / extraction_limited와 제외 안내를 반환한다. 모두 제외되면
+  insufficient_evidence / extraction_limited를 반환하고 추가 검색이나 근거 저장은 하지 않는다.
+- 생성기가 보완 대상 claims 수를 줄인 경우에도 일부 답변이 누락됐을 가능성을 표시한다.
+  이는 질문의 각 항목이 모두 답변됐는지 의미적으로 검증한 것은 아니다.
+- 보완 대상이 아닌 숫자 단독 줄·미완결 끝부분 등 다른 사유의 partial 정책은 유지한다.
+  단, 보완을 시도한 대상은 재검사에서 어떤 위험이라도 남으면 제외한다.
+
+`repair_target.reason_code`로 보완 사유를 구분한다. 앞부분·원문 불일치는
+next_evidence_id가 null일 수 있다. `claim_excluded`는 서버가 제외한 초안의 주장 번호·근거 ID·
+사유·round_number를 남기며 본문을 출력하지 않는다. 번호는 제외 전 초안 기준이다.
+생성기가 스스로 제거한 주장은 이 이벤트에 나타나지 않으며, 수정 전후 claim_selection을 비교한다.
+
+보완 입력의 주장 번호는 대상만 모은 초안에서 1부터 다시 부여한다. 최초 round_number=0과
+repair_target의 번호는 전체 최초 초안 기준이고, round_number=1의 claim_selection·quality·
+claim_excluded 번호는 보완 응답 기준이다. 근거 ID로 연결해 확인한다.
+보완 응답이 대상 수보다 많은 주장을 반환하면 형식 오류로 거절한다. 보완은 최대 한 번이며,
+통과한 대상 묶음을 최초 대상 위치에 넣고 비대상 주장의 상대적 순서는 유지한다.
+
+검사가 첫 위험 신호만 반환하는 휴리스틱이라는 한계는 그대로다. 정상 판정이 의미적 근거 충족을
+보장하지 않으며, 이 기능은 #20의 과거 verification_failed 원인이 해결됐다는 증거가 아니다.
+
+## 복합 질문 verification_failed 진단 (#20)
+
+외부 응답의 reason_code는 기존 verification_failed를 유지한다. 서버 로그의
+`stage=evidence_trace`, `event=verification_failure`에서 다음을 구분한다.
+
+| 로그 reason_code | 실패 지점 |
+|---|---|
+| GENERATION_JSON_INVALID | 생성 본문 JSON 해석 실패, 중복 키·비표준 상수 포함 |
+| GENERATION_SCHEMA_INVALID | JSON 해석 후 필드·자료형·값 계약 검사 실패 |
+| GENERATION_FORMAT_INVALID | 그 밖의 제공자 응답 형식 오류(예: 응답 봉투 구조) |
+| DRAFT_INVALID | 생성기가 반환한 내부 초안 객체 형식 오류 |
+| EMPTY_EVIDENCE_IDS | 주장에 인용 근거가 없음 |
+| DUPLICATE_EVIDENCE_ID | 같은 주장 안에서 근거 ID가 중복됨 |
+| UNKNOWN_EVIDENCE_ID | 후보에 없는 근거 ID를 인용함 |
+| SUPPORT_REFERENCE_INVALID | supports가 해당 주장에 인용되지 않은 근거를 참조함 |
+
+근거 연결 실패에는 1부터 시작하는 claim_number가 기록된다. 다른 주장끼리 같은 근거를
+인용하는 것은 허용된다. 알 수 없는 ID 자체와 본문·예외 메시지는 로그에 남기지 않는다.
+`round_number=0`은 최초 초안 실패, `1`은 보완 초안 실패다. 보완 실패는 최초 partial을
+유지하므로 외부 응답의 verification_failed와 혼동하지 않는다.
+
+### 재현 절차와 현재 한계
+
+이슈 첨부 기록에는 실제 복합 질문의 도구 입력 JSON이 없다. 아래는 재구성한 질문이며,
+당시 장애와 같은 원인이라고 단정할 수 없다. 과거 코드·청크와 현재 상태도 다를 수 있다.
+
+1. MCP를 종료한 뒤 이 문서의 래퍼 설정으로 재시작한다.
+2. 등록된 논문의 유효한 context_id를 사용한다. 재등록은 하지 않는다.
+3. 당시 정확한 입력을 확보했으면 그것을 사용하고, 없으면 아래 재구성 입력으로 한 번만 호출한다.
+
+```text
+question: "Self-attention이 recurrent 층보다 계산 복잡도 측면에서 더 빠른 조건은 무엇이며, 최대 경로 길이는 장거리 의존성 학습에 어떤 영향을 주는가?"
+top_k: 5
+focus: {"pdf_pages": [6, 7]}
+```
+
+4. status·reason_code·answer_ko와 반환 근거 ID를 보존하고 같은 요청 시간대의 request_id로 로그를 확인한다.
+   실패 응답에는 근거가 없을 수 있으므로 진단 중에는 다른 요청을 동시에 보내지 않는다.
+5. verification_failure가 있으면 코드·주장 번호로 실패 경로를 특정한다. 생성 모델의 원본 JSON은 수집하지 않는다.
+6. 성공하거나 partial이면 이번 호출에서는 해당 실패가 재현되지 않은 것이다. 원인 해결로 기록하지 않는다.
+
+일반 테스트는 합성 초안으로 각 오류 분기와 정상 복합 초안 처리를 검증한다. 실제 모델에서
+과거 장애를 재현했다는 의미는 아니다. 유료 API 자동 재호출·이슈 생성은 수행하지 않는다.
 
 ## 재현·해석
 

@@ -37,18 +37,29 @@ class _RepairBudget:
     used: bool = False
 
 
+class _DraftValidationError(ValueError):
+    """본문·알 수 없는 ID를 보관하지 않고 고정 코드와 주장 번호만 전달한다."""
+    def __init__(self, code: str, claim_number: int):
+        self.code = code
+        self.claim_number = claim_number
+        super().__init__(code)
+
+
 def _validate_draft(draft, evidence_by_id):
     """최초 초안과 보완 초안을 같은 규칙으로 검사한다."""
     if not isinstance(draft, GeneratedAnswerDraft):
         raise ValueError('생성 결과 형식이 올바르지 않습니다.')
     draft = GeneratedAnswerDraft(draft.claims)
-    for claim in draft.claims:
+    for number, claim in enumerate(draft.claims, 1):
         GeneratedClaim(claim.text, claim.evidence_ids, claim.supports)
-        if (not claim.evidence_ids or len(set(claim.evidence_ids)) != len(claim.evidence_ids)
-                or not set(claim.evidence_ids).issubset(evidence_by_id)):
-            raise ValueError('주장이 제공된 근거를 올바르게 참조하지 않습니다.')
+        if not claim.evidence_ids:
+            raise _DraftValidationError('EMPTY_EVIDENCE_IDS', number)
+        if len(set(claim.evidence_ids)) != len(claim.evidence_ids):
+            raise _DraftValidationError('DUPLICATE_EVIDENCE_ID', number)
+        if not set(claim.evidence_ids).issubset(evidence_by_id):
+            raise _DraftValidationError('UNKNOWN_EVIDENCE_ID', number)
         if any(s.evidence_id not in claim.evidence_ids for s in claim.supports):
-            raise ValueError('주장의 구절이 인용하지 않은 근거를 참조합니다.')
+            raise _DraftValidationError('SUPPORT_REFERENCE_INVALID', number)
     return draft
 
 
@@ -118,6 +129,16 @@ class AnswerService:
                             allocated: set[str], repair_budget: _RepairBudget) -> AnswerResponse:
         # 추가 검색 후 재생성하더라도 후보와 판정이 섞이지 않도록 시도를 구분한다.
         attempt_id = uuid4().hex
+
+        def log_verification_failure(error, round_number):
+            code, number = 'DRAFT_INVALID', None
+            if isinstance(error, GenerationFormatError):
+                code = error.code.value
+            elif isinstance(error, _DraftValidationError):
+                code, number = error.code, error.claim_number
+            evidence_diagnostic('verification_failure', attempt_id=attempt_id,
+                round_number=round_number, reason_code=code, claim_number=number)
+
         if self.continuation_reader is not None and search.items:
             search = supplement_continuations(search, self.continuation_reader,
                                               self.max_supplemental_chunks)
@@ -168,7 +189,8 @@ class AnswerService:
         try:
             with stage('generation'):
                 draft = self.generator.generate_claims(search.query, tuple(inputs))
-        except GenerationFormatError:
+        except GenerationFormatError as error:
+            log_verification_failure(error, 0)
             return insufficient(ReasonCode.VERIFICATION_FAILED, '생성된 답변의 응답 형식을 확인하지 못했습니다.')
         except GenerationUnavailable:
             raise AnswerGenerationError('답변 생성 서비스를 사용할 수 없습니다.') from None
@@ -177,7 +199,8 @@ class AnswerService:
             draft = _validate_draft(draft, evidence_by_id)
             if not draft.claims:
                 return insufficient(ReasonCode.EVIDENCE_NOT_FOUND, '검색된 근거로 답변 초안을 구성하지 못했습니다.')
-        except (ValueError, TypeError, AttributeError):
+        except (ValueError, TypeError, AttributeError) as error:
+            log_verification_failure(error, 0)
             return insufficient(ReasonCode.VERIFICATION_FAILED, '생성된 답변의 근거 연결을 확인하지 못했습니다.')
 
         def evaluate(candidate, round_number):
@@ -201,29 +224,98 @@ class AnswerService:
             if assessment.reason == ExtractionReason.UNFINISHED_TAIL
             for item in inputs if item.follows_evidence_id == assessment.evidence_id
             and item.evidence_id not in claim.evidence_ids)
+        # 앞부분 연결·원문 불일치는 다음 후보가 없어도 기존 후보 안에서 구절을 재선택한다.
+        exclusion_reasons = {ExtractionReason.UNRESOLVED_PREFIX, ExtractionReason.SUPPORT_NOT_FOUND}
+        targets += tuple(ContinuationRepairTarget(number, assessment.evidence_id,
+                                                  reason_code=assessment.reason.value)
+            for number, assessment in enumerate(assessments, 1) if assessment.reason in exclusion_reasons)
         repair = getattr(self.generator, 'repair_claims', None)
+        final_round = 0
+        generator_excluded = False
         if targets and callable(repair) and not repair_budget.used:
             repair_budget.used = True
+            target_numbers = sorted({target.claim_number for target in targets})
+            target_set = set(target_numbers)
+            # 정상 주장은 보완 입력에서도 분리한다. 제공자가 다시 작성할 권한을 주지 않는다.
+            target_draft = GeneratedAnswerDraft(tuple(draft.claims[n - 1] for n in target_numbers))
+            local_numbers = {number: index for index, number in enumerate(target_numbers, 1)}
+            local_targets = tuple(replace(target, claim_number=local_numbers[target.claim_number])
+                                  for target in targets)
             for target in targets:
                 evidence_diagnostic('repair_target', attempt_id=attempt_id, round_number=1,
                     claim_number=target.claim_number, evidence_id=target.evidence_id,
-                    next_evidence_id=target.next_evidence_id, reason_code='UNFINISHED_TAIL')
+                    next_evidence_id=target.next_evidence_id, reason_code=target.reason_code)
             try:
                 with stage('generation_repair'):
-                    repaired = repair(search.query, tuple(inputs), draft, targets)
+                    repaired = repair(search.query, tuple(inputs), target_draft, local_targets)
                     repaired = _validate_draft(repaired, evidence_by_id)
+                    if len(repaired.claims) > len(target_numbers):
+                        raise ValueError('보완 대상보다 많은 주장을 반환했습니다.')
+                    for number, claim in enumerate(repaired.claims, 1):
+                        if {s.evidence_id for s in claim.supports} != set(claim.evidence_ids):
+                            raise _DraftValidationError('SUPPORT_REFERENCE_INVALID', number)
                     repaired_assessments = evaluate(repaired, 1)
             except GenerationUnavailable:
                 outcome = 'REPAIR_UNAVAILABLE'
-            except (GenerationFormatError, ValueError, TypeError, AttributeError):
+                replacements, replacement_assessments = [], []
+            except (GenerationFormatError, ValueError, TypeError, AttributeError) as error:
+                log_verification_failure(error, 1)
                 outcome = 'REPAIR_INVALID'
+                replacements, replacement_assessments = [], []
             else:
-                draft, assessments = repaired, repaired_assessments
+                replacements, replacement_assessments = [], []
+                for number, (claim, assessment) in enumerate(zip(repaired.claims, repaired_assessments), 1):
+                    if assessment.risky:
+                        evidence_diagnostic('claim_excluded', attempt_id=attempt_id, round_number=1,
+                            claim_number=number, evidence_id=assessment.evidence_id,
+                            reason_code=assessment.reason.value)
+                    else:
+                        replacements.append(claim)
+                        replacement_assessments.append(assessment)
+                final_round = 1
                 outcome = 'REPAIR_ADOPTED'
+            generator_excluded = (len(replacements) < len(target_numbers)
+                                  or outcome != 'REPAIR_ADOPTED'
+                                  or len(replacements) < len(repaired.claims))
+            if outcome != 'REPAIR_ADOPTED':
+                for number in target_numbers:
+                    assessment = assessments[number - 1]
+                    evidence_diagnostic('claim_excluded', attempt_id=attempt_id, round_number=0,
+                        claim_number=number, evidence_id=assessment.evidence_id,
+                        reason_code=assessment.reason.value)
+            # 대상 위치에 검사를 통과한 보완만 넣고, 비대상 주장·supports는 그대로 보존한다.
+            combined, combined_assessments = [], []
+            for number, (claim, assessment) in enumerate(zip(draft.claims, assessments), 1):
+                if number == target_numbers[0]:
+                    combined.extend(replacements)
+                    combined_assessments.extend(replacement_assessments)
+                if number not in target_set:
+                    combined.append(claim)
+                    combined_assessments.append(assessment)
+            draft, assessments = GeneratedAnswerDraft(tuple(combined)), combined_assessments
             evidence_diagnostic('repair_outcome', attempt_id=attempt_id,
                                 round_number=1, reason_code=outcome)
             if not draft.claims:
-                return insufficient(ReasonCode.EVIDENCE_NOT_FOUND, '검색된 근거로 답변 초안을 구성하지 못했습니다.')
+                return insufficient(ReasonCode.EXTRACTION_LIMITED,
+                    '보완 대상 주장의 원문 근거를 확인하지 못하여 답변을 제공하지 않습니다.')
+
+        # 보완 미지원·실패 때도 확인되지 않은 앞부분이나 없는 구절의 주장은 노출하지 않는다.
+        retained, retained_assessments = [], []
+        excluded = 0
+        for number, (claim, assessment) in enumerate(zip(draft.claims, assessments), 1):
+            if assessment.reason in exclusion_reasons:
+                excluded += 1
+                evidence_diagnostic('claim_excluded', attempt_id=attempt_id,
+                    claim_number=number, evidence_id=assessment.evidence_id,
+                    reason_code=assessment.reason.value,
+                    round_number=final_round)
+            else:
+                retained.append(claim)
+                retained_assessments.append(assessment)
+        draft, assessments = GeneratedAnswerDraft(tuple(retained)), retained_assessments
+        if not draft.claims:
+            return insufficient(ReasonCode.EXTRACTION_LIMITED,
+                '원문 구절과 연결을 확인하지 못한 주장을 제외하여 답변을 제공하지 않습니다.')
 
         claims = tuple(Claim(new_id(), claim.text, claim.evidence_ids) for claim in draft.claims)
         used_ids = dict.fromkeys(eid for claim in claims for eid in claim.evidence_ids)
@@ -236,9 +328,12 @@ class AnswerService:
                 numbers = ', '.join(map(str, risky))
                 answer_ko += (f'\n\n주의: {numbers}번 주장은 끊긴 원문 또는 확인되지 않은 근거 구절·숫자 출처에 '
                               '기반할 수 있어 추가 확인이 필요합니다.')
-            result = AnswerResult(AnswerStatus.PARTIAL if risky else AnswerStatus.OK,
+            if excluded or generator_excluded:
+                answer_ko += '\n\n주의: 원문 구절과 연결을 확인하지 못한 일부 주장을 제외했습니다. 질문의 일부에 답하지 못했을 수 있습니다.'
+            limited = bool(risky or excluded or generator_excluded)
+            result = AnswerResult(AnswerStatus.PARTIAL if limited else AnswerStatus.OK,
                                   answer_ko, claims, citations,
-                                  ReasonCode.EXTRACTION_LIMITED if risky else None)
+                                  ReasonCode.EXTRACTION_LIMITED if limited else None)
             validate_answer_against_search(result, search)
         # 저장 성공 전에는 성공 응답을 반환하지 않는다. DB 오류는 숨기지 않는다.
         with stage('evidence_save'):

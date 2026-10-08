@@ -91,6 +91,7 @@ starts_mid_sentence가 true면 근거의 앞부분이, ends_mid_sentence가 true
 이어지는 조건이나 설명을 여러 근거에서 함께 확인해 주장을 만들었다면 해당 근거 ID들을 모두 인용하라. 연결을 확인할 수 없는 조각을 임의로 이어 붙이지 마라.
 follows_evidence_id는 문서 순서상 바로 앞의 잘린 근거 ID다. 인접 관계일 뿐 의미 연결을 보장하지 않으므로 원문을 함께 확인하라.
 각 claim의 supports에는 인용한 evidence_id별로 주장에 사용한 원문 문장 전체를 quote_original로 복사하라.
+청크 전체를 기계적으로 복사하지 마라. 주장과 무관한 잘린 시작부분은 제외하고, 실제 근거 문장의 조건절은 보존하라.
 문장이 경계에서 끊겼으면 원문에 있는 조각만 그대로 복사하고, 이어지는 근거도 사용했다면 양쪽 구절을 포함하라.
 원문의 조건절을 생략하거나 없는 문장을 만들어 구절을 완성하지 마라. 페이지 번호만 있는 줄을 실험 수치로 사용하지 마라.
 supports는 내부 검사 자료다. 페이지·리비전은 생성하지 말고 지정한 JSON 스키마로만 응답하라.'''
@@ -116,9 +117,18 @@ _REPAIR_INSTRUCTIONS = '''
 repair_targets의 claim_number는 1부터 시작한다. UNFINISHED_TAIL로 표시된 주장은
 evidence_id의 잘린 끝부분을 사용했지만 next_evidence_id의 다음 후보를 인용하지 않았다.
 두 원문 조각을 확인하고 빠진 비교 조건을 주장 문구에 반영하라. ID만 추가해서는 안 된다.
+UNRESOLVED_PREFIX는 사용 구절에 앞부분이 잘린 문장이 포함되었다는 뜻이다.
+주장과 무관한 조각이면 제외하고 실제로 뒷받침하는 완결된 문장만 원문 그대로 선택하라.
+잘린 부분에 주장이 의존하면 기존 후보에서 연결 근거를 확인하거나 주장을 제외하라.
+SUPPORT_NOT_FOUND는 지정한 근거의 원문에 사용 구절이 없다는 뜻이다.
+해당 근거의 original_text에서 실제 문장을 복사하고 주장을 그 문장에 맞게 수정하라.
+다른 후보의 문장을 사용한다면 그 후보의 ID를 정확히 인용하라. 문장이나 조건을 창작하지 마라.
+검사를 피하려고 단어 몇 개만 발췌하거나 필요한 조건절을 제거하지 마라.
 인접 관계는 의미 연결을 보장하지 않는다. 조건을 확인할 수 없으면 해당 주장을 제외하라.
 순차 연산 수와 층당 계산 복잡도를 혼동하지 마라. 관련 없는 기준으로 질문을 대신 답하지 마라.
-유효한 기존 주장은 유지하되 전체 claims를 반환하라. 답할 주장이 없으면 빈 claims를 반환하라.
+draft에는 보완 대상 주장만 있다. 그 대상만 수정하여 claims를 반환하라.
+다른 질문 항목이나 다른 주장을 새로 추가하지 마라. 비대상 주장은 서버가 별도로 보존한다.
+대상을 뒷받침할 수 없으면 제외하고, 모두 제외되면 빈 claims를 반환하라.
 실제로 사용한 양쪽 근거와 원문 구절을 evidence_ids와 supports에 모두 포함하라.
 '''
 
@@ -133,7 +143,7 @@ class OpenAIClaimGenerator:
     def repair_claims(self, question: str, evidence, draft, targets) -> GeneratedAnswerDraft:
         return self._generate(question, evidence, repair={
             'draft': asdict(draft),
-            'repair_targets': [dict(asdict(target), reason_code='UNFINISHED_TAIL') for target in targets],
+            'repair_targets': [asdict(target) for target in targets],
         })
 
     def _generate(self, question: str, evidence, *, repair=None) -> GeneratedAnswerDraft:

@@ -78,12 +78,16 @@ def evidence_diagnostic(event, *, attempt_id, evidence_id=None, chunk_id=None,
     """본문을 받지 않는 고정 메타데이터만 출력하며, 잘못된 값은 출력하지 않는다."""
     if _request.get() is None:
         return
-    if event not in ('candidate', 'claim_selection', 'quality', 'repair_target', 'repair_outcome'):
+    if event not in ('candidate', 'claim_selection', 'quality', 'repair_target', 'repair_outcome',
+                     'verification_failure', 'claim_excluded'):
         return
     reasons = {'NO_EXTRACTION_RISK', 'STANDALONE_NUMBER', 'EMPTY_BODY',
                'SUPPORT_NOT_FOUND', 'SUPPORT_LOCATION_UNRESOLVED',
                'UNFINISHED_TAIL', 'UNRESOLVED_PREFIX', 'REPAIR_ADOPTED',
-               'REPAIR_UNAVAILABLE', 'REPAIR_INVALID'}
+               'REPAIR_UNAVAILABLE', 'REPAIR_INVALID', 'GENERATION_FORMAT_INVALID',
+               'GENERATION_JSON_INVALID', 'GENERATION_SCHEMA_INVALID', 'DRAFT_INVALID',
+               'EMPTY_EVIDENCE_IDS', 'DUPLICATE_EVIDENCE_ID', 'UNKNOWN_EVIDENCE_ID',
+               'SUPPORT_REFERENCE_INVALID'}
     if reason_code is not None and reason_code not in reasons:
         return
 

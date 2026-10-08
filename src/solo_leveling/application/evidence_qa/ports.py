@@ -60,15 +60,16 @@ class ClaimGenerator(Protocol):
 
 @dataclass(frozen=True)
 class ContinuationRepairTarget:
-    """서버가 확인한 미완결 주장과 미인용 다음 후보의 연결 정보."""
+    """서버가 확인한 구절 위험과 선택적인 다음 후보의 연결 정보."""
     claim_number: int
     evidence_id: str
-    next_evidence_id: str
+    next_evidence_id: str | None = None
+    reason_code: str = 'UNFINISHED_TAIL'
 
 
 class ClaimRepairer(Protocol):
     def repair_claims(self, question: str, evidence: Sequence[EvidenceInput],
                       draft: GeneratedAnswerDraft,
                       targets: Sequence[ContinuationRepairTarget]) -> GeneratedAnswerDraft:
-        """기존 후보로 전체 초안을 한 번 보완한다. 호출 제한은 답변 서비스가 관리한다."""
+        """기존 후보로 대상 초안만 보완한다. 주장 번호는 대상 초안 내 순서다."""
         ...
