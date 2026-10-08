@@ -1,12 +1,22 @@
 """제공자와 무관한 생성 JSON 본문을 기존 응답 계약으로 변환한다."""
 
 import json
+from enum import Enum
 
 from solo_leveling.domain.evidence_qa import ClaimSupport, GeneratedAnswerDraft, GeneratedClaim
 
 
+class GenerationFailure(str, Enum):
+    FORMAT_INVALID = 'GENERATION_FORMAT_INVALID'
+    JSON_INVALID = 'GENERATION_JSON_INVALID'
+    SCHEMA_INVALID = 'GENERATION_SCHEMA_INVALID'
+
+
 class GenerationFormatError(ValueError):
     """생성 응답의 JSON 형식이나 필드가 계약과 맞지 않는 경우."""
+    def __init__(self, message: str, *, code: GenerationFailure = GenerationFailure.FORMAT_INVALID):
+        self.code = code
+        super().__init__(message)
 
 
 def _unique_object(pairs):
@@ -24,11 +34,13 @@ def _reject_constant(value):
 
 def parse_generated_answer(raw_text: str) -> GeneratedAnswerDraft:
     """순수 JSON만 허용하며 근거의 존재 여부와 의미는 여기서 판단하지 않는다."""
+    failure = GenerationFailure.JSON_INVALID
     try:
         if not isinstance(raw_text, str):
             raise ValueError('문자열이 아님')
         payload = json.loads(raw_text, object_pairs_hook=_unique_object,
                              parse_constant=_reject_constant)
+        failure = GenerationFailure.SCHEMA_INVALID
         if not isinstance(payload, dict) or set(payload) != {'claims'}:
             raise ValueError('최상위 필드 불일치')
         if not isinstance(payload['claims'], list):
@@ -54,4 +66,4 @@ def parse_generated_answer(raw_text: str) -> GeneratedAnswerDraft:
         return GeneratedAnswerDraft(tuple(claims))
     except (ValueError, TypeError, RecursionError):
         # 원본 응답이나 제공자의 내부 정보는 오류 메시지에 포함하지 않는다.
-        raise GenerationFormatError('생성 응답이 정해진 JSON 형식과 일치하지 않습니다.') from None
+        raise GenerationFormatError('생성 응답이 정해진 JSON 형식과 일치하지 않습니다.', code=failure) from None

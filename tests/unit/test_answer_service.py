@@ -55,7 +55,7 @@ def test_normal_answer_and_explicit_verification_level(parts):
      'Parallel is possible.', AnswerStatus.OK),
     ('The sequence length is 6.\n6', '시퀀스 길이는 6이다.',
      'The sequence length is 6.', AnswerStatus.OK),
-    ('A complete sentence.', '주장', '원문에 없는 구절', AnswerStatus.PARTIAL),
+    ('A complete sentence.', '주장', '원문에 없는 구절', AnswerStatus.INSUFFICIENT_EVIDENCE),
 ])
 def test_extraction_quality_status_and_serialization(parts, original, text, quote, expected):
     from dataclasses import replace
@@ -69,6 +69,11 @@ def test_extraction_quality_status_and_serialization(parts, original, text, quot
     service.generator = SimpleNamespace(generate_claims=generate)
     response = service.answer('조건은?', context_id='ctx')
     assert response.result.status == expected
+    if expected == AnswerStatus.INSUFFICIENT_EVIDENCE:
+        assert not response.result.claims
+        assert not saved
+        assert response.result.reason_code == ReasonCode.EXTRACTION_LIMITED
+        return
     assert response.result.claims[0].text == text
     assert saved[0][1][0].quote_original == original
     payload = serialize_answer_response(response)
@@ -369,7 +374,7 @@ def test_repair_once_uses_same_candidates_and_saves_only_final(repair_parts, cap
 
 
 @pytest.mark.parametrize('outcome', ['unavailable', 'format', 'unknown_id', 'wrong_type', 'still_partial', 'empty'])
-def test_repair_failure_and_empty_never_loop(repair_parts, outcome):
+def test_repair_failure_and_empty_never_loop(repair_parts, outcome, capsys):
     from solo_leveling.application.evidence_qa.response_parser import GenerationFormatError
     service, saved, lookup = repair_parts
 
@@ -386,16 +391,19 @@ def test_repair_failure_and_empty_never_loop(repair_parts, outcome):
 
     service.generator.repair_claims.side_effect = repair
     response = service.answer('조건은?', context_id='ctx', top_k=1)
+    import json
+    failures = [r for line in capsys.readouterr().err.splitlines()
+                if (r := json.loads(line))['event'] == 'verification_failure']
+    expected = {'format': 'GENERATION_FORMAT_INVALID', 'unknown_id': 'UNKNOWN_EVIDENCE_ID',
+                'wrong_type': 'DRAFT_INVALID'}.get(outcome)
+    assert [r['reason_code'] for r in failures] == ([expected] if expected else [])
+    assert all(r['round_number'] == 1 for r in failures)
     lookup.assert_called_once()
     service.generator.repair_claims.assert_called_once()
-    if outcome == 'empty':
-        assert response.result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
-        assert not saved
-    else:
-        assert response.result.status == AnswerStatus.PARTIAL
-        assert response.result.claims[0].text == '최초 불완전 주장'
-        assert len(saved) == 1
-        assert [e.chunk_id for e in saved[0][1]] == ['c0']
+    assert response.result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert response.result.reason_code == ReasonCode.EXTRACTION_LIMITED
+    assert not response.result.claims
+    assert not saved
 
 
 @pytest.mark.parametrize('case', ['no_next', 'already_cited', 'complete', 'number_only', 'unsupported'])
@@ -425,3 +433,187 @@ def test_no_repair_outside_eligible_tail(repair_parts, case):
     lookup.assert_called_once()
     if case != 'unsupported':
         service.generator.repair_claims.assert_not_called()
+
+
+@pytest.mark.parametrize('case,code', [
+    ('syntax', 'GENERATION_JSON_INVALID'),
+    ('schema', 'GENERATION_SCHEMA_INVALID'),
+    ('format', 'GENERATION_FORMAT_INVALID'),
+    ('unknown', 'UNKNOWN_EVIDENCE_ID'),
+    ('duplicate', 'DUPLICATE_EVIDENCE_ID'),
+    ('empty_refs', 'EMPTY_EVIDENCE_IDS'),
+    ('support', 'SUPPORT_REFERENCE_INVALID'),
+    ('draft', 'DRAFT_INVALID'),
+    ('normal', None),
+])
+def test_compound_draft_failure_classification(parts, capsys, case, code):
+    import json
+    from solo_leveling.application.evidence_qa.response_parser import GenerationFormatError, parse_generated_answer
+    service, _, saved, _ = parts
+
+    def generate(question, evidence):
+        if case == 'syntax':
+            return parse_generated_answer('{"claims": [SECRET')
+        if case == 'schema':
+            return parse_generated_answer('{"claims": "SECRET"}')
+        if case == 'format':
+            raise GenerationFormatError('SECRET provider response')
+        if case == 'draft':
+            return {'claims': 'SECRET'}
+        first, second = (e.evidence_id for e in evidence)
+        ids = {'unknown': ('SECRET-invalid-id',), 'duplicate': (second, second),
+               'empty_refs': ()}.get(case, (second,))
+        supports = [{'evidence_id': first, 'quote_original': 'SECRET quote'}] if case == 'support' else []
+        return parse_generated_answer(json.dumps({'claims': [
+            {'text': 'SECRET 계산 조건', 'evidence_ids': [first]},
+            {'text': 'SECRET 경로 길이', 'evidence_ids': ids, 'supports': supports},
+        ]}))
+
+    service.generator = SimpleNamespace(generate_claims=generate)
+    response = service.answer('SECRET 계산 조건과 경로 길이를 함께 설명해줘', context_id='ctx')
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    logs = [json.loads(line) for line in captured.err.splitlines()]
+    assert 'SECRET' not in json.dumps(logs, ensure_ascii=False)
+    failures = [r for r in logs if r['event'] == 'verification_failure']
+    if code is None:
+        assert not failures
+        assert response.result.status == AnswerStatus.OK
+        assert len(response.result.claims) == 2
+        assert len(saved) == 1
+    else:
+        assert len(failures) == 1
+        assert failures[0]['reason_code'] == code
+        assert failures[0]['round_number'] == 0
+        expected_number = 2 if case in ('unknown', 'duplicate', 'empty_refs', 'support') else None
+        assert failures[0]['claim_number'] == expected_number
+        assert response.result.reason_code == ReasonCode.VERIFICATION_FAILED
+        assert response.result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+        assert not saved
+
+
+@pytest.mark.parametrize('reason', ['UNRESOLVED_PREFIX', 'SUPPORT_NOT_FOUND'])
+@pytest.mark.parametrize('outcome', ['fixed', 'unchanged', 'unavailable', 'invalid', 'no_supports', 'unsupported', 'removed'])
+def test_prefix_and_missing_quote_repair_or_exclusion(parts, capsys, reason, outcome):
+    import json
+    from dataclasses import replace
+    from unittest.mock import Mock
+    service, search, saved, _ = parts
+    first = replace(search.items[0], chunk=replace(search.items[0].chunk,
+        original_text='fragment ends here. A complete relevant sentence.'))
+    lookup = Mock(return_value=ContextSearchResponse('ctx', replace(search, items=(first, search.items[1]))))
+    service.search = SimpleNamespace(search=lookup)
+
+    def generate(question, evidence):
+        quote = 'fragment ends here.' if reason == 'UNRESOLVED_PREFIX' else 'SECRET invented quote.'
+        return GeneratedAnswerDraft((
+            GeneratedClaim('SECRET risky claim', (evidence[0].evidence_id,),
+                (ClaimSupport(evidence[0].evidence_id, quote),)),
+            GeneratedClaim('정상 주장', (evidence[1].evidence_id,),
+                (ClaimSupport(evidence[1].evidence_id, evidence[1].original_text),)),
+        ))
+
+    def repair(question, evidence, draft, targets):
+        assert len(targets) == 1
+        assert targets[0].reason_code == reason
+        assert targets[0].next_evidence_id is None
+        assert targets[0].claim_number == 1
+        if outcome == 'unavailable':
+            raise GenerationUnavailable('SECRET failure')
+        if outcome == 'invalid':
+            return GeneratedAnswerDraft((GeneratedClaim('SECRET invalid', ('unknown',)),))
+        if outcome == 'no_supports':
+            return GeneratedAnswerDraft((GeneratedClaim('SECRET bypass', (evidence[1].evidence_id,)),))
+        if outcome == 'removed':
+            return GeneratedAnswerDraft(draft.claims[1:])
+        if outcome == 'unchanged':
+            return draft
+        return GeneratedAnswerDraft((GeneratedClaim('수정된 주장', (evidence[0].evidence_id,),
+            (ClaimSupport(evidence[0].evidence_id, 'A complete relevant sentence.'),)),))
+
+    provider = SimpleNamespace(generate_claims=Mock(side_effect=generate))
+    if outcome != 'unsupported':
+        provider.repair_claims = Mock(side_effect=repair)
+    service.generator = provider
+    response = service.answer('SECRET question', context_id='ctx', top_k=2)
+    lookup.assert_called_once()
+    provider.generate_claims.assert_called_once()
+    if outcome != 'unsupported':
+        provider.repair_claims.assert_called_once()
+    assert len(saved) == 1
+    if outcome == 'fixed':
+        assert response.result.status == AnswerStatus.OK
+        assert len(response.result.claims) == 2
+        assert len(saved[0][1]) == 2
+    else:
+        assert response.result.status == AnswerStatus.PARTIAL
+        assert response.result.reason_code == ReasonCode.EXTRACTION_LIMITED
+        assert [c.text for c in response.result.claims] == ['정상 주장']
+        assert [e.chunk_id for e in saved[0][1]] == ['c1']
+        assert '일부 주장' in response.result.answer_ko
+    assert 'SECRET' not in response.result.answer_ko
+    captured = capsys.readouterr()
+    logs = [json.loads(line) for line in captured.err.splitlines()]
+    assert captured.out == ''
+    assert 'SECRET' not in json.dumps(logs, ensure_ascii=False)
+    excluded = [r for r in logs if r['event'] == 'claim_excluded']
+    assert len(excluded) == (0 if outcome in ('fixed', 'removed') else 1)
+
+
+def test_all_unresolved_claims_are_excluded_without_more_search(parts):
+    from unittest.mock import Mock
+    service, search, saved, _ = parts
+    service.search = SimpleNamespace(search=Mock(return_value=ContextSearchResponse('ctx', search)))
+    def generate(question, evidence):
+        return GeneratedAnswerDraft(tuple(GeneratedClaim('제외할 주장', (e.evidence_id,),
+            (ClaimSupport(e.evidence_id, 'Invented quote.'),)) for e in evidence))
+    provider = SimpleNamespace(generate_claims=Mock(side_effect=generate),
+                               repair_claims=Mock(side_effect=lambda q, e, d, t: d))
+    service.generator = provider
+    response = service.answer('질문', context_id='ctx', top_k=2)
+    assert response.result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert response.result.reason_code == ReasonCode.EXTRACTION_LIMITED
+    assert not response.result.claims and not response.result.citations
+    assert not saved
+    provider.repair_claims.assert_called_once()
+    service.search.search.assert_called_once()
+
+
+@pytest.mark.parametrize('outcome', ['unchanged', 'unavailable', 'whole_draft', 'empty'])
+def test_repair_never_rewrites_untargeted_valid_claim(repair_parts, outcome):
+    from unittest.mock import Mock
+    service, saved, lookup = repair_parts
+    original = []
+
+    def generate(question, evidence):
+        good = GeneratedClaim('n이 d보다 작을 때 더 빠르다.', tuple(e.evidence_id for e in evidence),
+            tuple(ClaimSupport(e.evidence_id, e.original_text) for e in evidence))
+        bad = GeneratedClaim('미완결 두 번째 주장', (evidence[0].evidence_id,),
+            (ClaimSupport(evidence[0].evidence_id, evidence[0].original_text),))
+        original.extend((good, bad))
+        return GeneratedAnswerDraft((good, bad))
+
+    def repair(question, evidence, draft, targets):
+        assert draft.claims == (original[1],)
+        assert targets[0].claim_number == 1
+        if outcome == 'unavailable':
+            raise GenerationUnavailable('실패')
+        if outcome == 'whole_draft':
+            return GeneratedAnswerDraft((original[1], original[1]))
+        if outcome == 'empty':
+            return GeneratedAnswerDraft(())
+        return draft
+
+    service.generator.generate_claims.side_effect = generate
+    service.generator.repair_claims.side_effect = repair
+    response = service.answer('복합 질문', context_id='ctx', top_k=1)
+    assert response.result.status == AnswerStatus.PARTIAL
+    assert len(response.result.claims) == 1
+    assert response.result.claims[0].text == original[0].text
+    assert response.result.claims[0].evidence_ids == original[0].evidence_ids
+    assert [c.pdf_page for c in response.result.citations] == [6, 7]
+    assert '미완결 두 번째 주장' not in response.result.answer_ko
+    assert '일부 주장' in response.result.answer_ko
+    assert len(saved) == 1 and len(saved[0][1]) == 2
+    service.generator.repair_claims.assert_called_once()
+    lookup.assert_called_once()

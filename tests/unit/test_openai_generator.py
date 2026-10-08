@@ -111,6 +111,21 @@ def test_repair_timeout_has_no_transport_retry(setup):
     post.assert_called_once()
 
 
+@pytest.mark.parametrize('reason', ['UNRESOLVED_PREFIX', 'SUPPORT_NOT_FOUND'])
+def test_repair_instructions_for_quote_quality(setup, reason):
+    from solo_leveling.application.evidence_qa.ports import ContinuationRepairTarget
+    from solo_leveling.domain.evidence_qa import GeneratedAnswerDraft
+    generator, evidence, post, _ = setup
+    generator.repair_claims('질문', evidence, GeneratedAnswerDraft(()),
+        (ContinuationRepairTarget(1, 'ev-1', reason_code=reason),))
+    payload = post.call_args.kwargs['json']
+    target = json.loads(payload['input'][0]['content'])['repair_targets'][0]
+    assert target['reason_code'] == reason
+    assert target['next_evidence_id'] is None
+    assert '필요한 조건절을 제거하지 마라' in payload['instructions']
+    assert '청크 전체를 기계적으로 복사하지 마라' in payload['instructions']
+
+
 @pytest.mark.parametrize('allow,local', [(False, False), (True, True), (False, True)])
 def test_external_call_requires_permission(setup, allow, local):
     _, evidence, post, _ = setup
