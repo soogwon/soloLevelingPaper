@@ -350,3 +350,64 @@ def test_vector_sets_isolate_dimensions_and_detect_corruption(tmp_path):
     delete_by_version(client, 'v1')
     assert client.get_collection('chunks-index-one').count() == 0
     assert client.get_collection('chunks-index-two').count() == 1
+
+
+def _write_papers(tmp_path):
+    pdf_path = tmp_path / "paper.pdf"
+    write_minimal_pdf(str(pdf_path), ["Attention is all you need for sequence transduction tasks."])
+    return str(pdf_path), str(tmp_path / "db.sqlite"), str(tmp_path / "chroma")
+
+
+def test_same_file_without_paper_id_is_reused(tmp_path):
+    """paper_id를 안 넘겨도 같은 파일을 다시 등록하면 기존 결과를 재사용해야 한다."""
+    pdf_path, db_path, chroma_dir = _write_papers(tmp_path)
+    first = register_and_ingest(db_path, chroma_dir, pdf_path)
+    second = register_and_ingest(db_path, chroma_dir, pdf_path)
+
+    assert first["reused_existing"] is False
+    assert second["reused_existing"] is True
+    assert second["version_id"] == first["version_id"]
+    assert second["job_id"] == first["job_id"]
+
+
+def test_different_files_without_paper_id_stay_separate(tmp_path):
+    pdf_a, db_path, chroma_dir = _write_papers(tmp_path)
+    pdf_b = str(tmp_path / "other.pdf")
+    write_minimal_pdf(pdf_b, ["A completely different paper about graph neural networks."])
+
+    first = register_and_ingest(db_path, chroma_dir, pdf_a)
+    second = register_and_ingest(db_path, chroma_dir, pdf_b)
+
+    assert second["reused_existing"] is False
+    assert second["version_id"] != first["version_id"]
+
+
+def test_default_paper_id_matches_mcp_rule(tmp_path):
+    """직접 등록과 MCP 등록이 같은 파일에 같은 paper_id를 만들어야 한다."""
+    from solo_leveling.workers.ingestion import default_paper_id
+    from solo_leveling.interfaces.mcp.ingestion import LocalIngestionManager
+
+    pdf_path, _, _ = _write_papers(tmp_path)
+    file_hash = compute_file_hash(pdf_path)
+    assert default_paper_id("local", file_hash) == LocalIngestionManager._paper_id(file_hash)
+
+
+def test_same_html_url_without_paper_id_is_reused(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from solo_leveling.infrastructure.parsing import url_ingest
+    from solo_leveling.workers.ingestion import register_and_ingest_url
+
+    page = SimpleNamespace(text="<html><body><p>Attention based models are parallelizable.</p></body></html>")
+    monkeypatch.setattr(url_ingest, "fetch_and_classify", lambda url: ("html", page))
+    db_path, chroma_dir = str(tmp_path / "db.sqlite"), str(tmp_path / "chroma")
+    kwargs = dict(
+        translation_service=TranslationService(FixtureProvider()),
+        translation_settings=TranslationSettings("fake", "fixture", "prompt1"),
+    )
+
+    first = register_and_ingest_url(db_path, chroma_dir, "https://example.org/paper", str(tmp_path / "tmp"), **kwargs)
+    second = register_and_ingest_url(db_path, chroma_dir, "https://example.org/paper", str(tmp_path / "tmp"), **kwargs)
+
+    assert first["reused_existing"] is False
+    assert second["reused_existing"] is True
+    assert second["version_id"] == first["version_id"]

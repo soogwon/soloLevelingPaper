@@ -39,6 +39,17 @@ def compute_file_hash(pdf_path: str) -> str:
     return h.hexdigest()
 
 
+def default_paper_id(source: str, file_hash: str) -> str:
+    """호출자가 paper_id를 주지 않았을 때 쓰는, 내용 해시 기반의 결정적 paper_id.
+
+    중복 판정 키가 (paper_id, file_hash)라서 paper_id를 매번 새로 만들면 같은 파일도
+    항상 새 논문이 된다. 같은 내용이면 같은 paper_id가 나오게 해서 재등록 때
+    기존 결과를 재사용한다. source='local' 규칙은 MCP의 LocalIngestionManager._paper_id와
+    같은 값을 만든다(둘이 어긋나면 같은 파일이 경로에 따라 따로 등록된다).
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f'solo-leveling:{source}:{file_hash}'))
+
+
 @dataclass(frozen=True)
 class PreparedLocalIngestion:
     """DB 등록을 끝내고 파싱·번역·색인 실행 여부를 확정한 작업."""
@@ -59,11 +70,12 @@ def prepare_local_ingestion(
 ) -> PreparedLocalIngestion:
     """파일 해시와 작업을 원자적으로 등록하며 PDF 본문 처리는 시작하지 않는다."""
     init_db(db_path)
-    candidate_paper_id = paper_id or str(uuid.uuid4())
+    file_hash = compute_file_hash(pdf_path)
+    candidate_paper_id = paper_id or default_paper_id('local', file_hash)
     original_filename = original_filename or Path(pdf_path).name
     registration = repo.prepare_ingestion(
         db_path, Paper(paper_id=candidate_paper_id, source_kind='local_file'),
-        PaperVersion(str(uuid.uuid4()), candidate_paper_id, compute_file_hash(pdf_path),
+        PaperVersion(str(uuid.uuid4()), candidate_paper_id, file_hash,
                      pdf_path, original_filename), str(uuid.uuid4()),
         request_key=request_key, input_fingerprint=input_fingerprint,
     )
@@ -295,7 +307,7 @@ def register_and_ingest_url(
     file_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
 
     init_db(db_path)
-    paper_id = paper_id or str(uuid.uuid4())
+    paper_id = paper_id or default_paper_id('url', file_hash)
     registration = repo.prepare_ingestion(
         db_path, Paper(paper_id=paper_id, source_kind='url'),
         PaperVersion(str(uuid.uuid4()), paper_id, file_hash, url, url),
