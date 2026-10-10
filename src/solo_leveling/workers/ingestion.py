@@ -25,7 +25,9 @@ from solo_leveling.infrastructure.embeddings.embedder import (
 )
 from solo_leveling.infrastructure.embeddings.process_embedder import EmbeddingProcessError
 from solo_leveling.infrastructure.parsing.chunker import chunk_pages
-from solo_leveling.infrastructure.parsing.pdf_extractor import extract_pages, ExtractedPage
+from solo_leveling.infrastructure.parsing.pdf_extractor import (
+    extract_pages, ExtractedPage, PdfExtractionError,
+)
 from solo_leveling.infrastructure.storage.vector_store import (
     get_client, upsert_chunk_embeddings, verify_chunk_embeddings, delete_by_embedding_set,
 )
@@ -142,6 +144,20 @@ def get_ingestion_status(db_path: str, job_id: str) -> dict:
     return response
 
 
+def _empty_page_limitations(page_count: int, chunks) -> list[str]:
+    """청크가 하나도 없는 페이지(글자를 읽지 못한 페이지)를 limitations 항목으로 만든다.
+
+    예: 2·5페이지가 비었으면 ['empty_pages:2,5']. 20개를 넘으면 앞 20개 뒤에 '+N'을 붙인다.
+    """
+    present = {c.pdf_page for c in chunks}
+    missing = [n for n in range(1, page_count + 1) if n not in present]
+    if not missing:
+        return []
+    shown = ','.join(map(str, missing[:20]))
+    extra = f'+{len(missing) - 20}' if len(missing) > 20 else ''
+    return [f'empty_pages:{shown}{extra}']
+
+
 def _ingest_pages(
     db_path: str, chroma_dir: str, pages_provider: Callable[[], list],
     version_id: str, job: ProcessingJob, paper_id: str, reused: bool,
@@ -180,6 +196,7 @@ def _ingest_pages(
         if not chunks:
             limitations = ['extraction_empty']
         else:
+            page_limitations = _empty_page_limitations(parse_revision.page_count, chunks)
             repo.update_job_status(db_path, job.job_id, JobStatus.PROCESSING, JobStage.TRANSLATE)
             metadata = repo.get_translation_metadata(db_path, parse_revision.parse_revision_id)
             pending = [c for c in chunks if c.text is None]
@@ -200,7 +217,8 @@ def _ingest_pages(
                 raise ValueError('translated chunks have no persisted revision')
             translated = repo.get_translated_chunks(db_path, parse_revision.parse_revision_id, translation_id)
             failures = repo.get_translation_failures(db_path, translation_id)
-            limitations = [f"translation_failed:{f['chunk_id']}:{f['failure_code']}" for f in failures]
+            limitations = [*page_limitations,
+                           *(f"translation_failed:{f['chunk_id']}:{f['failure_code']}" for f in failures)]
             if translated:
                 repo.update_job_status(db_path, job.job_id, JobStatus.PROCESSING, JobStage.INDEX)
                 texts = [c.text for c in translated]
@@ -240,9 +258,12 @@ def _ingest_pages(
                                             collection_name=f'chunks-{embedding_set.embedding_set_id}')
                 except Exception:
                     limitations.append('index_cleanup_failed')
+            if isinstance(error, (EmbeddingProcessError, PdfExtractionError)):
+                failure_code = error.code.value if isinstance(error, EmbeddingProcessError) else error.code
+            else:
+                failure_code = 'ingestion_failed'
             repo.update_job_status(db_path, job.job_id, JobStatus.FAILED,
-                                   limitations=[*limitations,
-                                       error.code.value if isinstance(error, EmbeddingProcessError) else 'ingestion_failed'])
+                                   limitations=[*limitations, failure_code])
         raise
 
 

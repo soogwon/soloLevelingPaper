@@ -31,6 +31,43 @@ from typing import List
 
 import pdfplumber
 
+PDF_ENCRYPTED = "pdf_encrypted"
+PDF_UNREADABLE = "pdf_unreadable"
+
+
+class PdfExtractionError(ValueError):
+    """PDF를 열 수 없을 때 쓰는 오류.
+
+    라이브러리(pdfminer)의 내부 메시지나 경로를 담지 않고 고정 코드만 가진다.
+    code는 작업 기록(limitations)에 그대로 남는다: pdf_encrypted | pdf_unreadable.
+    """
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
+
+
+def _open_pdf(pdf_path: str):
+    """pdfplumber.open을 감싸 PDF 내용 문제(손상·암호·PDF 아님)만 PdfExtractionError로 바꾼다.
+
+    파일이 없거나 권한이 없는 경우처럼 PDF 내용과 무관한 오류는 그대로 올린다.
+    """
+    try:
+        return pdfplumber.open(pdf_path)
+    except (FileNotFoundError, PermissionError, IsADirectoryError):
+        raise
+    except Exception as error:
+        # pdfplumber는 pdfminer 예외를 PdfminerException(원래 예외)로 감싼다.
+        cause = error.args[0] if error.args and isinstance(error.args[0], BaseException) else error
+        if type(cause).__module__.split(".")[0] not in ("pdfminer", "pdfplumber"):
+            raise
+        if type(cause).__name__ in ("PDFPasswordIncorrect", "PDFEncryptionError"):
+            raise PdfExtractionError(
+                PDF_ENCRYPTED, "암호가 걸린 PDF는 처리할 수 없습니다.") from None
+        raise PdfExtractionError(
+            PDF_UNREADABLE, "PDF를 읽을 수 없습니다. 파일이 손상되었거나 PDF가 아닙니다.") from None
+
+
 # pdfplumber extract_text() 기본값(3)은 일부 논문 PDF에서 단어 간 공백을
 # 인식하지 못해 단어가 붙어버리는 문제가 있었다. 실측 검증 결과 1.5가
 # 안정적으로 공백을 보존함 (근거: 진단 스크립트로 1/1.5/2 모두 정상 확인).
@@ -63,7 +100,7 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
     경우가 대부분이라 추출 전에 걸러낸다(위 docstring 참고).
     """
     pages: List[ExtractedPage] = []
-    with pdfplumber.open(pdf_path) as pdf:
+    with _open_pdf(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
             upright_only = page.filter(_is_upright)
             text = upright_only.extract_text(x_tolerance=TEXT_X_TOLERANCE) or ""
@@ -72,5 +109,5 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
 
 
 def page_count(pdf_path: str) -> int:
-    with pdfplumber.open(pdf_path) as pdf:
+    with _open_pdf(pdf_path) as pdf:
         return len(pdf.pages)
