@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 
-from solo_leveling.application.translation.ports import TranslationProviderUnavailable
+from solo_leveling.application.translation.ports import ProviderFailure, TranslationProviderUnavailable
 from solo_leveling.application.translation.service import TranslationService
 from solo_leveling.domain.models import Chunk
 from solo_leveling.domain.translation import TranslationRequest, TranslationSettings
@@ -88,7 +88,32 @@ def test_transport_failure(setup, error):
     with pytest.raises(TranslationProviderUnavailable) as caught:
         provider.translate(request, settings)
     assert 'secret' not in str(caught.value)
+    assert caught.value.code == (ProviderFailure.TIMEOUT if isinstance(error, requests.Timeout)
+                                 else ProviderFailure.CONNECTION)
     post.assert_called_once()
+
+
+def test_tls_error_is_not_retried(setup):
+    provider, request, settings, post, _ = setup
+    post.side_effect = requests.exceptions.SSLError('secret')
+    with pytest.raises(TranslationProviderUnavailable) as caught:
+        provider.translate(request, settings)
+    assert not caught.value.retryable and 'secret' not in str(caught.value)
+
+
+@pytest.mark.parametrize('data,code', [
+    ({'status': 'incomplete'}, ProviderFailure.INCOMPLETE),
+    ({'status': 'completed', 'output': [{'type': 'message', 'role': 'assistant',
+      'status': 'completed', 'content': [{'type': 'refusal', 'refusal': 'secret'}]}]}, ProviderFailure.REFUSAL),
+    (envelope('{'), ProviderFailure.INVALID_RESPONSE),
+])
+def test_response_failure_classification(setup, data, code):
+    provider, request, settings, _, response = setup
+    response.json.return_value = data
+    with pytest.raises(TranslationProviderUnavailable) as caught:
+        provider.translate(request, settings)
+    assert caught.value.code == code and not caught.value.retryable
+    response.close.assert_called_once()
 
 
 @pytest.mark.parametrize('data', [None, {}, {'status': 'incomplete', 'output': []},
