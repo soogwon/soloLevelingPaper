@@ -34,10 +34,11 @@ def test_pdf_registration_with_openai_provider(tmp_path, monkeypatch, mode):
     db, chroma = str(tmp_path / 'test.sqlite'), str(tmp_path / 'chroma')
     config = OpenAITranslationConfig('test-key', allow_external_api=True)
     kwargs = dict(paper_id='paper', embedding_model='fixed-test',
-        translation_service=TranslationService(OpenAITranslationProvider(config)),
+        translation_service=TranslationService(OpenAITranslationProvider(config), sleep=lambda _: None),
         translation_settings=config.translation_settings)
     result = ingestion.register_and_ingest(db, chroma, str(pdf), **kwargs)
-    assert http.call_count == 2
+    expected_calls = {'success': 2, 'partial': 4, 'failed': 6}[mode]
+    assert http.call_count == expected_calls
     chunks = repo.get_chunks_by_parse_revision(db, result['parse_revision_id'])
     assert [c.original_text.strip() for c in chunks] == ['Attention.', 'Results.']
     metadata = repo.get_translation_metadata(db, result['parse_revision_id'])
@@ -55,6 +56,6 @@ def test_pdf_registration_with_openai_provider(tmp_path, monkeypatch, mode):
         assert repo.get_search_index(db, result['version_id'])['chunk_count'] == expected
         reused = ingestion.register_and_ingest(db, chroma, str(pdf), **kwargs)
         assert reused['reused_existing'] is True
-        assert http.call_count == 2
+        assert http.call_count == expected_calls
     if mode == 'partial':
         assert any('translation_failed:' in value for value in result['limitations'])

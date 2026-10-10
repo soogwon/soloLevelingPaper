@@ -1,6 +1,8 @@
 """청크별 OpenAI 번역을 기존 번역 제공자 계약에 연결한다."""
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import json
 import math
 import os
@@ -8,7 +10,7 @@ from typing import Mapping
 
 import requests
 
-from solo_leveling.application.translation.ports import TranslationProviderUnavailable
+from solo_leveling.application.translation.ports import ProviderFailure, TranslationProviderUnavailable
 from solo_leveling.domain.translation import TranslationRequest, TranslationSettings, require_text
 
 
@@ -80,7 +82,7 @@ class OpenAITranslationProvider:
         if settings != self.config.translation_settings or request.target_language != settings.target_language:
             raise ValueError('호출할 번역 설정과 리비전에 기록할 설정이 일치하지 않습니다.')
         if not self.config.allow_external_api or self.config.local_only:
-            raise TranslationProviderUnavailable('외부 번역 API 호출이 허용되지 않았습니다.')
+            raise TranslationProviderUnavailable(code=ProviderFailure.DISABLED)
         payload = {
             'model': settings.model, 'instructions': _INSTRUCTIONS,
             'input': [{'role': 'user', 'content': json.dumps({
@@ -91,24 +93,72 @@ class OpenAITranslationProvider:
             'max_output_tokens': self.config.max_output_tokens, 'store': False,
         }
         try:
-            # 청크당 한 번만 호출한다. 실패 시 원문 복사나 자동 재시도는 하지 않는다.
+            # 어댑터는 한 번만 호출한다. 재시도는 번역 서비스 한 곳에서 관리한다.
             response = requests.post('https://api.openai.com/v1/responses', json=payload,
                 headers={'Authorization': f'Bearer {self.config.api_key}'},
                 timeout=(5.0, self.config.timeout_seconds), allow_redirects=False)
         except requests.Timeout:
-            raise TranslationProviderUnavailable('번역 API 응답 대기 시간이 초과되었습니다.') from None
+            raise TranslationProviderUnavailable(code=ProviderFailure.TIMEOUT) from None
+        except requests.exceptions.SSLError:
+            # 인증서·TLS 설정 오류는 같은 요청을 자동 반복하지 않는다.
+            raise TranslationProviderUnavailable(code=ProviderFailure.UNKNOWN) from None
+        except requests.ConnectionError:
+            raise TranslationProviderUnavailable(code=ProviderFailure.CONNECTION) from None
         except requests.RequestException:
-            raise TranslationProviderUnavailable('번역 API에 연결할 수 없습니다.') from None
+            raise TranslationProviderUnavailable(code=ProviderFailure.UNKNOWN) from None
         try:
             if response.status_code != 200:
                 # 제공자 오류 본문이나 키를 결과·로그에 포함하지 않는다.
-                raise TranslationProviderUnavailable('번역 API 요청이 실패했습니다.')
+                raise _http_failure(response)
             try:
                 return _translation_text(response.json())
             except (ValueError, TypeError, RecursionError):
-                raise TranslationProviderUnavailable('완전한 번역 응답을 확인하지 못했습니다.') from None
+                raise TranslationProviderUnavailable(code=ProviderFailure.INVALID_RESPONSE) from None
         finally:
             response.close()
+
+
+def _retry_after(value):
+    """초 단위 또는 HTTP 날짜만 읽으며 잘못된 헤더는 무시한다."""
+    if not isinstance(value, str) or len(value) > 128:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            date = parsedate_to_datetime(value)
+            if date.tzinfo is None:
+                return None
+            seconds = max(0.0, (date - datetime.now(timezone.utc)).total_seconds())
+        except (ValueError, TypeError, OverflowError):
+            return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
+def _http_failure(response):
+    """제공자 오류 본문은 분류에만 사용하고 허용된 내부 코드로 치환한다."""
+    status = response.status_code
+    code = {400: ProviderFailure.INVALID_REQUEST, 401: ProviderFailure.AUTHENTICATION,
+            403: ProviderFailure.PERMISSION, 404: ProviderFailure.INVALID_REQUEST,
+            422: ProviderFailure.INVALID_REQUEST, 408: ProviderFailure.TIMEOUT,
+            500: ProviderFailure.SERVER, 502: ProviderFailure.SERVER,
+            503: ProviderFailure.SERVER, 504: ProviderFailure.SERVER}.get(status, ProviderFailure.UNKNOWN)
+    if status == 429:
+        try:
+            data = response.json()
+        except (ValueError, TypeError, RecursionError):
+            data = None
+        error = data.get('error') if isinstance(data, dict) else None
+        if isinstance(error, dict):
+            error_code, error_type = error.get('code'), error.get('type')
+            if error_code in ('insufficient_quota', 'credit_balance_exhausted',
+                              'organization_spend_limit_exceeded', 'project_spend_limit_exceeded',
+                              'organization_usage_limit_exceeded') or error_type == 'insufficient_quota':
+                code = ProviderFailure.QUOTA
+            elif error_code in ('rate_limit_exceeded', 'slow_down'):
+                code = ProviderFailure.RATE_LIMIT
+    delay = _retry_after(response.headers.get('Retry-After'))
+    return TranslationProviderUnavailable(code=code, retry_after_seconds=delay)
 
 
 def _unique_object(pairs):
@@ -125,6 +175,8 @@ def _reject_constant(value):
 
 
 def _translation_text(envelope) -> str:
+    if isinstance(envelope, dict) and envelope.get('status') == 'incomplete':
+        raise TranslationProviderUnavailable(code=ProviderFailure.INCOMPLETE)
     if (not isinstance(envelope, dict) or envelope.get('status') != 'completed'
             or not isinstance(envelope.get('output'), list)):
         raise ValueError('완료되지 않은 번역 응답')
@@ -138,6 +190,8 @@ def _translation_text(envelope) -> str:
                 or item.get('status') != 'completed' or not isinstance(item.get('content'), list)):
             raise ValueError('잘못된 메시지')
         for part in item['content']:
+            if isinstance(part, dict) and part.get('type') == 'refusal':
+                raise TranslationProviderUnavailable(code=ProviderFailure.REFUSAL)
             # 거절·잘린 결과·다른 도구 출력은 번역 성공으로 처리하지 않는다.
             if (not isinstance(part, dict) or part.get('type') != 'output_text'
                     or not isinstance(part.get('text'), str)):

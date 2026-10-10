@@ -206,7 +206,7 @@ def _ingest_pages(
                     ('provider', 'model', 'prompt_version', 'target_language')))
                 if pending and stored_settings != translation_settings:
                     raise ValueError('retry must use original translation settings')
-                service = TranslationService(translation_service.provider, lambda: translation_id)
+                service = translation_service.with_revision_id(translation_id)
             else:
                 service = translation_service
             if pending:
