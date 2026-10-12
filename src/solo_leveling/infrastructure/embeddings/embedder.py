@@ -45,4 +45,10 @@ def embed_texts(texts: List[str], model_name: str = DEFAULT_MODEL_NAME) -> List[
 
 def embedding_dimension(model_name: str = DEFAULT_MODEL_NAME) -> int:
     model = _get_model(model_name)
-    return model.get_sentence_embedding_dimension()
+    # 최신 sentence-transformers는 get_embedding_dimension()으로 이름을 바꾸고
+    # 옛 이름 호출 시 FutureWarning을 낸다. 라이브러리 버전이 고정되어 있지 않아서
+    # 새 이름이 있으면 쓰고, 없는 버전에서는 옛 이름으로 되돌아간다.
+    getter = getattr(model, 'get_embedding_dimension', None)
+    if getter is None:
+        getter = model.get_sentence_embedding_dimension
+    return getter()
