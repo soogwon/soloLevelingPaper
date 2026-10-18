@@ -25,11 +25,15 @@ extract_words() 기반 재구성은 오히려 단어 자체를 잘못 묶어 도
 으로 검증했을 때 원래도 문제 없었음을 확인했다 — extract_tables()로
 바꾸면 오히려 셀 병합 문제가 생겨 더 나빠지므로 표는 손대지 않았다.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
 import pdfplumber
+
+from solo_leveling.infrastructure.parsing.sections import (
+    LineStyle, detect_headings, find_body_size,
+)
 
 PDF_ENCRYPTED = "pdf_encrypted"
 PDF_UNREADABLE = "pdf_unreadable"
@@ -79,6 +83,8 @@ class ExtractedPage:
     pdf_page: int  # 1부터 시작하는 물리 페이지 번호
     text: str
     printed_page_label: str | None = None  # 자동 인식 방식 미정(22번 문서) → 현재는 항상 None
+    # 이 페이지에서 시작하는 큰 섹션 제목(M1-05a). 못 찾으면 빈 목록이다.
+    headings: list = field(default_factory=list)
 
 
 def _is_upright(obj: dict) -> bool:
@@ -90,6 +96,21 @@ def _is_upright(obj: dict) -> bool:
     return obj.get("upright", True)
 
 
+def _line_styles(page) -> list[LineStyle]:
+    """페이지 각 줄의 글자 크기·굵기를 읽는다. 텍스트는 extract_text와 같은 줄 나누기를 쓴다."""
+    styles = []
+    for line in page.extract_text_lines(x_tolerance=TEXT_X_TOLERANCE, return_chars=True):
+        chars = [c for c in line["chars"] if c["text"].strip()]
+        if not chars:
+            continue
+        styles.append(LineStyle(
+            text=line["text"],
+            size=max(c["size"] for c in chars),
+            bold=all("bold" in str(c.get("fontname", "")).lower() for c in chars),
+        ))
+    return styles
+
+
 def extract_pages(pdf_path: str) -> List[ExtractedPage]:
     """
     PDF를 페이지 단위로 추출한다. 절대 전체를 하나의 문자열로 합치지 않는다.
@@ -98,13 +119,27 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
 
     회전된(upright=False) 문자는 본문이 아니라 그림에 박힌 캡션/축 레이블인
     경우가 대부분이라 추출 전에 걸러낸다(위 docstring 참고).
+
+    섹션 제목(M1-05a): 글자 크기·굵기로 큰 제목을 찾아 각 페이지의 headings에 담는다.
+    제목 인식은 실패해도 본문 추출에 영향을 주지 않는다(제목 없이 진행).
     """
     pages: List[ExtractedPage] = []
+    page_styles: list[list[LineStyle]] = []
+    size_counts: list[tuple[float, int]] = []
     with _open_pdf(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
             upright_only = page.filter(_is_upright)
             text = upright_only.extract_text(x_tolerance=TEXT_X_TOLERANCE) or ""
             pages.append(ExtractedPage(pdf_page=i, text=text, printed_page_label=None))
+            try:
+                styles = _line_styles(upright_only)
+            except Exception:
+                styles = []
+            page_styles.append(styles)
+            size_counts.extend((line.size, len(line.text.strip())) for line in styles)
+    body_size = find_body_size(size_counts)
+    for extracted, styles in zip(pages, page_styles):
+        extracted.headings = detect_headings(extracted.text, styles, body_size)
     return pages
 
 
