@@ -30,6 +30,9 @@ from solo_leveling.domain.models import (
 )
 from solo_leveling.domain.translation import TranslationBatchResult
 from solo_leveling.domain.context import ContextNotReadyError
+from solo_leveling.domain.paper_summary import (
+    PAPER_SCOPE, PaperSummary, SummaryItem, SummaryValidationError,
+)
 from solo_leveling.domain.evidence_qa import EvidenceDetail, GetEvidenceResult, require_text
 from solo_leveling.infrastructure.database.schema import get_connection
 
@@ -641,3 +644,65 @@ def get_evidences(db_path: str, context_id: str, evidence_ids: List[str]) -> Get
                 row['evidence_id'], row['chunk_id'], row['quote_ko'], row['quote_original'],
             )))
         return GetEvidenceResult(tuple(details))
+
+
+# ── 근거 연결형 요약 (M1-05) ────────────────────────────────────
+def save_summary(db_path: str, context_id: str, scope: str, items: List[SummaryItem]) -> PaperSummary:
+    """요약을 검증한 뒤 저장한다. 같은 (맥락, scope)가 있으면 통째로 교체한다.
+
+    근거가 없거나 맥락 밖의 evidence_id를 가진 항목이 하나라도 있으면 아무것도 저장하지 않고
+    SummaryValidationError를 낸다. 걸러서 저장하려면 split_supported()로 먼저 나눈다.
+    """
+    items = tuple(items)
+    if not items:
+        raise SummaryValidationError('저장할 요약 항목이 없습니다.')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        context = conn.execute('SELECT parse_revision_id FROM learning_contexts WHERE context_id=?',
+                               (context_id,)).fetchone()
+        if not context:
+            raise ResourceNotFoundError('context not found')
+        if scope != PAPER_SCOPE and not conn.execute(
+                'SELECT 1 FROM chunks WHERE parse_revision_id=? AND section_id=? LIMIT 1',
+                (context['parse_revision_id'], scope)).fetchone():
+            raise SummaryValidationError('이 논문에 없는 섹션입니다.')
+        known = {r['evidence_id'] for r in conn.execute(
+            'SELECT evidence_id FROM evidences WHERE context_id=?', (context_id,))}
+        missing = sorted({e for item in items for e in item.evidence_ids} - known)
+        if missing:
+            raise SummaryValidationError(f'이 맥락에 없는 evidence_id: {", ".join(missing)}')
+        conn.execute('DELETE FROM summary_items WHERE summary_id IN '
+                     '(SELECT summary_id FROM summaries WHERE context_id=? AND scope=?)', (context_id, scope))
+        conn.execute('DELETE FROM summaries WHERE context_id=? AND scope=?', (context_id, scope))
+        summary = PaperSummary(str(uuid4()), context_id, scope, items, now_iso())
+        conn.execute('INSERT INTO summaries VALUES (?, ?, ?, ?)',
+                     (summary.summary_id, context_id, scope, summary.created_at))
+        for position, item in enumerate(items):
+            conn.execute('INSERT INTO summary_items VALUES (?, ?, ?, ?, ?)',
+                         (summary.summary_id, position, item.kind, item.text,
+                          json.dumps(list(item.evidence_ids))))
+        return summary
+
+
+def get_summary(db_path: str, context_id: str, scope: str = PAPER_SCOPE) -> Optional[PaperSummary]:
+    with closing(get_connection(db_path)) as conn:
+        row = conn.execute('SELECT * FROM summaries WHERE context_id=? AND scope=?',
+                           (context_id, scope)).fetchone()
+        if not row:
+            return None
+        items = tuple(SummaryItem(r['kind'], r['text'], tuple(json.loads(r['evidence_ids'])))
+                      for r in conn.execute('SELECT * FROM summary_items WHERE summary_id=? ORDER BY position',
+                                            (row['summary_id'],)))
+        return PaperSummary(row['summary_id'], context_id, row['scope'], items, row['created_at'])
+
+
+def list_summary_scopes(db_path: str, context_id: str) -> List[str]:
+    with closing(get_connection(db_path)) as conn:
+        return [r['scope'] for r in conn.execute(
+            'SELECT scope FROM summaries WHERE context_id=? ORDER BY created_at, scope', (context_id,))]
+
+
+def get_summary_evidence(db_path: str, summary: PaperSummary) -> GetEvidenceResult:
+    """요약이 인용한 근거(원문·페이지)를 중복 없이 조회한다."""
+    ids = list(dict.fromkeys(e for item in summary.items for e in item.evidence_ids))
+    return get_evidences(db_path, summary.context_id, ids)

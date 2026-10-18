@@ -131,6 +131,24 @@ CREATE TABLE IF NOT EXISTS evidences (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_evidences_context ON evidences(context_id);
+
+-- 근거 연결형 요약(M1-05). 맥락(context)마다 전체(paper)·섹션별 요약을 하나씩 둔다.
+-- 항목의 evidence_ids는 같은 맥락의 evidences를 가리키며, 저장할 때 리포지토리가 확인한다.
+CREATE TABLE IF NOT EXISTS summaries (
+    summary_id TEXT PRIMARY KEY,
+    context_id TEXT NOT NULL REFERENCES learning_contexts(context_id),
+    scope TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (context_id, scope)
+);
+CREATE TABLE IF NOT EXISTS summary_items (
+    summary_id TEXT NOT NULL REFERENCES summaries(summary_id),
+    position INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    evidence_ids TEXT NOT NULL,
+    PRIMARY KEY (summary_id, position)
+);
 """
 
 
