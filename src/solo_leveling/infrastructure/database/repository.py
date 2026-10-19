@@ -30,8 +30,14 @@ from solo_leveling.domain.models import (
 )
 from solo_leveling.domain.translation import TranslationBatchResult
 from solo_leveling.domain.context import ContextNotReadyError
+
 from solo_leveling.domain.paper_summary import (
     PAPER_SCOPE, PaperSummary, SummaryItem, SummaryValidationError,
+
+from solo_leveling.domain.learning_progress import (
+    LEARNING_STEPS,
+    RESUME_POSITION_KEYS,
+    LearningProgress,
 )
 from solo_leveling.domain.evidence_qa import EvidenceDetail, GetEvidenceResult, require_text
 from solo_leveling.infrastructure.database.schema import get_connection
@@ -646,6 +652,7 @@ def get_evidences(db_path: str, context_id: str, evidence_ids: List[str]) -> Get
         return GetEvidenceResult(tuple(details))
 
 
+
 # ── 근거 연결형 요약 (M1-05) ────────────────────────────────────
 def save_summary(db_path: str, context_id: str, scope: str, items: List[SummaryItem]) -> PaperSummary:
     """요약을 검증한 뒤 저장한다. 같은 (맥락, scope)가 있으면 통째로 교체한다.
@@ -706,3 +713,98 @@ def get_summary_evidence(db_path: str, summary: PaperSummary) -> GetEvidenceResu
     """요약이 인용한 근거(원문·페이지)를 중복 없이 조회한다."""
     ids = list(dict.fromkeys(e for item in summary.items for e in item.evidence_ids))
     return get_evidences(db_path, summary.context_id, ids)
+
+  
+  
+# ── 학습 진행 상태 ───────────────────────────────────────────────
+def _progress_from_row(row) -> LearningProgress:
+    return LearningProgress(
+        context_id=row['context_id'], current_step=row['current_step'],
+        completed_steps=json.loads(row['completed_steps']),
+        resume_position=(json.loads(row['resume_position'])
+                         if row['resume_position'] is not None else None),
+        last_studied_at=row['last_studied_at'], updated_at=row['updated_at'])
+
+
+def _require_step(step: str) -> None:
+    if step not in LEARNING_STEPS:
+        raise ValueError(f'unknown learning step: {step}')
+
+
+def _require_resume_position(position: Optional[dict]) -> None:
+    if position is None:
+        return
+    if not isinstance(position, dict) or set(position) - RESUME_POSITION_KEYS:
+        raise ValueError('resume_position has unsupported keys')
+    for value in position.values():
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise ValueError('resume_position values must be str or int')
+
+
+def _require_context(conn, context_id: str) -> None:
+    require_text(context_id, 'context_id')
+    if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
+        raise ResourceNotFoundError('학습 맥락을 찾을 수 없습니다.')
+
+
+def get_learning_progress(db_path: str, context_id: str) -> LearningProgress:
+    """저장된 진행 상태를 읽는다. 진행 기록이 없으면 첫 단계 기본값을 돌려주고 저장하지 않는다."""
+    with closing(get_connection(db_path)) as conn:
+        _require_context(conn, context_id)
+        row = conn.execute('SELECT * FROM learning_progress WHERE context_id=?', (context_id,)).fetchone()
+        return _progress_from_row(row) if row else LearningProgress(context_id)
+
+
+def set_current_step(db_path: str, context_id: str, step: str,
+                     resume_position: Optional[dict] = None) -> LearningProgress:
+    """현재 단계를 바꾼다. resume_position을 주면 재개 위치도 함께 저장한다."""
+    _require_step(step)
+    _require_resume_position(resume_position)
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        _require_context(conn, context_id)
+        row = conn.execute('SELECT * FROM learning_progress WHERE context_id=?', (context_id,)).fetchone()
+        current = _progress_from_row(row) if row else LearningProgress(context_id)
+        position = resume_position if resume_position is not None else current.resume_position
+        now = now_iso()
+        _save_progress(conn, LearningProgress(
+            context_id, step, current.completed_steps, position, now, now))
+        return _progress_from_row(conn.execute(
+            'SELECT * FROM learning_progress WHERE context_id=?', (context_id,)).fetchone())
+
+
+def complete_step(db_path: str, context_id: str, step: str) -> LearningProgress:
+    """단계를 완료로 표시한다. 같은 단계를 다시 호출해도 결과는 같다.
+
+    현재 단계는 아직 끝나지 않은 가장 앞 단계로 옮기고, 모두 끝났으면 마지막 단계에 둔다.
+    """
+    _require_step(step)
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        _require_context(conn, context_id)
+        row = conn.execute('SELECT * FROM learning_progress WHERE context_id=?', (context_id,)).fetchone()
+        current = _progress_from_row(row) if row else LearningProgress(context_id)
+        done = set(current.completed_steps) | {step}
+        completed = [name for name in LEARNING_STEPS if name in done]
+        pending = [name for name in LEARNING_STEPS if name not in done]
+        next_step = pending[0] if pending else LEARNING_STEPS[-1]
+        now = now_iso()
+        _save_progress(conn, LearningProgress(
+            context_id, next_step, completed, current.resume_position, now, now))
+        return _progress_from_row(conn.execute(
+            'SELECT * FROM learning_progress WHERE context_id=?', (context_id,)).fetchone())
+
+
+def _save_progress(conn, progress: LearningProgress) -> None:
+    conn.execute('''INSERT INTO learning_progress
+        (context_id, current_step, completed_steps, resume_position, last_studied_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(context_id) DO UPDATE SET
+            current_step=excluded.current_step, completed_steps=excluded.completed_steps,
+            resume_position=excluded.resume_position,
+            last_studied_at=excluded.last_studied_at, updated_at=excluded.updated_at''',
+        (progress.context_id, progress.current_step,
+         json.dumps(progress.completed_steps),
+         json.dumps(progress.resume_position, ensure_ascii=False)
+         if progress.resume_position is not None else None,
+         progress.last_studied_at, progress.updated_at))

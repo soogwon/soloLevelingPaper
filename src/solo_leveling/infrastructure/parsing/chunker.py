@@ -22,6 +22,7 @@ from typing import List, Optional
 
 from solo_leveling.domain.models import Chunk
 from solo_leveling.infrastructure.parsing.pdf_extractor import ExtractedPage
+from solo_leveling.infrastructure.parsing.sections import make_section_id
 
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 80
@@ -101,6 +102,31 @@ def _split_within_page(text: str, chunk_size: int, overlap: int) -> List[str]:
     return pieces
 
 
+def _segment_page(page: ExtractedPage, current_section: Optional[str], section_order: int):
+    """페이지 텍스트를 섹션 제목 위치에서 잘라 (section_id, 텍스트) 목록으로 만든다.
+
+    제목이 없는 페이지는 앞 페이지에서 이어진 섹션(없으면 None) 하나로 그대로 둔다.
+    그래서 제목을 못 찾은 논문의 청킹 결과는 이전과 같다. 청크는 섹션 경계를 넘지 않는다.
+    반환: (조각 목록, 페이지 끝의 섹션, 지금까지 센 섹션 수)
+    """
+    text = page.text
+    cuts = []
+    last = -1
+    for heading in page.headings:
+        if isinstance(heading.offset, int) and last < heading.offset < len(text):
+            cuts.append(heading)
+            last = heading.offset
+    segments = []
+    start = 0
+    for heading in cuts:
+        segments.append((current_section, text[start:heading.offset]))
+        section_order += 1
+        current_section = make_section_id(section_order, heading.title)
+        start = heading.offset
+    segments.append((current_section, text[start:]))
+    return segments, current_section, section_order
+
+
 def chunk_pages(
     parse_revision_id: str,
     pages: List[ExtractedPage],
@@ -117,23 +143,26 @@ def chunk_pages(
     make_id = id_factory or (lambda: str(uuid.uuid4()))
     chunks: List[Chunk] = []
     global_index = 0
+    current_section: Optional[str] = None  # 앞 페이지에서 이어지는 섹션
+    section_order = 0
 
     for page in pages:
-        pieces = _split_within_page(page.text, chunk_size, overlap)
-        for piece in pieces:
-            chunks.append(
-                Chunk(
-                    chunk_id=make_id(),
-                    parse_revision_id=parse_revision_id,
-                    chunk_index=global_index,
-                    original_text=piece,
-                    text=None,  # 번역 문구는 B 담당 파이프라인이 채운다
-                    translation_revision_id=None,
-                    printed_page_label=page.printed_page_label,
-                    pdf_page=page.pdf_page,
-                    section_id=None,
+        segments, current_section, section_order = _segment_page(page, current_section, section_order)
+        for section_id, segment_text in segments:
+            for piece in _split_within_page(segment_text, chunk_size, overlap):
+                chunks.append(
+                    Chunk(
+                        chunk_id=make_id(),
+                        parse_revision_id=parse_revision_id,
+                        chunk_index=global_index,
+                        original_text=piece,
+                        text=None,  # 번역 문구는 B 담당 파이프라인이 채운다
+                        translation_revision_id=None,
+                        printed_page_label=page.printed_page_label,
+                        pdf_page=page.pdf_page,
+                        section_id=section_id,
+                    )
                 )
-            )
-            global_index += 1
+                global_index += 1
 
     return chunks
