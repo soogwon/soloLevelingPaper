@@ -100,3 +100,47 @@ test('응답 없는 새로고침은 대기 안내로 끝나고 자동 재시도�
   assert.match(message(), /확인하지 못/);
   assert.equal(doc.getElementById('refresh').disabled, false);
 });
+
+test('첫 결과 이후 새 입력의 응답이 없으면 대기를 끝내고 늦은 결과도 표시한다', async () => {
+  const { app, doc, calls, message } = await setup({}, 20);
+  app.ontoolresult(result());
+  app.ontoolinput({ arguments: { job_id: 'job-2' } });
+  assert.equal(doc.querySelector('main').getAttribute('aria-busy'), 'true');
+  assert.equal(doc.getElementById('refresh').disabled, true);
+  await new Promise((resolve) => setTimeout(resolve, 45));
+  assert.match(message(), /지연/);
+  assert.equal(doc.querySelector('main').getAttribute('aria-busy'), 'false');
+  assert.equal(doc.getElementById('refresh').disabled, false);
+  assert.deepEqual(calls, []);
+  app.ontoolresult(result({ job_id: 'job-2' }));
+  assert.match(message(), /완료/);
+  assert.equal(doc.getElementById('job').textContent, 'job-2');
+});
+
+test('연속 입력은 마지막 입력 시점부터 대기 시간을 다시 계산한다', async () => {
+  const { app, doc, message } = await setup({}, 500);
+  app.ontoolresult(result());
+  app.ontoolinput({ arguments: { job_id: 'job-2' } });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  app.ontoolinput({ arguments: { job_id: 'job-3' } });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.match(message(), /불러오고/);
+  assert.equal(doc.getElementById('refresh').disabled, true);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.match(message(), /지연/);
+  assert.equal(doc.getElementById('refresh').disabled, false);
+});
+
+for (const outcome of ['result', 'cancel', 'error']) {
+  test(`새 입력 후 ${outcome} 알림이 오면 대기 타이머가 화면을 덮어쓰지 않는다`, async () => {
+    const { app, message } = await setup({}, 20);
+    app.ontoolresult(result());
+    app.ontoolinput({ arguments: { job_id: 'job-2' } });
+    if (outcome === 'cancel') app.ontoolcancelled({});
+    else app.ontoolresult(outcome === 'error' ? { isError: true } : result({ job_id: 'job-2' }));
+    const displayed = message();
+    await new Promise((resolve) => setTimeout(resolve, 45));
+    assert.equal(message(), displayed);
+    assert.doesNotMatch(message(), /지연/);
+  });
+}

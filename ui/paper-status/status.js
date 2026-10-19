@@ -21,6 +21,16 @@ export function mountStatusApp(app, doc, timeoutMs = 15000) {
     button.disabled = !connected || !jobId || loading;
   }
 
+  function startWaitTimer() {
+    clearTimeout(connectionTimer);
+    const waitingRevision = revision;
+    connectionTimer = setTimeout(() => {
+      // 이전 입력의 타이머가 새 결과나 새 조회 상태를 덮어쓰지 않게 한다.
+      if (waitingRevision !== revision) return;
+      message('호스트 연결 또는 결과가 지연되고 있습니다. 채팅의 도구 응답을 확인하세요.');
+    }, timeoutMs);
+  }
+
   function display(result) {
     clearTimeout(connectionTimer);
     el('details').hidden = true;
@@ -65,6 +75,7 @@ export function mountStatusApp(app, doc, timeoutMs = 15000) {
     jobId = typeof args?.job_id === 'string' && args.job_id.trim() ? args.job_id : null;
     el('details').hidden = true;
     message('상태를 불러오고 있습니다.', true);
+    startWaitTimer();
   };
   app.ontoolresult = (result) => { revision += 1; display(result); };
   app.ontoolcancelled = () => {
@@ -91,9 +102,7 @@ export function mountStatusApp(app, doc, timeoutMs = 15000) {
       clearTimeout(timer);
     }
   });
-  connectionTimer = setTimeout(() => {
-    message('호스트 연결 또는 결과가 지연되고 있습니다. 채팅의 도구 응답을 확인하세요.');
-  }, timeoutMs);
+  startWaitTimer();
   Promise.resolve().then(() => app.connect()).then(() => {
     connected = true;
     button.disabled = !jobId || busy;
