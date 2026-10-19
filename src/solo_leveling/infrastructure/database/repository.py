@@ -33,6 +33,7 @@ from solo_leveling.domain.context import ContextNotReadyError
 
 from solo_leveling.domain.paper_summary import (
     PAPER_SCOPE, PaperSummary, SummaryItem, SummaryValidationError,
+)
 
 from solo_leveling.domain.learning_progress import (
     LEARNING_STEPS,
