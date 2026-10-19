@@ -39,6 +39,9 @@ stdio의 stdout은 MCP 메시지 전용이다. 서버를 터미널에서 직접 
 
 ### get_paper_status
 
+MCP Apps 지원 호스트에는 읽기 전용 상태 카드를 연결한다. 기존 입력·응답은 그대로이며
+UI 미지원 호스트도 텍스트로 조회할 수 있다. [Claude Desktop UI 검증](mcp-app-ui.md)을 참고한다.
+
 `job_id`로 `processing`, `ready`, `failed`, `interrupted` 상태와 현재 단계,
 제한 사항을 조회한다. `ready`일 때만 `start_learning`을 capabilities에
 표시한다. 서버 재시작 시 끝나지 않은 processing 작업은 interrupted가 된다.

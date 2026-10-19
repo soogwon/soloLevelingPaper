@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>논문 처리 상태</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 16px; font: 14px/1.6 system-ui, sans-serif; color: var(--color-text-primary, #202b35); background: var(--color-background-primary, #fafbf9); }
+    main { max-width: 660px; margin: auto; padding: 22px; border: 1px solid var(--color-border-primary, #ccd8d0); border-radius: 16px; }
+    header { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; }
+    h1 { font-size: 20px; margin: 0; }
+    h2 { font-size: 14px; margin-top: 20px; }
+    .eyebrow { color: var(--color-text-secondary, #53665b); font-size: 11px; letter-spacing: .12em; margin: 0 0 4px; }
+    button { padding: 9px 14px; border: 1px solid #788e80; border-radius: 8px; color: inherit; background: transparent; cursor: pointer; font: inherit; }
+    button:disabled { opacity: .45; cursor: default; }
+    button:focus-visible { outline: 3px solid #71a689; outline-offset: 3px; }
+    #message { margin: 20px 0 12px; font-size: 16px; font-weight: 600; }
+    dl { display: grid; grid-template-columns: 85px minmax(0, 1fr); gap: 8px 12px; }
+    dt { color: var(--color-text-secondary, #53665b); }
+    dd { margin: 0; overflow-wrap: anywhere; }
+    ul { padding-left: 20px; overflow-wrap: anywhere; }
+    .note { color: var(--color-text-secondary, #53665b); font-size: 12px; }
+    [hidden] { display: none !important; }
+    @media (prefers-color-scheme: dark) { body { color: var(--color-text-primary, #e7eee9); background: var(--color-background-primary, #18231d); } .note, dt, .eyebrow { color: var(--color-text-secondary, #a7b9ad); } }
+  </style>
+</head>
+<body>
+  <main aria-busy="true">
+    <header><div><p class="eyebrow">SOLO LEVELING PAPER</p><h1>논문 처리 상태</h1></div><button id="refresh" disabled>상태 새로고침</button></header>
+    <p id="message" role="status" aria-live="polite">호스트 연결을 기다리고 있습니다.</p>
+    <section id="details" hidden>
+      <dl><dt>현재 단계</dt><dd id="stage"></dd><dt>작업 ID</dt><dd id="job"></dd><dt>논문 버전</dt><dd id="version"></dd></dl>
+      <h2>제한 사항</h2><ul id="limitations"></ul>
+      <p id="next"></p>
+    </section>
+    <p class="note">조회 시점의 상태입니다. 자동 재등록·재번역은 하지 않습니다. 화면을 사용할 수 없으면 채팅의 도구 응답을 확인하세요.</p>
+  </main>
+  <!-- APP_SCRIPT -->
+</body>
+</html>
