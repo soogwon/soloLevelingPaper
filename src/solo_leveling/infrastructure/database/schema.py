@@ -131,6 +131,17 @@ CREATE TABLE IF NOT EXISTS evidences (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_evidences_context ON evidences(context_id);
+
+-- 학습 맥락별 진행 상태. context는 고정 값이고 진행 상태는 계속 바뀌므로 분리한다.
+-- 진행 행이 없는 맥락은 조회할 때 기본값(첫 단계)으로 본다.
+CREATE TABLE IF NOT EXISTS learning_progress (
+    context_id TEXT PRIMARY KEY REFERENCES learning_contexts(context_id),
+    current_step TEXT NOT NULL,
+    completed_steps TEXT NOT NULL DEFAULT '[]',
+    resume_position TEXT,
+    last_studied_at TEXT,
+    updated_at TEXT NOT NULL
+);
 """
 
 
