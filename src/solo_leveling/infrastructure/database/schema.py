@@ -149,7 +149,7 @@ CREATE TABLE IF NOT EXISTS summary_items (
     text TEXT NOT NULL,
     evidence_ids TEXT NOT NULL,
     PRIMARY KEY (summary_id, position)
-
+);
 
 -- 학습 맥락별 진행 상태. context는 고정 값이고 진행 상태는 계속 바뀌므로 분리한다.
 -- 진행 행이 없는 맥락은 조회할 때 기본값(첫 단계)으로 본다.
