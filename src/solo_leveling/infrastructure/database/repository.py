@@ -11,6 +11,7 @@ from pathlib import PureWindowsPath, PurePosixPath
 from typing import List, Optional
 
 from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
+)
 from solo_leveling.domain.models import (
     Chunk,
     JobStage,
