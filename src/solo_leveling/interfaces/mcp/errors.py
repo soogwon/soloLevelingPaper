@@ -9,10 +9,7 @@ from solo_leveling.application.evidence_qa.errors import (
 from solo_leveling.domain.context import ContextNotReadyError
 from solo_leveling.domain.models import RequestConflictError
 from solo_leveling.infrastructure.embeddings.process_embedder import EmbeddingProcessError
-
-
-class UnsupportedDocumentError(ValueError):
-    """MCP로 등록할 파일이 지원 형식·크기 조건을 만족하지 않는다."""
+from solo_leveling.infrastructure.storage.pdf_store import UnsupportedDocumentError
 
 
 def to_tool_error(error: Exception) -> ToolError:

@@ -3,12 +3,11 @@
 from dataclasses import dataclass
 import hashlib
 import json
-import os
 from pathlib import Path
-import uuid
 
 from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
 from .errors import UnsupportedDocumentError
+from solo_leveling.infrastructure.storage.pdf_store import PdfStore
 
 
 @dataclass(frozen=True)
@@ -44,39 +43,10 @@ class LocalPdfStore:
         if size < 5 or size > self.max_bytes:
             raise UnsupportedDocumentError('PDF 파일 크기가 허용 범위를 벗어났습니다.')
 
-        self.managed_root.mkdir(parents=True, exist_ok=True)
-        temporary = self.managed_root / f'.import-{uuid.uuid4()}.tmp'
-        digest = hashlib.sha256()
-        copied = 0
-        try:
-            with source.open('rb') as reader, temporary.open('xb') as writer:
-                header = reader.read(5)
-                if header != b'%PDF-':
-                    raise UnsupportedDocumentError('PDF 헤더를 확인할 수 없습니다.')
-                writer.write(header)
-                digest.update(header)
-                copied = len(header)
-                while block := reader.read(65536):
-                    copied += len(block)
-                    if copied > self.max_bytes:
-                        raise UnsupportedDocumentError('PDF 파일 크기가 허용 범위를 벗어났습니다.')
-                    writer.write(block)
-                    digest.update(block)
-            file_hash = digest.hexdigest()
-            destination = self.managed_root / f'{file_hash}.pdf'
-            if destination.exists():
-                if not destination.is_file():
-                    raise RuntimeError('관리 PDF 저장소의 기존 경로가 파일이 아닙니다.')
-                existing_hash = hashlib.sha256(destination.read_bytes()).hexdigest()
-                if destination.stat().st_size != copied or existing_hash != file_hash:
-                    raise RuntimeError('관리 PDF 저장소의 기존 파일이 일치하지 않습니다.')
-                temporary.unlink()
-            else:
-                os.replace(temporary, destination)
-            normalized = requested.as_posix()
-            fingerprint = hashlib.sha256(json.dumps({
-                'kind': 'local_file', 'relative_path': normalized, 'file_hash': file_hash,
-            }, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
-            return ManagedPdf(destination, source.name, file_hash, fingerprint)
-        finally:
-            temporary.unlink(missing_ok=True)
+        with source.open('rb') as reader:
+            stored = PdfStore(self.managed_root, self.max_bytes).save_stream(reader)
+        normalized = requested.as_posix()
+        fingerprint = hashlib.sha256(json.dumps({
+            'kind': 'local_file', 'relative_path': normalized, 'file_hash': stored.file_hash,
+        }, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+        return ManagedPdf(stored.path, source.name, stored.file_hash, fingerprint)
