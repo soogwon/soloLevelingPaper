@@ -36,6 +36,12 @@ def test_stdio_server_lists_tools(tmp_path):
                     ask = next(tool for tool in tools.tools if tool.name == 'ask_paper')
                     assert ask.outputSchema is not None
                     assert ask.annotations.openWorldHint is True
+                    status_tool = next(tool for tool in tools.tools if tool.name == 'get_paper_status')
+                    assert status_tool.meta['ui']['resourceUri'] == 'ui://solo-leveling/paper-status.html'
+                    resource = await session.read_resource(status_tool.meta['ui']['resourceUri'])
+                    assert resource.contents[0].mimeType == 'text/html;profile=mcp-app'
+                    assert '논문 처리 상태' in resource.contents[0].text
+                    assert resource.contents[0].meta['ui']['csp']['connectDomains'] == []
                     failure = await session.call_tool('get_evidence',
                         {'context_id': 'missing', 'evidence_ids': ['missing']})
                     assert failure.isError is True

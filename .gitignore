@@ -27,6 +27,7 @@ htmlcov/
 Thumbs.db
 
 # Build and runtime
+node_modules/
 build/
 dist/
 runtime/

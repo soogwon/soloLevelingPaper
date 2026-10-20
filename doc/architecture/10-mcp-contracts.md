@@ -54,6 +54,9 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 | get_evidence | true | true | false |
 
 모두 `destructiveHint=false`다. 속성은 호스트용 힌트이며 권한 강제 장치가 아니다.
+`get_paper_status`에는 선택적 화면 연결 메타데이터 `_meta.ui.resourceUri`가 있다.
+`ui://solo-leveling/paper-status.html`을 제공하되 기존 출력 객체·text 응답과 도구 개수는 유지한다.
+UI가 없는 호스트에서도 같은 계약을 사용한다. 실제 호스트 검증은 [#57 안내](../setup/mcp-app-ui.md)를 따른다.
 등록은 요청 키와 입력을 기준으로, 학습 시작은 같은 논문·색인·학습 설정을 기준으로 재사용한다.
 `ask_paper`는 외부 API 호출과 근거 저장을 수행하므로 읽기 전용·멱등 도구가 아니다.
 

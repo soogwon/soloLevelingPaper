@@ -17,6 +17,7 @@ from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
 from solo_leveling.application.evidence_qa.ports import DefaultContextStore
 from solo_leveling.domain.evidence_qa import require_text
 from .errors import to_tool_error
+from .status_app import STATUS_APP_URI, register_status_app
 
 
 HOST_INSTRUCTIONS = '''등록된 논문에서 한국어 근거 답변과 원문 근거를 조회합니다.
@@ -157,6 +158,7 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         log_level='ERROR', lifespan=lifespan)
 
     if services.ingestion is not None:
+        register_status_app(server)
         @server.tool(name='add_paper', structured_output=True,
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                         idempotentHint=True, openWorldHint=True))
@@ -170,6 +172,7 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                 raise to_tool_error(error) from None
 
         @server.tool(name='get_paper_status', structured_output=True,
+            meta={'ui': {'resourceUri': STATUS_APP_URI}},
             annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                         idempotentHint=True, openWorldHint=False))
         async def get_paper_status(job_id: str) -> PaperStatusOutput:
