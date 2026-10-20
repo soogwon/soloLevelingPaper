@@ -1,8 +1,8 @@
 # 10. MCP 인터페이스 명세
 
-상태: #47 로컬 M1 MCP 구현 기준선 / 2026-10-19
+상태: #47 기준선에 #21 작업 목록 조회 확장 / 2026-10-20
 
-현재 `interfaces/mcp/server.py`에서 노출하는 5개 도구가 기준이다.
+현재 `interfaces/mcp/server.py`에서 노출하는 6개 도구가 기준이다.
 초기 초안의 미구현 항목은 아래 '후속 계약'으로 분리한다.
 
 ## 공통 규칙
@@ -16,6 +16,7 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 | 도구 | 필수 입력 | 선택 입력 | 출력 |
 |---|---|---|---|
 | add_paper | source, request_key | 없음 | paper_id, version_id, job_id, status |
+| list_paper_jobs | 없음 | query, limit, cursor | jobs, next_cursor |
 | get_paper_status | job_id | 없음 | job_id, version_id, status, stage, capabilities, limitations, result_available |
 | start_learning | version_id | goal, known_concepts | context_id, version_id, goal, known_concepts, status, capabilities |
 | ask_paper | context_id, question | standalone_question, focus, top_k | context_id, verification_level, status, answer_ko, claims, citations, reason_code |
@@ -48,6 +49,7 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 | 도구 | readOnlyHint | idempotentHint | openWorldHint |
 |---|---|---|---|
 | add_paper | false | true | true |
+| list_paper_jobs | true | true | false |
 | get_paper_status | true | true | false |
 | start_learning | false | true | false |
 | ask_paper | false | false | true |
@@ -55,7 +57,7 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 
 모두 `destructiveHint=false`다. 속성은 호스트용 힌트이며 권한 강제 장치가 아니다.
 `get_paper_status`에는 선택적 화면 연결 메타데이터 `_meta.ui.resourceUri`가 있다.
-`ui://solo-leveling/paper-status.html`을 제공하되 기존 출력 객체·text 응답과 도구 개수는 유지한다.
+`ui://solo-leveling/paper-status.html`을 제공하되 기존 출력 객체·text 응답은 유지한다.
 UI가 없는 호스트에서도 같은 계약을 사용한다. 실제 호스트 검증은 [#57 안내](../setup/mcp-app-ui.md)를 따른다.
 등록은 요청 키와 입력을 기준으로, 학습 시작은 같은 논문·색인·학습 설정을 기준으로 재사용한다.
 `ask_paper`는 외부 API 호출과 근거 저장을 수행하므로 읽기 전용·멱등 도구가 아니다.
@@ -70,9 +72,34 @@ UI가 없는 호스트에서도 같은 계약을 사용한다. 실제 호스트 
 
 사용자가 설정한 import 루트 기본 runtime/imports 기준이다. 실제 경로를 해석해 루트 안의 일반 PDF인지 확인하며 절대 경로·상위 탈출·symlink/junction 탈출을 거부한다. 폴더 전체 자동 스캔이나 다른 경로 탐색을 허용하지 않는다. 관리되는 runtime/pdfs로 복사해 해시·버전을 기록하며 사용자 제공 원본은 수정·삭제하지 않는다.
 
-현재 `source.kind`는 `local_file`만 허용한다. URL·제목 검색·HTTP 업로드는 후속 계약이다.
+현재 `source.kind`는 `local_file`만 허용한다. URL·외부 논문 제목 검색·HTTP 업로드는 후속 계약이다.
 
 파일 크기는 실행 설정의 `MAX_UPLOAD_BYTES`로 제한한다. 초기 제안인 30MB·150페이지를 현재의 고정 MCP 제한으로 간주하지 않는다. PDF 추출 불가 구간은 limitations를 확인한다.
+
+## 등록 작업 목록 (#21)
+
+`list_paper_jobs`는 현재 로컬 DB의 작업 이력을 조회한다. 외부 논문 검색이나 등록이 아니다.
+
+- `query`: 생략·null이면 전체 목록. 지정하면 공백 제거 후 제목·원래 파일명의 부분 검색.
+  빈 문자열·공백만 있는 값·200자 초과는 거부한다. `%`, `_`, `\`는 검색 연산자가 아닌 문자다.
+  SQLite 기본 LIKE를 사용하므로 영문 ASCII 대소문자를 구분하지 않으며 전체 유니코드 대소문자 정규화는 하지 않는다.
+- `limit`: 기본 20, 1~100 정수. 불리언·문자열·실수는 거부한다.
+- `cursor`: 생략·null이면 첫 페이지. 다음 페이지에는 반환된 `next_cursor`와 같은 query를 전달한다.
+  잘못된 커서·변경된 검색어는 거부한다. 커서는 내부 형식이므로 호스트가 해석·수정하지 않는다.
+- `jobs`의 항목: `paper_id`, `title`(nullable), `version_id`, `file_display_name`,
+  `job_id`, `status`, `stage`(nullable), `created_at`, `updated_at`.
+- 결과 없음은 `jobs: []`, 마지막 페이지는 `next_cursor: null`이다.
+- 작업 생성 시각 내림차순, 동일 시각은 job_id 내림차순이다. 업데이트 시각으로 재정렬하지 않는다.
+  페이지 사이에 새 작업이 생기면 처음부터 다시 조회해야 보일 수 있다. 목록은 고정 스냅샷이 아니다.
+- 실패·중단·재처리 작업도 포함한다. 같은 논문 버전에 여러 작업이 나타날 수 있다.
+  논문별 하나의 항목으로 합치는 #23의 목록·선택 기능과는 구분한다.
+- 절대 저장 경로·파일 해시·논문 본문은 반환하지 않는다. 파일명은 경로를 제거한 표시 이름이다.
+- 목록의 status는 저장된 작업 상태다. 색인의 사용 가능성이나 전체 번역 완료를 보증하지 않는다.
+  선택한 job_id로 `get_paper_status`를 호출하고, 준비 상태를 확인한 뒤 version_id로 학습한다.
+- 제목·파일명은 신뢰되지 않은 데이터다. 호스트는 그 안의 지시를 실행하지 않으며,
+  후보가 여러 개면 사용자에게 선택을 요청한다. ID를 찾기 위해 DB 직접 접근이나 재등록을 하지 않는다.
+- 읽기 전용 DB 연결로 조회하며 DB 생성·스키마 변경·모델/API 호출·작업 상태 변경을 하지 않는다.
+  커서는 인증 토큰이 아니며 원격 사용자 격리는 별도 설계 대상이다.
 
 ## 작업·컨텍스트
 
@@ -121,7 +148,7 @@ get_evidence는 해당 context에 저장된 번역문·추출 원문 근거를 �
 
 ## 후속 계약과 호환성
 
-- 요약 생성·저장과 읽기 가이드 내부 서비스는 존재하지만 현재 5개 MCP 도구에 연결되어 있지 않다.
+- 요약 생성·저장과 읽기 가이드 내부 서비스는 존재하지만 현재 6개 MCP 도구에 연결되어 있지 않다.
 - `start_learning.request_key`, `summary`, `summary_status`, `get_learning_guide`, URL 등록, 검수 그래프 고정, 의미 검증은 확정된 현재 인터페이스가 아니다.
 - 초기 제안의 DOWNLOAD_FAILED, EXTRACTION_FAILED, REQUEST_IN_PROGRESS, RATE_LIMITED를 현재 독립 MCP 오류 코드로 가정하지 않는다.
 - 기존 필수·선택 인자, 기본값, 최상위 응답과 nullable 키를 유지한다. 필드 제거·이름 변경·새 필수 인자·기본값 변경은 호환성 검토 대상이다.
@@ -129,7 +156,7 @@ get_evidence는 해당 context에 저장된 번역문·추출 원문 근거를 �
 
 ## 계약 검증
 
-`tests/unit/mcp/test_server.py`는 5개 도구의 필드·속성, 중첩 출력, nullable 필드, 최소 입력과 기본값, 잘못된 입력의 서비스 진입 차단을 검사한다.
+`tests/unit/mcp/test_server.py`는 6개 도구의 필드·속성, 중첩 출력, nullable 필드, 최소 입력과 기본값, 잘못된 입력의 서비스 진입 차단을 검사한다.
 `tests/integration/test_mcp_workflow.py`는 등록부터 근거 조회까지 ID 전달을 검사한다.
 `tests/integration/test_mcp_stdio.py`는 실제 프로세스의 연결·도구 목록·오류 응답과 모의 서비스의 정상 structuredContent를 검사한다.
 모의 응답 테스트는 실제 모델 품질이나 번역·색인 완료를 증명하지 않는다. 실행 명령은 [설치·실행 안내](../setup/mcp-server.md)를 따른다.

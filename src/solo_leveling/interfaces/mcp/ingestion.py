@@ -68,3 +68,7 @@ class LocalIngestionManager:
 
     def get_status(self, job_id: str) -> dict:
         return get_ingestion_status(self.db_path, job_id)
+
+    def list_jobs(self, *, query=None, limit=20, cursor=None) -> dict:
+        from solo_leveling.infrastructure.database.job_queries import list_paper_jobs
+        return list_paper_jobs(self.db_path, query=query, limit=limit, cursor=cursor)

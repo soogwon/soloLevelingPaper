@@ -26,6 +26,21 @@ stdio의 stdout은 MCP 메시지 전용이다. 서버를 터미널에서 직접 
 
 ## 도구
 
+### list_paper_jobs
+
+기존 작업 ID를 모르면 인자 없이 호출하거나 `query`로 제목·파일명을 검색한다.
+`limit`은 기본 20·최대 100이며 `next_cursor`가 있으면 같은 query와 cursor로 다음 페이지를 요청한다.
+실패·재처리 작업을 포함한 작업별 목록이며, 논문별 하나로 합친 목록은 아니다.
+원하는 항목의 job_id로 `get_paper_status`를 호출한 뒤 학습을 이어간다.
+읽기 전용이므로 논문 재등록·번역·모델 호출은 필요하지 않다.
+
+수동 확인 예:
+
+> 등록한 논문 작업을 list_paper_jobs로 찾아줘. 논문 재등록이나 번역은 하지 마.
+> 후보가 여러 개면 선택할 수 있도록 파일명·상태·작업 ID를 보여줘.
+
+DB가 비어 있으면 빈 목록이 정상이다. 커서 형식과 응답 필드는 MCP 인터페이스 명세를 참고한다.
+
 ### add_paper
 
 `source={"kind":"local_file","relative_path":"paper.pdf"}`와 `request_key`를 받는다.
