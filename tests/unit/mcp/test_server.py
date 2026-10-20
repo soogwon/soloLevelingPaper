@@ -1,6 +1,7 @@
 """MCP 도구 스키마·응답·안전한 오류 변환을 검증한다."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -14,7 +15,7 @@ from solo_leveling.application.evidence_qa.errors import (
 from solo_leveling.domain.context import ContextNotReadyError
 from solo_leveling.domain.evidence_qa import (
     AnswerResult, AnswerStatus, Citation, Claim, EvidenceDetail, GetEvidenceResult,
-    RetrievalMethod, RetrievedChunk, SearchResult, SearchScope,
+    ReasonCode, RetrievalMethod, RetrievedChunk, SearchResult, SearchScope,
 )
 from solo_leveling.domain.models import (
     Chunk, JobStatus, LearningContext, RequestConflictError,
@@ -228,3 +229,146 @@ def test_sdk_rejects_out_of_range_top_k(top_k):
             'context_id': 'context', 'question': '질문', 'top_k': top_k,
         }))
     answer.answer.assert_not_called()
+
+
+@pytest.mark.parametrize(('name', 'required', 'optional', 'outputs', 'hints'), [
+    ('add_paper', {'source', 'request_key'}, set(),
+     {'paper_id', 'version_id', 'job_id', 'status'}, (False, True, True)),
+    ('get_paper_status', {'job_id'}, set(),
+     {'job_id', 'version_id', 'status', 'stage', 'capabilities', 'limitations',
+      'result_available'}, (True, True, False)),
+    ('start_learning', {'version_id'}, {'goal', 'known_concepts'},
+     {'context_id', 'version_id', 'goal', 'known_concepts', 'status', 'capabilities'},
+     (False, True, False)),
+    ('ask_paper', {'context_id', 'question'}, {'standalone_question', 'focus', 'top_k'},
+     {'context_id', 'verification_level', 'status', 'answer_ko', 'claims',
+      'citations', 'reason_code'}, (False, False, True)),
+    ('get_evidence', {'context_id', 'evidence_ids'}, set(), {'evidence'},
+     (True, True, False)),
+])
+def test_complete_tool_contract(name, required, optional, outputs, hints):
+    server, _, _ = make_server(ingestion=Mock(), contexts=Mock())
+    tool = next(tool for tool in run(server.list_tools()) if tool.name == name)
+    assert set(tool.inputSchema['required']) == required
+    assert set(tool.inputSchema['properties']) == required | optional
+    assert set(tool.outputSchema['required']) == outputs
+    assert set(tool.outputSchema['properties']) == outputs
+    assert (tool.annotations.readOnlyHint, tool.annotations.idempotentHint,
+            tool.annotations.openWorldHint) == hints
+    assert tool.annotations.destructiveHint is False
+
+
+def test_nested_schema_defaults_and_nullable_fields():
+    server, _, _ = make_server(ingestion=Mock(), contexts=Mock())
+    tools = {tool.name: tool for tool in run(server.list_tools())}
+    ask = tools['ask_paper']
+    top_k = ask.inputSchema['properties']['top_k']
+    assert (top_k['default'], top_k['minimum'], top_k['maximum']) == (5, 1, 20)
+    goal = tools['start_learning'].inputSchema['properties']['goal']
+    assert goal['default'] == 'understand'
+    assert goal['enum'] == ['understand', 'implement', 'skim']
+    assert ask.inputSchema['properties']['focus']['default'] is None
+    assert ask.inputSchema['properties']['standalone_question']['default'] is None
+    source = tools['add_paper'].inputSchema['$defs']['PaperSource']
+    assert source['additionalProperties'] is False
+    assert set(source['required']) == {'kind', 'relative_path'}
+    assert source['properties']['kind']['const'] == 'local_file'
+    definitions = ask.outputSchema['$defs']
+    assert set(definitions['ClaimOutput']['required']) == {'claim_id', 'text', 'evidence_ids'}
+    citation = definitions['CitationOutput']
+    assert set(citation['required']) == {
+        'evidence_id', 'chunk_id', 'version_id', 'parse_revision_id',
+        'translation_revision_id', 'printed_page_label', 'pdf_page',
+        'quote_ko', 'quote_original',
+    }
+    for field in ('translation_revision_id', 'printed_page_label', 'quote_ko'):
+        assert {'type': 'null'} in citation['properties'][field]['anyOf']
+    assert {'type': 'null'} in ask.outputSchema['properties']['reason_code']['anyOf']
+    detail = tools['get_evidence'].outputSchema['$defs']['EvidenceOutput']
+    assert set(detail['required']) == set(citation['required']) | {'file_display_name'}
+
+
+def test_legacy_minimal_ask_keeps_defaults_and_matching_text_content():
+    server, answer, _ = make_server()
+    answer.answer.return_value = answer_response()
+    content, structured = run(server.call_tool('ask_paper', {
+        'context_id': 'context', 'question': '질문',
+    }))
+    answer.answer.assert_called_once_with('질문', context_id='context', top_k=5,
+                                          pdf_pages=(), section_ids=())
+    assert json.loads(content[0].text) == structured
+    assert structured['reason_code'] is None
+    assert structured['citations'][0]['printed_page_label'] is None
+
+
+@pytest.mark.parametrize('concepts', [None, []])
+def test_legacy_start_learning_defaults(concepts):
+    contexts = Mock()
+    contexts.get_or_create_learning_context.return_value = LearningContext(
+        'context', 'version', 'parse', 'translation', embedding_set_id='embedding',
+    )
+    server, _, _ = make_server(contexts=contexts)
+    arguments = {'version_id': 'version'}
+    if concepts is not None:
+        arguments['known_concepts'] = concepts
+    result = payload(run(server.call_tool('start_learning', arguments)))
+    contexts.get_or_create_learning_context.assert_called_once_with('version', 'understand', [])
+    assert result['goal'] == 'understand'
+    assert result['known_concepts'] == []
+
+
+@pytest.mark.parametrize(('name', 'arguments'), [
+    ('add_paper', {'source': {'kind': 'url', 'relative_path': 'paper.pdf'}, 'request_key': 'r'}),
+    ('add_paper', {'source': {'kind': 'local_file', 'relative_path': 'paper.pdf'}}),
+    ('get_paper_status', {}),
+    ('start_learning', {'version_id': 'v', 'goal': 'unknown'}),
+    ('ask_paper', {'context_id': 'c'}),
+    ('get_evidence', {'context_id': 'c', 'evidence_ids': None}),
+])
+def test_invalid_schema_never_calls_services(name, arguments):
+    ingestion, contexts = Mock(), Mock()
+    server, answer, evidence = make_server(ingestion=ingestion, contexts=contexts)
+    with pytest.raises(Exception):
+        run(server.call_tool(name, arguments))
+    for service in (ingestion, contexts, answer, evidence):
+        assert service.mock_calls == []
+
+
+@pytest.mark.parametrize(('status', 'reason'), [
+    (AnswerStatus.PARTIAL, ReasonCode.EXTRACTION_LIMITED),
+    (AnswerStatus.INSUFFICIENT_EVIDENCE, ReasonCode.EVIDENCE_NOT_FOUND),
+    (AnswerStatus.NEEDS_CLARIFICATION, None),
+])
+def test_answer_status_is_not_a_tool_error(status, reason):
+    server, answer, _ = make_server()
+    response = answer_response()
+    partial = status == AnswerStatus.PARTIAL
+    response.result = AnswerResult(
+        status, '주장' if partial else '근거를 확인할 수 없습니다.',
+        response.result.claims if partial else (),
+        response.result.citations if partial else (), reason,
+    )
+    answer.answer.return_value = response
+    result = payload(run(server.call_tool('ask_paper', {
+        'context_id': 'context', 'question': '질문',
+    })))
+    assert result['status'] == status.value
+    assert result['reason_code'] == (reason.value if reason is not None else None)
+    assert bool(result['claims']) is partial
+
+
+@pytest.mark.parametrize(('error', 'message'), [
+    (InvalidArgumentError('secret'), 'INVALID_ARGUMENT: 입력값을 확인해주세요.'),
+    (ResourceNotFoundError('secret'), 'NOT_FOUND: 요청한 자료를 찾을 수 없습니다.'),
+    (RequestConflictError('secret'), 'CONFLICT: request_key가 이전 요청과 일치하지 않습니다.'),
+    (UnsupportedDocumentError('secret'), 'UNSUPPORTED_DOCUMENT: 지원하는 PDF 파일인지 확인해주세요.'),
+    (AnswerGenerationError('secret'), 'UPSTREAM_UNAVAILABLE: 답변 생성 서비스를 사용할 수 없습니다.'),
+    (DataIntegrityError('secret'), 'INTERNAL_ERROR: 저장된 데이터의 연결을 확인하지 못했습니다.'),
+    (RuntimeError('secret'), 'INTERNAL_ERROR: 요청을 처리하지 못했습니다.'),
+    (ContextNotReadyError('v', 'job', JobStatus.PROCESSING),
+     'PAPER_NOT_READY: 등록 작업 상태를 확인해주세요. job_id=job, status=processing'),
+])
+def test_safe_service_message_contract(error, message):
+    from solo_leveling.interfaces.mcp.errors import to_tool_error
+
+    assert str(to_tool_error(error)) == message

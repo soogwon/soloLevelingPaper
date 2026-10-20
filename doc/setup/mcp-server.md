@@ -2,6 +2,10 @@
 
 현재 연결 범위는 로컬 PDF 등록·상태 조회와 등록된 논문 질문·근거 재조회다.
 
+입출력 필드·기본값·nullable 값·도구 속성·호환성 기준은
+[MCP 인터페이스 명세](../architecture/10-mcp-contracts.md)를 기준으로 한다.
+이 문서는 실행과 호스트 사용 안내에 집중한다.
+
 ## 설치와 실행
 
 PowerShell에서 저장소 루트로 이동하고 로컬 의존성을 설치한다.
@@ -51,13 +55,16 @@ stdio의 stdout은 MCP 메시지 전용이다. 서버를 터미널에서 직접 
 같은 논문·색인·설정의 context를 재사용하고 다른 설정이면 별도 context를 만든다.
 응답의 `context_id`, `goal`, `known_concepts`를 확인하고 후속 질문에 같은 ID를 사용한다.
 목적 저장이 생성 프롬프트에 목적별 설명 방식을 적용한다는 보장은 아니다.
-`request_key`, 요약 및 `summary_status`는 아직 구현하지 않았다.
+이 도구의 `request_key`, 요약 및 `summary_status` 출력은 아직 연결하지 않았다.
+별도 요약·읽기 가이드 내부 서비스의 존재와 MCP 도구 노출은 구분한다.
 
 ### ask_paper
 
 필수 입력은 `context_id`, `question`이다. 선택 입력은 `standalone_question`,
 `focus`, `top_k`다. `focus.pdf_pages`는 1부터 시작하는 실제 PDF 페이지이며
 `focus.section_ids`와 함께 지정하면 두 조건의 교집합에서 검색한다.
+`top_k`는 기본 5이며 1~20의 정수다. `focus`, `standalone_question`은 생략하거나
+`null`로 보낼 수 있다. 두 값이 없으면 기존 context 범위에서 원 질문을 사용한다.
 
 답변은 `context_id`, `verification_level`, `status`, `answer_ko`, `claims`,
 `citations`, `reason_code`를 최상위에 반환한다. 현재 검증 수준은
@@ -76,6 +83,11 @@ context의 근거는 조회할 수 없다.
 `PAPER_NOT_READY`, `UPSTREAM_UNAVAILABLE`, `INTERNAL_ERROR`로 구분한다. 원래 예외 메시지,
 API 키, 절대 경로와 스택은 MCP 오류에 포함하지 않는다.
 
+위 설명은 서비스 예외 변환에 해당한다. 필수 입력 누락·타입 오류는 함수 실행 전에
+SDK가 검사하며, 현재 코드 접두사가 통일되지 않은 검증 문구를 반환한다.
+호스트는 `isError`를 먼저 확인하고, 입력값을 포함할 수 있는 SDK 오류 전문을
+무조건 기록하지 않는다. `partial` 등 답변 상태는 도구 오류와 구분한다.
+
 - 서버 시작 시 DB 스키마를 준비하고 이전 실행의 processing 작업을 interrupted로 바꾼다.
 - 서비스 호출은 작업 스레드에서 실행해 비동기 MCP 메시지 처리를 직접 막지 않는다.
 - `standalone_question`이 있으면 검색·생성에 사용하지만 원 질문도 비어 있지 않아야 한다.
@@ -85,8 +97,12 @@ API 키, 절대 경로와 스택은 MCP 오류에 포함하지 않는다.
 테스트:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/unit/mcp tests/integration/test_mcp_stdio.py -v
+.\.venv\Scripts\python.exe -m pytest tests/unit/mcp tests/integration/test_mcp_workflow.py tests/integration/test_mcp_stdio.py -v
 ```
+
+단위 테스트는 스키마·기본값·기존 입력 호환성·도구 속성을 확인한다.
+stdio 테스트는 실제 실행 구성의 도구 목록·오류와, 모의 서비스를 연결한 정상 응답을
+확인한다. 외부 생성 API를 호출하거나 실제 사용자 DB를 사용하지 않는다.
 
 ## 호스트 안내와 근거 확인
 

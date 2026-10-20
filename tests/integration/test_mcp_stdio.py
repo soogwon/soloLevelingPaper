@@ -1,6 +1,7 @@
 """실제 자식 프로세스의 stdio MCP 초기화와 도구 목록을 검증한다."""
 
 import asyncio
+import json
 import os
 from pathlib import Path
 import sys
@@ -44,3 +45,66 @@ def test_stdio_server_lists_tools(tmp_path):
 
     asyncio.run(scenario())
     assert (tmp_path / 'runtime/solo_leveling.sqlite3').is_file()
+
+
+def test_stdio_success_contract_with_fake_services(tmp_path):
+    """모델·DB 대신 테스트 대역을 연결하되 실제 MCP 전송 응답을 검사한다."""
+    root = Path(__file__).resolve().parents[2]
+    environment = dict(os.environ)
+    environment['PYTHONPATH'] = os.pathsep.join((str(root / 'src'), str(root)))
+    program = '''
+from tests.integration.test_mcp_workflow import (
+    WorkflowAnswer, WorkflowEvidence, WorkflowIngestion, WorkflowContexts,
+)
+from solo_leveling.interfaces.mcp.server import MCPServices, create_server
+create_server(MCPServices(
+    WorkflowAnswer(), WorkflowEvidence(), WorkflowIngestion(), WorkflowContexts(),
+)).run(transport='stdio')
+'''
+
+    async def scenario():
+        parameters = StdioServerParameters(command=sys.executable,
+            args=['-B', '-c', program], env=environment, cwd=root)
+        with (tmp_path / 'stderr.log').open('w', encoding='utf-8') as errors:
+            async with stdio_client(parameters, errlog=errors) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+
+                    async def call(name, arguments):
+                        result = await session.call_tool(name, arguments)
+                        assert result.isError is False
+                        assert isinstance(result.structuredContent, dict)
+                        assert json.loads(result.content[0].text) == result.structuredContent
+                        return result.structuredContent
+
+                    added = await call('add_paper', {
+                        'source': {'kind': 'local_file', 'relative_path': 'paper.pdf'},
+                        'request_key': 'request-1',
+                    })
+                    status = await call('get_paper_status', {'job_id': added['job_id']})
+                    context = await call('start_learning', {'version_id': status['version_id']})
+                    repeated = await call('start_learning', {'version_id': status['version_id']})
+                    assert repeated == context
+                    response = await call('ask_paper', {
+                        'context_id': context['context_id'],
+                        'question': '구현할 때 핵심 구성 요소는 무엇인가요?',
+                    })
+                    assert response['status'] == 'ok'
+                    assert response['verification_level'] == 'structural_only'
+                    assert response['reason_code'] is None
+                    assert 'answer' not in response
+                    evidence_ids = response['claims'][0]['evidence_ids']
+                    details = await call('get_evidence', {
+                        'context_id': context['context_id'], 'evidence_ids': evidence_ids,
+                    })
+                    assert details['evidence'][0]['evidence_id'] == evidence_ids[0]
+                    assert details['evidence'][0]['printed_page_label'] is None
+                    assert details['evidence'][0]['file_display_name'] == 'paper.pdf'
+                    invalid = await session.call_tool('ask_paper', {
+                        'context_id': context['context_id'], 'question': '질문', 'top_k': True,
+                    })
+                    assert invalid.isError is True
+                    assert invalid.structuredContent is None
+                    assert invalid.content[0].text
+
+    asyncio.run(scenario())
