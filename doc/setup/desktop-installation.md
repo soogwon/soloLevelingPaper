@@ -47,6 +47,7 @@ ALLOW_EXTERNAL_API=false
 ```
 
 번역·생성에는 외부 API로 논문 일부와 질문·근거가 전송되고 비용이 발생한다.
+활성화 전에 [외부 전송 데이터·시점과 설정의 범위](external-data-transfer.md)를 확인한다.
 이를 확인한 뒤 실제 사용 시에만 `ALLOW_EXTERNAL_API=true`로 바꾼다.
 키의 존재 검사는 인증 성공을 뜻하지 않는다. `false` 상태에서는 외부 호출을 허용하지 않는다.
 

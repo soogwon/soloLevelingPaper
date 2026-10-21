@@ -8,6 +8,9 @@
 [MCP 인터페이스 명세](../architecture/10-mcp-contracts.md)를 기준으로 한다.
 이 문서는 실행과 호스트 사용 안내에 집중한다.
 
+실제 자료를 등록하기 전에 [외부 전송 데이터·시점 안내](external-data-transfer.md)를 확인한다.
+`LOCAL_ONLY`는 서버의 OpenAI 호출을 차단하지만 Claude 호스트 통신까지 차단하지 않는다.
+
 ## 설치와 실행
 
 PowerShell에서 저장소 루트로 이동하고 로컬 의존성을 설치한다.
