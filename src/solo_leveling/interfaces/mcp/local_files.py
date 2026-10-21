@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
 from .errors import UnsupportedDocumentError
@@ -29,6 +29,11 @@ class LocalPdfStore:
     def import_pdf(self, relative_path: str) -> ManagedPdf:
         if not isinstance(relative_path, str) or not relative_path.strip():
             raise InvalidArgumentError('상대 PDF 경로가 필요합니다.')
+        # OS별 경로 해석 차이와 Windows 대체 데이터 스트림 접근을 차단한다.
+        windows_path = PureWindowsPath(relative_path)
+        if ('\x00' in relative_path or ':' in relative_path or windows_path.drive
+                or windows_path.root or '..' in windows_path.parts):
+            raise InvalidArgumentError('import 루트 아래 상대 경로만 사용할 수 있습니다.')
         requested = Path(relative_path)
         if requested.is_absolute() or '..' in requested.parts:
             raise InvalidArgumentError('import 루트 아래 상대 경로만 사용할 수 있습니다.')
