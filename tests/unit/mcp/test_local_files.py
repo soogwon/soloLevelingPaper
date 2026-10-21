@@ -1,5 +1,6 @@
 """로컬 PDF 가져오기 경계와 관리 복사본을 검증한다."""
 
+import errno
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,46 @@ def test_missing_file_and_directory_are_rejected(tmp_path, name):
         pdfs.import_pdf(name)
 
 
+def symlink_or_skip(link, target, *, directory=False):
+    """권한 부족·기능 미지원만 건너뛰고 나머지 파일 시스템 오류는 드러낸다."""
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except NotImplementedError:
+        pytest.skip('이 환경에서는 심볼릭 링크 생성을 지원하지 않습니다.')
+    except OSError as error:
+        if (error.errno in {errno.EACCES, errno.EPERM, errno.ENOSYS, errno.ENOTSUP}
+                or getattr(error, 'winerror', None) == 1314):
+            pytest.skip('심볼릭 링크 생성 권한이 없거나 파일 시스템에서 지원하지 않습니다.')
+        raise
+
+
+@pytest.mark.parametrize('error', [
+    OSError(errno.EACCES, '권한 부족'), OSError(errno.EPERM, '작업 불허'),
+    OSError(errno.ENOSYS, '기능 미지원'), OSError(errno.ENOTSUP, '지원하지 않음'),
+    NotImplementedError(),
+])
+def test_symlink_expected_environment_errors_are_skipped(monkeypatch, error):
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(Path, 'symlink_to', fail)
+    with pytest.raises(pytest.skip.Exception):
+        symlink_or_skip(Path('link'), Path('target'))
+
+
+@pytest.mark.parametrize('code', [errno.EIO, errno.ENOENT, errno.EEXIST, errno.ENOSPC])
+def test_symlink_unexpected_errors_are_not_skipped(monkeypatch, code):
+    error = OSError(code, '예상하지 못한 파일 시스템 오류')
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(Path, 'symlink_to', fail)
+    with pytest.raises(OSError) as caught:
+        symlink_or_skip(Path('link'), Path('target'))
+    assert caught.value is error
+
+
 @pytest.mark.parametrize('directory_link', [False, True])
 def test_symlink_outside_import_root_is_rejected(tmp_path, directory_link):
     pdfs, imports = store(tmp_path)
@@ -96,11 +137,8 @@ def test_symlink_outside_import_root_is_rejected(tmp_path, directory_link):
     outside.mkdir()
     (outside / 'paper.pdf').write_bytes(b'%PDF-1.7\nprivate')
     link = imports / ('linked' if directory_link else 'paper.pdf')
-    try:
-        link.symlink_to(outside if directory_link else outside / 'paper.pdf',
-                        target_is_directory=directory_link)
-    except (OSError, NotImplementedError):
-        pytest.skip('이 환경에서는 심볼릭 링크 생성 권한을 사용할 수 없습니다.')
+    symlink_or_skip(link, outside if directory_link else outside / 'paper.pdf',
+                    directory=directory_link)
     with pytest.raises(InvalidArgumentError):
         pdfs.import_pdf('linked/paper.pdf' if directory_link else 'paper.pdf')
     assert not (tmp_path / 'pdfs').exists()
