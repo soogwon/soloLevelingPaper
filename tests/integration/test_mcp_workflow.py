@@ -32,6 +32,13 @@ def payload(result):
 
 
 class WorkflowIngestion:
+    def list_jobs(self, *, query=None, limit=20, cursor=None):
+        return {'jobs': [{
+            'paper_id': 'paper-1', 'version_id': 'version-1', 'job_id': 'job-1',
+            'title': None, 'file_display_name': 'paper.pdf', 'status': 'ready',
+            'stage': 'index', 'created_at': '2026-01-01', 'updated_at': '2026-01-01',
+        }], 'next_cursor': None}
+
     def add_local_pdf(self, relative_path: str, request_key: str) -> dict:
         assert relative_path == 'paper.pdf'
         assert request_key == 'request-1'

@@ -144,6 +144,7 @@ def test_registration_tools_and_status_contract():
     tools = {tool.name: tool for tool in run(server.list_tools())}
     assert set(tools) == {
         'add_paper', 'get_paper_status', 'start_learning', 'ask_paper', 'get_evidence',
+        'list_paper_jobs',
     }
     assert tools['add_paper'].annotations.idempotentHint is True
     assert tools['start_learning'].annotations.idempotentHint is True
@@ -232,6 +233,8 @@ def test_sdk_rejects_out_of_range_top_k(top_k):
 
 
 @pytest.mark.parametrize(('name', 'required', 'optional', 'outputs', 'hints'), [
+    ('list_paper_jobs', set(), {'query', 'limit', 'cursor'},
+     {'jobs', 'next_cursor'}, (True, True, False)),
     ('add_paper', {'source', 'request_key'}, set(),
      {'paper_id', 'version_id', 'job_id', 'status'}, (False, True, True)),
     ('get_paper_status', {'job_id'}, set(),
@@ -249,7 +252,7 @@ def test_sdk_rejects_out_of_range_top_k(top_k):
 def test_complete_tool_contract(name, required, optional, outputs, hints):
     server, _, _ = make_server(ingestion=Mock(), contexts=Mock())
     tool = next(tool for tool in run(server.list_tools()) if tool.name == name)
-    assert set(tool.inputSchema['required']) == required
+    assert set(tool.inputSchema.get('required', [])) == required
     assert set(tool.inputSchema['properties']) == required | optional
     assert set(tool.outputSchema['required']) == outputs
     assert set(tool.outputSchema['properties']) == outputs
@@ -372,3 +375,36 @@ def test_safe_service_message_contract(error, message):
     from solo_leveling.interfaces.mcp.errors import to_tool_error
 
     assert str(to_tool_error(error)) == message
+
+
+def test_list_jobs_defaults_and_empty_result():
+    ingestion = Mock()
+    ingestion.list_jobs.return_value = {'jobs': [], 'next_cursor': None}
+    server, _, _ = make_server(ingestion=ingestion)
+    assert payload(run(server.call_tool('list_paper_jobs', {}))) == {
+        'jobs': [], 'next_cursor': None}
+    ingestion.list_jobs.assert_called_once_with(query=None, limit=20, cursor=None)
+    ingestion.add_local_pdf.assert_not_called()
+
+
+@pytest.mark.parametrize('arguments', [
+    {'limit': True}, {'limit': '2'}, {'limit': 0}, {'limit': 101},
+    {'query': 1}, {'query': ''}, {'query': 'x' * 201},
+    {'cursor': 2}, {'cursor': ''}, {'cursor': 'x' * 2049},
+])
+def test_list_invalid_schema_never_calls_service(arguments):
+    ingestion = Mock()
+    server, _, _ = make_server(ingestion=ingestion)
+    with pytest.raises(Exception):
+        run(server.call_tool('list_paper_jobs', arguments))
+    ingestion.list_jobs.assert_not_called()
+
+
+def test_list_cursor_error_is_safe():
+    ingestion = Mock()
+    ingestion.list_jobs.side_effect = InvalidArgumentError('private-data')
+    server, _, _ = make_server(ingestion=ingestion)
+    with pytest.raises(ToolError) as error:
+        run(server.call_tool('list_paper_jobs', {'cursor': 'bad'}))
+    assert 'INVALID_ARGUMENT' in str(error.value)
+    assert 'private-data' not in str(error.value)
