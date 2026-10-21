@@ -11,6 +11,9 @@ dependencies = []
 
 [project.scripts]
 solo-leveling-mcp = "solo_leveling.interfaces.mcp.runtime:main"
+solo-leveling-desktop = "solo_leveling.interfaces.cli.desktop:main"
+solo-leveling-prepare-model = "solo_leveling.interfaces.cli.prepare_embedding_model:main"
+solo-leveling-mcp-diagnostics = "solo_leveling.interfaces.cli.mcp_diagnostics:main"
 
 [project.optional-dependencies]
 dev = ["pytest", "mcp>=1,<2", "pdfplumber", "chromadb", "requests>=2.32,<3", "python-dotenv>=1,<2"]

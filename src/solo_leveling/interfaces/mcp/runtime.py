@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from contextlib import asynccontextmanager
 import os
+import math
 from pathlib import Path
 from typing import Mapping
 
@@ -27,6 +28,16 @@ class RuntimePaths:
     chroma_dir: Path
     import_dir: Path
     pdf_dir: Path
+
+
+@dataclass(frozen=True)
+class RuntimeSettings:
+    paths: RuntimePaths
+    embedding_timeout: float
+    max_bytes: int
+    max_workers: int
+    generation: OpenAIGenerationSettings
+    translation: OpenAITranslationConfig
 
 
 def load_environment(path: Path | None = None,
@@ -62,10 +73,31 @@ def runtime_paths(values: Mapping[str, str]) -> RuntimePaths:
     return RuntimePaths(root, db, chroma, imports, pdfs)
 
 
-def build_runtime_server(values: Mapping[str, str]):
-    """저장소를 초기화하고 이전 실행에서 남은 처리 중 작업을 중단 상태로 바꾼다."""
+def validate_runtime_settings(values: Mapping[str, str]) -> RuntimeSettings:
+    """저장소 변경·모델 로딩·외부 호출 없이 점검과 실행의 공통 설정을 검증한다."""
     paths = runtime_paths(values)
-    embedder = ProcessEmbedder(float(values.get('EMBEDDING_PROCESS_TIMEOUT_SECONDS', '90')),
+    try:
+        timeout = float(values.get('EMBEDDING_PROCESS_TIMEOUT_SECONDS', '90'))
+        max_bytes = int(values.get('MAX_UPLOAD_BYTES', '31457280'))
+        max_workers = int(values.get('MAX_CONCURRENT_INGESTIONS', '1'))
+    except ValueError:
+        raise ValueError('제한 시간·등록 크기·동시 작업 설정이 올바른 숫자여야 합니다.') from None
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError('임베딩 제한 시간은 유한한 양수여야 합니다.')
+    if max_bytes < 1:
+        raise ValueError('MAX_UPLOAD_BYTES는 양의 정수여야 합니다.')
+    if max_workers != 1:
+        raise ValueError('현재 MAX_CONCURRENT_INGESTIONS는 1만 지원합니다.')
+    return RuntimeSettings(paths, timeout, max_bytes, max_workers,
+                           OpenAIGenerationSettings.from_env(values),
+                           OpenAITranslationConfig.from_env(values))
+
+
+def build_runtime_server(values: Mapping[str, str]):
+    """설정 검증 후 저장소를 초기화하고 이전 처리 중 작업을 중단 상태로 바꾼다."""
+    settings = validate_runtime_settings(values)
+    paths = settings.paths
+    embedder = ProcessEmbedder(settings.embedding_timeout,
                               log_dir=paths.data_root / 'diagnostics')
     paths.data_root.mkdir(parents=True, exist_ok=True)
     paths.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,19 +107,12 @@ def build_runtime_server(values: Mapping[str, str]):
     init_db(str(paths.db_path))
     mark_interrupted_jobs_on_startup(str(paths.db_path))
     services = build_services(str(paths.db_path), get_client(str(paths.chroma_dir)),
-        generation=OpenAIGenerationSettings.from_env(values),
-        translation=OpenAITranslationConfig.from_env(values), embedder=embedder)
-    try:
-        max_bytes = int(values.get('MAX_UPLOAD_BYTES', '31457280'))
-        max_workers = int(values.get('MAX_CONCURRENT_INGESTIONS', '1'))
-    except ValueError:
-        raise ValueError('등록 크기·동시 작업 설정이 올바른 정수여야 합니다.') from None
-    if max_workers != 1:
-        raise ValueError('현재 MAX_CONCURRENT_INGESTIONS는 1만 지원합니다.')
+        generation=settings.generation,
+        translation=settings.translation, embedder=embedder)
     ingestion = LocalIngestionManager(str(paths.db_path), str(paths.chroma_dir),
-        LocalPdfStore(paths.import_dir, paths.pdf_dir, max_bytes),
+        LocalPdfStore(paths.import_dir, paths.pdf_dir, settings.max_bytes),
         IngestionServices(services.translation, services.translation_settings, embedder),
-        max_workers=max_workers)
+        max_workers=settings.max_workers)
 
     @asynccontextmanager
     async def lifespan(server):

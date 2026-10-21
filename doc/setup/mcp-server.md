@@ -1,5 +1,7 @@
 # 로컬 MCP 서버 실행
 
+저장소 없이 설치하는 경우 [Claude Desktop 설치·배포](desktop-installation.md)를 참고한다.
+
 현재 연결 범위는 로컬 PDF 등록·상태 조회와 등록된 논문 질문·근거 재조회다.
 
 입출력 필드·기본값·nullable 값·도구 속성·호환성 기준은
