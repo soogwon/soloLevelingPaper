@@ -29,6 +29,27 @@ cd D:\fd\soloLeveling
 stdio의 stdout은 MCP 메시지 전용이다. 서버를 터미널에서 직접 실행하면 입력을
 기다리는 것이 정상이며, 일반적으로 MCP 호스트가 자식 프로세스로 실행해야 한다.
 
+## 선택적 진단 로그 수집 (#64)
+
+`python -m solo_leveling.interfaces.cli.mcp_diagnostics` 또는
+`python scripts/run_mcp_diagnostics.py` 실행 시 기본 로그에는 시작 메타데이터와
+고정 실패 코드와 허용된 단계별 JSON 로그를 저장한다. 단계 로그의 요청·구간 ID,
+단계명, 이벤트, 소요 시간, 고정 오류 코드만 검증해 보존한다. 임의 문자열·추가 필드와
+네이티브 원본 stderr는 폐기하고 import 지연 스택은 기본 수집하지 않는다.
+근거별 상세 추적 및 작업 프로세스 이벤트는 기본 필터의 대상이 아니다.
+새 단계명을 추가하면 C의 `safe_diagnostic_stream.py` 허용 목록도 함께 갱신해야 한다.
+stdout의 MCP 통신은 유지한다.
+
+문제 재현에 상세 정보가 필요한 경우에만 `--collect-raw-logs`를 추가한다.
+이 모드는 원본 stderr, 실행 파일·모듈·로그의 절대 경로, import 지연 스택 수집을
+허용한다. 라이브러리가 출력한 키·본문·사용자 경로 등이 포함될 수 있고 자동 마스킹을
+보장하지 않는다. 합성 자료로 재현하고 공유 전에 내용을 확인한다. 로그의 자동 삭제는 없다.
+다시 기본 모드로 실행해도 이미 수집한 파일은 삭제되지 않는다.
+
+이 정책은 C 진단 실행기를 통해 시작한 부모 프로세스에만 적용된다. 일반 MCP 실행이나
+A의 임베딩 자식 프로세스가 별도 파일에 수집하는 로그까지 보호하는 설정은 아니다.
+남은 범위는 [임베딩 로그 협의 사항](embedding-log-privacy-coordination.md)을 참고한다.
+
 ## 공용 PDF 저장 인터페이스 (#28)
 
 `infrastructure.storage.pdf_store.PdfStore`는 MCP에 의존하지 않는 저장 모듈이다.

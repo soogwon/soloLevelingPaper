@@ -45,14 +45,23 @@ def test_missing_file_rejected(tmp_path, capsys):
     assert not capsys.readouterr().out
 
 
-def test_serve_uses_explicit_log_and_cache_without_preloading(tmp_path, monkeypatch):
+@pytest.mark.parametrize('raw', [False, True])
+def test_serve_uses_explicit_log_and_cache_without_preloading(tmp_path, monkeypatch, raw):
     from solo_leveling.interfaces.cli import mcp_diagnostics
     path = config_file(tmp_path, monkeypatch, f'HF_HOME={tmp_path.as_posix()}/models\n')
     calls = []
     monkeypatch.setattr(mcp_diagnostics, 'main', lambda args: calls.append(args) or 0)
-    assert desktop.main(['serve', '--env-file', str(path)]) == 0
-    assert calls == [['--log-dir', str(tmp_path / 'data' / 'diagnostics')]]
+    options = ['--collect-raw-logs'] if raw else []
+    assert desktop.main(['serve', '--env-file', str(path), *options]) == 0
+    assert calls == [['--log-dir', str(tmp_path / 'data' / 'diagnostics'), *options]]
     assert desktop.os.environ['HF_HOME'] == f'{tmp_path.as_posix()}/models'
+
+
+@pytest.mark.parametrize('action', ['check', 'config', 'prepare-model'])
+def test_raw_logs_option_is_serve_only(action):
+    with pytest.raises(SystemExit) as error:
+        desktop.main([action, '--env-file', 'unused.env', '--collect-raw-logs'])
+    assert error.value.code == 2
 
 
 def test_prepare_uses_same_cache_without_api_key(tmp_path, monkeypatch):

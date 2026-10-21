@@ -220,11 +220,14 @@ Claude 호스트의 MCP stderr 로그를 확인하거나, 서버 실행 명령 �
 ```json
 {
   "command": "D:\\fd\\soloLeveling\\.venv\\Scripts\\python.exe",
-  "args": ["D:\\fd\\soloLeveling\\scripts\\run_mcp_diagnostics.py"]
+  "args": ["D:\\fd\\soloLeveling\\scripts\\run_mcp_diagnostics.py", "--collect-raw-logs"]
 }
 ```
 
 이 래퍼는 자식 서버를 따로 띄우지 않고 같은 프로세스에서 서버를 실행한다.
+이 절의 상세 진단 예시는 원본 수집을 명시적으로 켠 경우다. 기본 모드에서는
+허용된 단계별 JSON만 보존하고 경로·원본 stderr·import 스택은 수집하지 않는다.
+상세 수집은 민감정보가 포함될 수 있으므로 합성 자료로 재현하고 사용 후 옵션을 제거한다.
 stdin·stdout은 그대로 유지하고 운영체제 stderr 파일 설명자만 실행별 파일로 연결한다.
 기존 실행 환경 변수와 작업 디렉터리는 유지하며 소스는 래퍼가 있는 저장소의 src를 사용한다.
 로그는 `D:\fd\soloLeveling\runtime\diagnostics\mcp-시각-UUID.log`에 저장된다.
@@ -233,7 +236,7 @@ stdin·stdout은 그대로 유지하고 운영체제 stderr 파일 설명자만 
 서버나 API를 실행하지 않고 파일 수집 경로만 점검하는 명령:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts/run_mcp_diagnostics.py --check
+.\.venv\Scripts\python.exe scripts/run_mcp_diagnostics.py --check --collect-raw-logs
 Get-ChildItem .\runtime\diagnostics\*.log | Sort-Object LastWriteTime -Descending
 ```
 
@@ -249,7 +252,7 @@ request_id·span_id·stage·event·elapsed_ms·error_code 필드만 선별한다
 
 ## import 지연 스택 수집
 
-진단 래퍼로 실행하면 embedding_library_import가 30초 이상 걸릴 때 faulthandler가
+진단 래퍼에 `--collect-raw-logs`를 지정하면 embedding_library_import가 30초 이상 걸릴 때 faulthandler가
 모든 Python 스레드의 스택을 한 번 기록한다. 같은 로그 폴더의
 `import-stack-요청ID-진단ID.log`이며 요청 ID로 단계 로그와 연결한다.
 정상 완료·예외 종료 시 예약을 취소한다. 파일은 예약 시 생성되므로 빠르게 종료하면
@@ -271,7 +274,7 @@ sentence_transformers를 import한다. 기본값은 꺼짐이다. 모델 생성�
 비교 실행 시 MCP args 예:
 
 ```json
-["D:\\fd\\soloLeveling\\scripts\\run_mcp_diagnostics.py", "--preload-embedding-library"]
+["D:\\fd\\soloLeveling\\scripts\\run_mcp_diagnostics.py", "--preload-embedding-library", "--collect-raw-logs"]
 ```
 
 시작 시간이 늘어나므로 MCP 연결 제한 시간에 걸릴 수 있다. 먼저 연결과 선행 import 종료 로그를
