@@ -26,6 +26,38 @@ cd D:\fd\soloLeveling
 stdio의 stdout은 MCP 메시지 전용이다. 서버를 터미널에서 직접 실행하면 입력을
 기다리는 것이 정상이며, 일반적으로 MCP 호스트가 자식 프로세스로 실행해야 한다.
 
+## 공용 PDF 저장 인터페이스 (#28)
+
+`infrastructure.storage.pdf_store.PdfStore`는 MCP에 의존하지 않는 저장 모듈이다.
+기존 `LocalPdfStore`는 import 루트·상대 경로·확장자 검증과 요청 fingerprint 생성을 유지하고,
+PDF 내용의 검사·저장은 이 공용 모듈에 위임한다. 기존 MCP 오류 응답은 유지한다.
+
+```python
+from solo_leveling.infrastructure.storage.pdf_store import PdfStore
+
+# managed_root에는 공통 설정의 DATA_ROOT/PDF_SUBDIR 경로를 전달한다.
+store = PdfStore(managed_root, max_bytes)
+stored = store.save_bytes(downloaded_pdf_bytes)
+# 파일·동기 바이너리 스트림은 store.save_stream(stream)으로 전달할 수 있다.
+# stored.path, stored.file_hash, stored.size_bytes를 후속 등록에서 사용한다.
+```
+
+- SHA-256 기반 `<hash>.pdf`를 저장하며 동일 내용은 기존 파일을 검증한 뒤 재사용한다.
+- `%PDF-` 헤더와 크기만 확인한다. 실제 PDF 파싱·암호화·손상 여부 검증을 대신하지 않는다.
+- 스트림은 현재 위치부터 읽으며 저장소가 닫거나 되감지 않는다. 블로킹 바이너리 스트림을 전달한다.
+- 호출자가 지정한 저장소는 신뢰된 설정 경로여야 한다. 파일명·URL을 저장 경로로 사용하지 않는다.
+- 다운로드·네트워크 제한·원본 파일명·요청 키·DB 등록·논문 ID 정책은 호출자 책임이다.
+  `save_bytes`는 이미 메모리에 있는 데이터를 받으므로 다운로드 중 용량 제한을 대신하지 않는다.
+- 잘못된 헤더·용량은 공용 `UnsupportedDocumentError`, 읽기·저장 오류는 예외로 전달한다.
+  실패 시 이번 호출의 임시 파일만 정리하며, 기존 관리 파일은 덮어쓰거나 삭제하지 않는다.
+- 동일 내용의 동시 저장은 원자적 하드 링크 생성으로 처리한다. 관리 저장소 파일시스템은
+  하드 링크를 지원해야 한다(예: NTFS). 미지원·권한 오류 시 저장에 실패하며 덮어쓰기 방식으로 우회하지 않는다.
+  프로세스 강제 종료 후 남은 임시 파일이나 DB 등록 실패 후 남은 파일의 정리는 별도 정책이다.
+
+#28에서는 공용 인터페이스와 로컬 입력 연결까지만 제공한다.
+`workers/ingestion.py`의 URL 등록은 아직 변경하지 않았으며, #27에서 A가 위 인터페이스를 연결한다.
+기존 UUID 파일 이관·정리와 URL 등록 시 관리 경로 설정도 #27에서 결정한다.
+
 ## 도구
 
 ### list_paper_jobs
