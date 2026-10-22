@@ -24,6 +24,44 @@ def test_partial_writes_preserve_stage_but_drop_plaintext():
     assert json.loads(output.getvalue()) == record()
 
 
+@pytest.mark.parametrize('line', ['{broken', 'null', '[]', '"PRIVATE_TEXT"', '123'])
+def test_invalid_json_or_non_object_does_not_block_next_record(line):
+    output = StringIO()
+    stream = SafeDiagnosticStream(output)
+    stream.write(line + '\n' + json.dumps(record()) + '\n')
+    assert json.loads(output.getvalue()) == record()
+
+
+@pytest.mark.parametrize('field', list(record()))
+def test_missing_field_is_dropped(field):
+    output = StringIO()
+    incomplete = record()
+    del incomplete[field]
+    SafeDiagnosticStream(output).write(json.dumps(incomplete) + '\n')
+    assert output.getvalue() == ''
+
+
+@pytest.mark.parametrize('changes', [
+    {'span_id': 'PRIVATE_KEY'}, {'request_id': None}, {'span_id': 'a' * 31},
+    {'event': []}, {'error_code': {}}, {'elapsed_ms': '12'},
+    {'elapsed_ms': None}, {'elapsed_ms': float('inf')}, {'elapsed_ms': 1e16},
+])
+def test_invalid_field_types_and_bounds_are_dropped(changes):
+    output = StringIO()
+    SafeDiagnosticStream(output).write(json.dumps(record() | changes) + '\n')
+    assert output.getvalue() == ''
+
+
+@pytest.mark.parametrize(('event', 'code'), [
+    ('start', None), ('end', None), ('error', 'STAGE_FAILED'), ('error', 'CANCELLED'),
+])
+def test_allowed_events_remain_available_for_diagnosis(event, code):
+    output = StringIO()
+    expected = record() | {'event': event, 'error_code': code, 'elapsed_ms': 1.25}
+    SafeDiagnosticStream(output).write(json.dumps(expected) + '\n')
+    assert json.loads(output.getvalue()) == expected
+
+
 @pytest.mark.parametrize('changes', [
     {'question': 'PRIVATE_TEXT'}, {'stage': 'PRIVATE_TEXT'}, {'stage': []},
     {'request_id': 'PRIVATE_KEY'}, {'event': 'PRIVATE_TEXT'},

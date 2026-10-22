@@ -96,3 +96,43 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch):
     asyncio.run(check())
     embedder.close.assert_called_once()
     manager.executor.shutdown.assert_called_once_with(wait=False, cancel_futures=True)
+
+
+@pytest.mark.parametrize(('allow', 'local'), [
+    (False, False), (False, True), (True, False), (True, True),
+])
+def test_external_policy_reaches_real_providers(tmp_path, monkeypatch, allow, local):
+    from unittest.mock import Mock
+    import requests
+    from solo_leveling.interfaces.mcp import runtime
+
+    # 설정 파일과 반대인 프로세스 설정으로 우선순위와 실제 객체 조립을 함께 검증한다.
+    env_file = tmp_path / '.env'
+    env_file.write_text(
+        f'ALLOW_EXTERNAL_API={str(not allow).lower()}\n'
+        f'LOCAL_ONLY={str(not local).lower()}\n', encoding='utf-8')
+    values = load_environment(env_file, {
+        'DATA_ROOT': str(tmp_path / 'data'), 'OPENAI_API_KEY': 'test-only-key',
+        'ALLOW_EXTERNAL_API': str(allow).lower(), 'LOCAL_ONLY': str(local).lower(),
+    })
+    post = Mock(side_effect=AssertionError('객체 조립 중 외부 호출 금지'))
+    monkeypatch.setattr(requests, 'post', post)
+    embedder = Mock()
+    monkeypatch.setattr(runtime, 'ProcessEmbedder', Mock(return_value=embedder))
+    monkeypatch.setattr(runtime, 'get_client', Mock(return_value=Mock()))
+    monkeypatch.setattr(runtime, 'init_db', Mock())
+    monkeypatch.setattr(runtime, 'mark_interrupted_jobs_on_startup', Mock())
+    manager_factory = Mock()
+    monkeypatch.setattr(runtime, 'LocalIngestionManager', manager_factory)
+    monkeypatch.setattr(runtime, 'create_server', lambda services, **kwargs: services)
+
+    # build_services는 대역으로 바꾸지 않아 실제 번역·생성 제공자까지 연결한다.
+    services = runtime.build_runtime_server(values)
+    generation = services.answer.generator.settings
+    ingestion_services = manager_factory.call_args.args[3]
+    translation = ingestion_services.translation.provider.config
+    for config in (generation, translation):
+        assert config.allow_external_api is allow
+        assert config.local_only is local
+    post.assert_not_called()
+    embedder.assert_not_called()

@@ -28,3 +28,24 @@ def test_disabled_generation_never_sends_http(monkeypatch, allow, local, operati
         else:
             OpenAISummaryGenerator(settings).generate_summary(())
     post.assert_not_called()
+
+
+@pytest.mark.parametrize(('allow', 'local'), [(False, False), (False, True), (True, True)])
+def test_disabled_translation_never_sends_http(monkeypatch, allow, local):
+    from solo_leveling.application.translation.ports import (
+        ProviderFailure, TranslationProviderUnavailable,
+    )
+    from solo_leveling.domain.translation import TranslationRequest
+    from solo_leveling.infrastructure.translation.openai_provider import (
+        OpenAITranslationConfig, OpenAITranslationProvider,
+    )
+
+    post = Mock(side_effect=AssertionError('외부 HTTP 요청이 발생하면 안 됩니다.'))
+    monkeypatch.setattr(requests, 'post', post)
+    config = OpenAITranslationConfig('test-only-key', allow_external_api=allow,
+                                     local_only=local)
+    request = TranslationRequest('test-chunk', 'test-parse', 'Synthetic paper text.')
+    with pytest.raises(TranslationProviderUnavailable) as caught:
+        OpenAITranslationProvider(config).translate(request, config.translation_settings)
+    assert caught.value.code == ProviderFailure.DISABLED
+    post.assert_not_called()
