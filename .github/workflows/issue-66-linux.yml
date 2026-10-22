@@ -1,0 +1,38 @@
+name: "#66 Linux 검증"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: 검증 대상 코드 가져오기
+        uses: actions/checkout@v6
+        with:
+          ref: c9219d632a3f5d7fc8d644988551d14a02bd4869
+
+      - name: Python 3.12 준비
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 실행 환경 기록
+        run: |
+          uname -a
+          python --version
+          git rev-parse HEAD
+
+      - name: 테스트 의존성 설치
+        run: python -m pip install -e ".[dev]"
+
+      - name: "#66 관련 테스트"
+        run: python -m pytest tests/unit/mcp/test_runtime.py -v
+
+      - name: 단위 테스트 전체
+        if: ${{ !cancelled() }}
+        run: python -m pytest tests/unit -q
