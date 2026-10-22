@@ -151,6 +151,29 @@ CREATE TABLE IF NOT EXISTS summary_items (
     PRIMARY KEY (summary_id, position)
 );
 
+-- 근거 기반 단계별 퀴즈(M1-09). 맥락(context)마다 학습 단계별 퀴즈를 하나씩 둔다.
+-- 문항의 evidence_ids는 같은 맥락의 evidences를 가리키며, 저장할 때 리포지토리가 확인한다.
+-- 객관식은 choices(JSON 배열)와 correct_index, 단답형은 answer와 grading_criteria를 가진다.
+CREATE TABLE IF NOT EXISTS quizzes (
+    quiz_id TEXT PRIMARY KEY,
+    context_id TEXT NOT NULL REFERENCES learning_contexts(context_id),
+    step TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (context_id, step)
+);
+CREATE TABLE IF NOT EXISTS quiz_questions (
+    quiz_id TEXT NOT NULL REFERENCES quizzes(quiz_id),
+    position INTEGER NOT NULL,
+    question_type TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    choices TEXT NOT NULL DEFAULT '[]',
+    correct_index INTEGER,
+    answer TEXT NOT NULL,
+    grading_criteria TEXT NOT NULL DEFAULT '',
+    evidence_ids TEXT NOT NULL,
+    PRIMARY KEY (quiz_id, position)
+);
+
 -- 학습 맥락별 진행 상태. context는 고정 값이고 진행 상태는 계속 바뀌므로 분리한다.
 -- 진행 행이 없는 맥락은 조회할 때 기본값(첫 단계)으로 본다.
 CREATE TABLE IF NOT EXISTS learning_progress (

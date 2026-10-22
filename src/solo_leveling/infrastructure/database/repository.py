@@ -34,6 +34,7 @@ from solo_leveling.domain.context import ContextNotReadyError
 from solo_leveling.domain.paper_summary import (
     PAPER_SCOPE, PaperSummary, SummaryItem, SummaryValidationError,
 )
+from solo_leveling.domain.quiz import Quiz, QuizQuestion, QuizValidationError
 
 from solo_leveling.domain.learning_progress import (
     LEARNING_STEPS,
@@ -714,6 +715,69 @@ def get_summary_evidence(db_path: str, summary: PaperSummary) -> GetEvidenceResu
     """요약이 인용한 근거(원문·페이지)를 중복 없이 조회한다."""
     ids = list(dict.fromkeys(e for item in summary.items for e in item.evidence_ids))
     return get_evidences(db_path, summary.context_id, ids)
+
+# ── 근거 기반 단계별 퀴즈 (M1-09) ───────────────────────────────
+def save_quiz(db_path: str, context_id: str, step: str, questions: List[QuizQuestion]) -> Quiz:
+    """퀴즈를 검증한 뒤 저장한다. 같은 (맥락, 단계)가 있으면 통째로 교체한다.
+
+    정답/근거가 없거나 맥락 밖의 evidence_id를 가진 문항이 하나라도 있으면 아무것도 저장하지 않고
+    QuizValidationError를 낸다. 걸러서 저장하려면 quiz.split_supported()로 먼저 나눈다.
+    """
+    questions = tuple(questions)
+    if step not in LEARNING_STEPS:
+        raise QuizValidationError(f'지원하지 않는 학습 단계: {step!r}')
+    if not questions:
+        raise QuizValidationError('저장할 문항이 없습니다.')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        _require_context(conn, context_id)
+        known = {r['evidence_id'] for r in conn.execute(
+            'SELECT evidence_id FROM evidences WHERE context_id=?', (context_id,))}
+        missing = sorted({e for q in questions for e in q.evidence_ids} - known)
+        if missing:
+            raise QuizValidationError(f'이 맥락에 없는 evidence_id: {", ".join(missing)}')
+        conn.execute('DELETE FROM quiz_questions WHERE quiz_id IN '
+                     '(SELECT quiz_id FROM quizzes WHERE context_id=? AND step=?)', (context_id, step))
+        conn.execute('DELETE FROM quizzes WHERE context_id=? AND step=?', (context_id, step))
+        quiz = Quiz(str(uuid4()), context_id, step, questions, now_iso())
+        conn.execute('INSERT INTO quizzes VALUES (?, ?, ?, ?)',
+                     (quiz.quiz_id, context_id, step, quiz.created_at))
+        for position, q in enumerate(questions):
+            conn.execute('INSERT INTO quiz_questions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                         (quiz.quiz_id, position, q.question_type, q.prompt,
+                          json.dumps(list(q.choices), ensure_ascii=False), q.correct_index,
+                          q.answer, q.grading_criteria, json.dumps(list(q.evidence_ids))))
+        return quiz
+
+
+def get_quiz(db_path: str, context_id: str, step: str) -> Optional[Quiz]:
+    with closing(get_connection(db_path)) as conn:
+        row = conn.execute('SELECT * FROM quizzes WHERE context_id=? AND step=?',
+                           (context_id, step)).fetchone()
+        if not row:
+            return None
+        questions = tuple(
+            QuizQuestion(r['question_type'], r['prompt'], tuple(json.loads(r['evidence_ids'])),
+                         tuple(json.loads(r['choices'])), r['correct_index'], r['answer'],
+                         r['grading_criteria'])
+            for r in conn.execute('SELECT * FROM quiz_questions WHERE quiz_id=? ORDER BY position',
+                                  (row['quiz_id'],)))
+        return Quiz(row['quiz_id'], context_id, row['step'], questions, row['created_at'])
+
+
+def list_quiz_steps(db_path: str, context_id: str) -> List[str]:
+    """퀴즈가 만들어진 단계를 학습 순서대로 돌려준다."""
+    with closing(get_connection(db_path)) as conn:
+        found = {r['step'] for r in conn.execute(
+            'SELECT step FROM quizzes WHERE context_id=?', (context_id,))}
+    return [step for step in LEARNING_STEPS if step in found]
+
+
+def get_quiz_evidence(db_path: str, quiz: Quiz) -> GetEvidenceResult:
+    """퀴즈가 인용한 근거(원문·페이지)를 중복 없이 조회한다."""
+    ids = list(dict.fromkeys(e for q in quiz.questions for e in q.evidence_ids))
+    return get_evidences(db_path, quiz.context_id, ids)
+
 
   
   
