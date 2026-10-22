@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from contextlib import asynccontextmanager
 import os
 import math
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Mapping
 
 from dotenv import dotenv_values
@@ -56,7 +56,9 @@ def load_environment(path: Path | None = None,
 
 def _child(root: Path, value: str, name: str) -> Path:
     candidate = Path(value)
-    if candidate.is_absolute():
+    # 실행 OS와 무관하게 드라이브·UNC·루트 기준 Windows 경로를 거부한다.
+    windows_path = PureWindowsPath(value)
+    if candidate.is_absolute() or windows_path.drive or windows_path.root:
         raise ValueError(f'{name}은 데이터 루트 아래 상대 경로여야 합니다.')
     resolved = (root / candidate).resolve()
     if resolved == root or root not in resolved.parents:

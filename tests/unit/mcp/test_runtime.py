@@ -44,6 +44,29 @@ def test_paths_cannot_escape_data_root(tmp_path, key, value):
         runtime_paths(values)
 
 
+@pytest.mark.parametrize('key', [
+    'SQLITE_FILENAME', 'CHROMA_SUBDIR', 'IMPORT_SUBDIR', 'PDF_SUBDIR',
+])
+@pytest.mark.parametrize('value', [
+    'D:/outside.sqlite', r'D:\outside.sqlite', 'D:outside.sqlite',
+    r'\\server\share\outside.sqlite', '//server/share/outside.sqlite',
+    r'\outside.sqlite', r'\\?\D:\outside.sqlite',
+])
+def test_windows_anchored_paths_are_rejected_on_every_os(tmp_path, key, value):
+    with pytest.raises(ValueError, match='상대 경로'):
+        runtime_paths({'DATA_ROOT': str(tmp_path), key: value})
+
+
+def test_windows_drive_is_rejected_with_posix_path_semantics(monkeypatch):
+    from pathlib import PurePosixPath
+    from solo_leveling.interfaces.mcp import runtime
+
+    # POSIX에서는 D:/outside.sqlite가 상대 경로다. resolve 전에 명시적으로 거부해야 한다.
+    monkeypatch.setattr(runtime, 'Path', PurePosixPath)
+    with pytest.raises(ValueError, match='상대 경로'):
+        runtime._child(PurePosixPath('/data'), 'D:/outside.sqlite', 'SQLITE_FILENAME')
+
+
 def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch):
     import asyncio
     from types import SimpleNamespace
