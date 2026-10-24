@@ -13,7 +13,7 @@ from solo_leveling.application.translation.service import TranslationService
 from solo_leveling.application.translation.ports import TranslationProviderUnavailable
 from solo_leveling.domain.translation import TranslationSettings
 from solo_leveling.infrastructure.database import repository as repo
-from solo_leveling.infrastructure.storage.vector_store import get_client, query_similar
+from solo_leveling.infrastructure.storage.vector_store import query_similar
 from solo_leveling.domain.models import JobStatus, LearningContext, Evidence
 
 
@@ -96,7 +96,7 @@ def test_end_to_end_ingestion_produces_page_bound_chunks_and_vectors(tmp_path):
     assert "attention mechanisms" not in page2.original_text
 
 
-def test_end_to_end_vectors_are_queryable(tmp_path):
+def test_end_to_end_vectors_are_queryable(tmp_path, chroma_client_factory):
     pdf_path = tmp_path / "paper.pdf"
     write_minimal_pdf(
         str(pdf_path),
@@ -107,7 +107,7 @@ def test_end_to_end_vectors_are_queryable(tmp_path):
 
     result = register_and_ingest(db_path, chroma_dir, str(pdf_path))
 
-    client = get_client(chroma_dir)
+    client = chroma_client_factory(chroma_dir)
     query_vec = _fake_embed_texts(["parallel computation attention"])[0]
 
     collection_name = f"chunks-{result['embedding_set_id']}"
@@ -172,7 +172,7 @@ def test_all_translation_failure_then_retry_same_version(tmp_path):
     assert second['limitations'] == []
 
 
-def test_partial_translation_indexes_only_successes(tmp_path):
+def test_partial_translation_indexes_only_successes(tmp_path, chroma_client_factory):
     class PartialProvider(FixtureProvider):
         def translate(self, request, settings):
             if request.original_text == 'Second page.':
@@ -188,12 +188,13 @@ def test_partial_translation_indexes_only_successes(tmp_path):
     assert len(result['limitations']) == 1
     chunks = repo.get_chunks_by_parse_revision(db, result['parse_revision_id'])
     assert chunks[1].text is None
-    client = get_client(vectors)
+    client = chroma_client_factory(vectors)
     collection = client.get_or_create_collection(f"chunks-{result['embedding_set_id']}")
     assert collection.get()['ids'] == [chunks[0].chunk_id]
 
 
-def test_index_failure_preserves_translation_and_retry_skips_provider(tmp_path, monkeypatch):
+def test_index_failure_preserves_translation_and_retry_skips_provider(
+        tmp_path, monkeypatch, chroma_client_factory):
     pdf = tmp_path / 'index-failure.pdf'
     write_minimal_pdf(str(pdf), ['First page.'])
     db, vectors = str(tmp_path / 'data.sqlite'), str(tmp_path / 'chroma')
@@ -211,7 +212,7 @@ def test_index_failure_preserves_translation_and_retry_skips_provider(tmp_path, 
     assert repo.get_search_index(db, version.version_id) is None
     parse = repo.get_latest_parse_revision(db, version.version_id)
     assert repo.get_chunks_by_parse_revision(db, parse.parse_revision_id)[0].text is not None
-    client = get_client(vectors)
+    client = chroma_client_factory(vectors)
     assert all(client.get_collection(c.name).count() == 0 for c in client.list_collections())
     monkeypatch.setattr(ingestion_module, 'verify_chunk_embeddings', original_verify)
     result = register_and_ingest(db, vectors, str(pdf), paper_id='p', translation_service=service)
@@ -335,11 +336,11 @@ def test_duplicate_registration_returns_active_job_then_completed_result(tmp_pat
         get_ingestion_status(db, 'missing')
 
 
-def test_vector_sets_isolate_dimensions_and_detect_corruption(tmp_path):
+def test_vector_sets_isolate_dimensions_and_detect_corruption(tmp_path, chroma_client_factory):
     from solo_leveling.infrastructure.storage.vector_store import (
         upsert_chunk_embeddings, verify_chunk_embeddings, delete_by_version,
     )
-    client = get_client(str(tmp_path / 'vectors'))
+    client = chroma_client_factory(str(tmp_path / 'vectors'))
     upsert_chunk_embeddings(client, ['c1'], [[1.0, 0.0]], 'index-one', 'paper', 'v1', ['첫째'])
     upsert_chunk_embeddings(client, ['c2'], [[1.0, 0.0, 0.0]], 'index-two', 'paper', 'v2', ['둘째'])
     verify_chunk_embeddings(client, ['c1'], ['첫째'], 'index-one', 'paper', 'v1', 2)

@@ -13,15 +13,15 @@ from solo_leveling.domain.translation import TranslationSettings
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.database.schema import get_connection, init_db
 from solo_leveling.infrastructure.retrieval.sqlite_chroma import SQLiteChromaRetriever, SQLiteContextReader
-from solo_leveling.infrastructure.storage.vector_store import get_client, upsert_chunk_embeddings, verify_chunk_embeddings
+from solo_leveling.infrastructure.storage.vector_store import upsert_chunk_embeddings, verify_chunk_embeddings
 from solo_leveling.infrastructure.translation.fake_provider import FakeTranslationProvider
 
 
 @pytest.fixture
-def setup_search(tmp_path):
+def setup_search(tmp_path, chroma_client_factory):
     db = str(tmp_path / 'db.sqlite')
     init_db(db)
-    client = get_client(str(tmp_path / 'chroma'))
+    client = chroma_client_factory(str(tmp_path / 'chroma'))
     repo.insert_paper(db, Paper('paper'))
     repo.insert_version(db, PaperVersion('v', 'paper', 'hash', '/private/a.pdf', 'a.pdf'))
     repo.insert_parse_revision(db, ParseRevision('p', 'v', 3))
@@ -50,7 +50,7 @@ def setup_search(tmp_path):
     return db, client, retriever, service, calls
 
 
-def test_registered_pdf_can_be_searched_through_context(tmp_path, monkeypatch):
+def test_registered_pdf_can_be_searched_through_context(tmp_path, monkeypatch, chroma_client_factory):
     from tests.fixtures.pdf_builder import write_minimal_pdf
     from solo_leveling.workers import ingestion
 
@@ -70,7 +70,7 @@ def test_registered_pdf_can_be_searched_through_context(tmp_path, monkeypatch):
         registered['parse_revision_id'], registered['translation_revision_id'],
         embedding_set_id=registered['embedding_set_id']))
     service = ContextSearchService(SQLiteContextReader(db),
-        SQLiteChromaRetriever(db, get_client(chroma), embedder=embedder))
+        SQLiteChromaRetriever(db, chroma_client_factory(chroma), embedder=embedder))
     result = service.search('어텐션이란?', 'ctx')
     assert result.embedding_set_id == registered['embedding_set_id']
     assert result.items[0].chunk.text == '어텐션 설명'
