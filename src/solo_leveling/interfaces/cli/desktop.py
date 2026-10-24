@@ -25,8 +25,9 @@ def checked_environment(env_file: Path):
 
 def desktop_config(env_file: Path):
     """호스트 파일을 수정하지 않고 병합할 설정 조각만 반환한다."""
+    # 심볼릭 링크를 해제하면 가상환경 밖의 Python이 실행될 수 있다.
     return {'mcpServers': {'solo-leveling-paper': {
-        'command': str(Path(sys.executable).resolve()),
+        'command': sys.executable,
         'args': ['-X', 'utf8', '-m', 'solo_leveling.interfaces.cli.desktop',
                  'serve', '--env-file', str(env_file)],
     }}}
