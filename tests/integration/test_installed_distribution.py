@@ -10,7 +10,8 @@ import pytest
 @pytest.mark.skipif(not os.environ.get('SOLO_INSTALLED_PYTHON'),
                     reason='새 가상환경에 wheel[local] 설치 후 SOLO_INSTALLED_PYTHON 지정 필요')
 def test_installed_distribution_outside_repository(tmp_path):
-    python = Path(os.environ['SOLO_INSTALLED_PYTHON']).resolve()
+    # 심볼릭 링크를 유지해 설치한 가상환경의 Python으로 검증한다.
+    python = Path(os.path.abspath(os.environ['SOLO_INSTALLED_PYTHON']))
     environment = dict(os.environ)
     for key in list(environment):
         if key.startswith(('PYTHON', 'OPENAI', 'GENERATION_', 'TRANSLATION_', 'HF_')):
