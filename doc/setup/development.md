@@ -198,6 +198,34 @@ dev 의존성은 pytest·pdfplumber·Chroma다. 테스트는 실제 SQLite·합�
 실제 모델 임베딩·MCP 실행 의존성은 `pip install -e ".[local,dev]"`로 설치한다.
 실제 임베딩 모델은 첫 사용에 다운로드가 필요할 수 있다. 번역 제공자는 호출자가 주입해야 한다.
 
+### macOS에서 전체 테스트 실행
+
+먼저 Python 3.11 이상이 설치되어 있는지 확인한다. 아래 예시는 Python 3.12를
+사용하며 `python3.12`가 없으면 지원 버전을 설치하거나 설치된 3.11 이상 실행 파일로
+바꾼다. macOS 기본 `python3`가 요구 버전 이상이라고 가정하지 않는다.
+기존 `.venv`가 있으면 `.venv/bin/python --version`으로 버전을 확인하고 사용한다.
+저장소 루트에서 실행한다.
+
+```bash
+python3.12 --version
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
+ulimit -Sn
+ulimit -Hn
+(ulimit -Sn 4096 && .venv/bin/python -m pytest tests -q)
+```
+
+Python 3.11 이상이 필요하다. `ulimit -Sn`은 현재 열린 파일 수 제한,
+`ulimit -Hn`은 올릴 수 있는 상한을 표시한다. 상한이 4096보다 낮으면 위 명령은
+실패하므로 테스트를 그대로 진행하지 말고 터미널의 제한 설정을 확인한다.
+괄호 안의 제한 변경은 해당 테스트 실행에만 적용된다.
+
+파일 수 제한이 낮은 환경에서는 통합 테스트가 만든 Chroma 리소스가 누적되어
+`OSError: [Errno 24] Too many open files`가 발생할 수 있다. 4096으로 높이는 것은
+검증된 임시 우회이며 리소스 정리 자체를 해결하지는 않는다. 실제 기본 제한은
+환경마다 다르므로 256이라고 가정하지 않는다. 측정 결과와 별도 실패는
+[#67 macOS 파일 핸들 검증 기록](macos-file-handles.md)을 참고한다.
+
 ## 서비스 연결 전 확인 사항
 
 아래 항목은 현재 구현의 제약과 후속 연결 과제이며, 해결 완료된 기능이 아니다.

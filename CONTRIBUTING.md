@@ -7,6 +7,10 @@
 - 완료한 작업은 Pull Request를 통해 병합합니다.
 - 사용자 정보, API Key, 재배포 권한이 없는 논문 원문은 커밋하지 않습니다.
 
+개발 환경과 테스트 명령은 [개발 안내](doc/setup/development.md#설치테스트)를 참고합니다.
+macOS에서 전체 테스트 중 `Too many open files`가 발생하면
+[macOS 테스트 안내](doc/setup/development.md#macos에서-전체-테스트-실행)의 임시 우회 방법을 확인합니다.
+
 ## 2. Mini Project 진행 방식
 
 초기 단계에서는 각 팀원이 다음 경로에서 독립적으로 기술을 검증합니다.
