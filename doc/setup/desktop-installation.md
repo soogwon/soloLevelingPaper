@@ -153,7 +153,11 @@ Remove-Item Env:SOLO_INSTALLED_PYTHON
   실제 stdio의 6개 도구 목록, 목록 조회 계약·빈 결과·입력 오류·오류 후 재조회,
   UI 리소스·상태 조회 오류·안전 로그를 확인했다.
 - 테스트 전용 DB와 가짜 키만 사용했다. 사용자 데이터 변경·모델 다운로드·생성/번역 API 호출은 없다.
-- macOS·Linux 설치 실행, 실제 Desktop 화면, 실제 논문 등록·질문은 이번 검증에 포함하지 않았다.
+- Linux 추가 검증: Ubuntu 24.04·Python 3.12.15, 커밋 `2658edf`의 깨끗한 체크아웃에서
+  wheel을 빌드하고 저장소 밖 한글·공백 경로의 새 가상환경에 설치했다.
+  `pip check` 통과, 단위 테스트 **84개 통과**, 설치본 stdio 테스트 **1개 통과, 건너뛰기 없음**.
+  [GitHub Actions 실행 결과](https://github.com/soogwon/soloLevelingPaper/actions/runs/40322939094).
+- macOS 설치 실행, 실제 Desktop 화면, 실제 논문 등록·질문은 이번 검증에 포함하지 않았다.
 
 ### #101 Linux CI와 macOS 수동 확인
 
