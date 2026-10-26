@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Mapping, Optional, Protocol, Sequence
 
 from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
+from solo_leveling.application.reading_guide.summary_concepts import SummaryKeyConceptSource
 from solo_leveling.domain.learning_progress import LEARNING_STEPS
 from solo_leveling.domain.reading_guide import (
     GOAL_HINTS_KO, STEP_GOALS_KO, STEP_TITLES_KO, ReadingGuide, StepGuide,
@@ -52,7 +53,8 @@ def _pages(sections: Sequence[_Section]):
 class ReadingGuideService:
     def __init__(self, db_path: str, concept_source: Optional[KeyConceptSource] = None):
         self.db_path = db_path
-        self.concept_source = concept_source
+        # 따로 주지 않으면 저장된 근거 연결형 요약에서 핵심 개념을 가져온다. 요약이 없으면 빈 목록이다.
+        self.concept_source = concept_source if concept_source is not None else SummaryKeyConceptSource(db_path)
 
     # ── 조회 ────────────────────────────────────────────────
     def get_guide(self, context_id: str) -> ReadingGuide:
@@ -64,7 +66,7 @@ class ReadingGuideService:
         chunks = repo.get_chunks_by_parse_revision(self.db_path, context.parse_revision_id)
         sections = self._sections(chunks)
         all_pages = (min(c.pdf_page for c in chunks), max(c.pdf_page for c in chunks)) if chunks else None
-        concepts = self.concept_source.key_concepts(context_id) if self.concept_source else {}
+        concepts = self.concept_source.key_concepts(context_id)
 
         steps = []
         for step in LEARNING_STEPS:
