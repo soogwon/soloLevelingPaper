@@ -25,6 +25,7 @@ extract_words() 기반 재구성은 오히려 단어 자체를 잘못 묶어 도
 으로 검증했을 때 원래도 문제 없었음을 확인했다 — extract_tables()로
 바꾸면 오히려 셀 병합 문제가 생겨 더 나빠지므로 표는 손대지 않았다.
 """
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
@@ -78,6 +79,12 @@ def _open_pdf(pdf_path: str):
 TEXT_X_TOLERANCE = 1.5
 
 
+# 페이지 아래 여백(맨 아래 10%)에 숫자만 있는 줄은 쪽 번호로 보고 본문에서 뺀다(#15).
+# 본문 안의 수식·표 숫자는 여백에 있지 않거나 다른 글자와 함께 있으므로 건드리지 않는다.
+FOOTER_ZONE_RATIO = 0.90
+_PAGE_NUMBER_RE = re.compile(r"\d{1,4}")
+
+
 @dataclass
 class ExtractedPage:
     pdf_page: int  # 1부터 시작하는 물리 페이지 번호
@@ -85,6 +92,9 @@ class ExtractedPage:
     printed_page_label: str | None = None  # 자동 인식 방식 미정(22번 문서) → 현재는 항상 None
     # 이 페이지에서 시작하는 큰 섹션 제목(M1-05a). 못 찾으면 빈 목록이다.
     headings: list = field(default_factory=list)
+    # 본문에서 분리한 쪽 번호 후보(#15). 저장하거나 인용에 쓰지 않는다.
+    # printed_page_label로 쓸지는 #31에서 정한다.
+    page_number_candidate: str | None = None
 
 
 def _is_upright(obj: dict) -> bool:
@@ -111,6 +121,28 @@ def _line_styles(page) -> list[LineStyle]:
     return styles
 
 
+def split_page_number(page, text: str) -> tuple[str, str | None]:
+    """페이지 아래 여백에 숫자만 있는 줄이 있으면 본문에서 떼어낸다.
+
+    반환: (쪽 번호를 뺀 본문, 쪽 번호 후보). 아래 조건을 모두 만족할 때만 뗀다.
+    - 맨 아래 FOOTER_ZONE_RATIO 이후 영역의 글자가 숫자 1~4자리 하나뿐이다.
+    - 본문 텍스트의 마지막 줄이 바로 그 숫자다.
+    조건이 하나라도 안 맞으면 본문을 그대로 돌려준다.
+    """
+    try:
+        zone = page.crop((0, page.height * FOOTER_ZONE_RATIO, page.width, page.height))
+        zone_text = (zone.extract_text(x_tolerance=TEXT_X_TOLERANCE) or "").strip()
+    except Exception:
+        return text, None
+    if not _PAGE_NUMBER_RE.fullmatch(zone_text):
+        return text, None
+    body = text.rstrip()
+    head, _, last_line = body.rpartition("\n")
+    if last_line.strip() != zone_text:
+        return text, None
+    return head.rstrip(), zone_text
+
+
 def extract_pages(pdf_path: str) -> List[ExtractedPage]:
     """
     PDF를 페이지 단위로 추출한다. 절대 전체를 하나의 문자열로 합치지 않는다.
@@ -119,6 +151,9 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
 
     회전된(upright=False) 문자는 본문이 아니라 그림에 박힌 캡션/축 레이블인
     경우가 대부분이라 추출 전에 걸러낸다(위 docstring 참고).
+
+    쪽 번호(#15): 페이지 아래 여백의 숫자만 있는 줄은 본문에서 떼어 page_number_candidate에 둔다.
+    이 값은 printed_page_label을 채우는 데 쓰지 않는다(자동 인식 여부는 #31에서 결정).
 
     섹션 제목(M1-05a): 글자 크기·굵기로 큰 제목을 찾아 각 페이지의 headings에 담는다.
     제목 인식은 실패해도 본문 추출에 영향을 주지 않는다(제목 없이 진행).
@@ -130,7 +165,9 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
         for i, page in enumerate(pdf.pages, start=1):
             upright_only = page.filter(_is_upright)
             text = upright_only.extract_text(x_tolerance=TEXT_X_TOLERANCE) or ""
-            pages.append(ExtractedPage(pdf_page=i, text=text, printed_page_label=None))
+            text, page_number = split_page_number(upright_only, text)
+            pages.append(ExtractedPage(pdf_page=i, text=text, printed_page_label=None,
+                                       page_number_candidate=page_number))
             try:
                 styles = _line_styles(upright_only)
             except Exception:
