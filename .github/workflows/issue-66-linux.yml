@@ -1,4 +1,4 @@
-name: "#66 Linux 검증"
+name: "#66·#88 Linux 검증"
 
 on:
   workflow_dispatch:
@@ -13,8 +13,6 @@ jobs:
     steps:
       - name: 검증 대상 코드 가져오기
         uses: actions/checkout@v6
-        with:
-          ref: c9219d632a3f5d7fc8d644988551d14a02bd4869
 
       - name: Python 3.12 준비
         uses: actions/setup-python@v5
@@ -32,6 +30,10 @@ jobs:
 
       - name: "#66 관련 테스트"
         run: python -m pytest tests/unit/mcp/test_runtime.py -v
+
+      - name: "#88 Desktop 가상환경 회귀 테스트"
+        if: ${{ !cancelled() }}
+        run: python -m pytest tests/unit/mcp/test_desktop.py -v
 
       - name: 단위 테스트 전체
         if: ${{ !cancelled() }}
