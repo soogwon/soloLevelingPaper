@@ -1,7 +1,11 @@
 """Desktop 설정이 기존 데이터와 키를 건드리지 않는지 검사한다."""
 
 import json
+import os
+from pathlib import Path
+import subprocess
 import sys
+import venv
 
 import pytest
 
@@ -28,6 +32,30 @@ def test_config_is_only_json_without_secret_or_data_creation(tmp_path, monkeypat
     assert result['args'][-1] == str(path)
     assert 'private-test-secret' not in output.out
     assert not (tmp_path / 'data').exists()
+
+
+def test_config_command_uses_virtual_environment_packages(tmp_path, monkeypatch):
+    """설정의 실행 파일이 가상환경 전용 패키지와 실행 환경을 유지한다."""
+    environment = tmp_path / '한글 가상환경'
+    builder = venv.EnvBuilder(with_pip=False, symlinks=os.name != 'nt')
+    builder.create(environment)
+    python = environment / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+    # 부모 환경의 출력 인코딩 설정과 무관하게 한글 경로를 전달한다.
+    process_env = dict(os.environ, PYTHONIOENCODING='utf-8')
+    package_dir = subprocess.check_output(
+        [str(python), '-X', 'utf8', '-c',
+         'import sysconfig; print(sysconfig.get_path("purelib"))'],
+        env=process_env, text=True, encoding='utf-8', timeout=30).strip()
+    Path(package_dir, 'venv_only_probe.py').write_text('VALUE = 88\n', encoding='utf-8')
+    monkeypatch.setattr(sys, 'executable', str(python))
+    config = desktop.desktop_config(tmp_path / '설정.env')['mcpServers']['solo-leveling-paper']
+    result = subprocess.run(
+        [config['command'], '-X', 'utf8', '-c',
+         'import json, sys, venv_only_probe; '
+         'print(json.dumps([sys.prefix, venv_only_probe.VALUE]))'],
+        cwd=tmp_path, env=process_env, capture_output=True, text=True, encoding='utf-8',
+        check=True, timeout=30)
+    assert json.loads(result.stdout) == [str(environment), 88]
 
 
 @pytest.mark.parametrize('value', ['', 'relative/data', '../data'])
