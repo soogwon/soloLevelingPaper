@@ -35,6 +35,7 @@ from solo_leveling.domain.paper_summary import (
     PAPER_SCOPE, PaperSummary, SummaryItem, SummaryValidationError,
 )
 from solo_leveling.domain.quiz import Quiz, QuizQuestion, QuizValidationError
+from solo_leveling.domain.quiz_attempt import AnswerResult, AttemptValidationError, QuizAttempt
 
 from solo_leveling.domain.learning_progress import (
     LEARNING_STEPS,
@@ -777,6 +778,65 @@ def get_quiz_evidence(db_path: str, quiz: Quiz) -> GetEvidenceResult:
     """퀴즈가 인용한 근거(원문·페이지)를 중복 없이 조회한다."""
     ids = list(dict.fromkeys(e for q in quiz.questions for e in q.evidence_ids))
     return get_evidences(db_path, quiz.context_id, ids)
+
+
+# ── 퀴즈 시도 (M1-10) ───────────────────────────────────────────
+def save_quiz_attempt(db_path: str, attempt: QuizAttempt) -> QuizAttempt:
+    """채점이 끝난 시도를 저장한다. 시도는 기록이라 한 번 저장하면 고치거나 덮어쓰지 않는다.
+
+    답안의 evidence_id가 이 맥락에 없으면 아무것도 저장하지 않고 AttemptValidationError를 낸다.
+    """
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        _require_context(conn, attempt.context_id)
+        known = {r['evidence_id'] for r in conn.execute(
+            'SELECT evidence_id FROM evidences WHERE context_id=?', (attempt.context_id,))}
+        missing = sorted({e for r in attempt.results for e in r.evidence_ids} - known)
+        if missing:
+            raise AttemptValidationError(f'이 맥락에 없는 evidence_id: {", ".join(missing)}')
+        conn.execute('INSERT INTO quiz_attempts VALUES (?, ?, ?, ?, ?, ?, ?)',
+                     (attempt.attempt_id, attempt.context_id, attempt.quiz_id, attempt.step,
+                      attempt.correct_count, attempt.total_count, attempt.submitted_at))
+        for r in attempt.results:
+            conn.execute('INSERT INTO quiz_attempt_answers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                         (attempt.attempt_id, r.position, r.question_type, r.prompt,
+                          json.dumps(list(r.choices), ensure_ascii=False), r.selected_index,
+                          r.submitted_text, r.correct_answer, r.grading_criteria,
+                          1 if r.is_correct else 0, json.dumps(list(r.evidence_ids))))
+        return attempt
+
+
+def _attempt_from_row(conn, row) -> QuizAttempt:
+    results = tuple(
+        AnswerResult(r['position'], r['question_type'], r['prompt'], tuple(json.loads(r['choices'])),
+                     r['selected_index'], r['submitted_text'], r['correct_answer'],
+                     r['grading_criteria'], bool(r['is_correct']), tuple(json.loads(r['evidence_ids'])))
+        for r in conn.execute('SELECT * FROM quiz_attempt_answers WHERE attempt_id=? ORDER BY position',
+                              (row['attempt_id'],)))
+    return QuizAttempt(row['attempt_id'], row['context_id'], row['quiz_id'], row['step'], results,
+                       row['submitted_at'])
+
+
+def get_quiz_attempt(db_path: str, attempt_id: str) -> Optional[QuizAttempt]:
+    with closing(get_connection(db_path)) as conn:
+        row = conn.execute('SELECT * FROM quiz_attempts WHERE attempt_id=?', (attempt_id,)).fetchone()
+        return _attempt_from_row(conn, row) if row else None
+
+
+def list_quiz_attempts(db_path: str, context_id: str, step: Optional[str] = None) -> List[QuizAttempt]:
+    """시도를 오래된 순서로 돌려준다. step을 주면 그 단계만."""
+    query, params = 'SELECT * FROM quiz_attempts WHERE context_id=?', [context_id]
+    if step is not None:
+        query, params = query + ' AND step=?', params + [step]
+    with closing(get_connection(db_path)) as conn:
+        rows = conn.execute(query + ' ORDER BY submitted_at, rowid', params).fetchall()
+        return [_attempt_from_row(conn, row) for row in rows]
+
+
+def get_attempt_wrong_evidence(db_path: str, attempt: QuizAttempt) -> GetEvidenceResult:
+    """틀린 문항이 인용한 근거(원문·페이지)를 중복 없이 조회한다."""
+    ids = list(dict.fromkeys(e for r in attempt.wrong_results for e in r.evidence_ids))
+    return get_evidences(db_path, attempt.context_id, ids)
 
 
   
