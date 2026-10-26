@@ -271,6 +271,7 @@ def test_parsed_response_passes_through_reference_checks(parts, case):
 
 
 @pytest.mark.parametrize('cite_next', [False, True])
+@pytest.mark.usefixtures('raw_diagnostics')
 def test_diagnostics_distinguishes_unused_continuation(parts, capsys, cite_next):
     import json
     from dataclasses import replace
@@ -342,6 +343,7 @@ def repair_parts(parts):
     return service, saved, lookup
 
 
+@pytest.mark.usefixtures('raw_diagnostics')
 def test_repair_once_uses_same_candidates_and_saves_only_final(repair_parts, capsys):
     service, saved, lookup = repair_parts
     response = service.answer('조건은?', context_id='ctx', top_k=1, pdf_pages=(6, 7))
@@ -367,8 +369,10 @@ def test_repair_once_uses_same_candidates_and_saves_only_final(repair_parts, cap
     assert all(s not in json.dumps([json.loads(line) for line in captured.err.splitlines()],
                                   ensure_ascii=False) for s in ('최초 불완전 주장', 'Faster when', '조건은?'))
     logs = [json.loads(line) for line in captured.err.splitlines()]
-    assert [r['round_number'] for r in logs if r['event'] == 'quality'] == [0, 1]
-    assert [r['reason_code'] for r in logs if r['event'] == 'quality'] == ['UNFINISHED_TAIL', 'NO_EXTRACTION_RISK']
+    assert [r['round_number'] for r in logs
+            if r['stage'] == 'evidence_trace' and r['event'] == 'quality'] == [0, 1]
+    assert [r['reason_code'] for r in logs
+            if r['stage'] == 'evidence_trace' and r['event'] == 'quality'] == ['UNFINISHED_TAIL', 'NO_EXTRACTION_RISK']
     assert next(r for r in logs if r['event'] == 'repair_target')['next_evidence_id'] == target.next_evidence_id
     assert next(r for r in logs if r['event'] == 'repair_outcome')['reason_code'] == 'REPAIR_ADOPTED'
 
@@ -392,8 +396,14 @@ def test_repair_failure_and_empty_never_loop(repair_parts, outcome, capsys):
     service.generator.repair_claims.side_effect = repair
     response = service.answer('조건은?', context_id='ctx', top_k=1)
     import json
-    failures = [r for line in capsys.readouterr().err.splitlines()
-                if (r := json.loads(line))['event'] == 'verification_failure']
+    logs = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    failures = [r for r in logs if r['event'] == 'verification_failure'
+                and r['stage'] == 'extraction_diagnostic']
+    if outcome in ('still_partial', 'empty'):
+        assert next(r for r in logs if r['event'] == 'repair_outcome')['reason_code'] == 'REPAIR_NO_USABLE_CLAIMS'
+    if outcome == 'still_partial':
+        quality = [r for r in logs if r['stage'] == 'extraction_diagnostic' and r['event'] == 'quality']
+        assert [r['detail_code'] for r in quality] == ['NEXT_NOT_CITED', 'NEXT_NOT_CITED']
     expected = {'format': 'GENERATION_FORMAT_INVALID', 'unknown_id': 'UNKNOWN_EVIDENCE_ID',
                 'wrong_type': 'DRAFT_INVALID'}.get(outcome)
     assert [r['reason_code'] for r in failures] == ([expected] if expected else [])
@@ -404,6 +414,47 @@ def test_repair_failure_and_empty_never_loop(repair_parts, outcome, capsys):
     assert response.result.reason_code == ReasonCode.EXTRACTION_LIMITED
     assert not response.result.claims
     assert not saved
+
+
+def test_already_cited_continuation_with_incomplete_support_is_repaired(repair_parts):
+    service, saved, lookup = repair_parts
+
+    def generate(question, evidence):
+        first, second = evidence
+        return GeneratedAnswerDraft((GeneratedClaim('조건부 주장',
+            (first.evidence_id, second.evidence_id), (
+                ClaimSupport(first.evidence_id, first.original_text),
+                ClaimSupport(second.evidence_id, 'length n'),
+            )),))
+
+    service.generator.generate_claims.side_effect = generate
+    response = service.answer('조건은?', context_id='ctx', top_k=1)
+    assert response.result.status == AnswerStatus.OK
+    assert [c.pdf_page for c in response.result.citations] == [6, 7]
+    service.generator.repair_claims.assert_called_once()
+    lookup.assert_called_once()
+    assert len(saved) == 1
+
+
+def test_split_supports_in_repair_are_accepted_without_extra_calls(repair_parts):
+    service, saved, lookup = repair_parts
+
+    def repair(question, evidence, draft, targets):
+        first, second = evidence
+        return GeneratedAnswerDraft((GeneratedClaim('n이 d보다 작을 때 빠르다.',
+            (first.evidence_id, second.evidence_id), (
+                ClaimSupport(first.evidence_id, 'Faster when'),
+                ClaimSupport(first.evidence_id, 'the sequence'),
+                ClaimSupport(second.evidence_id, 'length n'),
+                ClaimSupport(second.evidence_id, 'is less than d.'),
+            )),))
+
+    service.generator.repair_claims.side_effect = repair
+    response = service.answer('조건은?', context_id='ctx', top_k=1)
+    assert response.result.status == AnswerStatus.OK
+    service.generator.repair_claims.assert_called_once()
+    lookup.assert_called_once()
+    assert len(saved) == 1
 
 
 @pytest.mark.parametrize('case', ['no_next', 'already_cited', 'complete', 'number_only', 'unsupported'])
@@ -446,9 +497,14 @@ def test_no_repair_outside_eligible_tail(repair_parts, case):
     ('draft', 'DRAFT_INVALID'),
     ('normal', None),
 ])
-def test_compound_draft_failure_classification(parts, capsys, case, code):
+@pytest.mark.parametrize('filtered', [False, True])
+def test_compound_draft_failure_classification(parts, capsys, case, code, filtered, monkeypatch):
     import json
+    import sys
+    from solo_leveling.interfaces.cli.safe_diagnostic_stream import SafeDiagnosticStream
     from solo_leveling.application.evidence_qa.response_parser import GenerationFormatError, parse_generated_answer
+    if filtered:
+        monkeypatch.setattr(sys, 'stderr', SafeDiagnosticStream(sys.stderr))
     service, _, saved, _ = parts
 
     def generate(question, evidence):
@@ -475,7 +531,8 @@ def test_compound_draft_failure_classification(parts, capsys, case, code):
     assert captured.out == ''
     logs = [json.loads(line) for line in captured.err.splitlines()]
     assert 'SECRET' not in json.dumps(logs, ensure_ascii=False)
-    failures = [r for r in logs if r['event'] == 'verification_failure']
+    failures = [r for r in logs if r['event'] == 'verification_failure'
+                and r['stage'] == 'extraction_diagnostic']
     if code is None:
         assert not failures
         assert response.result.status == AnswerStatus.OK
@@ -494,6 +551,7 @@ def test_compound_draft_failure_classification(parts, capsys, case, code):
 
 @pytest.mark.parametrize('reason', ['UNRESOLVED_PREFIX', 'SUPPORT_NOT_FOUND'])
 @pytest.mark.parametrize('outcome', ['fixed', 'unchanged', 'unavailable', 'invalid', 'no_supports', 'unsupported', 'removed'])
+@pytest.mark.usefixtures('raw_diagnostics')
 def test_prefix_and_missing_quote_repair_or_exclusion(parts, capsys, reason, outcome):
     import json
     from dataclasses import replace
@@ -556,7 +614,7 @@ def test_prefix_and_missing_quote_repair_or_exclusion(parts, capsys, reason, out
     logs = [json.loads(line) for line in captured.err.splitlines()]
     assert captured.out == ''
     assert 'SECRET' not in json.dumps(logs, ensure_ascii=False)
-    excluded = [r for r in logs if r['event'] == 'claim_excluded']
+    excluded = [r for r in logs if r['stage'] == 'evidence_trace' and r['event'] == 'claim_excluded']
     assert len(excluded) == (0 if outcome in ('fixed', 'removed') else 1)
 
 
@@ -617,3 +675,10 @@ def test_repair_never_rewrites_untargeted_valid_claim(repair_parts, outcome):
     assert len(saved) == 1 and len(saved[0][1]) == 2
     service.generator.repair_claims.assert_called_once()
     lookup.assert_called_once()
+
+
+@pytest.fixture
+def raw_diagnostics():
+    from solo_leveling.diagnostics import diagnostic_verbosity
+    with diagnostic_verbosity(raw=True):
+        yield

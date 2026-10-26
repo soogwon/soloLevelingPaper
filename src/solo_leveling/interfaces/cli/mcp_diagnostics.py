@@ -14,7 +14,7 @@ from .safe_diagnostic_stream import SafeDiagnosticStream
 
 
 @contextmanager
-def diagnostic_stderr(output, *, raw):
+def diagnostic_stderr(output, *, raw, detailed=False):
     """원본 출력은 기본 폐기하고 종료 시 Python 스트림과 파일 설명자를 복원한다."""
     previous = sys.stderr
     previous.flush()
@@ -23,8 +23,10 @@ def diagnostic_stderr(output, *, raw):
         with open(os.devnull, 'w', encoding='utf-8') as discarded:
             target = output if raw else discarded
             os.dup2(target.fileno(), 2)
-            sys.stderr = output if raw else SafeDiagnosticStream(output)
-            yield
+            sys.stderr = output if raw else SafeDiagnosticStream(output, detailed=detailed)
+            from solo_leveling.diagnostics import diagnostic_verbosity
+            with diagnostic_verbosity(detailed=detailed, raw=raw):
+                yield
     finally:
         sys.stderr = previous
         os.dup2(saved_fd, 2)
@@ -50,6 +52,7 @@ def main(argv=None):
                         help='메인 스레드 선행 import 비교 진단; 모델 생성 없음')
     parser.add_argument('--collect-raw-logs', action='store_true',
                         help='민감정보가 포함될 수 있는 원본 stderr·경로·지연 스택 수집 허용')
+    parser.add_argument('--detailed-diagnostics', action='store_true', help='본문 없이 정상 세부 검사 코드도 기록')
     args = parser.parse_args(argv)
     try:
         if args.log_dir is None:
@@ -59,7 +62,7 @@ def main(argv=None):
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
         path = args.log_dir.resolve() / f'mcp-{stamp}-{uuid4().hex}.log'
         with path.open('x', encoding='utf-8') as output:
-            with diagnostic_stderr(output, raw=args.collect_raw_logs):
+            with diagnostic_stderr(output, raw=args.collect_raw_logs, detailed=args.detailed_diagnostics):
                 return run_diagnostics(args, path, output)
     except Exception:
         print('MCP_DIAGNOSTIC_LOG_SETUP_FAILED', file=sys.stderr)

@@ -14,6 +14,7 @@ from dotenv import dotenv_values
 
 from solo_leveling.infrastructure.bootstrap import build_services
 from solo_leveling.infrastructure.generation.openai_generator import OpenAIGenerationSettings
+from solo_leveling.infrastructure.generation.semantic_verifier import SemanticSettings
 from solo_leveling.infrastructure.translation.openai_provider import OpenAITranslationConfig
 from solo_leveling.infrastructure.storage.vector_store import get_client
 from solo_leveling.workers.ingestion import register_and_ingest
@@ -45,6 +46,7 @@ def main(argv=None) -> int:
         env = {**{key: value for key, value in values.items() if value is not None}, **os.environ}
         generation = OpenAIGenerationSettings.from_env(env)
         translation = OpenAITranslationConfig.from_env(env)
+        verification = SemanticSettings.from_env(env)
     except (ValueError, OSError):
         print('입력 확인 실패: PDF·질문·설정 파일을 확인하세요. top-k는 1~20입니다.', file=sys.stderr)
         return 2
@@ -64,7 +66,8 @@ def main(argv=None) -> int:
         print('실행마다 새로 번역합니다. 청크 수에 따라 비용·시간이 늘어납니다.', flush=True)
         db = str(work / 'data.sqlite')
         chroma = str(work / 'chroma')
-        services = build_services(db, get_client(chroma), generation=generation, translation=translation)
+        services = build_services(db, get_client(chroma), generation=generation,
+                                  translation=translation, verification=verification)
         stage = '등록·번역·색인'
         print(f'{stage} 진행 중…', flush=True)
         registered = register_and_ingest(db, chroma, str(pdf),

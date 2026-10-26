@@ -1,7 +1,7 @@
 """MCP 도구 사이의 식별자 전달과 학습 맥락 흐름을 검증한다."""
 
 import asyncio
-from types import SimpleNamespace
+from solo_leveling.application.evidence_qa.answer import AnswerResponse
 
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
@@ -110,7 +110,7 @@ class WorkflowAnswer:
             (citation,),
             None,
         )
-        return SimpleNamespace(context_id=context_id, search=search, result=result)
+        return AnswerResponse(context_id=context_id, search=search, result=result)
 
 
 class WorkflowEvidence:

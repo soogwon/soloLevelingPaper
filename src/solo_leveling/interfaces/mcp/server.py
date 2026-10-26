@@ -33,7 +33,8 @@ next_cursor를 사용하세요. 여러 후보가 있으면 사용자에게 선�
 같은 학습 맥락의 후속 질문과 일시적 오류 후 재호출에는 기존 context_id를 유지하세요.
 ready는 검색 가능 상태이며 전체 번역 완료를 보장하지 않습니다. limitations를 확인하세요.
 provider_unavailable만으로 연결 실패 등 구체적인 원인을 단정하지 마세요.
-status=ok는 질문 전체의 완전한 답변을 보장하지 않습니다. structural_only는 구조 검증이며
+status=ok는 질문 전체의 완전한 답변을 보장하지 않습니다. model_checked는 실제 인용 근거와의
+모델 기반 의미 검증을 완료했다는 뜻이지 사실성 보증이 아닙니다. structural_only는 구조 검증이며
 주장과 근거의 의미 일치나 수식의 정확성을 검증했다는 뜻이 아닙니다.
 근거가 문장 중간에서 끊기면 get_evidence로 저장 근거를 확인하세요. 이 도구는 재검색하거나
 누락 문장을 복구하지 않습니다. 검색된 근거에 없다고 논문 전체에 없다고 단정하지 마세요.
@@ -285,7 +286,14 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                         top_k: Annotated[int, Field(strict=True, ge=1, le=20)] = 5) -> AskPaperOutput:
         """기존 context로 질문하고 주장별 한국어·원문 근거를 반환합니다.
 
-        ok는 답변 완전성 보증이 아니며 structural_only는 의미 검증을 포함하지 않습니다.
+        verification_level의 structural_only는 구조 검사 수준이며 의미 검증 완료를 뜻하지 않습니다.
+        model_checked는 실제 인용 원문을 대상으로 모델 기반 의미 검증을 완료했다는 뜻입니다.
+        반환된 주장은 의미 검증을 통과했지만, 모델의 오판 가능성이 있으므로 사실성 보증은 아닙니다.
+        verification_level은 검증 수준, status와 reason_code는 답변의 제한을 나타냅니다.
+        일부 주장이 추출 문제로 제외되면 model_checked와 partial/extraction_limited가 함께 반환될 수 있습니다.
+        의미 검증에서 일부 주장이 제외되면 partial/semantic_limited로 반환합니다.
+        검증 전에 모든 주장이 제외되면 structural_only일 수 있으며, 이것만으로 설정 비활성화를 단정하지 마세요.
+        ok도 질문 전체에 대한 답변 완전성 보증은 아닙니다. 제외된 내용을 배경지식으로 보충하지 마세요.
         focus는 사용자 지정 범위를 유지하세요. pdf_pages는 인쇄 번호가 아닌 물리 PDF 페이지입니다.
         """
         try:

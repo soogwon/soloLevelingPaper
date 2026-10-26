@@ -33,6 +33,17 @@ def test_build_has_no_io(tmp_path, monkeypatch):
     assert bundle.translation.provider.config.translation_settings == bundle.translation_settings
 
 
+def test_optional_semantic_verifier_has_no_io(tmp_path, monkeypatch):
+    from solo_leveling.infrastructure.generation.semantic_verifier import SemanticSettings
+    monkeypatch.setattr('requests.post', lambda *a, **kw: pytest.fail('외부 호출 금지'))
+    db = str(tmp_path / 'absent.sqlite')
+    assert services(db).answer.semantic_verification is None
+    bundle = build_services(db, object(), generation=OpenAIGenerationSettings('test-key'),
+        translation=OpenAITranslationConfig('test-key'), verification=SemanticSettings(enabled=True))
+    assert bundle.answer.semantic_verification is not None
+    assert not (tmp_path / 'absent.sqlite').exists()
+
+
 def test_stored_evidence_without_search(setup_db):
     db, chunks = setup_db
     publish(db, chunks)

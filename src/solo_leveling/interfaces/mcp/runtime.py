@@ -14,6 +14,7 @@ from solo_leveling.infrastructure.embeddings.process_embedder import ProcessEmbe
 from solo_leveling.infrastructure.database.repository import mark_interrupted_jobs_on_startup
 from solo_leveling.infrastructure.database.schema import init_db
 from solo_leveling.infrastructure.generation.openai_generator import OpenAIGenerationSettings
+from solo_leveling.infrastructure.generation.semantic_verifier import SemanticSettings
 from solo_leveling.infrastructure.storage.vector_store import get_client
 from solo_leveling.infrastructure.translation.openai_provider import OpenAITranslationConfig
 from .server import MCPServices, create_server
@@ -38,6 +39,7 @@ class RuntimeSettings:
     max_workers: int
     generation: OpenAIGenerationSettings
     translation: OpenAITranslationConfig
+    verification: SemanticSettings
 
 
 def load_environment(path: Path | None = None,
@@ -92,7 +94,7 @@ def validate_runtime_settings(values: Mapping[str, str]) -> RuntimeSettings:
         raise ValueError('현재 MAX_CONCURRENT_INGESTIONS는 1만 지원합니다.')
     return RuntimeSettings(paths, timeout, max_bytes, max_workers,
                            OpenAIGenerationSettings.from_env(values),
-                           OpenAITranslationConfig.from_env(values))
+                           OpenAITranslationConfig.from_env(values), SemanticSettings.from_env(values))
 
 
 def build_runtime_server(values: Mapping[str, str]):
@@ -110,7 +112,12 @@ def build_runtime_server(values: Mapping[str, str]):
     mark_interrupted_jobs_on_startup(str(paths.db_path))
     services = build_services(str(paths.db_path), get_client(str(paths.chroma_dir)),
         generation=settings.generation,
-        translation=settings.translation, embedder=embedder)
+        translation=settings.translation, embedder=embedder, verification=settings.verification)
+    from solo_leveling.diagnostics import semantic_startup_diagnostic
+    semantic = services.answer.semantic_verification
+    semantic_startup_diagnostic(enabled=settings.verification.enabled,
+        connected=semantic is not None,
+        prompt_version=semantic.verifier.prompt_version if semantic is not None else None)
     ingestion = LocalIngestionManager(str(paths.db_path), str(paths.chroma_dir),
         LocalPdfStore(paths.import_dir, paths.pdf_dir, settings.max_bytes),
         IngestionServices(services.translation, services.translation_settings, embedder),

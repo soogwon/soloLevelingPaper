@@ -14,6 +14,16 @@ from time import perf_counter
 from uuid import uuid4
 
 _request = ContextVar('diagnostic_request', default=None)
+_verbosity = ContextVar('diagnostic_verbosity', default='basic')
+
+
+@contextmanager
+def diagnostic_verbosity(*, detailed=False, raw=False):
+    token = _verbosity.set('raw' if raw else 'detailed' if detailed else 'basic')
+    try:
+        yield
+    finally:
+        _verbosity.reset(token)
 _stack_directory = None
 _stack_lock = Lock()
 
@@ -74,7 +84,7 @@ def _emit(request_id, span_id, stage, event, elapsed_ms, error_code=None, *, det
 def evidence_diagnostic(event, *, attempt_id, evidence_id=None, chunk_id=None,
                         follows_evidence_id=None, pdf_page=None, supplemental=None,
                         claim_number=None, support_count=None, reason_code=None, round_number=0,
-                        next_evidence_id=None):
+                        next_evidence_id=None, detail_code=None):
     """본문을 받지 않는 고정 메타데이터만 출력하며, 잘못된 값은 출력하지 않는다."""
     if _request.get() is None:
         return
@@ -84,12 +94,21 @@ def evidence_diagnostic(event, *, attempt_id, evidence_id=None, chunk_id=None,
     reasons = {'NO_EXTRACTION_RISK', 'STANDALONE_NUMBER', 'EMPTY_BODY',
                'SUPPORT_NOT_FOUND', 'SUPPORT_LOCATION_UNRESOLVED',
                'UNFINISHED_TAIL', 'UNRESOLVED_PREFIX', 'REPAIR_ADOPTED',
-               'REPAIR_UNAVAILABLE', 'REPAIR_INVALID', 'GENERATION_FORMAT_INVALID',
+               'REPAIR_UNAVAILABLE', 'REPAIR_INVALID', 'REPAIR_PARTIAL',
+               'REPAIR_NO_USABLE_CLAIMS', 'GENERATION_FORMAT_INVALID',
                'GENERATION_JSON_INVALID', 'GENERATION_SCHEMA_INVALID', 'DRAFT_INVALID',
                'EMPTY_EVIDENCE_IDS', 'DUPLICATE_EVIDENCE_ID', 'UNKNOWN_EVIDENCE_ID',
                'SUPPORT_REFERENCE_INVALID'}
     if reason_code is not None and reason_code not in reasons:
         return
+    detail = {}
+    if detail_code is not None:
+        if (event != 'quality' or reason_code != 'UNFINISHED_TAIL'
+                or detail_code not in ('NEXT_CANDIDATE_ABSENT', 'NEXT_NOT_CITED',
+                    'LEFT_TAIL_START_MISSING', 'LEFT_TAIL_END_MISSING', 'NEXT_NOT_CONTINUATION',
+                    'NEXT_SENTENCE_END_ABSENT', 'RIGHT_PREFIX_START_MISSING', 'RIGHT_PREFIX_END_MISSING')):
+            return
+        detail['detail_code'] = detail_code
 
     def safe_id(value):
         # 운영 ID와 테스트용 짧은 ID만 허용한다. 본문이나 임의 경로는 버린다.
@@ -98,6 +117,15 @@ def evidence_diagnostic(event, *, attempt_id, evidence_id=None, chunk_id=None,
     def safe_number(value):
         return value if type(value) is int and value >= 0 else None
 
+    if event in ('quality', 'claim_excluded', 'repair_outcome', 'verification_failure'):
+        # 기본 진단에는 근거 ID·본문 없이 요청별 판정 순서와 고정 사유만 남긴다.
+        _emit(_request.get(), uuid4().hex, 'extraction_diagnostic', event, 0,
+              details=dict(attempt_id=safe_id(attempt_id),
+                           claim_number=safe_number(claim_number),
+                           round_number=safe_number(round_number), reason_code=reason_code, **detail))
+
+    if _verbosity.get() != 'raw':
+        return
     _emit(_request.get(), uuid4().hex, 'evidence_trace', event, 0, details=dict(
         attempt_id=safe_id(attempt_id), evidence_id=safe_id(evidence_id),
         chunk_id=safe_id(chunk_id), follows_evidence_id=safe_id(follows_evidence_id),
@@ -105,6 +133,78 @@ def evidence_diagnostic(event, *, attempt_id, evidence_id=None, chunk_id=None,
         claim_number=safe_number(claim_number), support_count=safe_number(support_count),
         reason_code=reason_code, round_number=safe_number(round_number),
         next_evidence_id=safe_id(next_evidence_id)))
+
+
+def semantic_startup_diagnostic(*, enabled, connected, prompt_version):
+    """설정이나 본문을 받지 않고 의미 검증 연결 상태만 시작 시 기록한다."""
+    if type(enabled) is not bool or type(connected) is not bool:
+        return
+    if prompt_version not in (None, 'semantic-v1', 'semantic-v2', 'semantic-v3', 'semantic-v4', 'semantic-v5', 'semantic-v6', 'semantic-v7'):
+        return
+    record = dict(event='semantic_startup', enabled=enabled,
+                  connected=connected, prompt_version=prompt_version)
+    try:
+        sys.stderr.write(json.dumps(record) + '\n')
+        sys.stderr.flush()
+    except Exception:
+        # 진단 실패가 서버 시작을 막지 않도록 한다.
+        pass
+
+
+def _semantic_assessment(run_id, number, check, status, reason=None):
+    from solo_leveling.semantic_diagnostics import valid_assessment, basic_assessment
+    details = dict(item_number=number, check_item=check, status=status, reason_code=reason)
+    if (_request.get() is not None and valid_assessment(details)
+            and (_verbosity.get() != 'basic' or basic_assessment(check, status))):
+        _emit(_request.get(), run_id, 'semantic_diagnostic', 'assessment', 0, details=details)
+
+
+def semantic_retention_diagnostic(report, claims, retained):
+    """내용 검사 적용 후 실제 남긴 주장과 제외한 주장을 번호로 기록한다."""
+    if report.failure is not None:
+        return
+    judgments = {j.claim_id: j for j in report.judgments}
+    for number, claim in enumerate(claims, 1):
+        judgment = judgments.get(claim.claim_id)
+        if judgment is None:
+            continue
+        kept = claim.claim_id in retained
+        reason = ('RETAINED' if kept else 'SEMANTIC_NOT_SUPPORTED'
+                  if judgment.verdict.value != 'supported' else 'REPAIR_CHANGED')
+        _semantic_assessment(report.run_id, number, 'claim.final', 'retained' if kept else 'excluded', reason)
+
+
+def semantic_diagnostic(report):
+    """검증 본문·모델 응답 대신 서버 ID와 허용된 판정 코드만 기록한다."""
+    from solo_leveling.domain.semantic_verification import VerificationReport
+    if _request.get() is None or not isinstance(report, VerificationReport):
+        return
+    if not re.fullmatch(r'[a-f0-9]{32}', report.run_id):
+        return
+    # 기본 안전 로그에도 고정 거부 코드만 전달한다. 본문·근거 ID는 받지 않는다.
+    codes = ((report.detail_code,) if report.detail_code else ())
+    if report.answer_audit is not None:
+        codes += report.answer_audit.detail_codes
+    from solo_leveling.domain.semantic_verification import VerificationDetail, CHECK_DETAIL_CODES
+    for code in codes:
+        if isinstance(code, VerificationDetail):
+            details = {'reason_code': code.value}
+            if code == VerificationDetail.COVERAGE_REFERENCE_INVALID and report.detail_subreason is not None:
+                details['rejection_reason'] = report.detail_subreason
+            if code in CHECK_DETAIL_CODES and report.detail_check is not None:
+                details['check_item'] = report.detail_check
+            _emit(_request.get(), report.run_id, 'semantic_diagnostic', 'detail', 0,
+                  details=details)
+    for number, judgment in enumerate(report.judgments, 1):
+        _semantic_assessment(report.run_id, number, 'claim.verdict', judgment.verdict.value, judgment.reason.value)
+        for check, status in judgment.checks:
+            _semantic_assessment(report.run_id, number, check, status)
+    if report.answer_audit is not None:
+        for category, items in (('coverage', report.answer_audit.coverage), ('repairs', report.answer_audit.repairs)):
+            for number, item in enumerate(items, 1):
+                _semantic_assessment(report.run_id, number, f'{category}.overall', item.status)
+                for check, status in item.checks:
+                    _semantic_assessment(report.run_id, number, check, status)
 
 
 @contextmanager

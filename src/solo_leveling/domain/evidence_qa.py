@@ -40,6 +40,7 @@ class ReasonCode(str, Enum):
     CONFLICTING_EVIDENCE = "conflicting_evidence"
     UNSUPPORTED_SCOPE = "unsupported_scope"
     VERIFICATION_FAILED = "verification_failed"
+    SEMANTIC_LIMITED = "semantic_limited"
 
 
 class RetrievalMethod(str, Enum):
@@ -230,6 +231,13 @@ class EvidenceInput:
 @dataclass(frozen=True)
 class GeneratedAnswerDraft:
     claims: tuple[GeneratedClaim, ...]
+    # 보완 결과별 원래 대상 번호다. 일반 생성과 기존 제공자는 사용하지 않는다.
+    repair_sources: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         require_tuple(self.claims, GeneratedClaim, "claims")
+        if self.repair_sources is not None:
+            if (not isinstance(self.repair_sources, tuple)
+                    or len(self.repair_sources) != len(self.claims)
+                    or any(type(n) is not int or n < 1 for n in self.repair_sources)):
+                raise ValueError('보완 주장 대응 관계가 올바르지 않습니다.')
