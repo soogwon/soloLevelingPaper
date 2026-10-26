@@ -174,6 +174,34 @@ CREATE TABLE IF NOT EXISTS quiz_questions (
     PRIMARY KEY (quiz_id, position)
 );
 
+-- 퀴즈 시도(M1-10). 제출 시점의 문항 내용을 복사해 두므로 quizzes/quiz_questions에는 연결하지 않는다.
+-- (퀴즈를 다시 만들면 quizzes 행이 교체되는데, 과거 시도의 점수와 오답 근거는 계속 볼 수 있어야 한다.)
+-- 답안의 evidence_ids는 같은 맥락의 evidences를 가리키며, 저장할 때 리포지토리가 확인한다.
+CREATE TABLE IF NOT EXISTS quiz_attempts (
+    attempt_id TEXT PRIMARY KEY,
+    context_id TEXT NOT NULL REFERENCES learning_contexts(context_id),
+    quiz_id TEXT NOT NULL,
+    step TEXT NOT NULL,
+    correct_count INTEGER NOT NULL,
+    total_count INTEGER NOT NULL,
+    submitted_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_quiz_attempts_context ON quiz_attempts(context_id, step, submitted_at);
+CREATE TABLE IF NOT EXISTS quiz_attempt_answers (
+    attempt_id TEXT NOT NULL REFERENCES quiz_attempts(attempt_id),
+    position INTEGER NOT NULL,
+    question_type TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    choices TEXT NOT NULL DEFAULT '[]',
+    selected_index INTEGER,
+    submitted_text TEXT,
+    correct_answer TEXT NOT NULL,
+    grading_criteria TEXT NOT NULL DEFAULT '',
+    is_correct INTEGER NOT NULL,
+    evidence_ids TEXT NOT NULL,
+    PRIMARY KEY (attempt_id, position)
+);
+
 -- 학습 맥락별 진행 상태. context는 고정 값이고 진행 상태는 계속 바뀌므로 분리한다.
 -- 진행 행이 없는 맥락은 조회할 때 기본값(첫 단계)으로 본다.
 CREATE TABLE IF NOT EXISTS learning_progress (
