@@ -55,7 +55,28 @@ async def run():
             await session.initialize()
             tools = await session.list_tools()
             assert {t.name for t in tools.tools} == {
-                'add_paper', 'get_paper_status', 'start_learning', 'ask_paper', 'get_evidence'}
+                'add_paper', 'get_paper_status', 'list_paper_jobs',
+                'start_learning', 'ask_paper', 'get_evidence'}
+            # 설치본에서도 목록 조회 계약과 빈 DB·오류 응답을 실제 stdio로 확인한다.
+            listing = next(t for t in tools.tools if t.name == 'list_paper_jobs')
+            assert set(listing.inputSchema['properties']) == {'query', 'limit', 'cursor'}
+            assert not listing.inputSchema.get('required')
+            assert set(listing.outputSchema['required']) == {'jobs', 'next_cursor'}
+            assert listing.annotations.readOnlyHint is True
+            assert listing.annotations.openWorldHint is False
+            for arguments in ({}, {'query': '없는 논문', 'limit': 1}):
+                result = await session.call_tool('list_paper_jobs', arguments)
+                assert not result.isError
+                assert result.structuredContent == {'jobs': [], 'next_cursor': None}
+            for arguments in ({'limit': 0}, {'cursor': 'invalid-cursor'}):
+                result = await session.call_tool('list_paper_jobs', arguments)
+                assert result.isError
+            # 잘못된 커서는 안전한 서비스 오류이며 다음 정상 호출을 막지 않는다.
+            assert 'INVALID_ARGUMENT' in result.content[0].text
+            assert 'invalid-cursor' not in result.content[0].text
+            result = await session.call_tool('list_paper_jobs', {})
+            assert not result.isError
+            assert result.structuredContent == {'jobs': [], 'next_cursor': None}
             resource = await session.read_resource('ui://solo-leveling/paper-status.html')
             assert '논문 처리 상태' in resource.contents[0].text
             result = await session.call_tool('get_paper_status', {'job_id': 'missing'})

@@ -1,0 +1,67 @@
+name: "#101 Linux 설치 도구 계약 검증"
+
+on:
+  push:
+    branches: [soogwon/issue-101-installed-tool-contract]
+    paths:
+      - '.github/workflows/issue-101-installed-linux.yml'
+      - 'src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installed-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      LOCAL_ONLY: 'true'
+      ALLOW_EXTERNAL_API: 'false'
+      HF_HUB_OFFLINE: '1'
+      ANONYMIZED_TELEMETRY: 'false'
+    steps:
+      - name: 검증 대상 코드 가져오기
+        uses: actions/checkout@v6
+      - name: Python 3.12 준비
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 실행 환경 기록 및 wheel 빌드
+        run: |
+          uname -a
+          python --version
+          git rev-parse HEAD
+          python -m pip install build
+          python -m build --wheel
+      - name: 저장소 밖 새 가상환경에 설치
+        shell: bash
+        run: |
+          target="$RUNNER_TEMP/설치 검증/venv"
+          python -m venv "$target"
+          echo "SOLO_INSTALLED_PYTHON=$target/bin/python" >> "$GITHUB_ENV"
+          # GPU 실행이 필요 없는 설치 검증이므로 CPU 배포판을 사용한다.
+          "$target/bin/python" -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          wheels=(dist/*.whl)
+          test "${#wheels[@]}" -eq 1
+          "$target/bin/python" -m pip install "${wheels[0]}[local]" pytest
+          "$target/bin/python" -m pip check
+      - name: 목록 조회와 MCP 계약 단위 테스트
+        run: |
+          "$SOLO_INSTALLED_PYTHON" -m pytest tests/unit/test_job_queries.py tests/unit/mcp/test_server.py -q
+      - name: 실제 설치본 stdio 테스트
+        run: |
+          test -x "$SOLO_INSTALLED_PYTHON"
+          "$SOLO_INSTALLED_PYTHON" -m pytest tests/integration/test_installed_distribution.py -v -rs --basetemp "$RUNNER_TEMP/설치 검증/pytest" --junitxml="$RUNNER_TEMP/installed-results.xml"
+          # 조건부 테스트가 건너뛰어져도 성공으로 보이지 않도록 검사한다.
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          root = ET.parse(Path(os.environ['RUNNER_TEMP']) / 'installed-results.xml').getroot()
+          cases = root.findall('.//testcase')
+          assert len(cases) == 1
+          assert not root.findall('.//skipped')
+          PY

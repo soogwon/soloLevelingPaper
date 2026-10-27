@@ -121,6 +121,8 @@ DB·PDF·설정·캐시는 남는다. 데이터 완전 삭제는 백업 필요 �
 
 새 가상환경에 wheel의 `[local]`을 설치한 후 개발 환경에서 실행한다.
 검증 대상 환경에 editable 설치나 `--system-site-packages`를 사용하지 않는다.
+브랜치를 바꿔 빌드할 때는 이전 `build/`의 파일이 wheel에 남지 않도록 깨끗한
+체크아웃에서 빌드한다. 이번 변경에 포함되지 않은 파일이 섞인 wheel을 검증 결과로 사용하지 않는다.
 
 ```powershell
 $env:SOLO_INSTALLED_PYTHON = 'C:\검증용환경\Scripts\python.exe'
@@ -129,8 +131,73 @@ Remove-Item Env:SOLO_INSTALLED_PYTHON
 ```
 
 테스트는 임시 폴더와 가짜 키를 사용한다. 저장소 밖 격리 실행, 패키지 import 위치,
-설정 점검의 무기록, 실제 stdio 초기화·5개 도구·UI 리소스·안전한 오류·진단 파일을 검사한다.
+설정 점검의 무기록, 실제 stdio 초기화·6개 도구·UI 리소스·안전한 오류·진단 파일을 검사한다.
+공개 도구는 `add_paper`, `get_paper_status`, `list_paper_jobs`, `start_learning`,
+`ask_paper`, `get_evidence`이며 목록을 정확히 비교한다.
+`list_paper_jobs`는 설치본에서 입력·출력 스키마, 빈 목록·검색 결과, 잘못된 입력과
+커서의 오류 응답 및 오류 후 정상 조회를 확인한다. 실제 작업 목록의 필드·페이지 이동·
+검색·읽기 전용 동작은 `tests/unit/test_job_queries.py`와 MCP 단위 테스트에서 별도로 검증한다.
 모델 다운로드·실제 API·실제 Desktop 화면은 별도 수동 확인 항목이다.
+
+### #101 검증 기록 — 2026-10-26
+
+- 기준 소스: main `2989696`, 브랜치 `soogwon/issue-101-installed-tool-contract`의
+  설치 테스트·문서 변경 적용. 서버 구현 변경은 없다.
+- Windows·Python 3.12.14, 저장소 밖 한글·공백 경로에 시스템 패키지를 공유하지 않는
+  새 가상환경을 만들고 wheel `[local]`을 설치했다. `pip check` 통과.
+- 기존 빌드 디렉터리에 다른 브랜치 파일이 남아 있어, 기준 커밋의 깨끗한 소스 복사본으로
+  다시 빌드했다. wheel의 Python 파일 82개가 현재 소스와 일치함을 확인했다.
+- `tests/unit/test_job_queries.py`, `tests/unit/mcp/test_server.py`: **84개 통과**.
+- `SOLO_INSTALLED_PYTHON`과 저장소 밖의 고유 `--basetemp`를 지정한
+  `tests/integration/test_installed_distribution.py`: **1개 통과, 건너뛰기 없음**.
+  실제 stdio의 6개 도구 목록, 목록 조회 계약·빈 결과·입력 오류·오류 후 재조회,
+  UI 리소스·상태 조회 오류·안전 로그를 확인했다.
+- 테스트 전용 DB와 가짜 키만 사용했다. 사용자 데이터 변경·모델 다운로드·생성/번역 API 호출은 없다.
+- Linux 추가 검증: Ubuntu 24.04·Python 3.12.15, 커밋 `2658edf`의 깨끗한 체크아웃에서
+  wheel을 빌드하고 저장소 밖 한글·공백 경로의 새 가상환경에 설치했다.
+  `pip check` 통과, 단위 테스트 **84개 통과**, 설치본 stdio 테스트 **1개 통과, 건너뛰기 없음**.
+  [GitHub Actions 실행 결과](https://github.com/soogwon/soloLevelingPaper/actions/runs/40322939094).
+- macOS 설치 실행, 실제 Desktop 화면, 실제 논문 등록·질문은 이번 검증에 포함하지 않았다.
+
+### #101 Linux CI와 macOS 수동 확인
+
+`.github/workflows/issue-101-installed-linux.yml`은 #101 브랜치의 코드·테스트·워크플로
+변경을 푸시하면 Ubuntu 24.04 / Python 3.12에서 실행한다. 새 가상환경에 wheel `[local]`을
+설치하고 `pip check`, 목록 조회·MCP 단위 테스트, 실제 설치본 stdio 테스트를 실행한다.
+테스트 XML에 skip이 있으면 실패로 처리한다. Linux 설치 검증에는 CPU용 PyTorch를 사용한다.
+기본 브랜치에 병합된 뒤에는 Actions에서 수동으로도 실행할 수 있다.
+
+macOS 담당자는 Python 3.12가 설치된 환경에서 아래 명령을 실행하고, OS 버전·CPU 종류·
+커밋 SHA·`pip check` 결과·테스트 결과를 PR에 기록한다. 새 임시 폴더만 사용하며
+기존 Desktop 설정·DB를 바꾸지 않는다. 이 절차가 실제 Desktop UI 검증을 대체하지는 않는다.
+
+```bash
+# 새 체크아웃을 사용해 기존 빌드 산출물과 실제 사용자 설정을 분리한다.
+check_root="$(mktemp -d)/설치 검증"
+mkdir -p "$check_root"
+git clone --single-branch --branch soogwon/issue-101-installed-tool-contract \
+  https://github.com/soogwon/soloLevelingPaper.git "$check_root/source"
+cd "$check_root/source"
+sw_vers
+uname -m
+git rev-parse HEAD
+python3.12 -m venv "$check_root/venv"
+verify_python="$check_root/venv/bin/python"
+"$verify_python" -m pip install build pytest
+"$verify_python" -m build --wheel
+wheel_path="$(find "$PWD/dist" -name '*.whl' -type f)"
+"$verify_python" -m pip install "${wheel_path}[local]"
+"$verify_python" -m pip check
+export SOLO_INSTALLED_PYTHON="$verify_python"
+export LOCAL_ONLY=true ALLOW_EXTERNAL_API=false HF_HUB_OFFLINE=1 ANONYMIZED_TELEMETRY=false
+"$verify_python" -m pytest tests/unit/test_job_queries.py tests/unit/mcp/test_server.py -q
+"$verify_python" -m pytest tests/integration/test_installed_distribution.py \
+  -v -rs --basetemp "$check_root/pytest"
+```
+
+완료 기준은 단위 테스트 통과와 설치 테스트 **1 passed, skip 없음**이다.
+`Too many open files`가 발생하면 OS·파일 제한값(`ulimit -n`)과 실패 지점을 함께 기록한다.
+전체 테스트나 사용자 논문 재등록은 이 확인에 필요하지 않다.
 
 ### 검증 기록 — 2026-10-20
 
