@@ -50,6 +50,7 @@ class ExtractionReason(str, Enum):
 class ExtractionAssessment:
     reason: ExtractionReason
     evidence_id: str | None = None
+    detail_code: str | None = None
 
     @property
     def risky(self) -> bool:
@@ -84,6 +85,22 @@ def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInp
                 return ExtractionAssessment(ExtractionReason.SUPPORT_LOCATION_UNRESOLVED, item.evidence_id)
             selections.append(_Selection(item, body, start, start + len(selected)))
 
+    # 같은 근거 안에서 겹치거나 공백만 사이에 둔 구절은 실제 인용 범위로 묶는다.
+    # 선택하지 않은 단어·조건절을 건너뛰거나 서로 다른 근거의 본문을 합치지는 않는다.
+    covered = []
+    for item in cited:
+        for selected in sorted((s for s in selections if s.evidence == item),
+                               key=lambda s: (s.start, s.end)):
+            if (covered and covered[-1].evidence == item
+                    and (selected.start <= covered[-1].end
+                         or not selected.body[covered[-1].end:selected.start].strip())):
+                previous = covered[-1]
+                covered[-1] = _Selection(item, selected.body, previous.start,
+                                         max(previous.end, selected.end))
+            else:
+                covered.append(selected)
+    selections = covered
+
     def joined(left: _Selection, right: _Selection) -> bool:
         # 서버가 부여한 인접 관계와 두 조각의 실제 사용 범위가 모두 맞아야 한다.
         tail = incomplete_tail_start(left.body)
@@ -93,11 +110,37 @@ def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInp
                 and fragment_flags(right.body)[0] and bool(ends)
                 and right.start == 0 and right.end >= ends[0])
 
+    def tail_detail(selected: _Selection, tail: int) -> str:
+        # 여러 조건이 실패하면 후보 존재 → 인용 여부 → 구절 경계 순서로 첫 사유를 남긴다.
+        following = [item for item in evidence
+                     if item.follows_evidence_id == selected.evidence.evidence_id]
+        if not following:
+            return 'NEXT_CANDIDATE_ABSENT'
+        following_ids = {item.evidence_id for item in following}
+        right_parts = [s for s in selections if s.evidence.evidence_id in following_ids]
+        if not right_parts:
+            return 'NEXT_NOT_CITED'
+        if selected.start > tail:
+            return 'LEFT_TAIL_START_MISSING'
+        if selected.end < len(selected.body):
+            return 'LEFT_TAIL_END_MISSING'
+        prefixes = [s for s in right_parts if fragment_flags(s.body)[0]]
+        if not prefixes:
+            return 'NEXT_NOT_CONTINUATION'
+        completed = [s for s in prefixes if sentence_ends(s.body)]
+        if not completed:
+            return 'NEXT_SENTENCE_END_ABSENT'
+        starts = [s for s in completed if s.start == 0]
+        if not starts:
+            return 'RIGHT_PREFIX_START_MISSING'
+        return 'RIGHT_PREFIX_END_MISSING'
+
     for selected in selections:
         tail = incomplete_tail_start(selected.body)
         if tail is not None and selected.end > tail:
             if not any(joined(selected, other) for other in selections):
-                return ExtractionAssessment(ExtractionReason.UNFINISHED_TAIL, selected.evidence.evidence_id)
+                return ExtractionAssessment(ExtractionReason.UNFINISHED_TAIL,
+                    selected.evidence.evidence_id, tail_detail(selected, tail))
         ends = sentence_ends(selected.body)
         prefix_end = ends[0] if ends else len(selected.body)
         if fragment_flags(selected.body)[0] and selected.start < prefix_end:

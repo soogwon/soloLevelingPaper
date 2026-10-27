@@ -1,6 +1,7 @@
-"""검색·claim 구조 검증·답변 조립·근거 저장을 연결한다. 사실성 검증은 하지 않는다."""
+"""검색·구조 검증·선택적 모델 의미 검증·답변과 근거 저장을 연결한다."""
 
 from dataclasses import dataclass, replace
+import json
 from typing import Callable
 from uuid import uuid4
 from solo_leveling.diagnostics import traced, stage, evidence_diagnostic
@@ -16,8 +17,10 @@ from .continuation import supplement_continuations
 from .response_parser import GenerationFormatError
 from .errors import InvalidArgumentError
 from .fragments import fragment_flags
+from solo_leveling.domain.semantic_verification import VerificationLevel, SemanticVerdict
 from .evidence_quality import assess_extraction_risk, ExtractionReason
 from .validators import citation_from_evidence, validate_answer_against_search, validate_search_result
+from .answer_audit import audit_effects
 
 
 class AnswerGenerationError(RuntimeError):
@@ -30,6 +33,7 @@ class AnswerResponse:
     context_id: str
     search: SearchResult
     result: AnswerResult
+    verification_level: VerificationLevel = VerificationLevel.STRUCTURAL_ONLY
 
 
 @dataclass
@@ -49,7 +53,7 @@ def _validate_draft(draft, evidence_by_id):
     """최초 초안과 보완 초안을 같은 규칙으로 검사한다."""
     if not isinstance(draft, GeneratedAnswerDraft):
         raise ValueError('생성 결과 형식이 올바르지 않습니다.')
-    draft = GeneratedAnswerDraft(draft.claims)
+    draft = GeneratedAnswerDraft(draft.claims, draft.repair_sources)
     for number, claim in enumerate(draft.claims, 1):
         GeneratedClaim(claim.text, claim.evidence_ids, claim.supports)
         if not claim.evidence_ids:
@@ -67,10 +71,11 @@ class AnswerService:
     def __init__(self, search: SearchEntryService, generator: ClaimGenerator,
                  evidence_writer: EvidenceWriter, *, id_factory: Callable[[], str] | None = None,
                  max_expanded_top_k: int = 20, continuation_reader: ContinuationReader | None = None,
-                 max_supplemental_chunks: int = 20):
+                 max_supplemental_chunks: int = 20, semantic_verification=None):
         positive_int(max_expanded_top_k, 'max_expanded_top_k')
         positive_int(max_supplemental_chunks, 'max_supplemental_chunks')
         self.continuation_reader = continuation_reader
+        self.semantic_verification = semantic_verification
         self.max_supplemental_chunks = max_supplemental_chunks
         self.search = search
         self.generator = generator
@@ -141,7 +146,8 @@ class AnswerService:
 
         if self.continuation_reader is not None and search.items:
             search = supplement_continuations(search, self.continuation_reader,
-                                              self.max_supplemental_chunks)
+                                              self.max_supplemental_chunks,
+                                              include_overlapping_neighbors=True)
 
         def insufficient(reason, message):
             result = AnswerResult(AnswerStatus.INSUFFICIENT_EVIDENCE, message, (), (), reason)
@@ -215,15 +221,16 @@ class AnswerService:
                     assessments.append(assessment)
                     evidence_diagnostic('quality', attempt_id=attempt_id, round_number=round_number,
                         claim_number=number, evidence_id=assessment.evidence_id,
-                        reason_code=assessment.reason.value)
+                        reason_code=assessment.reason.value, detail_code=assessment.detail_code)
             return assessments
 
         assessments = evaluate(draft, 0)
+        repair_origins, repair_members = {}, {}
         targets = tuple(ContinuationRepairTarget(number, assessment.evidence_id, item.evidence_id)
             for number, (claim, assessment) in enumerate(zip(draft.claims, assessments), 1)
             if assessment.reason == ExtractionReason.UNFINISHED_TAIL
-            for item in inputs if item.follows_evidence_id == assessment.evidence_id
-            and item.evidence_id not in claim.evidence_ids)
+            for item in inputs if item.follows_evidence_id == assessment.evidence_id)
+        # 다음 근거를 이미 인용했어도 구절이 연결되지 않았다면 한 번 재선택할 수 있다.
         # 앞부분 연결·원문 불일치는 다음 후보가 없어도 기존 후보 안에서 구절을 재선택한다.
         exclusion_reasons = {ExtractionReason.UNRESOLVED_PREFIX, ExtractionReason.SUPPORT_NOT_FOUND}
         targets += tuple(ContinuationRepairTarget(number, assessment.evidence_id,
@@ -235,6 +242,7 @@ class AnswerService:
         if targets and callable(repair) and not repair_budget.used:
             repair_budget.used = True
             target_numbers = sorted({target.claim_number for target in targets})
+            repair_origins = {str(n): draft.claims[n - 1].text for n in target_numbers}
             target_set = set(target_numbers)
             # 정상 주장은 보완 입력에서도 분리한다. 제공자가 다시 작성할 권한을 주지 않는다.
             target_draft = GeneratedAnswerDraft(tuple(draft.claims[n - 1] for n in target_numbers))
@@ -249,8 +257,14 @@ class AnswerService:
                 with stage('generation_repair'):
                     repaired = repair(search.query, tuple(inputs), target_draft, local_targets)
                     repaired = _validate_draft(repaired, evidence_by_id)
-                    if len(repaired.claims) > len(target_numbers):
-                        raise ValueError('보완 대상보다 많은 주장을 반환했습니다.')
+                    sources = repaired.repair_sources
+                    if sources is None:
+                        # 기존 제공자의 단일 대상만 호환한다. 여러 대상의 대응을 추측하지 않는다.
+                        if repaired.claims and (len(target_numbers) != 1 or len(repaired.claims) != 1):
+                            raise ValueError('보완 대상 번호가 필요합니다.')
+                        sources = (1,) * len(repaired.claims)
+                    if any(n not in local_numbers.values() for n in sources):
+                        raise ValueError('보완 대상 번호가 범위를 벗어났습니다.')
                     for number, claim in enumerate(repaired.claims, 1):
                         if {s.evidence_id for s in claim.supports} != set(claim.evidence_ids):
                             raise _DraftValidationError('SUPPORT_REFERENCE_INVALID', number)
@@ -264,6 +278,7 @@ class AnswerService:
                 replacements, replacement_assessments = [], []
             else:
                 replacements, replacement_assessments = [], []
+                replacement_sources = []
                 for number, (claim, assessment) in enumerate(zip(repaired.claims, repaired_assessments), 1):
                     if assessment.risky:
                         evidence_diagnostic('claim_excluded', attempt_id=attempt_id, round_number=1,
@@ -272,12 +287,13 @@ class AnswerService:
                     else:
                         replacements.append(claim)
                         replacement_assessments.append(assessment)
+                        replacement_sources.append(sources[number - 1])
                 final_round = 1
-                outcome = 'REPAIR_ADOPTED'
-            generator_excluded = (len(replacements) < len(target_numbers)
-                                  or outcome != 'REPAIR_ADOPTED'
-                                  or len(replacements) < len(repaired.claims))
-            if outcome != 'REPAIR_ADOPTED':
+                outcome = ('REPAIR_ADOPTED' if set(replacement_sources) == set(local_numbers.values())
+                           and len(replacements) == len(repaired.claims)
+                           else 'REPAIR_PARTIAL' if replacements else 'REPAIR_NO_USABLE_CLAIMS')
+            generator_excluded = outcome != 'REPAIR_ADOPTED'
+            if outcome in ('REPAIR_UNAVAILABLE', 'REPAIR_INVALID'):
                 for number in target_numbers:
                     assessment = assessments[number - 1]
                     evidence_diagnostic('claim_excluded', attempt_id=attempt_id, round_number=0,
@@ -286,9 +302,12 @@ class AnswerService:
             # 대상 위치에 검사를 통과한 보완만 넣고, 비대상 주장·supports는 그대로 보존한다.
             combined, combined_assessments = [], []
             for number, (claim, assessment) in enumerate(zip(draft.claims, assessments), 1):
-                if number == target_numbers[0]:
-                    combined.extend(replacements)
-                    combined_assessments.extend(replacement_assessments)
+                if number in target_set and replacements:
+                    for replacement, quality, source in zip(replacements, replacement_assessments, replacement_sources):
+                        if source == local_numbers[number]:
+                            combined.append(replacement)
+                            combined_assessments.append(quality)
+                            repair_members[id(replacement)] = str(number)
                 if number not in target_set:
                     combined.append(claim)
                     combined_assessments.append(assessment)
@@ -318,6 +337,33 @@ class AnswerService:
                 '원문 구절과 연결을 확인하지 못한 주장을 제외하여 답변을 제공하지 않습니다.')
 
         claims = tuple(Claim(new_id(), claim.text, claim.evidence_ids) for claim in draft.claims)
+        repair_groups = tuple({'source_id': source, 'original_text': text,
+            'claim_ids': [c.claim_id for c, generated in zip(claims, draft.claims)
+                          if repair_members.get(id(generated)) == source]}
+            for source, text in repair_origins.items())
+        report, semantic_excluded = None, False
+        repair_limited, missing_questions = False, ()
+        if self.semantic_verification is not None:
+            used_for_check = {eid for claim in claims for eid in claim.evidence_ids}
+            report = self.semantic_verification.check(claims, tuple(
+                item for item in inputs if item.evidence_id in used_for_check),
+                question=search.query, repair_groups=repair_groups)
+            supported = {j.claim_id for j in report.judgments if j.verdict == SemanticVerdict.SUPPORTED}
+            if report.answer_audit is not None:
+                supported, repair_limited, missing_questions = audit_effects(
+                    report.answer_audit, repair_groups, supported)
+            from solo_leveling.diagnostics import semantic_retention_diagnostic
+            semantic_retention_diagnostic(report, claims, supported)
+            semantic_excluded = len(supported) != len(claims)
+            assessments = [assessment for claim, assessment in zip(claims, assessments)
+                           if claim.claim_id in supported]
+            claims = tuple(claim for claim in claims if claim.claim_id in supported)
+            if not claims:
+                result = AnswerResult(AnswerStatus.INSUFFICIENT_EVIDENCE,
+                    ('의미 검증을 완료하지 못해 답변을 제공하지 않습니다. 근거 부재를 뜻하지 않습니다.'
+                     if report.failure else '인용 원문이 주장 전체를 뒷받침하는지 확인하지 못해 답변을 제공하지 않습니다.'),
+                    (), (), ReasonCode.VERIFICATION_FAILED if report.failure else ReasonCode.SEMANTIC_LIMITED)
+                return AnswerResponse(context_id, search, result, report.level)
         used_ids = dict.fromkeys(eid for claim in claims for eid in claim.evidence_ids)
         used = tuple(evidence_by_id[eid] for eid in used_ids)
         with stage('evidence_validation'):
@@ -330,12 +376,23 @@ class AnswerService:
                               '기반할 수 있어 추가 확인이 필요합니다.')
             if excluded or generator_excluded:
                 answer_ko += '\n\n주의: 원문 구절과 연결을 확인하지 못한 일부 주장을 제외했습니다. 질문의 일부에 답하지 못했을 수 있습니다.'
-            limited = bool(risky or excluded or generator_excluded)
+            if semantic_excluded:
+                answer_ko += '\n\n주의: 인용 원문으로 전체 의미를 확인하지 못한 일부 주장을 제외했습니다. 질문의 일부에 답하지 못했을 수 있습니다.'
+            if repair_limited:
+                answer_ko += '\n\n주의: 보완 과정에서 원래 주장의 핵심 내용이 모두 보존되었는지 확인하지 못했습니다.'
+            if missing_questions:
+                # 모델의 새 설명이 아니라 검증된 질문 원문 부분만 인용한다.
+                answer_ko += '\n\n충분히 답하지 못한 질문 항목: ' + '; '.join(
+                    json.dumps(part, ensure_ascii=False) for part in missing_questions)
+            limited = bool(risky or excluded or generator_excluded or semantic_excluded
+                           or repair_limited or missing_questions)
             result = AnswerResult(AnswerStatus.PARTIAL if limited else AnswerStatus.OK,
                                   answer_ko, claims, citations,
+                                  ReasonCode.SEMANTIC_LIMITED if (semantic_excluded or repair_limited or missing_questions) else
                                   ReasonCode.EXTRACTION_LIMITED if limited else None)
             validate_answer_against_search(result, search)
         # 저장 성공 전에는 성공 응답을 반환하지 않는다. DB 오류는 숨기지 않는다.
         with stage('evidence_save'):
             self.evidence_writer.save(context_id, used)
-        return AnswerResponse(context_id, search, result)
+        return AnswerResponse(context_id, search, result,
+                              report.level if report else VerificationLevel.STRUCTURAL_ONLY)

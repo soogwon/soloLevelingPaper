@@ -74,12 +74,15 @@ def test_missing_file_rejected(tmp_path, capsys):
 
 
 @pytest.mark.parametrize('raw', [False, True])
-def test_serve_uses_explicit_log_and_cache_without_preloading(tmp_path, monkeypatch, raw):
+@pytest.mark.parametrize('detailed', [False, True])
+def test_serve_uses_explicit_log_and_cache_without_preloading(tmp_path, monkeypatch, raw, detailed):
     from solo_leveling.interfaces.cli import mcp_diagnostics
     path = config_file(tmp_path, monkeypatch, f'HF_HOME={tmp_path.as_posix()}/models\n')
     calls = []
     monkeypatch.setattr(mcp_diagnostics, 'main', lambda args: calls.append(args) or 0)
     options = ['--collect-raw-logs'] if raw else []
+    if detailed:
+        options.append('--detailed-diagnostics')
     assert desktop.main(['serve', '--env-file', str(path), *options]) == 0
     assert calls == [['--log-dir', str(tmp_path / 'data' / 'diagnostics'), *options]]
     assert desktop.os.environ['HF_HOME'] == f'{tmp_path.as_posix()}/models'

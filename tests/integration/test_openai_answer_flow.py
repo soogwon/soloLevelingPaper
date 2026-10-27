@@ -23,6 +23,11 @@ def test_openai_response_to_persisted_evidence(setup_search, monkeypatch, valid_
 
     def post(url, **kwargs):
         supplied = json.loads(kwargs['json']['input'][0]['content'])['evidence']
+        properties = kwargs['json']['text']['format']['schema']['properties']['claims']['items']['properties']
+        expected_ids = [item['evidence_id'] for item in supplied]
+        assert properties['evidence_ids']['items']['enum'] == expected_ids
+        assert properties['supports']['items']['properties']['evidence_id']['enum'] == expected_ids
+        # 스키마를 어긴 제공자 응답도 서버에서 다시 거부해야 한다.
         eid = supplied[0]['evidence_id'] if valid_reference else 'not-supplied'
         body = json.dumps({'claims': [{'text': '근거 기반 주장', 'evidence_ids': [eid],
             'supports': [{'evidence_id': eid, 'quote_original': supplied[0]['original_text']}]}]})

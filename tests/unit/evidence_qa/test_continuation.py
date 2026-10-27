@@ -9,7 +9,7 @@ from solo_leveling.application.evidence_qa.answer import AnswerService
 from solo_leveling.application.evidence_qa.continuation import supplement_continuations
 from solo_leveling.application.evidence_qa.entry import ContextSearchResponse
 from solo_leveling.domain.evidence_qa import (
-    GeneratedAnswerDraft, GeneratedClaim, RetrievedChunk, RetrievalMethod, SearchResult, SearchScope,
+    ClaimSupport, GeneratedAnswerDraft, GeneratedClaim, RetrievedChunk, RetrievalMethod, SearchResult, SearchScope,
 )
 from solo_leveling.domain.models import Chunk
 
@@ -55,6 +55,87 @@ def test_complete_sentence_does_not_read():
         chunk=replace(search.items[0].chunk, original_text='Complete.')),))
     reader = SimpleNamespace(following_chunks=lambda *a: pytest.fail('조회하면 안 됨'))
     assert supplement_continuations(search, reader) == search
+
+
+@pytest.mark.parametrize('following,expected', [
+    ('of the paths forward and backward signals have to traverse in the network. '
+     'The shorter these paths, the easier it is to learn dependencies.', True),
+    ('An unrelated complete sentence.', False),
+    ('of the paths forward and backward signals have to traverse in the network.', False),
+    ('of the paths forward and backward signals have to traverse in the network. Unfinished', False),
+])
+def test_complete_anchor_adds_only_overlapping_new_sentence(following, expected):
+    search, next_chunk = sample()
+    original = ('One key factor is the length of the paths forward and backward signals '
+                'have to traverse in the network.')
+    search = replace(search, items=(replace(search.items[0],
+        chunk=replace(search.items[0].chunk, original_text=original)),))
+    next_chunk = replace(next_chunk, original_text=following)
+    result = supplement_continuations(search,
+        SimpleNamespace(following_chunks=lambda *a: (next_chunk,)),
+        include_overlapping_neighbors=True)
+    assert bool(result.supplemental_chunks) is expected
+    assert result.items == search.items
+
+
+def test_path_direction_uses_own_neighbor_citation_not_anchor_only():
+    search, next_chunk = sample()
+    original = ('One key factor affecting the ability to learn such dependencies is the length '
+                'of the paths forward and backward signals have to traverse in the network.')
+    direction = ('The shorter these paths between any combination of positions in the input '
+                 'and output sequences, the easier it is to learn long-range dependencies [12].')
+    search = replace(search, items=(replace(search.items[0],
+        chunk=replace(search.items[0].chunk, original_text=original)),))
+    next_chunk = replace(next_chunk, original_text=(
+        'of the paths forward and backward signals have to traverse in the network. ' + direction))
+    saved = []
+
+    def generate(question, evidence):
+        assert len(evidence) == 2
+        neighbor = evidence[1]
+        # 완결 청크 뒤의 문맥 후보를 미완결 문장의 연속으로 표시하지 않는다.
+        assert neighbor.follows_evidence_id is None
+        return GeneratedAnswerDraft((GeneratedClaim('경로가 짧을수록 학습하기 쉽다.',
+            (neighbor.evidence_id,), (ClaimSupport(neighbor.evidence_id, direction),)),))
+
+    service = AnswerService(
+        SimpleNamespace(search=lambda *a, **kw: ContextSearchResponse('ctx', search)),
+        SimpleNamespace(generate_claims=generate),
+        SimpleNamespace(save=lambda ctx, evidence: saved.extend(evidence)),
+        continuation_reader=SimpleNamespace(following_chunks=lambda *a: (next_chunk,)))
+    response = service.answer('경로 길이의 영향은?', context_id='ctx', pdf_pages=(6, 7))
+    assert response.result.status.value == 'ok'
+    assert [(c.chunk_id, c.pdf_page) for c in response.result.citations] == [('b', 7)]
+    assert saved[0].quote_original == next_chunk.original_text
+
+
+def test_overlapping_neighbors_still_validate_scope():
+    search, following = sample()
+    search = replace(search, scope=replace(search.scope, pdf_pages=(6,)),
+        items=(replace(search.items[0], chunk=replace(search.items[0].chunk,
+            original_text='The signals traverse in the network.')),))
+    following = replace(following, original_text='The signals traverse in the network. More context.')
+    with pytest.raises(ValueError):
+        supplement_continuations(search, SimpleNamespace(following_chunks=lambda *a: (following,)),
+                                 include_overlapping_neighbors=True)
+
+
+def test_unfinished_neighbor_has_priority_over_overlap_with_limit():
+    search, following = sample()
+    complete = replace(search.items[0].chunk, chunk_id='c', chunk_index=20,
+                       original_text='The signals traverse in the network.')
+    search = replace(search, items=(RetrievedChunk(complete, .95, 1),
+                                    replace(search.items[0], rank=2)))
+    extra = replace(following, chunk_id='d', chunk_index=21,
+                    original_text='The signals traverse in the network. More context.')
+    calls = []
+    def read(result, indices):
+        calls.append(indices)
+        return (following, extra)
+    result = supplement_continuations(search, SimpleNamespace(following_chunks=read),
+                                     limit=1, include_overlapping_neighbors=True)
+    assert calls == [(11, 21)]
+    assert result.supplemental_chunks == (following,)
 
 
 def test_missing_next_is_not_skipped_and_existing_next_is_not_duplicated():

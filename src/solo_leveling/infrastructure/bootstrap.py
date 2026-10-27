@@ -10,6 +10,8 @@ from solo_leveling.domain.translation import TranslationSettings
 from solo_leveling.infrastructure.embeddings.embedder import embed_texts
 from solo_leveling.infrastructure.generation.evidence_store import SQLiteEvidenceReader, SQLiteEvidenceWriter
 from solo_leveling.infrastructure.generation.openai_generator import OpenAIClaimGenerator, OpenAIGenerationSettings
+from solo_leveling.infrastructure.generation.semantic_verifier import SemanticSettings, OpenAISemanticVerifier
+from solo_leveling.application.evidence_qa.semantic import SemanticVerificationService
 from solo_leveling.infrastructure.retrieval.sqlite_chroma import SQLiteChromaRetriever, SQLiteContextReader
 from solo_leveling.infrastructure.translation.openai_provider import OpenAITranslationConfig, OpenAITranslationProvider
 
@@ -24,12 +26,17 @@ class EvidenceQAServices:
 
 
 def build_services(db_path: str, chroma_client, *, generation: OpenAIGenerationSettings,
-                   translation: OpenAITranslationConfig, embedder=embed_texts) -> EvidenceQAServices:
+                   translation: OpenAITranslationConfig, embedder=embed_texts,
+                   verification: SemanticSettings | None = None) -> EvidenceQAServices:
     """DB 초기화·모델 다운로드·외부 API 호출 없이 객체만 연결한다."""
     retriever = SQLiteChromaRetriever(db_path, chroma_client, embedder=embedder)
     search = SearchEntryService(SQLiteContextReader(db_path), retriever)
+    semantic = None
+    if verification is not None and verification.enabled:
+        semantic = SemanticVerificationService(OpenAISemanticVerifier(generation, verification),
+            max_claims=verification.max_claims, max_input_chars=verification.max_input_chars)
     return EvidenceQAServices(search,
         AnswerService(search, OpenAIClaimGenerator(generation), SQLiteEvidenceWriter(db_path),
-                      continuation_reader=retriever),
+                      continuation_reader=retriever, semantic_verification=semantic),
         EvidenceService(SQLiteEvidenceReader(db_path)),
         TranslationService(OpenAITranslationProvider(translation)), translation.translation_settings)

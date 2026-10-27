@@ -71,5 +71,5 @@ class ClaimRepairer(Protocol):
     def repair_claims(self, question: str, evidence: Sequence[EvidenceInput],
                       draft: GeneratedAnswerDraft,
                       targets: Sequence[ContinuationRepairTarget]) -> GeneratedAnswerDraft:
-        """기존 후보로 대상 초안만 보완한다. 주장 번호는 대상 초안 내 순서다."""
+        """대상 초안만 보완하며 repair_sources에 결과별 대상 초안 내 번호를 반환한다."""
         ...

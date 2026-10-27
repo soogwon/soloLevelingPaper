@@ -11,10 +11,10 @@ from .validators import (
 
 
 def serialize_answer_response(response) -> dict:
-    """구조 검증만 수행했다는 사실을 명시하고 내부 검색 스냅샷은 노출하지 않는다."""
+    """실제로 수행한 검증 수준을 명시하고 내부 검색 스냅샷은 노출하지 않는다."""
     return {
         'context_id': response.context_id,
-        'verification_level': 'structural_only',
+        'verification_level': response.verification_level.value,
         'answer': serialize_answer_result(response.result, search=response.search),
     }
 

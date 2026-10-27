@@ -2,13 +2,14 @@
 
 import asyncio
 import json
-from types import SimpleNamespace
+from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
-from solo_leveling.application.evidence_qa.answer import AnswerGenerationError
+from solo_leveling.application.evidence_qa.answer import AnswerGenerationError, AnswerResponse
+from solo_leveling.domain.semantic_verification import VerificationLevel
 from solo_leveling.application.evidence_qa.errors import (
     DataIntegrityError, InvalidArgumentError, ResourceNotFoundError,
 )
@@ -42,7 +43,7 @@ def answer_response():
                         '번역.', 'Original.')
     result = AnswerResult(AnswerStatus.OK, '답변',
                           (Claim('claim', '주장', ('evidence',)),), (citation,), None)
-    return SimpleNamespace(context_id='context', search=search, result=result)
+    return AnswerResponse(context_id='context', search=search, result=result)
 
 
 def make_server(answer=None, evidence=None, ingestion=None, contexts=None):
@@ -66,6 +67,19 @@ def test_tools_and_annotations():
     assert tools['ask_paper'].inputSchema['$defs']['Focus']['additionalProperties'] is False
 
 
+def test_ask_tool_description_explains_verification_and_partial():
+    server, _, _ = make_server()
+    tool = next(tool for tool in run(server.list_tools()) if tool.name == 'ask_paper')
+    description = tool.description
+    assert 'structural_only는 구조 검사 수준' in description
+    assert 'model_checked는 실제 인용 원문' in description
+    assert '사실성 보증은 아닙니다' in description
+    assert 'model_checked와 partial/extraction_limited' in description
+    assert 'partial/semantic_limited' in description
+    assert '설정 비활성화를 단정하지 마세요' in description
+    assert '배경지식으로 보충하지 마세요' in description
+
+
 def test_ask_returns_flat_contract_and_focus():
     server, answer, _ = make_server()
     answer.answer.return_value = answer_response()
@@ -78,6 +92,16 @@ def test_ask_returns_flat_contract_and_focus():
     assert 'answer' not in result
     answer.answer.assert_called_once_with('독립 질문', context_id='context', top_k=3,
                                           pdf_pages=(1,), section_ids=('intro',))
+
+
+def test_ask_preserves_model_checked_level():
+    server, answer, _ = make_server()
+    answer.answer.return_value = replace(
+        answer_response(), verification_level=VerificationLevel.MODEL_CHECKED,
+    )
+    result = payload(run(server.call_tool('ask_paper',
+        {'context_id': 'context', 'question': '질문'})))
+    assert result['verification_level'] == 'model_checked'
 
 
 def test_get_evidence_returns_stored_details():
@@ -346,11 +370,11 @@ def test_answer_status_is_not_a_tool_error(status, reason):
     server, answer, _ = make_server()
     response = answer_response()
     partial = status == AnswerStatus.PARTIAL
-    response.result = AnswerResult(
+    response = replace(response, result=AnswerResult(
         status, '주장' if partial else '근거를 확인할 수 없습니다.',
         response.result.claims if partial else (),
         response.result.citations if partial else (), reason,
-    )
+    ))
     answer.answer.return_value = response
     result = payload(run(server.call_tool('ask_paper', {
         'context_id': 'context', 'question': '질문',

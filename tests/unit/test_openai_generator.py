@@ -81,11 +81,45 @@ def test_continuation_relation_is_sent_to_provider(setup):
     assert '해당 근거 ID들을 모두 인용하라' in payload['instructions']
 
 
+@pytest.mark.parametrize('repair', [False, True])
+def test_candidate_ids_constrain_both_reference_fields_per_request(setup, repair):
+    from dataclasses import replace
+    from solo_leveling.domain.evidence_qa import GeneratedAnswerDraft
+    from solo_leveling.infrastructure.generation.openai_generator import _SCHEMA
+    generator, evidence, post, _ = setup
+
+    def invoke(items):
+        if repair:
+            generator.repair_claims('질문', items, GeneratedAnswerDraft(()), ())
+        else:
+            generator.generate_claims('질문', items)
+        return post.call_args.kwargs['json']['text']['format']['schema']
+
+    first = invoke(evidence + (replace(evidence[0], evidence_id='ev-2'),))
+    second = invoke((replace(evidence[0], evidence_id='new-only'),))
+    for schema, expected in ((first, ['ev-1', 'ev-2']), (second, ['new-only'])):
+        properties = schema['properties']['claims']['items']['properties']
+        if repair:
+            assert set(properties) == {'text', 'source_claim_number', 'support_ids'}
+            # 보완 대상이 없으면 후보가 있어도 선택 권한이 없다.
+            assert schema['properties']['claims']['maxItems'] == 0
+        else:
+            assert properties['evidence_ids']['items']['enum'] == expected
+            assert properties['supports']['items']['properties']['evidence_id']['enum'] == expected
+    # 호출 간 후보 유출이나 공용 스키마 변경이 없어야 한다.
+    base = _SCHEMA['properties']['claims']['items']['properties']
+    assert 'enum' not in base['evidence_ids']['items']
+    assert 'enum' not in base['supports']['items']['properties']['evidence_id']
+    assert post.call_count == 2
+
+
 def test_repair_request_preserves_schema_timeout_and_private_fields(setup):
     from solo_leveling.application.evidence_qa.ports import ContinuationRepairTarget
     from solo_leveling.domain.evidence_qa import GeneratedAnswerDraft, GeneratedClaim
     generator, evidence, post, _ = setup
     draft = GeneratedAnswerDraft((GeneratedClaim('미완결 주장', ('ev-1',)),))
+    evidence += (EvidenceInput('ev-2', 'private-next-chunk', '이어지는 번역',
+                               'continued sentence.', None, 7, follows_evidence_id='ev-1'),)
     result = generator.repair_claims('조건은?', evidence, draft,
                                     (ContinuationRepairTarget(1, 'ev-1', 'ev-2'),))
     assert not result.claims
@@ -99,6 +133,11 @@ def test_repair_request_preserves_schema_timeout_and_private_fields(setup):
     assert payload['text']['format']['strict'] is True
     assert post.call_args.kwargs['timeout'] == (5.0, 30.0)
     assert 'internal-chunk' not in json.dumps(payload)
+    context, = data['repair_contexts']
+    assert context['draft_claim'] == data['draft']['claims'][0]
+    assert context['left']['evidence_id'] == 'ev-1'
+    assert context['next']['evidence_id'] == 'ev-2'
+    assert 'private-next-chunk' not in json.dumps(payload)
 
 
 def test_repair_timeout_has_no_transport_retry(setup):
@@ -114,16 +153,91 @@ def test_repair_timeout_has_no_transport_retry(setup):
 @pytest.mark.parametrize('reason', ['UNRESOLVED_PREFIX', 'SUPPORT_NOT_FOUND'])
 def test_repair_instructions_for_quote_quality(setup, reason):
     from solo_leveling.application.evidence_qa.ports import ContinuationRepairTarget
-    from solo_leveling.domain.evidence_qa import GeneratedAnswerDraft
+    from solo_leveling.domain.evidence_qa import GeneratedAnswerDraft, GeneratedClaim
     generator, evidence, post, _ = setup
-    generator.repair_claims('질문', evidence, GeneratedAnswerDraft(()),
+    generator.repair_claims('질문', evidence, GeneratedAnswerDraft((GeneratedClaim('주장', ('ev-1',)),)),
         (ContinuationRepairTarget(1, 'ev-1', reason_code=reason),))
     payload = post.call_args.kwargs['json']
     target = json.loads(payload['input'][0]['content'])['repair_targets'][0]
     assert target['reason_code'] == reason
     assert target['next_evidence_id'] is None
     assert '필요한 조건절을 제거하지 마라' in payload['instructions']
-    assert '청크 전체를 기계적으로 복사하지 마라' in payload['instructions']
+    assert 'support_ids에는 그 대상에 허용된 selection_id만 선택하라' in payload['instructions']
+    assert 'quote_original로 복사하라' not in payload['instructions']
+    assert json.loads(payload['input'][0]['content'])['repair_contexts'][0]['next'] is None
+
+
+@pytest.mark.parametrize('case', ['missing_left', 'missing_next', 'wrong_link', 'wrong_number'])
+def test_invalid_repair_pair_is_not_sent(setup, case):
+    from solo_leveling.application.evidence_qa.ports import ContinuationRepairTarget
+    from solo_leveling.domain.evidence_qa import GeneratedAnswerDraft, GeneratedClaim
+    generator, evidence, post, _ = setup
+    if case == 'wrong_link':
+        evidence += (EvidenceInput('ev-2', 'c2', '번역', 'Original.', None, 7),)
+    target = ContinuationRepairTarget(2 if case == 'wrong_number' else 1,
+        'absent' if case == 'missing_left' else 'ev-1',
+        'ev-2' if case in ('missing_next', 'wrong_link') else None)
+    with pytest.raises(ValueError):
+        generator.repair_claims('질문', evidence,
+            GeneratedAnswerDraft((GeneratedClaim('주장', ('ev-1',)),)), (target,))
+    post.assert_not_called()
+
+
+@pytest.mark.parametrize('count', [0, 1, 2])
+def test_repair_claim_limit_counts_unique_targets_and_does_not_leak(setup, count):
+    from solo_leveling.application.evidence_qa.ports import ContinuationRepairTarget
+    from solo_leveling.domain.evidence_qa import GeneratedAnswerDraft, GeneratedClaim
+    from solo_leveling.infrastructure.generation.openai_generator import _SCHEMA
+    generator, evidence, post, _ = setup
+    draft = GeneratedAnswerDraft(tuple(GeneratedClaim('주장', ('ev-1',)) for _ in range(count)))
+    targets = tuple(ContinuationRepairTarget(i + 1, 'ev-1', reason_code='SUPPORT_NOT_FOUND')
+                    for i in range(count))
+    generator.repair_claims('질문', evidence, draft, targets + targets)
+    schema = post.call_args.kwargs['json']['text']['format']['schema']
+    item = schema['properties']['claims']['items']
+    branches = item.get('anyOf', [item])
+    assert [n for branch in branches for n in branch['properties']['source_claim_number']['enum']] == (list(range(1, count + 1)) or [1])
+    assert all('source_claim_number' in branch['required'] for branch in branches)
+    assert schema['properties']['claims'].get('maxItems') == (0 if count == 0 else None)
+    assert schema['properties']['claims'].get('minItems', 0) == 0
+    generator.generate_claims('질문', evidence)
+    assert 'maxItems' not in post.call_args.kwargs['json']['text']['format']['schema']['properties']['claims']
+    assert 'maxItems' not in _SCHEMA['properties']['claims']
+
+
+def test_repair_payload_cannot_leak_excluded_sentences_through_other_fields(setup):
+    from solo_leveling.application.evidence_qa.ports import ContinuationRepairTarget
+    from solo_leveling.domain.evidence_qa import GeneratedAnswerDraft, GeneratedClaim, ClaimSupport
+    generator, _, post, _ = setup
+    left = EvidenceInput('left', 'c1', '제외할 번역 앞', 'Prior explanation. Faster when the sequence\n6',
+                         None, 6, False, True)
+    right = EvidenceInput('right', 'c2', '제외할 번역 뒤', 'length n is smaller than d. Restrict to r neighbors.',
+                          None, 7, True, False, 'left')
+    generator.repair_claims('조건과 경로 길이는?', (left, right),
+        GeneratedAnswerDraft((GeneratedClaim('계산 복잡도가 더 빠르다.', ('left',),
+            (ClaimSupport('left', left.original_text),)),)), (ContinuationRepairTarget(1, 'left', 'right'),))
+    data = json.loads(post.call_args.kwargs['json']['input'][0]['content'])
+    serialized = json.dumps(data, ensure_ascii=False)
+    for excluded in ('Prior explanation', 'Restrict to r neighbors', '제외할 번역', '조건과 경로 길이는?'):
+        assert excluded not in serialized
+    option, = data['repair_quote_options']
+    assert [q['pdf_page'] for q in option['quotes']] == [6, 7]
+    assert option['quotes'][1]['text'] == 'length n is smaller than d.'
+
+
+def test_repair_does_not_send_other_question_or_unrelated_evidence(setup):
+    from solo_leveling.application.evidence_qa.ports import ContinuationRepairTarget
+    from solo_leveling.domain.evidence_qa import GeneratedAnswerDraft, GeneratedClaim
+    generator, evidence, post, _ = setup
+    unrelated = EvidenceInput('path-only', 'private-path', '경로 길이', 'Short paths help learning.', None, 6)
+    generator.repair_claims('계산 조건과 경로 길이는?', (*evidence, unrelated),
+        GeneratedAnswerDraft((GeneratedClaim('계산 조건', ('ev-1',)),)),
+        (ContinuationRepairTarget(1, 'ev-1', reason_code='SUPPORT_NOT_FOUND'),))
+    data = json.loads(post.call_args.kwargs['json']['input'][0]['content'])
+    assert '계산 조건과 경로 길이는?' not in json.dumps(data, ensure_ascii=False)
+    assert 'path-only' not in json.dumps(data)
+    assert 'Short paths' not in json.dumps(data)
+    assert data['draft']['claims'][0]['text'] == '계산 조건'
 
 
 @pytest.mark.parametrize('allow,local', [(False, False), (True, True), (False, True)])

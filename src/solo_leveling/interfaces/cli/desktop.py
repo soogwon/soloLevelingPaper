@@ -40,7 +40,10 @@ def main(argv=None):
     parser.add_argument('--offline', action='store_true', help='모델 준비 시 로컬 캐시만 사용')
     parser.add_argument('--collect-raw-logs', action='store_true',
                         help='serve 전용: 민감정보가 포함될 수 있는 원본 진단 로그 수집')
+    parser.add_argument('--detailed-diagnostics', action='store_true', help='serve 전용: 본문 없는 상세 검사 코드 기록')
     args = parser.parse_args(argv)
+    if args.detailed_diagnostics and args.action != 'serve':
+        parser.error('--detailed-diagnostics는 serve에서만 사용합니다.')
     if args.offline and args.action != 'prepare-model':
         parser.error('--offline은 prepare-model에서만 사용합니다.')
     if args.collect_raw_logs and args.action != 'serve':
@@ -76,7 +79,8 @@ def main(argv=None):
             return prepare(['--offline'] if args.offline else [])
         from .mcp_diagnostics import main as serve
         return serve(['--log-dir', str(paths.data_root / 'diagnostics'),
-                      *(['--collect-raw-logs'] if args.collect_raw_logs else [])])
+                      *(['--collect-raw-logs'] if args.collect_raw_logs else []),
+                      *(['--detailed-diagnostics'] if args.detailed_diagnostics else [])])
     except Exception:
         # 입력값·키·원본 예외를 호스트 오류나 stdout에 노출하지 않는다.
         print('DESKTOP_SETUP_FAILED: 설정 파일·절대 경로·필수 설정·설치 의존성을 확인하세요.',

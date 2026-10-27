@@ -152,7 +152,9 @@ def test_evidence_trace_is_fixed_metadata_and_best_effort(capsys, monkeypatch):
         evidence_diagnostic('quality', attempt_id='a1', reason_code='SECRET reason')
         return 42
 
-    assert run() == 42
+    from solo_leveling.diagnostics import diagnostic_verbosity
+    with diagnostic_verbosity(raw=True):
+        assert run() == 42
     logs = records(capsys)
     trace = [r for r in logs if r['stage'] == 'evidence_trace']
     assert len(trace) == 1

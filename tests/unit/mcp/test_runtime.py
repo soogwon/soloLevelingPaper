@@ -17,6 +17,17 @@ def test_process_environment_wins_without_mutation(tmp_path):
     assert process == {'DATA_ROOT': 'from-process', 'OPENAI_API_KEY': 'process-key'}
 
 
+def test_semantic_settings_are_validated_without_io(tmp_path):
+    from solo_leveling.interfaces.mcp.runtime import validate_runtime_settings
+    values = {'DATA_ROOT': str(tmp_path / 'absent'), 'OPENAI_API_KEY': 'fixture',
+              'SEMANTIC_VERIFICATION_ENABLED': 'true', 'VERIFICATION_MAX_CLAIMS': '3'}
+    settings = validate_runtime_settings(values)
+    assert settings.verification.enabled and settings.verification.max_claims == 3
+    assert not (tmp_path / 'absent').exists()
+    with pytest.raises(ValueError):
+        validate_runtime_settings({**values, 'VERIFICATION_MAX_CLAIMS': '0'})
+
+
 def test_missing_env_file_uses_process_environment(tmp_path):
     result = load_environment(tmp_path / 'missing', {'DATA_ROOT': str(tmp_path)})
     assert result == {'DATA_ROOT': str(tmp_path)}
@@ -67,8 +78,10 @@ def test_windows_drive_is_rejected_with_posix_path_semantics(monkeypatch):
         runtime._child(PurePosixPath('/data'), 'D:/outside.sqlite', 'SQLITE_FILENAME')
 
 
-def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch):
+@pytest.mark.parametrize('enabled', [False, True])
+def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, enabled):
     import asyncio
+    import json
     from types import SimpleNamespace
     from unittest.mock import Mock
     from solo_leveling.interfaces.mcp import runtime
@@ -76,7 +89,8 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch):
     embedder = Mock()
     factory = Mock(return_value=embedder)
     monkeypatch.setattr(runtime, 'ProcessEmbedder', factory)
-    services = SimpleNamespace(answer=object(), evidence=object(),
+    semantic = SimpleNamespace(verifier=SimpleNamespace(prompt_version='semantic-v2')) if enabled else None
+    services = SimpleNamespace(answer=SimpleNamespace(semantic_verification=semantic), evidence=object(),
         search=SimpleNamespace(contexts=object()), translation=object(), translation_settings=object())
     build = Mock(return_value=services)
     monkeypatch.setattr(runtime, 'build_services', build)
@@ -85,7 +99,13 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch):
     manager_factory = Mock(return_value=manager)
     monkeypatch.setattr(runtime, 'LocalIngestionManager', manager_factory)
     monkeypatch.setattr(runtime, 'create_server', lambda services, *, lifespan: lifespan)
-    lifespan = runtime.build_runtime_server({'DATA_ROOT': str(tmp_path), 'OPENAI_API_KEY': 'fixture'})
+    lifespan = runtime.build_runtime_server({'DATA_ROOT': str(tmp_path), 'OPENAI_API_KEY': 'fixture',
+        'SEMANTIC_VERIFICATION_ENABLED': str(enabled).lower()})
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert json.loads(captured.err) == {'event': 'semantic_startup', 'enabled': enabled,
+        'connected': enabled, 'prompt_version': 'semantic-v2' if enabled else None}
+    assert build.call_args.kwargs['verification'].enabled is enabled
     assert build.call_args.kwargs['embedder'] is embedder
     assert manager_factory.call_args.args[3].embedder is embedder
 
