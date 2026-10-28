@@ -1,0 +1,791 @@
+{
+  "schema_version": 1,
+  "dataset_version": "synthetic-v1",
+  "source": "synthetic-authored",
+  "cases": [
+    {
+      "id": "temperature-normal",
+      "group": "temperature",
+      "split": "development",
+      "category": "missing_condition",
+      "review_status": "draft",
+      "claim": {
+        "text": "이 합성 센서는 섭씨 10~20도에서만 정확하다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "The synthetic sensor is accurate only between 10 and 20 degrees Celsius.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "supported",
+        "reasons": [
+          "full_support"
+        ],
+        "rationale": "제공된 원문이 주장의 모든 조건과 관계를 명시한다."
+      }
+    },
+    {
+      "id": "temperature-error",
+      "group": "temperature",
+      "split": "development",
+      "category": "missing_condition",
+      "review_status": "draft",
+      "claim": {
+        "text": "이 합성 센서는 모든 온도에서 정확하다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "The synthetic sensor is accurate only between 10 and 20 degrees Celsius.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "contradicted",
+        "reasons": [
+          "contradiction"
+        ],
+        "rationale": "only 조건과 모든 온도라는 주장이 명시적으로 충돌한다."
+      }
+    },
+    {
+      "id": "direction-normal",
+      "group": "direction",
+      "split": "development",
+      "category": "unsupported_direction",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 네트워크에서 경로 길이는 학습 성능에 영향을 주지만 영향 방향은 밝혀지지 않았다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "Path length affects learning performance in the synthetic network. No direction of the effect was determined.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "supported",
+        "reasons": [
+          "full_support"
+        ],
+        "rationale": "제공된 원문이 주장의 모든 조건과 관계를 명시한다."
+      }
+    },
+    {
+      "id": "direction-error",
+      "group": "direction",
+      "split": "development",
+      "category": "unsupported_direction",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 네트워크에서 경로가 짧을수록 학습 성능이 좋아진다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "Path length affects learning performance in the synthetic network. No direction of the effect was determined.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "partially_supported",
+        "reasons": [
+          "unsupported_direction"
+        ],
+        "rationale": "영향은 확인되지만 짧을수록 좋다는 방향은 확인되지 않았다."
+      }
+    },
+    {
+      "id": "causality-normal",
+      "group": "causality",
+      "split": "development",
+      "category": "unsupported_causality",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 조사에서 연습 시간과 점수 사이에 상관관계가 관찰됐다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "In a synthetic survey, practice time was correlated with scores. Causation was not tested.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "supported",
+        "reasons": [
+          "full_support"
+        ],
+        "rationale": "제공된 원문이 주장의 모든 조건과 관계를 명시한다."
+      }
+    },
+    {
+      "id": "causality-error",
+      "group": "causality",
+      "split": "development",
+      "category": "unsupported_causality",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 조사에서 연습 시간을 늘리는 것이 점수 상승을 일으킨다고 입증됐다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "In a synthetic survey, practice time was correlated with scores. Causation was not tested.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "partially_supported",
+        "reasons": [
+          "unsupported_causality"
+        ],
+        "rationale": "상관관계를 인과관계 입증으로 확대했다."
+      }
+    },
+    {
+      "id": "metrics-normal",
+      "group": "metrics",
+      "split": "development",
+      "category": "metric_confusion",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 방법 A는 B보다 순차 연산 수가 적다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "Synthetic method A has fewer sequential operations than B. Total computational complexity was not compared.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "supported",
+        "reasons": [
+          "full_support"
+        ],
+        "rationale": "제공된 원문이 주장의 모든 조건과 관계를 명시한다."
+      }
+    },
+    {
+      "id": "metrics-error",
+      "group": "metrics",
+      "split": "development",
+      "category": "metric_confusion",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 방법 A는 B보다 순차 연산 수가 적으므로 총 계산 복잡도도 낮다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "Synthetic method A has fewer sequential operations than B. Total computational complexity was not compared.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "partially_supported",
+        "reasons": [
+          "metric_confusion"
+        ],
+        "rationale": "순차 연산 수에서 총 계산량의 우열을 도출할 수 없다."
+      }
+    },
+    {
+      "id": "compound-normal",
+      "group": "compound",
+      "split": "development",
+      "category": "partial_support",
+      "review_status": "draft",
+      "claim": {
+        "text": "이 합성 도구는 메모리 사용을 줄인다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "The synthetic tool reduces memory use. Latency was not measured.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "supported",
+        "reasons": [
+          "full_support"
+        ],
+        "rationale": "제공된 원문이 주장의 모든 조건과 관계를 명시한다."
+      }
+    },
+    {
+      "id": "compound-error",
+      "group": "compound",
+      "split": "development",
+      "category": "partial_support",
+      "review_status": "draft",
+      "claim": {
+        "text": "이 합성 도구는 메모리 사용을 줄이고 지연 시간도 줄인다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "The synthetic tool reduces memory use. Latency was not measured.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "partially_supported",
+        "reasons": [
+          "partial_support"
+        ],
+        "rationale": "메모리 절만 뒷받침되고 지연 시간 절은 미측정이다."
+      }
+    },
+    {
+      "id": "translation-normal",
+      "group": "translation",
+      "split": "development",
+      "category": "translation_mismatch",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 과제에서 경로가 짧을수록 학습이 쉬워진다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "In the synthetic task, shorter paths make learning easier.",
+          "text_ko": "합성 과제에서 경로가 길수록 학습이 쉬워진다.",
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "supported",
+        "reasons": [
+          "full_support"
+        ],
+        "rationale": "제공된 원문이 주장의 모든 조건과 관계를 명시한다."
+      }
+    },
+    {
+      "id": "translation-error",
+      "group": "translation",
+      "split": "development",
+      "category": "translation_mismatch",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 과제에서 경로가 길수록 학습이 쉬워진다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "In the synthetic task, shorter paths make learning easier.",
+          "text_ko": "합성 과제에서 경로가 길수록 학습이 쉬워진다.",
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "contradicted",
+        "reasons": [
+          "contradiction"
+        ],
+        "rationale": "번역문이 반대로 되어 있어도 판정 기준인 원문은 짧은 경로를 지지한다."
+      }
+    },
+    {
+      "id": "crosspage-normal",
+      "group": "crosspage",
+      "split": "development",
+      "category": "joined_condition",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 방법 A는 시퀀스 길이 n이 표현 차원 d보다 작을 때 B보다 연산 수가 적다.",
+        "evidence_ids": [
+          "e1",
+          "e2"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "For synthetic methods A and B, A uses fewer operations when sequence length",
+          "text_ko": null,
+          "pdf_page": 6,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": true,
+          "follows_evidence_id": null
+        },
+        {
+          "id": "e2",
+          "original_text": "n is smaller than representation dimension d.",
+          "text_ko": null,
+          "pdf_page": 7,
+          "starts_mid_sentence": true,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": "e1"
+        }
+      ],
+      "expected": {
+        "verdict": "supported",
+        "reasons": [
+          "full_support"
+        ],
+        "rationale": "제공된 원문이 주장의 모든 조건과 관계를 명시한다."
+      }
+    },
+    {
+      "id": "crosspage-error",
+      "group": "crosspage",
+      "split": "development",
+      "category": "joined_condition",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 방법 A는 시퀀스 길이 n이 표현 차원 d보다 클 때 B보다 연산 수가 적다.",
+        "evidence_ids": [
+          "e1",
+          "e2"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "For synthetic methods A and B, A uses fewer operations when sequence length",
+          "text_ko": null,
+          "pdf_page": 6,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": true,
+          "follows_evidence_id": null
+        },
+        {
+          "id": "e2",
+          "original_text": "n is smaller than representation dimension d.",
+          "text_ko": null,
+          "pdf_page": 7,
+          "starts_mid_sentence": true,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": "e1"
+        }
+      ],
+      "expected": {
+        "verdict": "undetermined",
+        "reasons": [
+          "insufficient_support"
+        ],
+        "rationale": "원문은 n < d에서만 비교하며 반대 영역의 성능을 밝히지 않는다."
+      }
+    },
+    {
+      "id": "truncated-variable",
+      "group": "truncated",
+      "split": "development",
+      "category": "damaged_condition",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 방법 A는 시퀀스 길이가 n일 때 B보다 빠르다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "Synthetic method A is faster than B when the sequence",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": true,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "undetermined",
+        "reasons": [
+          "damaged_evidence"
+        ],
+        "rationale": "조건절이 잘려 변수 이름만으로 조건을 복원할 수 없다."
+      }
+    },
+    {
+      "id": "truncated-small",
+      "group": "truncated",
+      "split": "development",
+      "category": "damaged_condition",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 방법 A는 시퀀스 길이가 충분히 작을 때 B보다 빠르다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "Synthetic method A is faster than B when the sequence",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": true,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "undetermined",
+        "reasons": [
+          "damaged_evidence"
+        ],
+        "rationale": "비교 대상과 관계가 없으며 충분히 작다는 말은 추측이다."
+      }
+    },
+    {
+      "id": "dose-normal",
+      "group": "dose",
+      "split": "holdout",
+      "category": "missing_condition",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 실험의 설정 Z에서 용량 4일 때 개선이 관찰됐다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "For the synthetic experiment, an improvement was observed at dose 4 under setting Z.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "supported",
+        "reasons": [
+          "full_support"
+        ],
+        "rationale": "제공된 원문이 주장의 모든 조건과 관계를 명시한다."
+      }
+    },
+    {
+      "id": "dose-error",
+      "group": "dose",
+      "split": "holdout",
+      "category": "missing_condition",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 실험에서 모든 용량과 설정에서 개선이 관찰됐다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "For the synthetic experiment, an improvement was observed at dose 4 under setting Z.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "partially_supported",
+        "reasons": [
+          "missing_condition"
+        ],
+        "rationale": "특정 관측을 전체 용량과 설정으로 확대했다."
+      }
+    },
+    {
+      "id": "latency-normal",
+      "group": "latency",
+      "split": "holdout",
+      "category": "contradiction",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 시스템의 지연 시간이 8ms에서 12ms로 증가했다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "The synthetic system's latency increased from 8 ms to 12 ms.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "supported",
+        "reasons": [
+          "full_support"
+        ],
+        "rationale": "제공된 원문이 주장의 모든 조건과 관계를 명시한다."
+      }
+    },
+    {
+      "id": "latency-error",
+      "group": "latency",
+      "split": "holdout",
+      "category": "contradiction",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 시스템의 지연 시간이 12ms에서 8ms로 감소했다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "The synthetic system's latency increased from 8 ms to 12 ms.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "contradicted",
+        "reasons": [
+          "contradiction"
+        ],
+        "rationale": "측정값의 전후 관계와 증가 방향이 뒤집혔다."
+      }
+    },
+    {
+      "id": "absence-normal",
+      "group": "absence",
+      "split": "holdout",
+      "category": "insufficient_support",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 모델 K는 메모리 사용량만 평가됐고 정확도는 평가되지 않았다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "Synthetic model K was evaluated for memory use only. Accuracy was not evaluated.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "supported",
+        "reasons": [
+          "full_support"
+        ],
+        "rationale": "제공된 원문이 주장의 모든 조건과 관계를 명시한다."
+      }
+    },
+    {
+      "id": "absence-error",
+      "group": "absence",
+      "split": "holdout",
+      "category": "insufficient_support",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 모델 K의 정확도는 95%다.",
+        "evidence_ids": [
+          "e1"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "Synthetic model K was evaluated for memory use only. Accuracy was not evaluated.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "undetermined",
+        "reasons": [
+          "insufficient_support"
+        ],
+        "rationale": "정확도 관측이 없어 수치를 확인할 수 없다."
+      }
+    },
+    {
+      "id": "combine-normal",
+      "group": "combine",
+      "split": "holdout",
+      "category": "multiple_evidence",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 모듈 X는 2MB, Y는 3MB의 메모리를 사용한다.",
+        "evidence_ids": [
+          "e1",
+          "e2"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "Synthetic module X uses 2 MB of memory.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        },
+        {
+          "id": "e2",
+          "original_text": "Synthetic module Y uses 3 MB of memory.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "supported",
+        "reasons": [
+          "full_support"
+        ],
+        "rationale": "제공된 원문이 주장의 모든 조건과 관계를 명시한다."
+      }
+    },
+    {
+      "id": "combine-error",
+      "group": "combine",
+      "split": "holdout",
+      "category": "multiple_evidence",
+      "review_status": "draft",
+      "claim": {
+        "text": "합성 모듈 X는 2MB, Y는 3MB의 메모리를 사용하며 둘 다 지연 시간이 1ms다.",
+        "evidence_ids": [
+          "e1",
+          "e2"
+        ]
+      },
+      "evidence": [
+        {
+          "id": "e1",
+          "original_text": "Synthetic module X uses 2 MB of memory.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        },
+        {
+          "id": "e2",
+          "original_text": "Synthetic module Y uses 3 MB of memory.",
+          "text_ko": null,
+          "pdf_page": 1,
+          "starts_mid_sentence": false,
+          "ends_mid_sentence": false,
+          "follows_evidence_id": null
+        }
+      ],
+      "expected": {
+        "verdict": "partially_supported",
+        "reasons": [
+          "partial_support"
+        ],
+        "rationale": "두 메모리 수치는 확인되지만 지연 시간은 제공되지 않았다."
+      }
+    }
+  ]
+}
