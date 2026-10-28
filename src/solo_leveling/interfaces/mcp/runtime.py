@@ -13,6 +13,7 @@ from solo_leveling.infrastructure.bootstrap import build_services
 from solo_leveling.infrastructure.embeddings.process_embedder import ProcessEmbedder
 from solo_leveling.infrastructure.database.repository import mark_interrupted_jobs_on_startup
 from solo_leveling.infrastructure.database.schema import init_db
+from solo_leveling.infrastructure.database.dashboard_queries import DashboardReader
 from solo_leveling.infrastructure.generation.openai_generator import OpenAIGenerationSettings
 from solo_leveling.infrastructure.generation.semantic_verifier import SemanticSettings
 from solo_leveling.infrastructure.storage.vector_store import get_client
@@ -135,6 +136,7 @@ def build_runtime_server(values: Mapping[str, str]):
 
     return create_server(MCPServices(
         services.answer, services.evidence, ingestion, services.search.contexts,
+        DashboardReader(str(paths.db_path)),
     ), lifespan=lifespan)
 
 

@@ -18,6 +18,7 @@ from solo_leveling.application.evidence_qa.ports import DefaultContextStore
 from solo_leveling.domain.evidence_qa import require_text
 from .errors import to_tool_error
 from .status_app import STATUS_APP_URI, register_status_app
+from .dashboard import DashboardService, register_dashboard
 
 
 HOST_INSTRUCTIONS = '''등록된 논문에서 한국어 근거 답변과 원문 근거를 조회합니다.
@@ -31,6 +32,8 @@ next_cursor를 사용하세요. 여러 후보가 있으면 사용자에게 선�
 학습 목적은 understand(이해), implement(구현), skim(훑어보기)이며 known_concepts는
 사용자가 알려준 기존 지식입니다. 질문 내용과 구분하고 목적·지식을 임의로 추측하지 마세요.
 같은 학습 맥락의 후속 질문과 일시적 오류 후 재호출에는 기존 context_id를 유지하세요.
+학습 현황은 get_learning_dashboard에 기존 context_id를 전달해 조회하세요.
+저장된 요약·점수·단계가 없다고 자동 생성하거나 학습 완료를 추정하지 마세요.
 ready는 검색 가능 상태이며 전체 번역 완료를 보장하지 않습니다. limitations를 확인하세요.
 provider_unavailable만으로 연결 실패 등 구체적인 원인을 단정하지 마세요.
 status=ok는 질문 전체의 완전한 답변을 보장하지 않습니다. model_checked는 실제 인용 근거와의
@@ -70,6 +73,7 @@ class MCPServices:
     evidence: EvidenceService
     ingestion: IngestionService | None = None
     contexts: DefaultContextStore | None = None
+    dashboard: DashboardService | None = None
 
 
 class Focus(BaseModel):
@@ -181,6 +185,9 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
     server = FastMCP('solo-leveling-paper',
         instructions=HOST_INSTRUCTIONS,
         log_level='ERROR', lifespan=lifespan)
+
+    if services.dashboard is not None:
+        register_dashboard(server, services.dashboard)
 
     if services.ingestion is not None:
         register_status_app(server)
