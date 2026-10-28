@@ -102,7 +102,8 @@ def build_runtime_server(values: Mapping[str, str]):
     settings = validate_runtime_settings(values)
     paths = settings.paths
     embedder = ProcessEmbedder(settings.embedding_timeout,
-                              log_dir=paths.data_root / 'diagnostics')
+                              log_dir=paths.data_root / 'diagnostics',
+                              collect_raw_logs=values.get('SOLO_LEVELING_COLLECT_RAW_LOGS') == '1')
     paths.data_root.mkdir(parents=True, exist_ok=True)
     paths.db_path.parent.mkdir(parents=True, exist_ok=True)
     paths.chroma_dir.mkdir(parents=True, exist_ok=True)

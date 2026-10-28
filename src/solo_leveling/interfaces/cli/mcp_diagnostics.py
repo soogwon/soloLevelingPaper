@@ -55,10 +55,10 @@ def main(argv=None):
     parser.add_argument('--detailed-diagnostics', action='store_true', help='본문 없이 정상 세부 검사 코드도 기록')
     args = parser.parse_args(argv)
     # 임베딩 자식 프로세스도 같은 선택을 따르게 한다. 서버를 다시 시작해야 바뀐다.
-    if args.collect_raw_logs:
-        os.environ['SOLO_LEVELING_COLLECT_RAW_LOGS'] = '1'
-    else:
-        os.environ.pop('SOLO_LEVELING_COLLECT_RAW_LOGS', None)
+    raw_setting = 'SOLO_LEVELING_COLLECT_RAW_LOGS'
+    previous_raw_setting = os.environ.get(raw_setting)
+    # 명시적인 0으로 .env의 상세 수집 설정보다 CLI의 기본 보호를 우선한다.
+    os.environ[raw_setting] = '1' if args.collect_raw_logs else '0'
     try:
         if args.log_dir is None:
             from solo_leveling.interfaces.mcp.runtime import load_environment, runtime_paths
@@ -72,6 +72,11 @@ def main(argv=None):
     except Exception:
         print('MCP_DIAGNOSTIC_LOG_SETUP_FAILED', file=sys.stderr)
         return 2
+    finally:
+        if previous_raw_setting is None:
+            os.environ.pop(raw_setting, None)
+        else:
+            os.environ[raw_setting] = previous_raw_setting
 
 
 def run_diagnostics(args, path, output):
