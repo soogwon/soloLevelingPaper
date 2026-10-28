@@ -10,19 +10,49 @@ _stack_output = None
 _watchdog_seconds = 30
 
 
-def diagnostic_worker(connection, target, log_dir, worker_id, watchdog_seconds):
-    """모델 관련 import보다 먼저 별도 로그를 열고 자식 진입을 기록한다."""
+RAW_LOGS_ENV = 'SOLO_LEVELING_COLLECT_RAW_LOGS'
+
+
+def raw_logs_requested(environ=None):
+    """원본 수집은 명시적으로 '1'일 때만 켠다. 그 외 모든 값은 기본(끔)이다."""
+    return (os.environ if environ is None else environ).get(RAW_LOGS_ENV) == '1'
+
+
+def _discard_output():
+    """파이썬 print와 C 확장이 fd 1·2에 직접 쓰는 출력까지 모두 버린다."""
+    null_fd = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(null_fd, 1)
+        os.dup2(null_fd, 2)
+    finally:
+        os.close(null_fd)
+    sys.stdout = sys.stderr = open(os.devnull, 'w', encoding='utf-8')
+
+
+def diagnostic_worker(connection, target, log_dir, worker_id, watchdog_seconds, collect_raw=False):
+    """모델 관련 import보다 먼저 별도 로그를 열고 자식 진입을 기록한다.
+
+    기본(collect_raw=False)은 고정 형식의 worker_enter 한 줄만 남기고 자식의
+    stdout·stderr(파이썬/네이티브)와 지연 스택은 저장하지 않는다.
+    """
     global _stack_output, _watchdog_seconds
     _watchdog_seconds = watchdog_seconds
     try:
         folder = Path(log_dir)
         folder.mkdir(parents=True, exist_ok=True)
+        enter = json.dumps({'event': 'worker_enter', 'worker_id': worker_id, 'pid': os.getpid()})
+        if not collect_raw:
+            with (folder / f'worker-{worker_id}.log').open('x', encoding='utf-8') as output:
+                output.write(enter + '\n')
+            _discard_output()
+            target(connection)
+            return
         with (folder / f'worker-{worker_id}.log').open('x', encoding='utf-8') as output:
             os.dup2(output.fileno(), 2)
         sys.stderr = os.fdopen(os.dup(2), 'w', encoding='utf-8', buffering=1)
         os.dup2(2, 1)
         sys.stdout = sys.stderr
-        print(json.dumps({'event': 'worker_enter', 'worker_id': worker_id, 'pid': os.getpid()}), flush=True)
+        print(enter, flush=True)
         with (folder / f'worker-stack-{worker_id}.log').open('x', encoding='utf-8') as stack:
             _stack_output = stack
             faulthandler.dump_traceback_later(watchdog_seconds, file=stack, exit=False)
