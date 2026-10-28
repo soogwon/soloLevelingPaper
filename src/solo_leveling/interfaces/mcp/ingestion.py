@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 import threading
+import math
 import uuid
 
 from solo_leveling.application.translation.service import TranslationService
@@ -14,6 +15,10 @@ from solo_leveling.workers.ingestion import (
     get_ingestion_status, prepare_local_ingestion, run_prepared_local_ingestion,
 )
 from .local_files import LocalPdfStore
+
+
+class IngestionShuttingDownError(RuntimeError):
+    """종료를 시작한 등록 관리자는 새 요청을 받지 않는다."""
 
 
 @dataclass(frozen=True)
@@ -32,7 +37,36 @@ class LocalIngestionManager:
         self.services = services
         self.executor = ThreadPoolExecutor(max_workers=max_workers,
                                            thread_name_prefix='paper-ingestion')
-        self.lock = threading.Lock()
+        # 이미 완료된 Future의 콜백이 제출 스레드에서 즉시 실행될 수 있다.
+        self.lock = threading.RLock()
+        self._condition = threading.Condition(self.lock)
+        self._accepting = True
+        self._pending = set()
+
+    def _on_done(self, future):
+        # 취소된 Future에서는 exception()이 CancelledError를 발생시킨다.
+        try:
+            if not future.cancelled():
+                future.exception()
+        finally:
+            with self._condition:
+                self._pending.discard(future)
+                self._condition.notify_all()
+
+    def begin_shutdown(self) -> None:
+        """새 등록을 차단한다. 이미 제출된 작업은 취소하지 않고 마치게 한다."""
+        with self.lock:
+            if not self._accepting:
+                return
+            self._accepting = False
+            self.executor.shutdown(wait=False, cancel_futures=False)
+
+    def wait_for_idle(self, timeout: float) -> bool:
+        """제출 작업의 종료를 기다린다. 비동기 호출자는 별도 스레드에서 실행한다."""
+        if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout < 0:
+            raise ValueError('대기 시간은 유한한 0 이상의 숫자여야 합니다.')
+        with self._condition:
+            return self._condition.wait_for(lambda: not self._pending, timeout)
 
     @staticmethod
     def _paper_id(file_hash: str) -> str:
@@ -45,6 +79,8 @@ class LocalIngestionManager:
             raise InvalidArgumentError('request_key가 필요합니다.')
         # 한 프로세스 안에서는 복사·요청 등록·작업 제출 순서를 고정한다.
         with self.lock:
+            if not self._accepting:
+                raise IngestionShuttingDownError()
             managed = self.pdf_store.import_pdf(relative_path)
             prepared = prepare_local_ingestion(
                 self.db_path, self.chroma_dir, str(managed.path), managed.original_filename,
@@ -57,8 +93,8 @@ class LocalIngestionManager:
                         translation_service=self.services.translation,
                         translation_settings=self.services.translation_settings,
                         embedder=self.services.embedder)
-                    # 완료 결과는 DB가 기준이며, 예외를 소비해 실행기 경고만 방지한다.
-                    future.add_done_callback(lambda completed: completed.exception())
+                    self._pending.add(future)
+                    future.add_done_callback(self._on_done)
                 except Exception:
                     repo.update_job_status(self.db_path, prepared.registration.job_id,
                         JobStatus.FAILED, limitations=['scheduler_failed'])
