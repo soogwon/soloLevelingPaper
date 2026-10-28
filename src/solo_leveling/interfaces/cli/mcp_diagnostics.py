@@ -54,6 +54,11 @@ def main(argv=None):
                         help='민감정보가 포함될 수 있는 원본 stderr·경로·지연 스택 수집 허용')
     parser.add_argument('--detailed-diagnostics', action='store_true', help='본문 없이 정상 세부 검사 코드도 기록')
     args = parser.parse_args(argv)
+    # 임베딩 자식 프로세스도 같은 선택을 따르게 한다. 서버를 다시 시작해야 바뀐다.
+    if args.collect_raw_logs:
+        os.environ['SOLO_LEVELING_COLLECT_RAW_LOGS'] = '1'
+    else:
+        os.environ.pop('SOLO_LEVELING_COLLECT_RAW_LOGS', None)
     try:
         if args.log_dir is None:
             from solo_leveling.interfaces.mcp.runtime import load_environment, runtime_paths

@@ -15,7 +15,7 @@ from time import monotonic
 from uuid import uuid4
 
 from solo_leveling.diagnostics import _request, stage
-from .worker import run_worker, diagnostic_worker
+from .worker import run_worker, diagnostic_worker, raw_logs_requested
 
 
 class EmbeddingFailure(str, Enum):
@@ -57,7 +57,8 @@ def _null_stdin_for_child():
 
 
 class ProcessEmbedder:
-    def __init__(self, timeout_seconds=90, *, worker_target=run_worker, log_dir=None):
+    def __init__(self, timeout_seconds=90, *, worker_target=run_worker, log_dir=None,
+                 collect_raw_logs=None):
         if type(timeout_seconds) not in (int, float) or not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError('임베딩 제한 시간은 유한한 양수여야 합니다.')
         self.timeout = timeout_seconds
@@ -69,6 +70,8 @@ class ProcessEmbedder:
         self._connection = None
         self._log_dir = str(Path(log_dir or Path(tempfile.gettempdir()) / 'solo-leveling-diagnostics').resolve())
         self._worker_id = None
+        # None이면 환경 설정을 따르고, 기본은 원본 로그·스택을 수집하지 않는다.
+        self._collect_raw = raw_logs_requested() if collect_raw_logs is None else collect_raw_logs is True
 
     def _event(self, event, *, pid=None, exit_code=None, alive=None):
         try:
@@ -126,7 +129,8 @@ class ProcessEmbedder:
                     self._connection, child = context.Pipe()
                     self._worker_id = uuid4().hex
                     self._process = context.Process(target=diagnostic_worker,
-                        args=(child, self._target, self._log_dir, self._worker_id, min(30, self.timeout / 2)), daemon=True)
+                        args=(child, self._target, self._log_dir, self._worker_id, min(30, self.timeout / 2),
+                              self._collect_raw), daemon=True)
                     try:
                         self._event('worker_spawn_start')
                         with _null_stdin_for_child():
