@@ -23,7 +23,7 @@ MCP 호스트에 반환하는 정상 근거·본문과 진단 로그는 구분�
 | 설정 → 번역·생성 제공자: 의도하지 않은 전송 | 외부 호출 허용이 참이고 로컬 전용이 거짓일 때만 호출 | `tests/unit/mcp/test_external_api_policy.py`, `tests/unit/mcp/test_runtime.py`, `tests/unit/translation/test_openai_provider.py` | 호스트 통신·모델 다운로드까지 차단하는 설정이 아님 |
 | 제공자·내부 예외 → MCP 응답: 키·경로 노출 | 원본 예외 대신 고정 오류 응답으로 변환 | `tests/unit/mcp/test_server.py`, `tests/unit/translation/test_openai_provider.py`, `tests/unit/test_openai_generator.py` | 정상 도구 결과에는 요청한 원문 근거가 포함될 수 있음 |
 | 부모 stderr → 진단 파일: 본문·키·개인정보 기록 | 진단 실행기는 기본적으로 허용된 단계 로그만 저장, 네이티브 원본 출력 폐기 | `tests/unit/test_safe_diagnostic_stream.py`, `tests/unit/test_mcp_diagnostic_runner.py` | 일반 MCP 직접 실행에는 같은 필터가 적용되지 않음 |
-| 임베딩 자식 출력 → 로그 파일: 원본·스택 노출 | IPC 예외 본문 제외, 원본 로그 보호는 #85 후속 | `tests/unit/test_process_embedder.py`는 기존 동작 회귀 검증 | 부모 필터만으로 자식 로그를 보호하지 못함 |
+| 임베딩 자식 출력 → 로그 파일: 원본·스택 노출 | 기본 원본 비수집, C 설정에서 명시적 옵트인 전달 | `tests/unit/test_process_embedder.py`, `tests/integration/test_embedding_log_privacy.py` | 상세 수집 시 민감정보 포함 가능, 보관·삭제는 #99 후속 |
 
 ## 실행 경로별 로그 보호
 
@@ -31,9 +31,9 @@ MCP 호스트에 반환하는 정상 근거·본문과 진단 로그는 구분�
   비수집을 적용한다. `--collect-raw-logs`는 민감정보가 포함될 수 있는 상세 수집을
   명시적으로 허용하는 옵션이다. 원본 로그를 그대로 공유하지 않는다.
 - `python -m solo_leveling.interfaces.mcp`는 위 진단 실행기를 거치지 않는다.
-  기본 보호 수준의 통일은 #85 설정 전달 계약과 함께 검토한다.
-- 현재 임베딩 작업 프로세스의 원본 출력·스택 수집은 별개다. A 담당 구현과 C의
-  실행 설정 전달·통합 검증이 필요하며, 이번 문서·테스트 보완으로 해결되지 않는다.
+  부모 stderr 필터는 적용되지 않지만 자식 원본 수집은 기본 비활성화된다.
+- #85의 A 구현과 C 런타임 연결로 자식 원본 출력·스택 수집을 명시적으로 제어한다.
+  CLI 옵션은 환경 설정보다 우선하며, 직접 MCP 실행은 프로세스 환경과 `.env`를 따른다.
 - 안전 필터는 정확한 필드 집합과 단계·오류 코드·ID 형식·수치 범위만 허용한다.
   허용되지 않은 정상 진단 이벤트도 폐기될 수 있으므로 새 이벤트 추가 시 검토한다.
   ID 형식 검사는 악의적인 코드의 정보 은닉이나 출력의 진위를 증명하지 않는다.
@@ -78,10 +78,10 @@ python -m pytest -q -p no:cacheprovider --basetemp=<새로운 테스트 전용 �
 
 ## 완료 전에 남은 확인
 
-- [ ] #85의 A 구현과 C 설정 전달 연결
-- [ ] 기본 모드에서 부모·자식 모두 합성 민감정보가 기록되지 않는지 확인
-- [ ] 상세 모드 허용 및 해제 후 재시작 동작 확인
-- [ ] Desktop·일반 MCP의 정상·실패·시간 초과·종료 통합 검증
+- [x] #85의 A 구현과 C 설정 전달 연결
+- [x] 진단 실행기의 기본 모드에서 부모·자식 합성 민감정보 비기록 확인 (Windows)
+- [x] 상세 모드 허용 및 해제 후 재시작 동작 확인 (Windows)
+- [x] Desktop·진단·직접 실행 설정의 정상·실패·시간 초과·종료 검증 및 MCP stdio 회귀 (Windows)
 - [ ] 검증 환경·결과·남은 제한을 바탕으로 #64 완료 여부 판단
 
 검사 후 경로 교체 방어는 이번 범위에서 보류한다. 신뢰할 수 있는 로컬 폴더라는
