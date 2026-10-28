@@ -131,9 +131,10 @@ Remove-Item Env:SOLO_INSTALLED_PYTHON
 ```
 
 테스트는 임시 폴더와 가짜 키를 사용한다. 저장소 밖 격리 실행, 패키지 import 위치,
-설정 점검의 무기록, 실제 stdio 초기화·6개 도구·UI 리소스·안전한 오류·진단 파일을 검사한다.
+설정 점검의 무기록, 실제 stdio 초기화·7개 도구·UI 리소스·안전한 오류·진단 파일을 검사한다.
 공개 도구는 `add_paper`, `get_paper_status`, `list_paper_jobs`, `start_learning`,
-`ask_paper`, `get_evidence`이며 목록을 정확히 비교한다.
+`ask_paper`, `get_evidence`, `get_learning_dashboard`이며 목록을 정확히 비교한다.
+대시보드의 1차 범위와 데이터 기준은 [대시보드 안내](learning-dashboard.md)를 따른다.
 `list_paper_jobs`는 설치본에서 입력·출력 스키마, 빈 목록·검색 결과, 잘못된 입력과
 커서의 오류 응답 및 오류 후 정상 조회를 확인한다. 실제 작업 목록의 필드·페이지 이동·
 검색·읽기 전용 동작은 `tests/unit/test_job_queries.py`와 MCP 단위 테스트에서 별도로 검증한다.

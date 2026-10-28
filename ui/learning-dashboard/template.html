@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>학습 대시보드</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; font: 14px/1.6 system-ui, sans-serif; color: var(--color-text-primary, #203329); background: var(--color-background-primary, #f6f8f5); }
+    main { max-width: 880px; margin: auto; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+    h1 { font-size: 24px; margin: 0; } h2 { font-size: 16px; margin: 0 0 12px; }
+    .eyebrow { font-size: 11px; letter-spacing: .15em; margin: 0 0 4px; color: var(--color-text-secondary, #526858); }
+    button { font: inherit; color: inherit; background: transparent; border: 1px solid #829888; border-radius: 8px; padding: 9px 14px; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: default; } button:focus-visible { outline: 3px solid #71a689; outline-offset: 3px; }
+    #message { margin: 22px 0; } .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { border: 1px solid var(--color-border-primary, #d1dbd2); border-radius: 14px; padding: 20px; min-width: 0; margin-bottom: 16px; }
+    .grid .card { margin-bottom: 0; } .grid { margin-bottom: 16px; }
+    .muted { color: var(--color-text-secondary, #526858); font-size: 12px; }
+    p, li, dd { overflow-wrap: anywhere; } dl { margin: 0; } dt { font-size: 12px; color: var(--color-text-secondary, #526858); } dd { margin: 0 0 8px; }
+    #paper-title { font-size: 20px; } progress { width: 100%; height: 12px; accent-color: #477454; }
+    ol, ul { padding-left: 20px; } #steps li { margin: 5px 0; }
+    #summary-list li { padding-bottom: 12px; } .evidence { display: block; font-size: 12px; color: var(--color-text-secondary, #526858); }
+    .table-wrap { overflow-x: auto; } table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--color-border-primary, #d1dbd2); white-space: nowrap; } caption { text-align: left; margin-bottom: 8px; }
+    [hidden] { display: none !important; }
+    @media (max-width: 560px) { body { padding: 12px; } .grid { grid-template-columns: 1fr; } .card { padding: 16px; } }
+    @media (prefers-color-scheme: dark) { body { color: var(--color-text-primary, #e7eee9); background: var(--color-background-primary, #18231d); } .muted, dt, .eyebrow, .evidence { color: var(--color-text-secondary, #a7b9ad); } }
+  </style>
+</head>
+<body>
+  <main aria-busy="true">
+    <header><div><p class="eyebrow">SOLO LEVELING PAPER · LEARNING</p><h1>학습 대시보드</h1></div><button id="refresh" disabled>현황 새로고침</button></header>
+    <p id="message" role="status" aria-live="polite">호스트 연결을 기다리고 있습니다.</p>
+    <div id="details" hidden>
+      <section class="card" aria-labelledby="paper-title"><h2 id="paper-title"></h2><dl><dt>학습 목적</dt><dd id="goal"></dd><dt>학습 맥락 · 논문 버전</dt><dd id="identity"></dd></dl></section>
+      <div class="grid">
+        <section class="card"><h2>논문 처리 상태</h2><p id="processing"></p><p class="muted" id="job"></p><ul id="limitations"></ul><p class="muted">이 학습 맥락의 색인을 게시한 작업 기준입니다. 최신 재처리 작업과 다를 수 있으며, 검색 준비 완료가 전체 번역 완료를 뜻하지는 않습니다.</p></section>
+        <section class="card"><h2>학습 진행</h2><p id="progress-label"></p><progress id="progress" max="1" value="0" aria-label="완료한 학습 단계 비율"></progress><ol id="steps"></ol><p class="muted" id="last-studied"></p><p class="muted">완료한 단계 수 기준이며 이해도 평가가 아닙니다. 이 화면에서는 단계를 변경하지 않습니다.</p></section>
+      </div>
+      <section class="card"><h2>저장된 전체 요약</h2><p id="summary-empty">전체 요약이 아직 생성되지 않았습니다.</p><ul id="summary-list"></ul><p class="muted">저장된 요약을 표시합니다. 새로고침은 요약을 생성하거나 다시 검증하지 않습니다.</p></section>
+      <section class="card"><h2>퀴즈 결과</h2><div class="table-wrap"><table><caption class="muted">저장된 시도 기록 기준 · 점수는 정답 비율</caption><thead><tr><th scope="col">학습 단계</th><th scope="col">시도</th><th scope="col">최근 결과</th><th scope="col">최고 점수</th></tr></thead><tbody id="quiz"></tbody></table></div></section>
+      <section class="card"><h2>다음 기능</h2><p>메모·하이라이트와 논문 상세·퀴즈 풀이 화면은 준비 중입니다.</p><p class="muted">요약의 근거 확인은 채팅에서 이 학습 맥락과 근거 ID로 요청할 수 있습니다.</p></section>
+    </div>
+    <p class="muted">조회 시점의 저장 정보입니다. 화면을 사용할 수 없으면 채팅의 도구 응답으로 같은 정보를 확인하세요.</p>
+  </main>
+  <!-- APP_SCRIPT -->
+</body>
+</html>

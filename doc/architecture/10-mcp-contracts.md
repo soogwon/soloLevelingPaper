@@ -2,7 +2,7 @@
 
 상태: #47 기준선에 #21·#23 목록·선택과 #36 선택적 의미 검증 반영 / 2026-10-24
 
-현재 `interfaces/mcp/server.py`에서 노출하는 6개 도구가 기준이다.
+현재 runtime에서 공개하는 7개 도구가 기준이다. #61의 읽기 전용 대시보드는 `interfaces/mcp/dashboard.py`에 분리한다.
 초기 초안의 미구현 항목은 아래 '후속 계약'으로 분리한다.
 
 ## 공통 규칙
@@ -21,6 +21,7 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 | start_learning | version_id | goal, known_concepts | context_id, version_id, goal, known_concepts, status, capabilities |
 | ask_paper | context_id, question | standalone_question, focus, top_k | context_id, verification_level, status, answer_ko, claims, citations, reason_code |
 | get_evidence | context_id, evidence_ids | 없음 | evidence (저장 근거 목록) |
+| get_learning_dashboard | context_id | 없음 | context_id, version_id, paper_id, title, file_display_name, goal, processing, progress, summary, quiz_scores |
 
 이름은 기존 프로젝트 계약을 유지하며 C 문서의 register_paper/evidence_qa 등과 기능상 대응한다. 호스트 Skill이 없어도 핵심 도구로 접근 가능하다.
 
@@ -54,6 +55,7 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 | start_learning | false | true | false |
 | ask_paper | false | false | true |
 | get_evidence | true | true | false |
+| get_learning_dashboard | true | true | false |
 
 모두 `destructiveHint=false`다. 속성은 호스트용 힌트이며 권한 강제 장치가 아니다.
 `get_paper_status`에는 선택적 화면 연결 메타데이터 `_meta.ui.resourceUri`가 있다.
@@ -61,6 +63,13 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 UI가 없는 호스트에서도 같은 계약을 사용한다. 실제 호스트 검증은 [#57 안내](../setup/mcp-app-ui.md)를 따른다.
 등록은 요청 키와 입력을 기준으로, 학습 시작은 같은 논문·색인·학습 설정을 기준으로 재사용한다.
 `ask_paper`는 외부 API 호출과 근거 저장을 수행하므로 읽기 전용·멱등 도구가 아니다.
+
+## 학습 대시보드 (#61 1차)
+
+기존 context_id로 저장된 전체 요약·진행 상태·퀴즈 점수를 조회한다. 화면은 같은 객체를
+표시하고 새로고침만 제공한다. 메모·상세 화면 연결은 후속 작업이다. DB를 변경하거나
+요약·퀴즈를 생성하지 않는다. nullable 값, 진행 기록 없음과 0점의 구분, 처리 작업 선택,
+테스트·호스트 확인 범위는 [학습 대시보드 안내](../setup/learning-dashboard.md)를 따른다.
 
 ## 파일 등록
 
@@ -196,7 +205,7 @@ get_evidence는 해당 context에 저장된 번역문·추출 원문 근거를 �
 
 ## 후속 계약과 호환성
 
-- 요약 생성·저장과 읽기 가이드 내부 서비스는 존재하지만 현재 6개 MCP 도구에 연결되어 있지 않다.
+- 요약 생성·저장과 읽기 가이드 내부 서비스는 존재하지만 생성 기능은 MCP 도구에 연결되어 있지 않다. 저장된 전체 요약은 대시보드에서 조회한다.
 - `start_learning.request_key`, `summary`, `summary_status`, `get_learning_guide`, URL 등록, 검수 그래프 고정은 확정된 현재 인터페이스가 아니다.
 - 초기 제안의 DOWNLOAD_FAILED, EXTRACTION_FAILED, REQUEST_IN_PROGRESS, RATE_LIMITED를 현재 독립 MCP 오류 코드로 가정하지 않는다.
 - 기존 필수·선택 인자, 기본값, 최상위 응답과 nullable 키를 유지한다. 필드 제거·이름 변경·새 필수 인자·기본값 변경은 호환성 검토 대상이다.
@@ -204,7 +213,8 @@ get_evidence는 해당 context에 저장된 번역문·추출 원문 근거를 �
 
 ## 계약 검증
 
-`tests/unit/mcp/test_server.py`는 6개 도구의 필드·속성, 중첩 출력, nullable 필드, 최소 입력과 기본값, 잘못된 입력의 서비스 진입 차단을 검사한다.
+`tests/unit/mcp/test_dashboard.py`는 추가 대시보드 계약과 폴백을 검증한다.
+`tests/unit/mcp/test_server.py`는 기존 6개 도구의 필드·속성, 중첩 출력, nullable 필드, 최소 입력과 기본값, 잘못된 입력의 서비스 진입 차단을 검사한다.
 `tests/integration/test_mcp_workflow.py`는 등록부터 근거 조회까지 ID 전달을 검사한다.
 `tests/integration/test_mcp_stdio.py`는 실제 프로세스의 연결·도구 목록·오류 응답과 모의 서비스의 정상 structuredContent를 검사한다.
 모의 응답 테스트는 실제 모델 품질이나 번역·색인 완료를 증명하지 않는다. 실행 명령은 [설치·실행 안내](../setup/mcp-server.md)를 따른다.
