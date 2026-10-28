@@ -2,7 +2,7 @@
 
 상태: #47 기준선에 #21·#23 목록·선택과 #36 선택적 의미 검증 반영 / 2026-10-24
 
-현재 `interfaces/mcp/server.py`에서 노출하는 6개 도구가 기준이다.
+현재 런타임은 기존 6개 도구에 #62의 읽기 전용 `get_paper_detail`을 추가한다.
 초기 초안의 미구현 항목은 아래 '후속 계약'으로 분리한다.
 
 ## 공통 규칙
@@ -21,6 +21,7 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 | start_learning | version_id | goal, known_concepts | context_id, version_id, goal, known_concepts, status, capabilities |
 | ask_paper | context_id, question | standalone_question, focus, top_k | context_id, verification_level, status, answer_ko, claims, citations, reason_code |
 | get_evidence | context_id, evidence_ids | 없음 | evidence (저장 근거 목록) |
+| get_paper_detail | context_id | scope, offset, limit, summary_id | 논문 메타데이터, section_ids, summary, evidence, keywords, important_sentences, limitations |
 
 이름은 기존 프로젝트 계약을 유지하며 C 문서의 register_paper/evidence_qa 등과 기능상 대응한다. 호스트 Skill이 없어도 핵심 도구로 접근 가능하다.
 
@@ -54,6 +55,7 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 | start_learning | false | true | false |
 | ask_paper | false | false | true |
 | get_evidence | true | true | false |
+| get_paper_detail | true | true | false |
 
 모두 `destructiveHint=false`다. 속성은 호스트용 힌트이며 권한 강제 장치가 아니다.
 `get_paper_status`에는 선택적 화면 연결 메타데이터 `_meta.ui.resourceUri`가 있다.
@@ -196,7 +198,7 @@ get_evidence는 해당 context에 저장된 번역문·추출 원문 근거를 �
 
 ## 후속 계약과 호환성
 
-- 요약 생성·저장과 읽기 가이드 내부 서비스는 존재하지만 현재 6개 MCP 도구에 연결되어 있지 않다.
+- 요약 생성·저장과 읽기 가이드 내부 서비스는 존재하지만 생성용 MCP 도구는 없다. 저장 요약 조회만 `get_paper_detail`로 연결한다.
 - `start_learning.request_key`, `summary`, `summary_status`, `get_learning_guide`, URL 등록, 검수 그래프 고정은 확정된 현재 인터페이스가 아니다.
 - 초기 제안의 DOWNLOAD_FAILED, EXTRACTION_FAILED, REQUEST_IN_PROGRESS, RATE_LIMITED를 현재 독립 MCP 오류 코드로 가정하지 않는다.
 - 기존 필수·선택 인자, 기본값, 최상위 응답과 nullable 키를 유지한다. 필드 제거·이름 변경·새 필수 인자·기본값 변경은 호환성 검토 대상이다.
@@ -208,3 +210,24 @@ get_evidence는 해당 context에 저장된 번역문·추출 원문 근거를 �
 `tests/integration/test_mcp_workflow.py`는 등록부터 근거 조회까지 ID 전달을 검사한다.
 `tests/integration/test_mcp_stdio.py`는 실제 프로세스의 연결·도구 목록·오류 응답과 모의 서비스의 정상 structuredContent를 검사한다.
 모의 응답 테스트는 실제 모델 품질이나 번역·색인 완료를 증명하지 않는다. 실행 명령은 [설치·실행 안내](../setup/mcp-server.md)를 따른다.
+
+
+## #62 읽기 전용 근거 상세 UI
+
+`ask_paper`와 `get_evidence`는 같은 근거 상세 UI 리소스를 제공한다. 기존 JSON 계약은 유지한다.
+주장별 버튼은 반환된 근거의 원문·번역·페이지로 화면 안에서 이동하며 추가 검색을 하지 않는다.
+PDF 좌표·키워드·중요 문장·메모 저장은 이번 구현 범위에 포함되지 않는다. 섹션은 저장된 ID만 제공한다.
+구현 범위와 검증 순서는 [논문 상세 UI 안내](../setup/paper-detail-app.md)를 따른다.
+
+### get_paper_detail 응답 계약
+
+- `scope`: 기본 `paper`, 또는 반환된 `section_ids` 중 하나. 섹션 제목을 뜻하지 않는다.
+- `offset`: 기본 0, 0 이상의 정수. `limit`: 기본 20, 1~50의 정수. 불리언은 거부한다.
+- `offset > 0`이면 이전 응답의 `summary_id`가 필수다. 교체된 요약이면 처음부터 조회하도록 오류를 반환한다.
+- 메타데이터: `context_id`, `paper_id`, nullable `title`, 경로를 제거한 `file_display_name`, `version_id`, `parse_revision_id`, `translation_revision_id`, `scope`, `section_ids`.
+- `summary`: 저장 요약이 없으면 null. 있으면 `summary_id`, `created_at`, `items`, `total_items`, nullable `next_offset`, `verification_level=structural_only`.
+- `items`: `position`, `kind`(claim/method/result/limitation), `text`, `evidence_ids`. 현재 페이지 항목만 반환한다.
+- `evidence`: 현재 페이지 항목의 저장 근거. get_evidence 필드에 nullable `section_id`를 추가한다.
+- `keywords`, `important_sentences`: 현재 저장 계약이 없어 빈 목록. `limitations`에 `keywords_not_available`, `important_sentences_not_available`, `annotations_not_connected`, 요약 부재 시 `summary_not_available`을 반환한다.
+- 같은 읽기 트랜잭션에서 context·게시 색인·번역 리비전·근거 인용문 연결을 검사한다. 섹션 조회는 섹션 밖 근거를 거부한다. DB 변경·생성 API 호출은 없다.
+- UI의 다음 페이지는 자동 호출하지 않으며 채팅에서 사용할 조회 인자를 표시한다. 요약 부재를 생성 동의로 해석하지 않는다.

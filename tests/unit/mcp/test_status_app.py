@@ -17,6 +17,7 @@ def test_status_app_resource_and_tool_link():
         assert tools['get_paper_status'].annotations.readOnlyHint is True
         assert tools['get_paper_status'].annotations.openWorldHint is False
         resources = await server.list_resources()
+        resources = [r for r in resources if str(r.uri) == STATUS_APP_URI]
         assert len(resources) == 1
         assert str(resources[0].uri) == STATUS_APP_URI
         assert resources[0].mimeType == STATUS_APP_MIME
@@ -50,4 +51,4 @@ def test_status_text_fallback_is_unchanged_without_ui_negotiation():
 
 def test_no_status_resource_without_ingestion():
     server = create_server(MCPServices(Mock(), Mock()))
-    assert asyncio.run(server.list_resources()) == []
+    assert all(str(r.uri) != STATUS_APP_URI for r in asyncio.run(server.list_resources()))

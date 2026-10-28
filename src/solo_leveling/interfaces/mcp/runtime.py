@@ -17,6 +17,8 @@ from solo_leveling.infrastructure.generation.openai_generator import OpenAIGener
 from solo_leveling.infrastructure.generation.semantic_verifier import SemanticSettings
 from solo_leveling.infrastructure.storage.vector_store import get_client
 from solo_leveling.infrastructure.translation.openai_provider import OpenAITranslationConfig
+from solo_leveling.application.paper_detail.service import PaperDetailService
+from solo_leveling.infrastructure.retrieval.paper_detail import SQLitePaperDetailReader
 from .server import MCPServices, create_server
 from .ingestion import IngestionServices, LocalIngestionManager
 from .local_files import LocalPdfStore
@@ -134,6 +136,7 @@ def build_runtime_server(values: Mapping[str, str]):
 
     return create_server(MCPServices(
         services.answer, services.evidence, ingestion, services.search.contexts,
+        detail=PaperDetailService(SQLitePaperDetailReader(str(paths.db_path))),
     ), lifespan=lifespan)
 
 
