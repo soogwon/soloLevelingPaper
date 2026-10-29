@@ -5,6 +5,8 @@
 """
 
 import hashlib
+import json
+import sys
 import uuid
 from contextlib import closing
 from dataclasses import dataclass
@@ -30,7 +32,19 @@ from solo_leveling.infrastructure.parsing.pdf_extractor import (
 )
 from solo_leveling.infrastructure.storage.vector_store import (
     get_client, upsert_chunk_embeddings, verify_chunk_embeddings, delete_by_embedding_set,
+    close_client, ChromaCloseResult,
 )
+
+
+def _release_owned_client(client) -> None:
+    """직접 만든 Chroma 클라이언트만 닫는다. 실패해도 원래 작업의 결과·오류를 바꾸지 않는다."""
+    result = close_client(client)
+    if result in (ChromaCloseResult.FAILED, ChromaCloseResult.UNSUPPORTED):
+        try:
+            print(json.dumps({'event': 'chroma_close', 'code': result.value}),
+                  file=sys.stderr, flush=True)
+        except Exception:
+            pass
 
 
 def compute_file_hash(pdf_path: str) -> str:
@@ -94,9 +108,13 @@ def prepare_local_ingestion(
 
 def run_prepared_local_ingestion(
     prepared: PreparedLocalIngestion, *, translation_service: TranslationService,
-    translation_settings: TranslationSettings, embedder=None,
+    translation_settings: TranslationSettings, embedder=None, chroma_client=None,
 ) -> dict:
-    """새로 확보한 작업만 실행하고 기존 작업·결과는 상태 조회로 반환한다."""
+    """새로 확보한 작업만 실행하고 기존 작업·결과는 상태 조회로 반환한다.
+
+    chroma_client를 주입하면 빌려 쓰는 것으로 보고 닫지 않는다. 없으면 직접 만들어
+    쓰고 이 호출이 끝날 때 닫는다.
+    """
     registration = prepared.registration
     if registration.disposition != IngestionDisposition.STARTED:
         status = get_ingestion_status(prepared.db_path, registration.job_id)
@@ -110,6 +128,7 @@ def run_prepared_local_ingestion(
         lambda: extract_pages(prepared.pdf_path), registration.version_id, job,
         prepared.paper_id, registration.reused_existing, prepared.embedding_model,
         translation_service, translation_settings, embedder=embedder,
+        chroma_client=chroma_client,
     )
 
 
@@ -162,15 +181,19 @@ def _ingest_pages(
     db_path: str, chroma_dir: str, pages_provider: Callable[[], list],
     version_id: str, job: ProcessingJob, paper_id: str, reused: bool,
     embedding_model: str, translation_service: TranslationService,
-    translation_settings: TranslationSettings, *, embedder=None,
+    translation_settings: TranslationSettings, *, embedder=None, chroma_client=None,
 ) -> dict:
     """파싱 이후(번역→임베딩→게시) 공통 로직.
 
     PDF 직접 등록, URL-PDF, URL-HTML 세 경로가 모두 이 함수를 공유한다.
     각 호출부는 pages_provider로 "아직 파싱 안 됐을 때만 호출되는" 페이지
     추출 함수를 넘기면 된다 (이미 파싱된 청크가 있으면 재사용하고 호출 안 함).
+
+    Chroma 클라이언트 소유권: 주입받은 chroma_client는 빌려 쓰며 닫지 않는다.
+    주입이 없으면 색인 단계에서 직접 만들고, 성공·실패와 관계없이 마지막에 닫는다.
     """
-    client = None
+    client = chroma_client
+    owns_client = False
     embedding_set = None
     parse_revision = None
     translation_id = None
@@ -225,7 +248,9 @@ def _ingest_pages(
                 vectors = (embedder or embed_texts)(texts, model_name=embedding_model)
                 dim = len(vectors[0]) if embedder is not None else embedding_dimension(embedding_model)
                 embedding_set = EmbeddingSet(str(uuid.uuid4()), translation_id, embedding_model, dim)
-                client = get_client(chroma_dir)
+                if client is None:
+                    client = get_client(chroma_dir)
+                    owns_client = True
                 # 임베딩 세트별 컬렉션을 사용해 이후 모델 차원이 달라져도 공존 저장 가능
                 collection = f'chunks-{embedding_set.embedding_set_id}'
                 upsert_chunk_embeddings(
@@ -265,6 +290,9 @@ def _ingest_pages(
             repo.update_job_status(db_path, job.job_id, JobStatus.FAILED,
                                    limitations=[*limitations, failure_code])
         raise
+    finally:
+        if owns_client and client is not None:
+            _release_owned_client(client)
 
 
 def register_and_ingest(
@@ -272,6 +300,7 @@ def register_and_ingest(
     original_filename: Optional[str] = None, paper_id: Optional[str] = None,
     embedding_model: str = DEFAULT_MODEL_NAME, *,
     translation_service: TranslationService, translation_settings: TranslationSettings,
+    chroma_client=None,
 ) -> dict:
     """번역 설정을 명시적으로 받아야 하며, 원문으로 자동 폴백하지 않는다.
 
@@ -282,13 +311,15 @@ def register_and_ingest(
     prepared = prepare_local_ingestion(db_path, chroma_dir, pdf_path,
         original_filename, paper_id, embedding_model)
     return run_prepared_local_ingestion(prepared,
-        translation_service=translation_service, translation_settings=translation_settings)
+        translation_service=translation_service, translation_settings=translation_settings,
+        chroma_client=chroma_client)
 
 
 def register_and_ingest_url(
     db_path: str, chroma_dir: str, url: str, tmp_pdf_dir: str,
     paper_id: Optional[str] = None, embedding_model: str = DEFAULT_MODEL_NAME, *,
     translation_service: TranslationService, translation_settings: TranslationSettings,
+    chroma_client=None,
 ) -> dict:
     """URL로 논문을 등록한다(M1 기능 ①의 URL 부분).
 
@@ -317,6 +348,7 @@ def register_and_ingest_url(
             original_filename=Path(url).name or 'downloaded.pdf', paper_id=paper_id,
             embedding_model=embedding_model,
             translation_service=translation_service, translation_settings=translation_settings,
+            chroma_client=chroma_client,
         )
         result['source_kind'] = 'url_pdf'
         return result
@@ -350,7 +382,7 @@ def register_and_ingest_url(
         db_path, chroma_dir,
         lambda: [ExtractedPage(pdf_page=1, text=text, printed_page_label=None)],
         version_id, job, paper_id, reused, embedding_model,
-        translation_service, translation_settings,
+        translation_service, translation_settings, chroma_client=chroma_client,
     )
     result['source_kind'] = 'url_html'
     return result

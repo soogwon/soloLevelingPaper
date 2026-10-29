@@ -221,6 +221,32 @@ def mark_interrupted_jobs_on_startup(db_path: str) -> int:
     return count
 
 
+CANCELLED_BEFORE_START_CODE = 'SERVER_SHUTTING_DOWN'
+
+
+def mark_job_cancelled_before_start(db_path: str, job_id: str) -> bool:
+    """시작 전에 취소가 확정된 작업만 interrupted + SERVER_SHUTTING_DOWN으로 바꾼다.
+
+    호출자는 실행기의 취소가 실제로 성공한 경우(Future.cancel()이 True)에만 호출한다.
+    취소가 실패했거나 이미 실행을 시작한 작업은 이 함수로 건드리지 않고 완료를 기다린다.
+    저장 계층은 한 번의 조건부 UPDATE로 다음을 보장한다.
+    - processing이고 아직 첫 단계(parse)인 작업만 바꾼다. 번역·색인 단계로 넘어갔거나
+      이미 ready/failed/interrupted인 작업은 덮어쓰지 않는다.
+    - 같은 작업에 다시 호출해도 안전하다(두 번째는 False).
+    반환: 상태를 바꿨으면 True, 대상이 아니면 False. 시간 초과만으로는 호출하지 않는다.
+    """
+    from solo_leveling.domain.models import now_iso
+
+    with closing(get_connection(db_path)) as conn, conn:
+        cur = conn.execute(
+            "UPDATE processing_jobs SET status = ?, limitations = ?, updated_at = ? "
+            "WHERE job_id = ? AND status = ? AND stage = ?",
+            (JobStatus.INTERRUPTED.value, json.dumps([CANCELLED_BEFORE_START_CODE]), now_iso(),
+             job_id, JobStatus.PROCESSING.value, JobStage.PARSE.value),
+        )
+        return cur.rowcount == 1
+
+
 def get_latest_parse_revision(db_path: str, version_id: str) -> Optional[ParseRevision]:
     with closing(get_connection(db_path)) as conn:
         row = conn.execute(
