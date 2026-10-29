@@ -100,6 +100,26 @@ python -m pytest tests/unit/test_safe_diagnostic_stream.py tests/unit/test_diagn
 - 남은 항목: Linux 검증, 기본 단계 진단 추가 범위·담당 합의. #99의 보관·정리와
   일반 MCP 부모 stderr 필터 제한은 별도이며 #85·#64는 자동 종료하지 않는다.
 
+### Linux 검증 결과 (2026-10-29)
+
+- 실행: [GitHub Actions #40869474839](https://github.com/soogwon/soloLevelingPaper/actions/runs/40869474839), 전체 성공.
+- 대상: `f8f811a3fac93aac78ae5d5959bd99bbd22cefcb`. main `46b7c62`에 Mac 검증 문서와
+  Linux workflow만 추가한 커밋으로, 운영 코드 변경은 없다.
+- 환경: Ubuntu 24.04 / x86_64 / Python 3.12.15 / Linux 7.0.0-1017-azure.
+- 실제 자식 프로세스 로그 보호 테스트: **19개 통과, 건너뜀 없음**.
+- 실행 설정·Desktop·진단 실행기·임베딩 프로세스·MCP stdio·부모 진단 회귀:
+  **222개 통과, 1개 건너뜀**. Windows 전용
+  `test_spawn_while_stdin_pipe_is_being_read`만 건너뛰었으며 workflow에서 이를 검사했다.
+- 합계 **241개 통과, 실패·오류 없음**. `pip check`도 통과했다.
+- 합성 자료와 가짜 작업을 사용했다. 외부 API 호출과 모델 다운로드를 차단했고,
+  실제 논문·키·사용자 DB는 사용하지 않았다. Linux의 실제 Claude UI·모델 실행이나
+  전체 테스트 모음의 통과를 의미하지 않는다.
+- 실행 환경, 설치 패키지 목록과 JUnit 결과는 `issue-85-linux-results` 아티팩트로
+  14일간 보관한다. `.github/workflows/issue-85-linux.yml`로 재현할 수 있다.
+- 위 추가 검증으로 앞 절의 Linux 미검증 항목은 해소했다. 남은 사항은 기본 자식
+  단계 진단의 추가 범위·담당 확정과 기존 제한을 반영한 #85 종료 판단이다.
+  #64 전체 완료 및 #99의 보관·정리 구현 완료를 뜻하지 않는다.
+
 아래는 통합 전 협의 당시 기록이다.
 
 ## 확인한 현재 동작
