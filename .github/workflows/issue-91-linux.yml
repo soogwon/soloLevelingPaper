@@ -1,0 +1,54 @@
+name: "#91 Linux 자원 수명 검증"
+
+on:
+  push:
+    branches: [feat/issue-91-runtime-lifecycle]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      LOCAL_ONLY: 'true'
+      ALLOW_EXTERNAL_API: 'false'
+      HF_HUB_OFFLINE: '1'
+      ANONYMIZED_TELEMETRY: 'false'
+    steps:
+      - name: 검증 대상 코드 가져오기
+        uses: actions/checkout@v6
+      - name: Python 준비
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 검증 의존성 설치
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev,local]" "chromadb==1.5.9"
+          python -m pip check
+      - name: 실행 환경 기록
+        run: |
+          uname -a
+          python --version
+          git rev-parse HEAD
+          python -m pip freeze
+      - name: 종료·취소·로그 보호와 실제 Chroma 검증
+        run: |
+          python -m pytest tests/unit/mcp/test_runtime_lifecycle.py tests/unit/mcp/test_ingestion_shutdown.py tests/integration/test_runtime_chroma_lifecycle.py -v -s --junitxml=lifecycle-results.xml
+      - name: 파일 수 제한 256으로 전체 회귀 검증
+        if: ${{ !cancelled() }}
+        run: |
+          python scripts/measure_test_file_handles.py --limit 256 --report linux-handles-256.json -- tests -q --tb=short --junitxml=full-results.xml
+      - name: 검증 결과 보관
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-91-linux-results
+          path: |
+            lifecycle-results.xml
+            full-results.xml
+            linux-handles-256.json
+          if-no-files-found: warn

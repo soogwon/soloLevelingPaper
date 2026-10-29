@@ -61,6 +61,12 @@ class SafeDiagnosticStream:
             record = json.loads(line)
         except (ValueError, RecursionError):
             return
+        if isinstance(record, dict) and record.get('event') == 'runtime_cleanup':
+            if (set(record) == {'event', 'code'} and isinstance(record['code'], str)
+                    and record['code'] in {'INGESTION_CANCEL_STATE_FAILED', 'RUNTIME_DRAIN_FAILED', 'EMBEDDER_CLOSE_FAILED',
+                        'RUNTIME_SHUTDOWN_DEFERRED', 'CHROMA_CLOSE_UNSUPPORTED', 'CHROMA_CLOSE_FAILED'}):
+                self.output.write(json.dumps(record) + '\n')
+            return
         if isinstance(record, dict) and record.get('event') == 'semantic_startup':
             # 시작 진단만 별도 고정 계약을 허용하며 임의 설정값은 보존하지 않는다.
             if (set(record) == {'event', 'enabled', 'connected', 'prompt_version'}
