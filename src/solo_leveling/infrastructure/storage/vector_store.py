@@ -11,6 +11,7 @@ infrastructure/storage — ChromaDB 벡터 저장
 """
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
 import math
 from typing import List, Optional
@@ -20,6 +21,43 @@ def get_client(persist_dir: str):
     import chromadb
     Path(persist_dir).mkdir(parents=True, exist_ok=True)
     return chromadb.PersistentClient(path=persist_dir)
+
+
+class ChromaCloseResult(str, Enum):
+    """close_client의 안전한 결과 코드. 예외 메시지·경로는 담지 않는다."""
+    CLOSED = 'CHROMA_CLOSED'
+    ALREADY_CLOSED = 'CHROMA_ALREADY_CLOSED'
+    UNSUPPORTED = 'CHROMA_CLOSE_UNSUPPORTED'
+    FAILED = 'CHROMA_CLOSE_FAILED'
+
+
+_CLOSED_MARK = '_solo_leveling_closed'
+
+
+def close_client(client) -> ChromaCloseResult:
+    """Chroma 클라이언트를 닫고 결과 코드를 돌려준다. 예외를 던지지 않는다.
+
+    - 같은 클라이언트를 다시 닫으면 ALREADY_CLOSED(안전한 no-op)다.
+    - close가 없는 클라이언트는 UNSUPPORTED이며 성공으로 간주하지 않는다.
+    - 같은 경로를 공유하는 다른 클라이언트나 전역 캐시는 건드리지 않는다
+      (reset·캐시 삭제를 종료 수단으로 쓰지 않는다).
+    호출자는 FAILED·UNSUPPORTED를 성공으로 보지 말고, 원래 작업의 오류를 이 결과로
+    덮어쓰지 않아야 한다.
+    """
+    if client is None or getattr(client, _CLOSED_MARK, False) is True:
+        return ChromaCloseResult.ALREADY_CLOSED
+    close = getattr(client, 'close', None)
+    if not callable(close):
+        return ChromaCloseResult.UNSUPPORTED
+    try:
+        close()
+    except Exception:
+        return ChromaCloseResult.FAILED
+    try:
+        setattr(client, _CLOSED_MARK, True)
+    except Exception:
+        pass
+    return ChromaCloseResult.CLOSED
 
 
 def get_collection(client, name: str = "chunks"):
