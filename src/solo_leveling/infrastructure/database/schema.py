@@ -202,6 +202,19 @@ CREATE TABLE IF NOT EXISTS quiz_attempt_answers (
     PRIMARY KEY (attempt_id, position)
 );
 
+-- 읽기 전·후 질문 답변(M1-07/M1-08). 학습 맥락(세션)·시점·질문 템플릿마다 한 행이고, 다시 쓰면 같은 행을 고친다.
+-- 질문 문구는 코드의 템플릿이 정하므로 저장하지 않는다. 본문은 사용자 데이터라 로그에 남기지 않는다.
+CREATE TABLE IF NOT EXISTS reflection_answers (
+    context_id TEXT NOT NULL REFERENCES learning_contexts(context_id),
+    phase TEXT NOT NULL,
+    template_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (context_id, phase, template_id)
+);
+
 -- 학습 맥락별 진행 상태. context는 고정 값이고 진행 상태는 계속 바뀌므로 분리한다.
 -- 진행 행이 없는 맥락은 조회할 때 기본값(첫 단계)으로 본다.
 CREATE TABLE IF NOT EXISTS learning_progress (

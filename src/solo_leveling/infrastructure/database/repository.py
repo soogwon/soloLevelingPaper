@@ -36,6 +36,7 @@ from solo_leveling.domain.paper_summary import (
 )
 from solo_leveling.domain.quiz import Quiz, QuizQuestion, QuizValidationError
 from solo_leveling.domain.quiz_attempt import AnswerResult, AttemptValidationError, QuizAttempt
+from solo_leveling.domain.reflection import ReflectionAnswer, validate_answer as validate_reflection_answer
 
 from solo_leveling.domain.learning_progress import (
     LEARNING_STEPS,
@@ -933,3 +934,39 @@ def _save_progress(conn, progress: LearningProgress) -> None:
          json.dumps(progress.resume_position, ensure_ascii=False)
          if progress.resume_position is not None else None,
          progress.last_studied_at, progress.updated_at))
+
+
+# ── 읽기 전·후 질문 답변 (M1-07 #52, M1-08 #53) ─────────────────────
+def save_reflection_answer(db_path: str, context_id: str, phase: str, template_id: str,
+                           text: str, status: str) -> ReflectionAnswer:
+    """답변을 검증한 뒤 저장한다. 같은 (맥락, 시점, 질문)이 있으면 본문·상태만 고치고 최초 작성 시각은 유지한다."""
+    from solo_leveling.domain.models import now_iso
+
+    validate_reflection_answer(phase, template_id, text, status)
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
+            raise ResourceNotFoundError('context not found')
+        timestamp = now_iso()
+        conn.execute(
+            'INSERT INTO reflection_answers (context_id, phase, template_id, text, status, created_at, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?) '
+            'ON CONFLICT(context_id, phase, template_id) DO UPDATE SET '
+            'text=excluded.text, status=excluded.status, updated_at=excluded.updated_at',
+            (context_id, phase, template_id, text, status, timestamp, timestamp))
+        row = conn.execute('SELECT * FROM reflection_answers WHERE context_id=? AND phase=? AND template_id=?',
+                           (context_id, phase, template_id)).fetchone()
+        return ReflectionAnswer(**dict(row))
+
+
+def get_reflection_answers(db_path: str, context_id: str, phase: str) -> List[ReflectionAnswer]:
+    """한 맥락의 한 시점 답변을 최초 작성 순서로 돌려준다. 맥락이 없으면 ResourceNotFoundError."""
+    from solo_leveling.domain.reflection import templates_for
+
+    templates_for(phase)  # 지원하지 않는 시점이면 ReflectionValidationError
+    with closing(get_connection(db_path)) as conn:
+        if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
+            raise ResourceNotFoundError('context not found')
+        return [ReflectionAnswer(**dict(r)) for r in conn.execute(
+            'SELECT * FROM reflection_answers WHERE context_id=? AND phase=? ORDER BY created_at, template_id',
+            (context_id, phase))]
