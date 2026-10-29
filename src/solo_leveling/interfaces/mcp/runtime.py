@@ -13,6 +13,7 @@ from solo_leveling.infrastructure.bootstrap import build_services
 from solo_leveling.infrastructure.embeddings.process_embedder import ProcessEmbedder
 from solo_leveling.infrastructure.database.repository import mark_interrupted_jobs_on_startup
 from solo_leveling.infrastructure.database.schema import init_db
+from solo_leveling.infrastructure.database.dashboard_queries import DashboardReader
 from solo_leveling.infrastructure.generation.openai_generator import OpenAIGenerationSettings
 from solo_leveling.infrastructure.generation.semantic_verifier import SemanticSettings
 from solo_leveling.infrastructure.storage.vector_store import get_client
@@ -104,7 +105,8 @@ def build_runtime_server(values: Mapping[str, str]):
     settings = validate_runtime_settings(values)
     paths = settings.paths
     embedder = ProcessEmbedder(settings.embedding_timeout,
-                              log_dir=paths.data_root / 'diagnostics')
+                              log_dir=paths.data_root / 'diagnostics',
+                              collect_raw_logs=values.get('SOLO_LEVELING_COLLECT_RAW_LOGS') == '1')
     paths.data_root.mkdir(parents=True, exist_ok=True)
     paths.db_path.parent.mkdir(parents=True, exist_ok=True)
     paths.chroma_dir.mkdir(parents=True, exist_ok=True)
@@ -135,8 +137,10 @@ def build_runtime_server(values: Mapping[str, str]):
             ingestion.executor.shutdown(wait=False, cancel_futures=True)
 
     return create_server(MCPServices(
-        services.answer, services.evidence, ingestion, services.search.contexts,
+        answer=services.answer, evidence=services.evidence,
+        ingestion=ingestion, contexts=services.search.contexts,
         detail=PaperDetailService(SQLitePaperDetailReader(str(paths.db_path))),
+        dashboard=DashboardReader(str(paths.db_path)),
     ), lifespan=lifespan)
 
 

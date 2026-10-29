@@ -56,7 +56,7 @@ async def run():
             tools = await session.list_tools()
             assert {t.name for t in tools.tools} == {
                 'add_paper', 'get_paper_status', 'list_paper_jobs',
-                'start_learning', 'ask_paper', 'get_evidence'}
+                'start_learning', 'ask_paper', 'get_evidence', 'get_learning_dashboard'}
             # 설치본에서도 목록 조회 계약과 빈 DB·오류 응답을 실제 stdio로 확인한다.
             listing = next(t for t in tools.tools if t.name == 'list_paper_jobs')
             assert set(listing.inputSchema['properties']) == {'query', 'limit', 'cursor'}
@@ -77,6 +77,12 @@ async def run():
             result = await session.call_tool('list_paper_jobs', {})
             assert not result.isError
             assert result.structuredContent == {'jobs': [], 'next_cursor': None}
+            dashboard = next(t for t in tools.tools if t.name == 'get_learning_dashboard')
+            assert dashboard.annotations.readOnlyHint is True
+            dashboard_resource = await session.read_resource('ui://solo-leveling/learning-dashboard.html')
+            assert '학습 대시보드' in dashboard_resource.contents[0].text
+            missing = await session.call_tool('get_learning_dashboard', {'context_id': 'missing'})
+            assert missing.isError and 'NOT_FOUND' in missing.content[0].text
             resource = await session.read_resource('ui://solo-leveling/paper-status.html')
             assert '논문 처리 상태' in resource.contents[0].text
             result = await session.call_tool('get_paper_status', {'job_id': 'missing'})

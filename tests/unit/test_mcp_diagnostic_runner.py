@@ -7,6 +7,27 @@ import sys
 import pytest
 
 
+@pytest.mark.parametrize('previous', [None, '1', 'invalid'])
+@pytest.mark.parametrize('raw', [False, True])
+def test_cli_policy_restores_environment_even_on_failure(tmp_path, monkeypatch, previous, raw):
+    import os
+    from solo_leveling.interfaces.cli import mcp_diagnostics
+    key = 'SOLO_LEVELING_COLLECT_RAW_LOGS'
+    if previous is None:
+        monkeypatch.delenv(key, raising=False)
+    else:
+        monkeypatch.setenv(key, previous)
+
+    def fail(*args):
+        assert os.environ[key] == ('1' if raw else '0')
+        raise RuntimeError('합성 실패')
+
+    monkeypatch.setattr(mcp_diagnostics, 'run_diagnostics', fail)
+    assert mcp_diagnostics.main(['--log-dir', str(tmp_path),
+        *(['--collect-raw-logs'] if raw else [])]) == 2
+    assert os.environ.get(key) == previous
+
+
 @pytest.mark.parametrize('options', [[], ['--preload-embedding-library']])
 @pytest.mark.parametrize('raw', [False, True])
 def test_probe_collects_stderr_without_starting_server(tmp_path, options, raw):

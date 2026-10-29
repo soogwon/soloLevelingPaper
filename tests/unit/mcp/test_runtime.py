@@ -79,7 +79,8 @@ def test_windows_drive_is_rejected_with_posix_path_semantics(monkeypatch):
 
 
 @pytest.mark.parametrize('enabled', [False, True])
-def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, enabled):
+@pytest.mark.parametrize('raw_setting', [None, '0', '1', 'true'])
+def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, enabled, raw_setting):
     import asyncio
     import json
     from types import SimpleNamespace
@@ -98,9 +99,24 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
     manager = Mock()
     manager_factory = Mock(return_value=manager)
     monkeypatch.setattr(runtime, 'LocalIngestionManager', manager_factory)
-    monkeypatch.setattr(runtime, 'create_server', lambda services, *, lifespan: lifespan)
-    lifespan = runtime.build_runtime_server({'DATA_ROOT': str(tmp_path), 'OPENAI_API_KEY': 'fixture',
-        'SEMANTIC_VERIFICATION_ENABLED': str(enabled).lower()})
+    create = Mock(side_effect=lambda services, *, lifespan: lifespan)
+    monkeypatch.setattr(runtime, 'create_server', create)
+    values = {'DATA_ROOT': str(tmp_path), 'OPENAI_API_KEY': 'fixture',
+        'SEMANTIC_VERIFICATION_ENABLED': str(enabled).lower()}
+    if raw_setting is not None:
+        values['SOLO_LEVELING_COLLECT_RAW_LOGS'] = raw_setting
+    lifespan = runtime.build_runtime_server(values)
+    # 상세 조회와 대시보드가 같은 저장소에 각각 연결되는지 확인한다.
+    connected = create.call_args.args[0]
+    assert connected.answer is services.answer
+    assert connected.evidence is services.evidence
+    assert connected.ingestion is manager
+    assert connected.contexts is services.search.contexts
+    assert isinstance(connected.detail, runtime.PaperDetailService)
+    assert isinstance(connected.detail.reader, runtime.SQLitePaperDetailReader)
+    assert isinstance(connected.dashboard, runtime.DashboardReader)
+    assert connected.dashboard.db_path == str(runtime.runtime_paths(values).db_path)
+    assert factory.call_args.kwargs['collect_raw_logs'] is (raw_setting == '1')
     captured = capsys.readouterr()
     assert captured.out == ''
     assert json.loads(captured.err) == {'event': 'semantic_startup', 'enabled': enabled,
