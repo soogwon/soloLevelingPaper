@@ -99,12 +99,23 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
     manager = Mock()
     manager_factory = Mock(return_value=manager)
     monkeypatch.setattr(runtime, 'LocalIngestionManager', manager_factory)
-    monkeypatch.setattr(runtime, 'create_server', lambda services, *, lifespan: lifespan)
+    create = Mock(side_effect=lambda services, *, lifespan: lifespan)
+    monkeypatch.setattr(runtime, 'create_server', create)
     values = {'DATA_ROOT': str(tmp_path), 'OPENAI_API_KEY': 'fixture',
         'SEMANTIC_VERIFICATION_ENABLED': str(enabled).lower()}
     if raw_setting is not None:
         values['SOLO_LEVELING_COLLECT_RAW_LOGS'] = raw_setting
     lifespan = runtime.build_runtime_server(values)
+    # 상세 조회와 대시보드가 같은 저장소에 각각 연결되는지 확인한다.
+    connected = create.call_args.args[0]
+    assert connected.answer is services.answer
+    assert connected.evidence is services.evidence
+    assert connected.ingestion is manager
+    assert connected.contexts is services.search.contexts
+    assert isinstance(connected.detail, runtime.PaperDetailService)
+    assert isinstance(connected.detail.reader, runtime.SQLitePaperDetailReader)
+    assert isinstance(connected.dashboard, runtime.DashboardReader)
+    assert connected.dashboard.db_path == str(runtime.runtime_paths(values).db_path)
     assert factory.call_args.kwargs['collect_raw_logs'] is (raw_setting == '1')
     captured = capsys.readouterr()
     assert captured.out == ''
