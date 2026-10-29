@@ -1,0 +1,72 @@
+name: "#85 Linux 로그 보호 검증"
+
+on:
+  push:
+    branches: [test/issue-85-macos-validation]
+    paths:
+      - '.github/workflows/issue-85-linux.yml'
+      - 'src/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  log-privacy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      LOCAL_ONLY: 'true'
+      ALLOW_EXTERNAL_API: 'false'
+      OPENAI_API_KEY: 'synthetic-key'
+      HF_HUB_OFFLINE: '1'
+      TRANSFORMERS_OFFLINE: '1'
+      ANONYMIZED_TELEMETRY: 'false'
+    steps:
+      - name: 검증 대상 코드 가져오기
+        uses: actions/checkout@v6
+      - name: Python 3.12 준비
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 환경 기록 및 테스트 의존성 설치
+        run: |
+          mkdir -p reports
+          uname -a > reports/environment.txt
+          python --version >> reports/environment.txt
+          git rev-parse HEAD >> reports/environment.txt
+          python -m pip install -e '.[dev]'
+          python -m pip check
+          python -m pip freeze > reports/packages.txt
+      - name: 실제 자식 프로세스 로그 보호 검증
+        run: |
+          python -m pytest tests/integration/test_embedding_log_privacy.py -q -rs --tb=short --junitxml=reports/privacy.xml
+      - name: 실행 경로와 부모 진단 회귀 검증
+        if: ${{ !cancelled() }}
+        run: |
+          python -m pytest tests/unit/mcp/test_runtime.py tests/unit/mcp/test_desktop.py tests/unit/test_mcp_diagnostic_runner.py tests/unit/test_process_embedder.py tests/integration/test_mcp_stdio.py tests/unit/test_safe_diagnostic_stream.py tests/unit/test_diagnostics.py tests/integration/test_answer_diagnostics.py -q -rs --tb=short --junitxml=reports/regression.xml
+      - name: 예상하지 않은 건너뜀 검사
+        if: ${{ !cancelled() }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          for name in ('privacy', 'regression'):
+              root = ET.parse(Path('reports') / f'{name}.xml').getroot()
+              cases = root.findall('.//testcase')
+              assert cases, f'{name}: 테스트 결과 없음'
+              assert not root.findall('.//failure') and not root.findall('.//error')
+              skipped = [c.attrib['name'] for c in cases if c.find('skipped') is not None]
+              expected = [] if name == 'privacy' else ['test_spawn_while_stdin_pipe_is_being_read']
+              assert skipped == expected, f'{name}: 예상하지 않은 건너뜀 {skipped}'
+          PY
+      - name: 검증 결과 보관
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-85-linux-results
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14

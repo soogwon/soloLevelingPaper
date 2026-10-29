@@ -42,6 +42,64 @@ CLI 종료 시 기존 프로세스 환경값을 복원한다. 실행 중인 자�
 - Mac/Linux·실제 모델 실행은 미검증이다. 전체 테스트 통과 또는 #64 전체 완료로
   기록하지 않으며, 원본 로그 보관·자동 삭제는 #99 후속 범위다.
 
+### macOS 검증 결과 (2026-10-29)
+
+- 기준: PR #111 병합 이후 main `46b7c622c888135a588506bc68650db5a3a2159a`.
+- 환경: macOS 26.7.1 (25G241), arm64, Python 3.12.14.
+- 로그 통합 19개와 runtime·Desktop·진단 실행기·ProcessEmbedder·실제 MCP stdio
+  회귀를 함께 실행해 **124개 통과, 1개 건너뜀**을 확인했다. 건너뛴 항목은
+  Windows 전용 `test_spawn_while_stdin_pipe_is_being_read`다.
+- 부모 안전 로그 필터·진단·답변 진단 테스트는 **117개 통과**했다.
+- 합성 문자열을 Python stdout/stderr와 네이티브 fd에 출력하는 실제 자식 프로세스로
+  정상·실패·시간 초과, 기본 비수집과 명시적 원본/스택 수집, 부모 출력 격리를 확인했다.
+  수집 옵션 해제 후 별도 프로세스로 재시작하면 새 원본 수집이 중단되고 기존 파일은
+  그대로 유지됐다. 활성 요청 종료 및 환경변수의 정확한 값 판정도 회귀 범위에 포함한다.
+- 추가로 임시 설정·빈 DB에서 실제 `desktop serve`를 기본/상세 모드로 각각 실행하여
+  MCP 초기화, 8개 도구 목록, 빈 작업 목록 조회, 종료를 확인했다. 설정 파일에 원본 수집
+  `1`이 있어도 옵션 없는 Desktop 실행의 시작 로그는 `raw_logs=false`였고,
+  명시적 옵션 실행은 `true`였다. 이 추가 점검은 임시 실행 스크립트로 수행했다.
+- 사용자 논문·DB·API 키, 모델 다운로드와 유료 API는 사용하지 않았다. 실제 Claude
+  Desktop 앱의 연결 설정도 변경하지 않았다. Desktop 실행 명령의 프로토콜 점검을
+  실제 Claude UI 검증이나 실제 모델 작업 검증으로 확대하지 않는다.
+
+재현 명령(저장소 루트, 개발 환경의 Python 사용):
+
+```bash
+python -m pytest tests/integration/test_embedding_log_privacy.py tests/unit/mcp/test_runtime.py tests/unit/mcp/test_desktop.py tests/unit/test_mcp_diagnostic_runner.py tests/unit/test_process_embedder.py tests/integration/test_mcp_stdio.py -q --tb=short
+python -m pytest tests/unit/test_safe_diagnostic_stream.py tests/unit/test_diagnostics.py tests/integration/test_answer_diagnostics.py -q --tb=short
+```
+
+전체 테스트를 다시 실행한 결과는 아니다. 아래 추가 검증 전에는 Linux·실제 Claude 호스트 검증이 남아 있었고,
+기본 자식 로그의 `worker_enter` 외 단계·소요 시간·안전 오류 코드 추가는 별도 합의가
+필요하다. 일반 MCP 부모 stderr의 필터 적용 제한과 #99의 보관·삭제 범위도 유지한다.
+따라서 이번 Mac 검증만으로 #85나 #64 전체를 종료하지 않는다.
+
+### 실제 Claude Desktop 추가 검증 (2026-10-29)
+
+- 동일 main 소스를 사용하는 임시 `solo85-host-check` 서버를 Claude Desktop에 연결했다.
+  Desktop CLI와 진단 실행기는 실제 코드를 사용하되, 서버 생성 지점은 검증용 FastMCP로
+  대체했다. 실제 `ProcessEmbedder`와 자식 로그 래퍼에 가짜 임베딩 작업을 주입했으며,
+  모델·유료 API·실제 논문은 사용하지 않았다. 제품 전체 등록 흐름 검증은 아니다.
+- Claude를 완전히 종료·재실행하면서 기본 → 명시적 원본 수집 → 옵션 해제 순서로
+  각각 새 서버와 자식 프로세스를 실행했다. 환경·설정 파일의 수집 값은 `1`로 유지하여
+  Desktop CLI 옵션 유무가 우선 적용되는지도 확인했다.
+
+| 단계 | Python·네이티브 합성 문자열 | 스택 파일 생성 | 기존 자식 로그 해시 |
+| --- | --- | --- | --- |
+| 기본 | 신규 로그에 없음 | 없음 | 유지 |
+| 원본 수집 옵션 사용 | 신규 원본 로그에 있음 | 있음 | 유지 |
+| 옵션 해제 후 재시작 | 신규 로그에 없음 | 없음 | 유지 |
+
+- Claude에서 `get_log_privacy_report`를 한 번 호출하여 세 단계의 통과 결과가
+  채팅 표로 표시되는 것을 확인했다. 이 도구는 결과 불리언만 반환하며 로그 본문이나
+  키를 반환하지 않는다. Claude의 임시 서버 로그에도 합성 원본 문자열은 없었다.
+- 정상 완료 작업이므로 스택 파일 생성 여부만 확인했다. 실제 지연 스택 내용,
+  실패·시간 초과·활성 작업 종료는 앞선 자동 테스트의 검증 범위다.
+- 임시 서버 연결을 제거하고 Claude를 다시 실행했다. 기존 MCP 서버 설정은 백업과
+  동일함을 확인했다. 합성 검증 자료와 화면 캡처는 저장소 밖 임시 폴더에 보관했다.
+- 남은 항목: Linux 검증, 기본 단계 진단 추가 범위·담당 합의. #99의 보관·정리와
+  일반 MCP 부모 stderr 필터 제한은 별도이며 #85·#64는 자동 종료하지 않는다.
+
 아래는 통합 전 협의 당시 기록이다.
 
 ## 확인한 현재 동작
