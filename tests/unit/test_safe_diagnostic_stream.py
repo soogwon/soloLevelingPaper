@@ -13,6 +13,92 @@ def record():
                 event='start', elapsed_ms=0, error_code=None)
 
 
+@pytest.mark.parametrize('detailed', [False, True])
+def test_chroma_close_preserves_only_fixed_failure_codes(detailed):
+    output = StringIO()
+    stream = SafeDiagnosticStream(output, detailed=detailed)
+    expected = []
+    for code in ('CHROMA_CLOSE_FAILED', 'CHROMA_CLOSE_UNSUPPORTED'):
+        row = {'event': 'chroma_close', 'code': code}
+        expected.append(row)
+        line = json.dumps(row)
+        stream.write(line[:12])
+        stream.write(line[12:] + '\n')
+    stream.flush()
+    assert [json.loads(line) for line in output.getvalue().splitlines()] == expected
+
+
+@pytest.mark.parametrize('detailed', [False, True])
+@pytest.mark.parametrize('value', [
+    {'event': 'chroma_close'},
+    {'event': 'chroma_close', 'code': 'CHROMA_CLOSED'},
+    {'event': 'chroma_close', 'code': 'CHROMA_ALREADY_CLOSED'},
+    {'event': 'chroma_close', 'code': 'PRIVATE'},
+    {'event': 'chroma_close', 'code': []},
+    {'event': 'chroma_close', 'code': None},
+    {'event': 'chroma_close', 'code': True},
+    {'event': 'chroma_close', 'code': {'secret': 'PRIVATE'}},
+    {'event': 'chroma_close', 'code': 'CHROMA_CLOSE_FAILED', 'path': 'PRIVATE'},
+    {'event': 'chroma_close', 'code': 'CHROMA_CLOSE_FAILED', 'exception': 'PRIVATE'},
+])
+def test_chroma_close_rejects_unapproved_records_and_recovers(detailed, value):
+    output = StringIO()
+    stream = SafeDiagnosticStream(output, detailed=detailed)
+    stream.write(json.dumps(value) + '\n')
+    assert output.getvalue() == ''
+    stream.write(json.dumps(record()) + '\n')
+    assert json.loads(output.getvalue()) == record()
+
+
+@pytest.mark.parametrize('detailed', [False, True])
+def test_chroma_close_log_write_failure_does_not_escape_owner(detailed, monkeypatch):
+    from unittest.mock import Mock
+    import sys
+    from solo_leveling.workers import ingestion
+    from solo_leveling.infrastructure.storage.vector_store import ChromaCloseResult
+    output = Mock(write=Mock(side_effect=OSError('PRIVATE_STORAGE_ERROR')))
+    monkeypatch.setattr(sys, 'stderr', SafeDiagnosticStream(output, detailed=detailed))
+    monkeypatch.setattr(ingestion, 'close_client', lambda client: ChromaCloseResult.FAILED)
+    ingestion._release_owned_client(object())
+    output.write.assert_called_once()
+
+
+@pytest.mark.parametrize('detailed', [False, True])
+def test_chroma_close_log_recovers_after_one_write_failure(detailed, monkeypatch):
+    from unittest.mock import Mock
+    import sys
+    from solo_leveling.workers import ingestion
+    from solo_leveling.infrastructure.storage.vector_store import ChromaCloseResult
+
+    output = StringIO()
+    original_write = output.write
+    attempts = 0
+
+    def write_once_failed(text):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError('PRIVATE_STORAGE_ERROR')
+        return original_write(text)
+
+    monkeypatch.setattr(output, 'write', write_once_failed)
+    stream = SafeDiagnosticStream(output, detailed=detailed)
+    monkeypatch.setattr(sys, 'stderr', stream)
+    monkeypatch.setattr(ingestion, 'close_client', Mock(side_effect=[
+        ChromaCloseResult.FAILED, ChromaCloseResult.UNSUPPORTED]))
+
+    ingestion._release_owned_client(object())
+    assert output.getvalue() == ''
+    assert stream.pending == ''
+    assert stream.dropping is False
+    ingestion._release_owned_client(object())
+    stream.write(json.dumps(record()) + '\n')
+    stream.flush()
+    assert [json.loads(line) for line in output.getvalue().splitlines()] == [
+        {'event': 'chroma_close', 'code': 'CHROMA_CLOSE_UNSUPPORTED'}, record()]
+    assert attempts == 3
+
+
 def test_partial_writes_preserve_stage_but_drop_plaintext():
     output = StringIO()
     stream = SafeDiagnosticStream(output)

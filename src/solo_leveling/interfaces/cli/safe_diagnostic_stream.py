@@ -50,16 +50,25 @@ class SafeDiagnosticStream:
                 if not self.dropping:
                     self.pending += part
                 if part.endswith(('\n', '\r')):
-                    if not self.dropping:
-                        self._record(self.pending)
-                    self.pending = ''
-                    self.dropping = False
+                    try:
+                        if not self.dropping:
+                            self._record(self.pending)
+                    finally:
+                        # 출력 실패가 다음 로그와 합쳐져 추가 누락을 만들지 않게 한다.
+                        self.pending = ''
+                        self.dropping = False
         return len(text)
 
     def _record(self, line):
         try:
             record = json.loads(line)
         except (ValueError, RecursionError):
+            return
+        if isinstance(record, dict) and record.get('event') == 'chroma_close':
+            # 수집 소유자의 종료 실패만 보존하며 원본 예외·추가 필드는 거부한다.
+            if (set(record) == {'event', 'code'} and isinstance(record['code'], str)
+                    and record['code'] in ('CHROMA_CLOSE_FAILED', 'CHROMA_CLOSE_UNSUPPORTED')):
+                self.output.write(json.dumps(record) + '\n')
             return
         if isinstance(record, dict) and record.get('event') == 'semantic_startup':
             # 시작 진단만 별도 고정 계약을 허용하며 임의 설정값은 보존하지 않는다.
