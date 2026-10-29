@@ -48,9 +48,9 @@ def test_normal_answer_and_explicit_verification_level(parts):
 
 @pytest.mark.parametrize('original,text,quote,expected', [
     ('Parallel is possible. Faster when the sequence\n6', '시퀀스 길이 6에서 더 빠르다.',
-     'Faster when the sequence\n6', AnswerStatus.PARTIAL),
+     'Faster when the sequence\n6', AnswerStatus.INSUFFICIENT_EVIDENCE),
     ('Parallel is possible. Faster when the sequence', '더 빠르다.',
-     'Faster when the sequence', AnswerStatus.PARTIAL),
+     'Faster when the sequence', AnswerStatus.INSUFFICIENT_EVIDENCE),
     ('Parallel is possible. Faster when the sequence', '병렬 처리가 가능하다.',
      'Parallel is possible.', AnswerStatus.OK),
     ('The sequence length is 6.\n6', '시퀀스 길이는 6이다.',
@@ -104,8 +104,9 @@ def test_one_risky_claim_makes_response_partial_without_retry(parts):
     service.generator = SimpleNamespace(generate_claims=generate)
     response = service.answer('조건은?', context_id='ctx', top_k=2)
     assert response.result.status == AnswerStatus.PARTIAL
-    assert '2번 주장' in response.result.answer_ko
-    assert len(response.result.claims) == len(saved[0][1]) == 2
+    assert '일부 주장' in response.result.answer_ko
+    assert [c.text for c in response.result.claims] == ['정상 주장']
+    assert [e.chunk_id for e in saved[0][1]] == ['c0']
     assert calls == [1]
 
 
@@ -136,8 +137,8 @@ def test_continuation_must_be_used_by_same_claim_to_complete_condition(parts, ci
             tuple(ClaimSupport(e.evidence_id, e.original_text) for e in used)),))
     service.generator = SimpleNamespace(generate_claims=generate)
     response = service.answer('조건은?', context_id='ctx')
-    assert response.result.status == (AnswerStatus.OK if cite_next else AnswerStatus.PARTIAL)
-    assert [c.pdf_page for c in response.result.citations] == ([6, 7] if cite_next else [6])
+    assert response.result.status == (AnswerStatus.OK if cite_next else AnswerStatus.INSUFFICIENT_EVIDENCE)
+    assert [c.pdf_page for c in response.result.citations] == ([6, 7] if cite_next else [])
 
 
 @pytest.mark.parametrize('case', ['unknown', 'empty_refs', 'duplicate_refs', 'wrong_type'])
@@ -310,7 +311,7 @@ def test_diagnostics_distinguishes_unused_continuation(parts, capsys, cite_next)
     assert all(r['support_count'] == 1 for r in selected)
     quality = [r for r in trace if r['event'] == 'quality']
     assert quality[0]['reason_code'] == ('NO_EXTRACTION_RISK' if cite_next else 'UNFINISHED_TAIL')
-    assert response.result.status == (AnswerStatus.OK if cite_next else AnswerStatus.PARTIAL)
+    assert response.result.status == (AnswerStatus.OK if cite_next else AnswerStatus.INSUFFICIENT_EVIDENCE)
 
 
 @pytest.fixture
@@ -682,3 +683,91 @@ def raw_diagnostics():
     from solo_leveling.diagnostics import diagnostic_verbosity
     with diagnostic_verbosity(raw=True):
         yield
+
+
+@pytest.mark.parametrize('semantic_enabled', [False, True])
+@pytest.mark.parametrize('keep_valid', [False, True])
+@pytest.mark.parametrize('text', [
+    '시퀀스 길이가 n일 때 더 빠르다.',
+    '시퀀스 길이 n이 충분히 작을 때 더 빠르다.',
+    '시퀀스 길이 6에서 더 빠르다.',
+    '시퀀스 길이 n이 d보다 작을 때 더 빠르다.',
+])
+def test_incomplete_condition_is_removed_before_semantic_verification(
+        parts, capsys, semantic_enabled, keep_valid, text):
+    import json
+    from dataclasses import replace
+    from unittest.mock import Mock
+    from solo_leveling.application.evidence_qa.semantic import SemanticVerificationService
+    from solo_leveling.domain.semantic_verification import SemanticVerdict, SemanticReason
+    from solo_leveling.infrastructure.generation.fake_semantic_verifier import FakeSemanticVerifier
+
+    service, search, saved, _ = parts
+    first = replace(search.items[0].chunk, pdf_page=6,
+        original_text='Faster when the sequence\n6')
+    good = replace(search.items[1].chunk, chunk_index=2, pdf_page=6,
+        original_text='Shorter paths make learning long-range dependencies easier.')
+    search = replace(search, scope=replace(search.scope, pdf_pages=(6,)), items=(
+        replace(search.items[0], chunk=first), replace(search.items[1], chunk=good)))
+    service.search = SimpleNamespace(search=Mock(return_value=ContextSearchResponse('ctx', search)))
+
+    def generate(question, evidence):
+        claims = [GeneratedClaim(text, (evidence[0].evidence_id,),
+            (ClaimSupport(evidence[0].evidence_id, evidence[0].original_text),))]
+        if keep_valid:
+            claims.append(GeneratedClaim('경로가 짧을수록 장거리 의존성 학습이 쉽다.',
+                (evidence[1].evidence_id,),
+                (ClaimSupport(evidence[1].evidence_id, evidence[1].original_text),)))
+        return GeneratedAnswerDraft(tuple(claims))
+
+    service.generator = SimpleNamespace(generate_claims=Mock(side_effect=generate))
+    verifier = FakeSemanticVerifier([(SemanticVerdict.SUPPORTED, SemanticReason.FULL_SUPPORT)])
+    if semantic_enabled:
+        service.semantic_verification = SemanticVerificationService(verifier)
+    result = service.answer('SECRET 조건과 경로 길이는?', context_id='ctx', pdf_pages=(6,)).result
+    assert result.status == (AnswerStatus.PARTIAL if keep_valid else AnswerStatus.INSUFFICIENT_EVIDENCE)
+    assert result.reason_code == ReasonCode.EXTRACTION_LIMITED
+    assert text not in result.answer_ko
+    assert len(result.claims) == len(result.citations) == int(keep_valid)
+    assert len(saved) == int(keep_valid)
+    if keep_valid:
+        assert result.citations[0].chunk_id == good.chunk_id
+        assert [e.chunk_id for e in saved[0][1]] == [good.chunk_id]
+    assert len(verifier.calls) == int(semantic_enabled and keep_valid)
+    if verifier.calls:
+        assert len(verifier.calls[0][0]) == 1
+        assert verifier.calls[0][0][0].text != text
+    service.search.search.assert_called_once()
+    service.generator.generate_claims.assert_called_once()
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert all(value not in captured.err for value in ('SECRET', first.original_text, text))
+    events = [json.loads(line) for line in captured.err.splitlines()]
+    excluded = [e for e in events if e['event'] == 'claim_excluded']
+    assert len(excluded) == 1
+    assert excluded[0]['reason_code'] == ('STANDALONE_NUMBER' if '6' in text else 'UNFINISHED_TAIL')
+
+
+@pytest.mark.parametrize('pages', [(6,), (6, 7)])
+def test_condition_repair_respects_page_scope(repair_parts, pages):
+    from dataclasses import replace
+    service, saved, lookup = repair_parts
+    response = lookup.return_value
+    lookup.return_value = replace(response, result=replace(response.result,
+        scope=replace(response.result.scope, pdf_pages=pages)))
+    following = service.continuation_reader.following_chunks
+    # 실제 조회 포트와 같이 사용자 범위에 속한 청크만 반환한다.
+    service.continuation_reader = SimpleNamespace(following_chunks=lambda search, indices:
+        tuple(c for c in following(search, indices) if c.pdf_page in search.scope.pdf_pages))
+    result = service.answer('더 빠른 조건은?', context_id='ctx', pdf_pages=pages).result
+    if pages == (6,):
+        assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+        assert result.reason_code == ReasonCode.EXTRACTION_LIMITED
+        assert not result.claims and not result.citations and not saved
+        service.generator.repair_claims.assert_not_called()
+    else:
+        assert result.status == AnswerStatus.OK
+        assert result.claims[0].text == 'n이 d보다 작을 때 더 빠르다.'
+        assert [c.pdf_page for c in result.citations] == [6, 7]
+        service.generator.repair_claims.assert_called_once()
+    lookup.assert_called_once()

@@ -114,7 +114,7 @@ def test_limits_do_not_call_provider_or_truncate(parts, limits):
     writer.save.assert_not_called()
 
 
-def test_existing_extraction_warning_is_not_upgraded(parts):
+def test_incomplete_source_is_excluded_before_semantic_approval(parts):
     service, verifier, writer = configure(parts, [(V.SUPPORTED, R.FULL_SUPPORT)])
     search = parts[1]
     broken = replace(search.items[0].chunk, original_text='Faster when the sequence\n6')
@@ -124,8 +124,11 @@ def test_existing_extraction_warning_is_not_upgraded(parts):
         GeneratedClaim('더 빠르다.', (ev[0].evidence_id,),
                        (ClaimSupport(ev[0].evidence_id, ev[0].original_text),)),))
     response = service.answer('조건은?', context_id='ctx')
-    assert response.result.status == AnswerStatus.PARTIAL
+    assert response.result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
     assert response.result.reason_code == ReasonCode.EXTRACTION_LIMITED
+    assert not response.result.claims and not response.result.citations
+    assert not verifier.calls
+    writer.save.assert_not_called()
 
 
 def test_only_cited_evidence_is_sent_and_multiple_citations_kept(parts):
