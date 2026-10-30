@@ -111,7 +111,10 @@ def run_diagnostics(args, path, output):
             return 0
         if args.preload_embedding_library:
             preload_embedding_library()
-        runpy.run_module('solo_leveling.interfaces.mcp', run_name='__main__')
+        from solo_leveling.interfaces.mcp.lifecycle import cleanup_scope
+        # 서버의 비동기 루프가 끝나도 작업·정리 출력의 보호를 먼저 해제하지 않는다.
+        with cleanup_scope():
+            runpy.run_module('solo_leveling.interfaces.mcp', run_name='__main__')
         return 0
     except Exception:
         print('MCP_DIAGNOSTIC_STARTUP_FAILED', file=output, flush=True)

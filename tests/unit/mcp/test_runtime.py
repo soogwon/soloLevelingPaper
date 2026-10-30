@@ -108,13 +108,13 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
     lifespan = runtime.build_runtime_server(values)
     # 상세 조회와 대시보드가 같은 저장소에 각각 연결되는지 확인한다.
     connected = create.call_args.args[0]
-    assert connected.answer is services.answer
-    assert connected.evidence is services.evidence
-    assert connected.ingestion is manager
-    assert connected.contexts is services.search.contexts
-    assert isinstance(connected.detail, runtime.PaperDetailService)
+    assert connected.answer.target is services.answer
+    assert connected.evidence.target is services.evidence
+    assert connected.ingestion.target is manager
+    assert connected.contexts.target is services.search.contexts
+    assert isinstance(connected.detail.target, runtime.PaperDetailService)
     assert isinstance(connected.detail.reader, runtime.SQLitePaperDetailReader)
-    assert isinstance(connected.dashboard, runtime.DashboardReader)
+    assert isinstance(connected.dashboard.target, runtime.DashboardReader)
     assert connected.dashboard.db_path == str(runtime.runtime_paths(values).db_path)
     assert factory.call_args.kwargs['collect_raw_logs'] is (raw_setting == '1')
     captured = capsys.readouterr()
@@ -131,7 +131,8 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
 
     asyncio.run(check())
     embedder.close.assert_called_once()
-    manager.executor.shutdown.assert_called_once_with(wait=False, cancel_futures=True)
+    manager.begin_shutdown.assert_called_once()
+    manager.wait_for_idle.assert_called_once_with(None)
 
 
 @pytest.mark.parametrize(('allow', 'local'), [

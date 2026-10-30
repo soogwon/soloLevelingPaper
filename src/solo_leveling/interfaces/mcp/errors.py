@@ -10,10 +10,13 @@ from solo_leveling.domain.context import ContextNotReadyError
 from solo_leveling.domain.models import RequestConflictError
 from solo_leveling.infrastructure.embeddings.process_embedder import EmbeddingProcessError
 from solo_leveling.infrastructure.storage.pdf_store import UnsupportedDocumentError
+from .ingestion import IngestionShuttingDownError
 
 
 def to_tool_error(error: Exception) -> ToolError:
     """원래 예외 메시지·경로·스택을 MCP 응답에 포함하지 않는다."""
+    if isinstance(error, IngestionShuttingDownError):
+        return ToolError('SERVER_SHUTTING_DOWN: 서버 종료 중에는 새 요청을 시작할 수 없습니다.')
     if isinstance(error, EmbeddingProcessError):
         return ToolError(f'UPSTREAM_UNAVAILABLE: {error.code.value}: 임베딩 처리를 완료하지 못했습니다.')
     if isinstance(error, InvalidArgumentError):

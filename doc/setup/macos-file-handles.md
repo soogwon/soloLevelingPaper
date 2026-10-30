@@ -1,5 +1,8 @@
 # #67 macOS 파일 핸들 검증 기록
 
+운영 서버의 후속 소유권·종료 협의는 [#91 계약안](chroma-lifecycle-coordination.md)에 정리한다.
+계약안 작성은 운영 코드의 종료 처리 완료를 뜻하지 않는다.
+
 ## 검증 범위
 
 - 검증 기준: `dda8fe5ebca3c0d4ca298aada60ebc70b284a015` (`origin/main`)

@@ -64,6 +64,12 @@ class SafeDiagnosticStream:
             record = json.loads(line)
         except (ValueError, RecursionError):
             return
+        if isinstance(record, dict) and record.get('event') == 'runtime_cleanup':
+            if (set(record) == {'event', 'code'} and isinstance(record['code'], str)
+                    and record['code'] in {'INGESTION_CANCEL_STATE_FAILED', 'RUNTIME_DRAIN_FAILED', 'EMBEDDER_CLOSE_FAILED',
+                        'RUNTIME_SHUTDOWN_DEFERRED', 'CHROMA_CLOSE_UNSUPPORTED', 'CHROMA_CLOSE_FAILED'}):
+                self.output.write(json.dumps(record) + '\n')
+            return
         if isinstance(record, dict) and record.get('event') == 'chroma_close':
             # 수집 소유자의 종료 실패만 보존하며 원본 예외·추가 필드는 거부한다.
             if (set(record) == {'event', 'code'} and isinstance(record['code'], str)

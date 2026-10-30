@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 import threading
+import math
 import uuid
 
 from solo_leveling.application.translation.service import TranslationService
@@ -16,11 +17,16 @@ from solo_leveling.workers.ingestion import (
 from .local_files import LocalPdfStore
 
 
+class IngestionShuttingDownError(RuntimeError):
+    """종료를 시작한 등록 관리자는 새 요청을 받지 않는다."""
+
+
 @dataclass(frozen=True)
 class IngestionServices:
     translation: TranslationService
     translation_settings: TranslationSettings
     embedder: object = None
+    chroma_client: object = None
 
 
 class LocalIngestionManager:
@@ -32,7 +38,44 @@ class LocalIngestionManager:
         self.services = services
         self.executor = ThreadPoolExecutor(max_workers=max_workers,
                                            thread_name_prefix='paper-ingestion')
-        self.lock = threading.Lock()
+        # 이미 완료된 Future의 콜백이 제출 스레드에서 즉시 실행될 수 있다.
+        self.lock = threading.RLock()
+        self._condition = threading.Condition(self.lock)
+        self._accepting = True
+        self._pending = {}
+
+    def _on_done(self, future):
+        # 취소된 Future에서는 exception()이 CancelledError를 발생시킨다.
+        try:
+            if not future.cancelled():
+                future.exception()
+        finally:
+            with self._condition:
+                self._pending.pop(future, None)
+                self._condition.notify_all()
+
+    def begin_shutdown(self) -> None:
+        """시작 전 작업만 취소하고 실행 중인 작업은 완료까지 유지한다."""
+        with self.lock:
+            if not self._accepting:
+                return
+            self._accepting = False
+            # cancel()의 즉시 콜백이 원본 사전을 바꾸므로 사본을 순회한다.
+            for future, job_id in list(self._pending.items()):
+                if future.cancel():
+                    try:
+                        repo.mark_job_cancelled_before_start(self.db_path, job_id)
+                    except Exception:
+                        from .lifecycle import report
+                        report('INGESTION_CANCEL_STATE_FAILED')
+            self.executor.shutdown(wait=False, cancel_futures=False)
+
+    def wait_for_idle(self, timeout: float | None) -> bool:
+        """제출 작업의 종료를 기다린다. 비동기 호출자는 별도 스레드에서 실행한다."""
+        if timeout is not None and (isinstance(timeout, bool) or not math.isfinite(timeout) or timeout < 0):
+            raise ValueError('대기 시간은 유한한 0 이상의 숫자여야 합니다.')
+        with self._condition:
+            return self._condition.wait_for(lambda: not self._pending, timeout)
 
     @staticmethod
     def _paper_id(file_hash: str) -> str:
@@ -45,6 +88,8 @@ class LocalIngestionManager:
             raise InvalidArgumentError('request_key가 필요합니다.')
         # 한 프로세스 안에서는 복사·요청 등록·작업 제출 순서를 고정한다.
         with self.lock:
+            if not self._accepting:
+                raise IngestionShuttingDownError()
             managed = self.pdf_store.import_pdf(relative_path)
             prepared = prepare_local_ingestion(
                 self.db_path, self.chroma_dir, str(managed.path), managed.original_filename,
@@ -56,9 +101,9 @@ class LocalIngestionManager:
                     future = self.executor.submit(run_prepared_local_ingestion, prepared,
                         translation_service=self.services.translation,
                         translation_settings=self.services.translation_settings,
-                        embedder=self.services.embedder)
-                    # 완료 결과는 DB가 기준이며, 예외를 소비해 실행기 경고만 방지한다.
-                    future.add_done_callback(lambda completed: completed.exception())
+                        embedder=self.services.embedder, chroma_client=self.services.chroma_client)
+                    self._pending[future] = prepared.registration.job_id
+                    future.add_done_callback(self._on_done)
                 except Exception:
                     repo.update_job_status(self.db_path, prepared.registration.job_id,
                         JobStatus.FAILED, limitations=['scheduler_failed'])

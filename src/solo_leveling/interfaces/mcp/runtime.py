@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from contextlib import asynccontextmanager
 import os
+import asyncio
+import anyio
 import math
 from pathlib import Path, PureWindowsPath
 from typing import Mapping
@@ -16,13 +18,14 @@ from solo_leveling.infrastructure.database.schema import init_db
 from solo_leveling.infrastructure.database.dashboard_queries import DashboardReader
 from solo_leveling.infrastructure.generation.openai_generator import OpenAIGenerationSettings
 from solo_leveling.infrastructure.generation.semantic_verifier import SemanticSettings
-from solo_leveling.infrastructure.storage.vector_store import get_client
+from solo_leveling.infrastructure.storage.vector_store import get_client, close_client, ChromaCloseResult
 from solo_leveling.infrastructure.translation.openai_provider import OpenAITranslationConfig
 from solo_leveling.application.paper_detail.service import PaperDetailService
 from solo_leveling.infrastructure.retrieval.paper_detail import SQLitePaperDetailReader
 from .server import MCPServices, create_server
 from .ingestion import IngestionServices, LocalIngestionManager
 from .local_files import LocalPdfStore
+from .lifecycle import RequestGate, RuntimeLifetime, report, track_lifetime
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,7 @@ class RuntimePaths:
 class RuntimeSettings:
     paths: RuntimePaths
     embedding_timeout: float
+    shutdown_timeout: float
     max_bytes: int
     max_workers: int
     generation: OpenAIGenerationSettings
@@ -85,17 +89,20 @@ def validate_runtime_settings(values: Mapping[str, str]) -> RuntimeSettings:
     paths = runtime_paths(values)
     try:
         timeout = float(values.get('EMBEDDING_PROCESS_TIMEOUT_SECONDS', '90'))
+        shutdown_timeout = float(values.get('MCP_SHUTDOWN_TIMEOUT_SECONDS', '30'))
         max_bytes = int(values.get('MAX_UPLOAD_BYTES', '31457280'))
         max_workers = int(values.get('MAX_CONCURRENT_INGESTIONS', '1'))
     except ValueError:
         raise ValueError('제한 시간·등록 크기·동시 작업 설정이 올바른 숫자여야 합니다.') from None
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError('임베딩 제한 시간은 유한한 양수여야 합니다.')
+    if not math.isfinite(shutdown_timeout) or shutdown_timeout < 0:
+        raise ValueError('종료 대기 시간은 유한한 0 이상의 숫자여야 합니다.')
     if max_bytes < 1:
         raise ValueError('MAX_UPLOAD_BYTES는 양의 정수여야 합니다.')
     if max_workers != 1:
         raise ValueError('현재 MAX_CONCURRENT_INGESTIONS는 1만 지원합니다.')
-    return RuntimeSettings(paths, timeout, max_bytes, max_workers,
+    return RuntimeSettings(paths, timeout, shutdown_timeout, max_bytes, max_workers,
                            OpenAIGenerationSettings.from_env(values),
                            OpenAITranslationConfig.from_env(values), SemanticSettings.from_env(values))
 
@@ -107,41 +114,66 @@ def build_runtime_server(values: Mapping[str, str]):
     embedder = ProcessEmbedder(settings.embedding_timeout,
                               log_dir=paths.data_root / 'diagnostics',
                               collect_raw_logs=values.get('SOLO_LEVELING_COLLECT_RAW_LOGS') == '1')
-    paths.data_root.mkdir(parents=True, exist_ok=True)
-    paths.db_path.parent.mkdir(parents=True, exist_ok=True)
-    paths.chroma_dir.mkdir(parents=True, exist_ok=True)
-    paths.import_dir.mkdir(parents=True, exist_ok=True)
-    paths.pdf_dir.mkdir(parents=True, exist_ok=True)
-    init_db(str(paths.db_path))
-    mark_interrupted_jobs_on_startup(str(paths.db_path))
-    services = build_services(str(paths.db_path), get_client(str(paths.chroma_dir)),
-        generation=settings.generation,
-        translation=settings.translation, embedder=embedder, verification=settings.verification)
-    from solo_leveling.diagnostics import semantic_startup_diagnostic
-    semantic = services.answer.semantic_verification
-    semantic_startup_diagnostic(enabled=settings.verification.enabled,
-        connected=semantic is not None,
-        prompt_version=semantic.verifier.prompt_version if semantic is not None else None)
-    ingestion = LocalIngestionManager(str(paths.db_path), str(paths.chroma_dir),
-        LocalPdfStore(paths.import_dir, paths.pdf_dir, settings.max_bytes),
-        IngestionServices(services.translation, services.translation_settings, embedder),
-        max_workers=settings.max_workers)
+    client = None
+    ingestion = None
+    try:
+        paths.data_root.mkdir(parents=True, exist_ok=True)
+        paths.db_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.chroma_dir.mkdir(parents=True, exist_ok=True)
+        paths.import_dir.mkdir(parents=True, exist_ok=True)
+        paths.pdf_dir.mkdir(parents=True, exist_ok=True)
+        init_db(str(paths.db_path))
+        mark_interrupted_jobs_on_startup(str(paths.db_path))
+        client = get_client(str(paths.chroma_dir))
+        services = build_services(str(paths.db_path), client,
+            generation=settings.generation,
+            translation=settings.translation, embedder=embedder, verification=settings.verification)
+        from solo_leveling.diagnostics import semantic_startup_diagnostic
+        semantic = services.answer.semantic_verification
+        semantic_startup_diagnostic(enabled=settings.verification.enabled,
+            connected=semantic is not None,
+            prompt_version=semantic.verifier.prompt_version if semantic is not None else None)
+        ingestion = LocalIngestionManager(str(paths.db_path), str(paths.chroma_dir),
+            LocalPdfStore(paths.import_dir, paths.pdf_dir, settings.max_bytes),
+            IngestionServices(services.translation, services.translation_settings, embedder, client),
+            max_workers=settings.max_workers)
 
-    @asynccontextmanager
-    async def lifespan(server):
+        gate = RequestGate()
+        lifetime = RuntimeLifetime(gate, ingestion, embedder, client)
+
+        @asynccontextmanager
+        async def lifespan(server):
+            try:
+                yield
+            finally:
+                lifetime.begin()
+                # 취소돼도 종료 스레드는 마지막 사용이 끝날 때까지 소유권을 유지한다.
+                with anyio.CancelScope(shield=True):
+                    if not await asyncio.to_thread(lifetime.done.wait, settings.shutdown_timeout):
+                        report('RUNTIME_SHUTDOWN_DEFERRED')
+
+        server = create_server(MCPServices(
+            answer=gate.wrap(services.answer), evidence=gate.wrap(services.evidence),
+            ingestion=gate.wrap(ingestion), contexts=gate.wrap(services.search.contexts),
+            detail=gate.wrap(PaperDetailService(SQLitePaperDetailReader(str(paths.db_path)))),
+            dashboard=gate.wrap(DashboardReader(str(paths.db_path))),
+        ), lifespan=lifespan)
+        track_lifetime(lifetime)
+        return server
+    except BaseException:
+        if ingestion is not None:
+            try:
+                ingestion.begin_shutdown()
+            except Exception:
+                report('RUNTIME_DRAIN_FAILED')
         try:
-            yield
-        finally:
-            # 새 임베딩 요청을 차단하고 실행 중인 전용 프로세스를 정리한다.
             embedder.close()
-            ingestion.executor.shutdown(wait=False, cancel_futures=True)
-
-    return create_server(MCPServices(
-        answer=services.answer, evidence=services.evidence,
-        ingestion=ingestion, contexts=services.search.contexts,
-        detail=PaperDetailService(SQLitePaperDetailReader(str(paths.db_path))),
-        dashboard=DashboardReader(str(paths.db_path)),
-    ), lifespan=lifespan)
+        except Exception:
+            report('EMBEDDER_CLOSE_FAILED')
+        result = close_client(client)
+        if result not in (ChromaCloseResult.CLOSED, ChromaCloseResult.ALREADY_CLOSED):
+            report(result.value)
+        raise
 
 
 def main() -> None:
