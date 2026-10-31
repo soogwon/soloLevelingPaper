@@ -371,6 +371,9 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         검증 전에 모든 주장이 제외되면 structural_only일 수 있으며, 이것만으로 설정 비활성화를 단정하지 마세요.
         ok도 질문 전체에 대한 답변 완전성 보증은 아닙니다. 제외된 내용을 배경지식으로 보충하지 마세요.
         focus는 사용자 지정 범위를 유지하세요. pdf_pages는 인쇄 번호가 아닌 물리 PDF 페이지입니다.
+        호스트의 시간 초과나 대기 취소만으로 서버 작업이 중단됐다고 판단하지 마세요.
+        서버에서 API 호출과 근거 저장이 계속될 수 있으므로 자동 재호출하지 마세요.
+        실행 상태를 확인할 수 없으면 그 한계를 알리고 추가 호출 여부를 사용자에게 확인하세요.
         """
         try:
             try:
@@ -385,8 +388,13 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             response = await anyio.to_thread.run_sync(lambda: services.answer.answer(
                 effective_question, context_id=context_id, top_k=top_k,
                 pdf_pages=pages, section_ids=sections))
+            # 동기 작업 대기 중 도착한 MCP 취소를 반영해 이미 취소 응답한 요청에 재응답하지 않는다.
+            # 실행 중인 스레드의 API 호출·저장을 취소하는 것은 아니다.
+            await anyio.lowlevel.checkpoint()
             return _answer_payload(response)
         except Exception as error:
+            # 취소 뒤 동기 작업이 실패한 경우에도 이미 응답한 요청에 오류를 재전송하지 않는다.
+            await anyio.lowlevel.checkpoint()
             raise to_tool_error(error) from None
 
     @server.tool(name='get_evidence', structured_output=True,
