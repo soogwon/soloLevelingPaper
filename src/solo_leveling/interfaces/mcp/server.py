@@ -18,6 +18,7 @@ from solo_leveling.application.evidence_qa.ports import DefaultContextStore
 from solo_leveling.domain.evidence_qa import require_text
 from solo_leveling.application.paper_detail.service import PaperDetailService
 from .errors import to_tool_error
+from .input_privacy import SafeInputServer
 from .detail_app import DETAIL_APP_URI, register_detail_app
 from .status_app import STATUS_APP_URI, register_status_app
 from .dashboard import DashboardService, register_dashboard
@@ -226,7 +227,7 @@ def _answer_payload(response) -> AskPaperOutput:
 
 def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
     """저장소 수명이나 환경 설정에 관여하지 않고 MCP 도구만 구성한다."""
-    server = FastMCP('solo-leveling-paper',
+    server = SafeInputServer('solo-leveling-paper',
         instructions=HOST_INSTRUCTIONS,
         log_level='ERROR', lifespan=lifespan)
 
