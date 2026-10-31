@@ -393,6 +393,8 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             await anyio.lowlevel.checkpoint()
             return _answer_payload(response)
         except Exception as error:
+            # 취소 뒤 동기 작업이 실패한 경우에도 이미 응답한 요청에 오류를 재전송하지 않는다.
+            await anyio.lowlevel.checkpoint()
             raise to_tool_error(error) from None
 
     @server.tool(name='get_evidence', structured_output=True,
