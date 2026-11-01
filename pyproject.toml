@@ -16,11 +16,12 @@ solo-leveling-prepare-model = "solo_leveling.interfaces.cli.prepare_embedding_mo
 solo-leveling-mcp-diagnostics = "solo_leveling.interfaces.cli.mcp_diagnostics:main"
 
 [project.optional-dependencies]
-dev = ["pytest", "mcp>=1,<2", "pdfplumber", "chromadb", "requests>=2.32,<3", "python-dotenv>=1,<2"]
+dev = ["pytest", "mcp>=1,<2", "jsonschema>=4.20,<5", "pdfplumber", "chromadb", "requests>=2.32,<3", "python-dotenv>=1,<2"]
 generation = ["requests>=2.32,<3", "python-dotenv>=1,<2"]
 translation = ["requests>=2.32,<3", "python-dotenv>=1,<2"]
 local = [
     "mcp>=1,<2",
+    "jsonschema>=4.20,<5",
     "pdfplumber",
     "chromadb",
     "sentence-transformers",

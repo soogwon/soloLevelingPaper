@@ -56,7 +56,8 @@ async def run():
             tools = await session.list_tools()
             assert {t.name for t in tools.tools} == {
                 'add_paper', 'get_paper_status', 'list_paper_jobs',
-                'start_learning', 'ask_paper', 'get_evidence', 'get_learning_dashboard'}
+                'start_learning', 'ask_paper', 'get_evidence', 'get_learning_dashboard',
+                'get_paper_detail', 'get_reading_questions', 'save_reading_answer'}
             # 설치본에서도 목록 조회 계약과 빈 DB·오류 응답을 실제 stdio로 확인한다.
             listing = next(t for t in tools.tools if t.name == 'list_paper_jobs')
             assert set(listing.inputSchema['properties']) == {'query', 'limit', 'cursor'}

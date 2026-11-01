@@ -115,6 +115,8 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
     assert isinstance(connected.detail.target, runtime.PaperDetailService)
     assert isinstance(connected.detail.reader, runtime.SQLitePaperDetailReader)
     assert isinstance(connected.dashboard.target, runtime.DashboardReader)
+    assert isinstance(connected.reflection.target, runtime.ReflectionService)
+    assert connected.reflection.db_path == str(runtime.runtime_paths(values).db_path)
     assert connected.dashboard.db_path == str(runtime.runtime_paths(values).db_path)
     assert factory.call_args.kwargs['collect_raw_logs'] is (raw_setting == '1')
     captured = capsys.readouterr()
