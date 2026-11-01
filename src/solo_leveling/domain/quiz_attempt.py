@@ -3,8 +3,11 @@
 시도는 제출 시점의 문항 내용(본문·선택지·정답·근거)을 그대로 복사해 둔다.
 퀴즈를 다시 만들어 문항이 바뀌어도 과거 시도의 점수와 오답 근거를 다시 볼 수 있게 하기 위해서다.
 """
+import hashlib
+import json
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from enum import Enum
+from typing import Mapping, Optional, Tuple, Union
 
 from solo_leveling.domain.learning_progress import LEARNING_STEPS
 from solo_leveling.domain.quiz import QUESTION_TYPES
@@ -74,3 +77,43 @@ class QuizAttempt:
     @property
     def wrong_results(self) -> Tuple[AnswerResult, ...]:
         return tuple(r for r in self.results if not r.is_correct)
+
+
+# ── 제출 요청 키와 저장 결과 (#110) ─────────────────────────────
+REQUEST_KEY_MAX_LENGTH = 128
+
+
+class SubmitOutcome(str, Enum):
+    """제출 저장의 결과. 저장소는 예외 대신 이 값을 돌려주고, 로그에는 답안·정답 본문을 남기지 않는다."""
+    SAVED = 'saved'                        # 새 요청이라 시도를 저장했다.
+    REUSED_EXISTING = 'reused_existing'    # 같은 키·같은 입력의 완료 기록이 있어 기존 결과를 돌려준다.
+    REQUEST_CONFLICT = 'request_conflict'  # 같은 키인데 입력이 다르다. 아무것도 저장하지 않는다.
+    QUIZ_CHANGED = 'quiz_changed'          # 완료 기록이 없고, 제출한 quiz_id가 현재 퀴즈와 다르다.
+
+
+@dataclass(frozen=True)
+class SubmitResult:
+    outcome: SubmitOutcome
+    attempt: Optional['QuizAttempt'] = None  # SAVED·REUSED_EXISTING일 때만 있다.
+
+
+def validate_request_key(request_key: str) -> str:
+    if not isinstance(request_key, str) or not request_key.strip():
+        raise AttemptValidationError('request_key가 비어 있습니다.')
+    if len(request_key) > REQUEST_KEY_MAX_LENGTH:
+        raise AttemptValidationError(f'request_key는 {REQUEST_KEY_MAX_LENGTH}자 이하여야 합니다.')
+    if not request_key.isprintable():
+        raise AttemptValidationError('request_key에 제어 문자를 쓸 수 없습니다.')
+    return request_key
+
+
+def submit_input_hash(context_id: str, step: str, quiz_id: str,
+                      answers: Mapping[int, Union[int, str]]) -> str:
+    """같은 제출인지 판정하는 해시. 문항 순서와 직렬화 형식만 통일하고, 답안 문자열은 바꾸지 않는다.
+
+    채점용 normalize_answer()를 쓰지 않으므로 공백·대소문자·유니코드 차이도 다른 입력으로 본다.
+    """
+    items = [[int(position), type(value).__name__, value] for position, value in sorted(answers.items())]
+    payload = json.dumps({'v': 1, 'context_id': context_id, 'step': step, 'quiz_id': quiz_id,
+                          'answers': items}, ensure_ascii=False, separators=(',', ':'), sort_keys=True)
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()

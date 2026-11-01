@@ -35,7 +35,8 @@ from solo_leveling.domain.paper_summary import (
     PAPER_SCOPE, PaperSummary, SummaryItem, SummaryValidationError,
 )
 from solo_leveling.domain.quiz import Quiz, QuizQuestion, QuizValidationError
-from solo_leveling.domain.quiz_attempt import AnswerResult, AttemptValidationError, QuizAttempt
+from solo_leveling.domain.quiz_attempt import (
+    AnswerResult, AttemptValidationError, QuizAttempt, SubmitOutcome, SubmitResult, validate_request_key)
 from solo_leveling.domain.reflection import ReflectionAnswer, validate_answer as validate_reflection_answer
 
 from solo_leveling.domain.learning_progress import (
@@ -808,29 +809,68 @@ def get_quiz_evidence(db_path: str, quiz: Quiz) -> GetEvidenceResult:
 
 
 # ── 퀴즈 시도 (M1-10) ───────────────────────────────────────────
+def _insert_attempt(conn, attempt: QuizAttempt) -> None:
+    """열린 쓰기 트랜잭션 안에서 시도와 문항 결과를 넣는다. 근거가 이 맥락에 없으면 아무것도 넣지 않고 예외."""
+    _require_context(conn, attempt.context_id)
+    known = {r['evidence_id'] for r in conn.execute(
+        'SELECT evidence_id FROM evidences WHERE context_id=?', (attempt.context_id,))}
+    missing = sorted({e for r in attempt.results for e in r.evidence_ids} - known)
+    if missing:
+        raise AttemptValidationError(f'이 맥락에 없는 evidence_id: {", ".join(missing)}')
+    conn.execute('INSERT INTO quiz_attempts VALUES (?, ?, ?, ?, ?, ?, ?)',
+                 (attempt.attempt_id, attempt.context_id, attempt.quiz_id, attempt.step,
+                  attempt.correct_count, attempt.total_count, attempt.submitted_at))
+    for r in attempt.results:
+        conn.execute('INSERT INTO quiz_attempt_answers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                     (attempt.attempt_id, r.position, r.question_type, r.prompt,
+                      json.dumps(list(r.choices), ensure_ascii=False), r.selected_index,
+                      r.submitted_text, r.correct_answer, r.grading_criteria,
+                      1 if r.is_correct else 0, json.dumps(list(r.evidence_ids))))
+
+
 def save_quiz_attempt(db_path: str, attempt: QuizAttempt) -> QuizAttempt:
     """채점이 끝난 시도를 저장한다. 시도는 기록이라 한 번 저장하면 고치거나 덮어쓰지 않는다.
 
     답안의 evidence_id가 이 맥락에 없으면 아무것도 저장하지 않고 AttemptValidationError를 낸다.
+    중복 제출을 막으려면 save_quiz_attempt_once를 쓴다.
     """
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
-        _require_context(conn, attempt.context_id)
-        known = {r['evidence_id'] for r in conn.execute(
-            'SELECT evidence_id FROM evidences WHERE context_id=?', (attempt.context_id,))}
-        missing = sorted({e for r in attempt.results for e in r.evidence_ids} - known)
-        if missing:
-            raise AttemptValidationError(f'이 맥락에 없는 evidence_id: {", ".join(missing)}')
-        conn.execute('INSERT INTO quiz_attempts VALUES (?, ?, ?, ?, ?, ?, ?)',
-                     (attempt.attempt_id, attempt.context_id, attempt.quiz_id, attempt.step,
-                      attempt.correct_count, attempt.total_count, attempt.submitted_at))
-        for r in attempt.results:
-            conn.execute('INSERT INTO quiz_attempt_answers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                         (attempt.attempt_id, r.position, r.question_type, r.prompt,
-                          json.dumps(list(r.choices), ensure_ascii=False), r.selected_index,
-                          r.submitted_text, r.correct_answer, r.grading_criteria,
-                          1 if r.is_correct else 0, json.dumps(list(r.evidence_ids))))
+        _insert_attempt(conn, attempt)
         return attempt
+
+
+def save_quiz_attempt_once(db_path: str, request_key: str, input_hash: str,
+                           attempt: QuizAttempt) -> SubmitResult:
+    """요청 키 단위로 한 번만 시도를 저장한다(#110). 짧은 쓰기 트랜잭션 하나에서 아래 순서로 판정한다.
+
+    1. 같은 request_key의 완료 기록이 있으면: 같은 입력(input_hash)이면 기존 시도를 돌려주고
+       (퀴즈가 다시 만들어졌어도), 다른 입력이면 REQUEST_CONFLICT. 아무것도 저장하지 않는다.
+    2. 완료 기록이 없으면: attempt.quiz_id가 지금 (맥락, 단계)의 퀴즈와 같은지 확인한다. 다르면 QUIZ_CHANGED.
+    3. 같으면 시도·문항 결과·요청 기록을 함께 저장한다. 중간에 실패하면 모두 되돌려 예약 흔적이 남지 않는다.
+
+    형식·근거 오류는 결과 코드가 아니라 AttemptValidationError로 낸다(재시도해도 같은 오류이므로).
+    """
+    validate_request_key(request_key)
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute('SELECT input_hash, attempt_id FROM quiz_submit_requests WHERE request_key=?',
+                           (request_key,)).fetchone()
+        if row:
+            if row['input_hash'] != input_hash:
+                return SubmitResult(SubmitOutcome.REQUEST_CONFLICT)
+            existing = conn.execute('SELECT * FROM quiz_attempts WHERE attempt_id=?',
+                                    (row['attempt_id'],)).fetchone()
+            return SubmitResult(SubmitOutcome.REUSED_EXISTING, _attempt_from_row(conn, existing))
+        _require_context(conn, attempt.context_id)
+        current = conn.execute('SELECT quiz_id FROM quizzes WHERE context_id=? AND step=?',
+                               (attempt.context_id, attempt.step)).fetchone()
+        if current is None or current['quiz_id'] != attempt.quiz_id:
+            return SubmitResult(SubmitOutcome.QUIZ_CHANGED)
+        _insert_attempt(conn, attempt)
+        conn.execute('INSERT INTO quiz_submit_requests VALUES (?, ?, ?, ?)',
+                     (request_key, input_hash, attempt.attempt_id, attempt.submitted_at))
+        return SubmitResult(SubmitOutcome.SAVED, attempt)
 
 
 def _attempt_from_row(conn, row) -> QuizAttempt:
