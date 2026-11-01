@@ -202,6 +202,37 @@ CREATE TABLE IF NOT EXISTS quiz_attempt_answers (
     PRIMARY KEY (attempt_id, position)
 );
 
+-- 메모·하이라이트(M1-11, #56). 기록 하나에 선택 구간이 0개 이상 붙는다(공통 기록 + 선택 구간 두 테이블).
+-- 학습 맥락(context)마다 따로 저장하고 다른 맥락에 자동으로 공유하지 않는다.
+-- 위치는 저장된 청크 텍스트의 문자 위치(코드 포인트, 0부터, [start_offset, end_offset))와 인용문 스냅샷으로 고정한다.
+-- 메모가 가리키는 맥락·청크는 삭제를 막는다(RESTRICT). 메모를 지우면 소속 구간도 같은 트랜잭션에서 함께 지운다.
+-- 본문과 인용문은 사용자 데이터라 로그에 남기지 않는다.
+CREATE TABLE IF NOT EXISTS annotations (
+    annotation_id TEXT PRIMARY KEY,
+    context_id TEXT NOT NULL REFERENCES learning_contexts(context_id) ON DELETE RESTRICT,
+    kind TEXT NOT NULL CHECK (kind IN ('note', 'highlight')),
+    body TEXT NOT NULL DEFAULT '',
+    step TEXT,
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_context ON annotations(context_id, step, created_at);
+CREATE TABLE IF NOT EXISTS annotation_segments (
+    annotation_id TEXT NOT NULL REFERENCES annotations(annotation_id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    chunk_id TEXT NOT NULL REFERENCES chunks(chunk_id) ON DELETE RESTRICT,
+    parse_revision_id TEXT NOT NULL REFERENCES parse_revisions(parse_revision_id),
+    target TEXT NOT NULL CHECK (target IN ('original', 'translation')),
+    translation_revision_id TEXT REFERENCES translation_revisions(translation_revision_id),
+    start_offset INTEGER NOT NULL,
+    end_offset INTEGER NOT NULL,
+    quote_snapshot TEXT NOT NULL,
+    PRIMARY KEY (annotation_id, position),
+    CHECK (start_offset >= 0 AND end_offset > start_offset)
+);
+CREATE INDEX IF NOT EXISTS idx_annotation_segments_chunk ON annotation_segments(chunk_id);
+
 -- 읽기 전·후 질문 답변(M1-07/M1-08). 학습 맥락(세션)·시점·질문 템플릿마다 한 행이고, 다시 쓰면 같은 행을 고친다.
 -- 질문 문구는 코드의 템플릿이 정하므로 저장하지 않는다. 본문은 사용자 데이터라 로그에 남기지 않는다.
 CREATE TABLE IF NOT EXISTS reflection_answers (
