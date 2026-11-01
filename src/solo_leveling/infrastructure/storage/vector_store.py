@@ -32,6 +32,7 @@ class ChromaCloseResult(str, Enum):
 
 
 _CLOSED_MARK = '_solo_leveling_closed'
+_FAILED_MARK = '_solo_leveling_close_failed'
 
 
 def close_client(client) -> ChromaCloseResult:
@@ -39,19 +40,31 @@ def close_client(client) -> ChromaCloseResult:
 
     - 같은 클라이언트를 다시 닫으면 ALREADY_CLOSED(안전한 no-op)다.
     - close가 없는 클라이언트는 UNSUPPORTED이며 성공으로 간주하지 않는다.
+    - 한 번 FAILED가 된 클라이언트는 다시 호출해도 FAILED로 남는다(#120). Chroma는 close()에서 '닫힘'
+      표시를 먼저 하고 자원을 해제하므로, 해제가 중간에 실패한 뒤의 재호출은 아무것도 하지 않고 성공처럼
+      돌아온다. 그 반환으로는 자원이 실제로 해제됐는지 알 수 없어서 CLOSED/ALREADY_CLOSED로 올리지 않는다.
+      같은 경로를 쓰는 새 클라이언트를 만들거나 프로세스를 끝내는 것이 복구 방법이다.
     - 같은 경로를 공유하는 다른 클라이언트나 전역 캐시는 건드리지 않는다
-      (reset·캐시 삭제를 종료 수단으로 쓰지 않는다).
+      (reset·캐시 삭제·강제 stop을 종료 수단으로 쓰지 않는다).
     호출자는 FAILED·UNSUPPORTED를 성공으로 보지 말고, 원래 작업의 오류를 이 결과로
     덮어쓰지 않아야 한다.
+
+    한계: 속성을 붙일 수 없는 객체(__slots__ 등)는 실패·성공 표시를 기억하지 못한다. Chroma 클라이언트는 해당 없다.
     """
     if client is None or getattr(client, _CLOSED_MARK, False) is True:
         return ChromaCloseResult.ALREADY_CLOSED
+    if getattr(client, _FAILED_MARK, False) is True:
+        return ChromaCloseResult.FAILED
     close = getattr(client, 'close', None)
     if not callable(close):
         return ChromaCloseResult.UNSUPPORTED
     try:
         close()
     except Exception:
+        try:
+            setattr(client, _FAILED_MARK, True)
+        except Exception:
+            pass
         return ChromaCloseResult.FAILED
     try:
         setattr(client, _CLOSED_MARK, True)
