@@ -1,4 +1,4 @@
-"""#110 연결 준비용 계약. 운영 MCP 도구에는 아직 등록하지 않는다."""
+"""퀴즈 MCP 도구의 입력 검증과 공개 응답 변환."""
 
 from dataclasses import dataclass
 from typing import Annotated, Literal, Protocol
@@ -9,6 +9,9 @@ from solo_leveling.domain.quiz import Quiz
 from solo_leveling.domain.quiz_attempt import QuizAttempt
 
 Step = Literal['preview', 'structure', 'deep_read', 'review']
+MAX_SUBMITTED_ANSWERS = 64
+MAX_QUIZ_ANSWER_CHARS = 5000
+MAX_SUBMISSION_BYTES = 64 * 1024
 Text = Annotated[str, Field(strict=True, min_length=1, pattern=r'\S')]
 Index = Annotated[int, Field(strict=True, ge=0)]
 
@@ -29,13 +32,13 @@ class ChoiceAnswer(ContractModel):
 
 class TextAnswer(ContractModel):
     question_index: Index
-    text: str
+    text: Annotated[str, Field(max_length=MAX_QUIZ_ANSWER_CHARS)]
 
 
 class SubmitInput(QuizInput):
     quiz_id: Text
     request_key: Annotated[Text, Field(max_length=128)]
-    answers: Annotated[list[ChoiceAnswer | TextAnswer], Field(min_length=1)]
+    answers: Annotated[list[ChoiceAnswer | TextAnswer], Field(min_length=1, max_length=MAX_SUBMITTED_ANSWERS)]
 
     @field_validator('request_key')
     @classmethod
@@ -45,10 +48,16 @@ class SubmitInput(QuizInput):
         return value
 
     @model_validator(mode='after')
-    def unique_questions(self):
+    def validate_submission(self):
+        # 긴 식별자를 다시 직렬화하기 전에 전체 바이트 한도를 넘는 경우를 먼저 거른다.
+        if len(self.context_id) + len(self.quiz_id) > MAX_SUBMISSION_BYTES:
+            raise ValueError('퀴즈 제출 크기를 초과했습니다.')
         positions = [answer.question_index for answer in self.answers]
         if len(positions) != len(set(positions)):
             raise ValueError('문항 위치는 중복될 수 없습니다.')
+        # 전송 시 공백·이스케이프 표기 차이와 무관하게 검증된 입력의 UTF-8 JSON 크기를 센다.
+        if len(self.model_dump_json().encode('utf-8')) > MAX_SUBMISSION_BYTES:
+            raise ValueError('퀴즈 제출 크기를 초과했습니다.')
         return self
 
     def answer_mapping(self) -> dict[int, int | str]:
@@ -166,9 +175,9 @@ class ContractError(Exception):
 
 
 class QuizContractAdapter:
-    """대역 검증용 어댑터. DB 조회·채점·재시도·도구 등록은 하지 않는다."""
+    """입력을 검증하고 서비스의 저장 결과를 공개 응답으로 변환한다."""
 
-    def __init__(self, service: QuizServicePort, policy: InputPolicy):
+    def __init__(self, service: QuizServicePort, policy: InputPolicy | None = None):
         self.service, self.policy = service, policy
 
     @staticmethod
@@ -199,10 +208,10 @@ class QuizContractAdapter:
 
     def submit(self, payload) -> SubmitOutput:
         request = self._input(SubmitInput, payload)
-        if len(request.answers) > self.policy.max_answers:
+        if self.policy and len(request.answers) > self.policy.max_answers:
             raise ContractError('INVALID_ARGUMENT')
         for answer in request.answers:
-            if isinstance(answer, TextAnswer) and (
+            if self.policy and isinstance(answer, TextAnswer) and (
                 len(answer.text) > self.policy.max_text_length
                 or (self.policy.reject_blank_text and not answer.text.strip())
             ):
