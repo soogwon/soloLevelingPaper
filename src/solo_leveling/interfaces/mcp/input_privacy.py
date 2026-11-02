@@ -43,8 +43,8 @@ class SafeInputServer(FastMCP):
             # 서비스나 출력 검증은 실행하지 않으므로 입력 오류와 혼동하지 않는다.
             parsed = tool.fn_metadata.pre_parse_json(arguments)
             tool.fn_metadata.arg_model.model_validate(parsed)
-        except ValidationError:
-            # 검증 예외에는 본문이 있으므로 로그나 예외 연결로 전달하지 않는다.
+        except ValueError:
+            # JSON 정수 변환 한도 초과와 Pydantic 검증 실패를 같은 입력 오류로 처리한다.
             raise to_tool_error(InvalidArgumentError('잘못된 입력입니다.')) from None
         try:
             result = await super().call_tool(name, arguments)

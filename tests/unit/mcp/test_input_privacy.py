@@ -19,6 +19,8 @@ INTERNAL_ERROR = 'INTERNAL_ERROR: 요청을 처리하지 못했습니다.'
 @pytest.mark.parametrize('name, arguments', [
     ('ask_paper', {'context_id': 'ctx', 'question': {'private': MARKER}}),
     ('ask_paper', {'context_id': MARKER}),
+    pytest.param('ask_paper', {'context_id': 'ctx', 'question': MARKER, 'top_k': '9' * 5000},
+                 id='oversized-json-integer'),
     ('ask_paper', {'context_id': 'ctx', 'question': MARKER,
                    'focus': {'pdf_pages': [MARKER]}}),
     ('ask_paper', {'context_id': 'ctx', 'question': '질문',
