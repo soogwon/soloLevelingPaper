@@ -81,5 +81,43 @@ def test_quiz_protocol_with_persisted_replay(ctx):
             stale = await client.call_tool('submit_quiz', dict(args, request_key='k2'))
             assert stale.isError and 'QUIZ_CHANGED' in stale.content[0].text
             assert counts(db) == (1, 1, 1)
+            detail_args = dict(context_id=cid, attempt_id=first['attempt_id'])
+            detail = await client.call_tool('get_quiz_attempt', detail_args)
+            assert detail.structuredContent == {k: v for k, v in first.items() if k != 'reused'}
+            denied = await client.call_tool('get_quiz_attempt', dict(detail_args, context_id='other'))
+            assert denied.isError and 'NOT_FOUND' in denied.content[0].text
+            current = repository.get_quiz(db, cid, 'preview')
+            second = await client.call_tool('submit_quiz', dict(args, quiz_id=current.quiz_id, request_key='k2',
+                answers=[{'question_index': 0, 'selected_index': 0}]))
+            score_response = await client.call_tool('get_quiz_scores', {'context_id': cid})
+            scores = {row['step']: row for row in score_response.structuredContent['scores']}
+            assert set(scores) == {'preview', 'structure', 'deep_read', 'review'}
+            assert scores['preview']['attempt_count'] == 2
+            assert scores['preview']['latest_score'] == 0 and scores['preview']['best_score'] == 1
+            assert scores['review']['attempt_count'] == 0 and scores['review']['latest_score'] is None
+            review_args = dict(context_id=cid, attempt_id=second.structuredContent['attempt_id'])
+            review = await client.call_tool('review_quiz_attempt', review_args)
+            item, = review.structuredContent['items']
+            assert item['result']['correct_answer'] == '나' and item['result']['selected_index'] == 0
+            assert item['evidence'][0]['quote_original'] == 'First.'
+            assert item['evidence'][0]['evidence_id'] == 'e1'
+            denied = await client.call_tool('review_quiz_attempt', dict(review_args, context_id='other'))
+            assert denied.isError and 'NOT_FOUND' in denied.content[0].text
+            assert 'First.' not in denied.content[0].text
+            correct = await client.call_tool('review_quiz_attempt', detail_args)
+            assert correct.structuredContent['items'] == []
+            page_args = dict(context_id=cid, step='preview', limit=1)
+            page = (await client.call_tool('list_quiz_attempts', page_args)).structuredContent
+            newest = second.structuredContent['attempt_id']
+            assert page['next_cursor'] == newest
+            assert [item['attempt_id'] for item in page['items']] == [newest]
+            assert 'results' not in page['items'][0]
+            last = (await client.call_tool('list_quiz_attempts', dict(page_args, cursor=newest))).structuredContent
+            assert last['next_cursor'] is None
+            assert [item['attempt_id'] for item in last['items']] == [first['attempt_id']]
+            empty = await client.call_tool('list_quiz_attempts', dict(page_args, step='review'))
+            assert empty.structuredContent == dict(context_id=cid, items=[], next_cursor=None)
+            invalid = await client.call_tool('list_quiz_attempts', dict(page_args, step='review', cursor=newest))
+            assert invalid.isError and 'INVALID_ARGUMENT' in invalid.content[0].text
 
     asyncio.run(scenario())

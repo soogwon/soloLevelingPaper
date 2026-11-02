@@ -15,11 +15,13 @@ from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
 from solo_leveling.application.reflection.service import ReflectionService, ReflectionSession
 from solo_leveling.domain.reflection import MAX_ANSWER_LENGTH, ReflectionValidationError
 from .errors import to_tool_error
-from .quiz_contracts import QuizInput, SubmitInput
+from .quiz_contracts import AttemptInput, HistoryInput, QuizInput, ScoresInput, SubmitInput
 
 
 _READING_TOOLS = frozenset({'get_reading_questions', 'save_reading_answer'})
-_QUIZ_INPUTS = {'get_quiz': QuizInput, 'submit_quiz': SubmitInput}
+_QUIZ_INPUTS = {'get_quiz': QuizInput, 'submit_quiz': SubmitInput,
+                'get_quiz_attempt': AttemptInput, 'list_quiz_attempts': HistoryInput,
+                'get_quiz_scores': ScoresInput, 'review_quiz_attempt': AttemptInput}
 
 
 class ReflectionInputServer(FastMCP):

@@ -5,13 +5,13 @@
 #52 읽기 전 질문 MCP 연결 추가 / 2026-10-31.
 입출력·덮어쓰기 제한·수동 테스트는 [읽기 전 질문 MCP 연결](../setup/reading-questions-mcp.md)을 따른다.
 
-현재 런타임에서 공개하는 12개 도구가 기준이다. 기존 6개 도구에 #61의 읽기 전용
+현재 런타임에서 공개하는 16개 도구가 기준이다. 기존 6개 도구에 #61의 읽기 전용
 `get_learning_dashboard`와 #62의 `get_paper_detail`을 추가한다. 대시보드는
 `interfaces/mcp/dashboard.py`에 분리한다.
 #52의 읽기 전 질문 조회·답변 저장은 `interfaces/mcp/reflection.py`에 분리한다.
 초기 초안의 미구현 항목은 아래 '후속 계약'으로 분리한다.
 
-#110에서 저장된 퀴즈 조회와 제출을 연결했다. 이력·점수·복습 조회는 [후속 계약안](quiz-mcp-contract-proposal.md)을 따른다.
+#110에서 저장된 퀴즈 조회·제출, 시도 상세·이력, 단계별 점수와 오답 근거 조회를 연결했다.
 
 ## 공통 규칙
 
@@ -35,6 +35,16 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 | save_reading_answer | context_id, template_id, text | phase, status | context_id, phase, items, total, written, completed, status |
 | get_quiz | context_id, step | 없음 | quiz_id, 공개 문항·선택지, 단답 채점 방식, context_id, step |
 | submit_quiz | context_id, step, quiz_id, request_key, answers | 없음 | 제출 당시 문항별 결과, 점수, 시도 ID·시각, reused |
+| get_quiz_attempt | context_id, attempt_id | 없음 | 제출 당시 문항·답안·정답·근거 ID와 점수 |
+| list_quiz_attempts | context_id | step, limit, cursor | items(시도 요약), context_id, next_cursor |
+| get_quiz_scores | context_id | 없음 | context_id, scores(단계별 시도 수·최근 시도·최근/최고 점수) |
+| review_quiz_attempt | context_id, attempt_id | 없음 | context_id, attempt_id, items(오답별 제출 당시 결과와 연결된 원문 근거) |
+
+점수는 0~1 비율이며 재생성 전 시도까지 포함한다. 미응시 단계의 시도 수는 0이고 점수는 null이다.
+복습은 무응답을 포함한 오답만 반환한다. 모두 맞힌 시도는 빈 목록이며 다른 맥락의 시도는 NOT_FOUND다.
+
+이력은 제출 시각과 시도 ID의 내림차순이며 기본 20개, 최대 100개다. 같은 맥락·단계로 마지막 시도 ID인 next_cursor를 전달한다.
+마지막 페이지는 next_cursor가 null이며, 해당 범위에 없는 커서는 INVALID_ARGUMENT로 거부한다.
 
 퀴즈 제출의 문항·선택지 번호는 0부터 시작한다. 누락한 문항은 무응답으로 채점하고 빈 답안 배열은 거부한다.
 MCP는 제출당 최대 64문항, 단답당 5,000자, 전체 입력 65,536바이트까지 허용한다.
@@ -228,7 +238,7 @@ get_evidence는 해당 context에 저장된 번역문·추출 원문 근거를 �
 필수 인자 누락·타입 오류 등 함수 실행 전 SDK 검증 실패도 `isError=true`지만, 현재는 위 코드로 통일되지 않은 SDK 검증 문구다. 그 문구는 버전별로 달라질 수 있고 입력값을 포함할 수 있으므로 호스트는 오류 전문을 무조건 로그에 남기지 않는다. 코드 파싱에 의존하지 말고 입력 스키마를 확인한다.
 `partial`·`insufficient_evidence` 등 답변 상태는 도구 실행 오류와 구분한다.
 
-원격 인증·upload 만료 오류는 후속 계약에서 다시 정의한다. 퀴즈 이력·복습, 인용 그래프·메모 도구는 후속 범위다.
+원격 인증·upload 만료 오류는 후속 계약에서 다시 정의한다. 인용 그래프·메모 도구는 후속 범위다.
 
 ## 후속 계약과 호환성
 
