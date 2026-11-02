@@ -97,7 +97,8 @@ def test_get_attempt_returns_saved_snapshot_without_fetching_latest(prepared):
     {'answers': [{'question_index': 0, 'text': ' '}]},
     {'answers': [{'question_index': 0, 'text': 'x' * 101}]},
     {'answers': [{'question_index': i, 'text': '답'} for i in range(11)]},
-    {'request_key': ' '}, {'request_key': 'x' * 201}, {'context_id': True},
+    {'request_key': ''}, {'request_key': ' '}, {'request_key': 'x' * 129},
+    {'request_key': 'ab\ncd'}, {'request_key': 'ab\u200bcd'}, {'context_id': True},
     {'step': 'unknown'}, {'unknown': 'private'},
 ])
 def test_invalid_inputs_never_call_service(prepared, changes):
@@ -108,6 +109,14 @@ def test_invalid_inputs_never_call_service(prepared, changes):
         adapter.submit(args)
     service.submit.assert_not_called()
     service.get_quiz.assert_not_called()
+
+
+def test_max_length_request_key_reaches_service_unchanged(prepared):
+    adapter, service, _ = prepared
+    key = ' ' + '가' * 126 + ' '
+    adapter.submit(payload(request_key=key))
+    service.submit.assert_called_once()
+    assert service.submit.call_args.kwargs['request_key'] == key
 
 
 def test_mapping_preserves_text_and_key_and_does_not_fetch_latest(prepared):

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Annotated, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from solo_leveling.domain.quiz import Quiz
 from solo_leveling.domain.quiz_attempt import QuizAttempt
@@ -34,8 +34,15 @@ class TextAnswer(ContractModel):
 
 class SubmitInput(QuizInput):
     quiz_id: Text
-    request_key: Annotated[Text, Field(max_length=200)]
+    request_key: Annotated[Text, Field(max_length=128)]
     answers: Annotated[list[ChoiceAnswer | TextAnswer], Field(min_length=1)]
+
+    @field_validator('request_key')
+    @classmethod
+    def printable_request_key(cls, value: str) -> str:
+        if not value.isprintable():
+            raise ValueError('요청 키에는 출력 가능한 문자만 사용할 수 있습니다.')
+        return value
 
     @model_validator(mode='after')
     def unique_questions(self):
