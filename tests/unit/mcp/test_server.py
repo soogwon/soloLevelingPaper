@@ -78,6 +78,8 @@ def test_ask_tool_description_explains_verification_and_partial():
     assert 'partial/semantic_limited' in description
     assert '설정 비활성화를 단정하지 마세요' in description
     assert '배경지식으로 보충하지 마세요' in description
+    assert '자동 재호출하지 마세요' in description
+    assert '서버 작업이 중단됐다고 판단하지 마세요' in description
 
 
 def test_ask_returns_flat_contract_and_focus():
