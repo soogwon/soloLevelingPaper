@@ -2,9 +2,13 @@
 
 상태: #47 기준선에 #21·#23 목록·선택과 #36 선택적 의미 검증 반영 / 2026-10-24
 
-현재 런타임에서 공개하는 8개 도구가 기준이다. 기존 6개 도구에 #61의 읽기 전용
+#52 읽기 전 질문 MCP 연결 추가 / 2026-10-31.
+입출력·덮어쓰기 제한·수동 테스트는 [읽기 전 질문 MCP 연결](../setup/reading-questions-mcp.md)을 따른다.
+
+현재 런타임에서 공개하는 10개 도구가 기준이다. 기존 6개 도구에 #61의 읽기 전용
 `get_learning_dashboard`와 #62의 `get_paper_detail`을 추가한다. 대시보드는
 `interfaces/mcp/dashboard.py`에 분리한다.
+#52의 읽기 전 질문 조회·답변 저장은 `interfaces/mcp/reflection.py`에 분리한다.
 초기 초안의 미구현 항목은 아래 '후속 계약'으로 분리한다.
 
 ## 공통 규칙
@@ -25,6 +29,8 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 | get_evidence | context_id, evidence_ids | 없음 | evidence (저장 근거 목록) |
 | get_paper_detail | context_id | scope, offset, limit, summary_id | 논문 메타데이터, section_ids, summary, evidence, keywords, important_sentences, limitations |
 | get_learning_dashboard | context_id | 없음 | context_id, version_id, paper_id, title, file_display_name, goal, processing, progress, summary, quiz_scores |
+| get_reading_questions | context_id | phase, step | context_id, phase, items, total, written, completed, status |
+| save_reading_answer | context_id, template_id, text | phase, status | context_id, phase, items, total, written, completed, status |
 
 이름은 기존 프로젝트 계약을 유지하며 C 문서의 register_paper/evidence_qa 등과 기능상 대응한다. 호스트 Skill이 없어도 핵심 도구로 접근 가능하다.
 
@@ -38,6 +44,8 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 - `standalone_question`: 생략·`null`이면 `question`을 사용한다. 지정하면 검색·생성 질문을 대체하되 원래 `question`도 비어 있으면 안 된다.
 - `focus`: 생략·`null`이면 추가 범위 제한이 없다. `pdf_pages`, `section_ids`는 각각 기본 빈 목록이며 함께 지정하면 교집합이다. 페이지는 양의 정수, 섹션은 비어 있지 않은 문자열을 전달한다.
 - `source`, `focus` 내부의 알 수 없는 필드는 거부한다. 최상위 알 수 없는 인자의 처리나 SDK의 암묵적 형 변환에 의존하지 않는다.
+- `get_reading_questions`, `save_reading_answer`는 최상위 알 수 없는 필드도 거부하며,
+  입력 스키마 위반 시 본문 없는 `INVALID_ARGUMENT`를 반환하고 서비스를 호출하지 않는다.
 - `evidence_ids`: 비어 있지 않은 문자열 목록이며 빈 항목·중복을 거부한다. 같은 context에 저장된 근거만 조회한다.
 - `get_paper_status.stage`는 문자열 또는 `null`, `result_available`은 불리언이다. `capabilities`, `limitations`는 문자열 목록이다.
 - `start_learning.status`는 `ready`, `capabilities`는 `ask_paper`, `get_evidence`다.
@@ -60,8 +68,12 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 | get_evidence | true | true | false |
 | get_paper_detail | true | true | false |
 | get_learning_dashboard | true | true | false |
+| get_reading_questions | true | true | false |
+| save_reading_answer | false | false | false |
 
-모두 `destructiveHint=false`다. 속성은 호스트용 힌트이며 권한 강제 장치가 아니다.
+`save_reading_answer`는 기존 답변을 덮어쓰므로 `destructiveHint=true`, 나머지는 false다.
+저장 시 수정 시각이 바뀌고 중복 요청 키를 지원하지 않아 idempotentHint도 false다.
+속성은 호스트용 힌트이며 권한 강제 장치가 아니다.
 `get_paper_status`에는 선택적 화면 연결 메타데이터 `_meta.ui.resourceUri`가 있다.
 `ui://solo-leveling/paper-status.html`을 제공하되 기존 출력 객체·text 응답은 유지한다.
 UI가 없는 호스트에서도 같은 계약을 사용한다. 실제 호스트 검증은 [#57 안내](../setup/mcp-app-ui.md)를 따른다.
