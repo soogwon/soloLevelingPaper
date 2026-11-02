@@ -44,6 +44,7 @@ class ExtractionReason(str, Enum):
     SUPPORT_LOCATION_UNRESOLVED = 'SUPPORT_LOCATION_UNRESOLVED'
     UNFINISHED_TAIL = 'UNFINISHED_TAIL'
     UNRESOLVED_PREFIX = 'UNRESOLVED_PREFIX'
+    AMBIGUOUS_OVERLAP = 'AMBIGUOUS_OVERLAP'
 
 
 @dataclass(frozen=True)
@@ -135,6 +136,7 @@ def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInp
             return 'RIGHT_PREFIX_START_MISSING'
         return 'RIGHT_PREFIX_END_MISSING'
 
+    cited_sentences = {}
     for selected in selections:
         tail = incomplete_tail_start(selected.body)
         if tail is not None and selected.end > tail:
@@ -146,7 +148,35 @@ def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInp
         if fragment_flags(selected.body)[0] and selected.start < prefix_end:
             if not any(joined(other, selected) for other in selections):
                 return ExtractionAssessment(ExtractionReason.UNRESOLVED_PREFIX, selected.evidence.evidence_id)
+        # 문장별 번역 정렬이 없어 어느 쪽이 맞는지 단정할 수 없다.
+        # 이 주장이 같은 페이지에서 실제로 중복 인용한 완결 문장만 비교한다.
+        if len(cited) > 1:
+            translation = ' '.join((selected.evidence.text_ko or '').split())
+            for sentence in _cited_complete_sentences(selected):
+                key = (selected.evidence.pdf_page, sentence)
+                previous = cited_sentences.setdefault(key, (selected.evidence.chunk_id, translation))
+                if previous[0] != selected.evidence.chunk_id and previous[1] != translation:
+                    return ExtractionAssessment(ExtractionReason.AMBIGUOUS_OVERLAP, selected.evidence.evidence_id)
     return ExtractionAssessment(ExtractionReason.NONE)
+
+
+def _cited_complete_sentences(selected: _Selection):
+    # 경계 검사 좌표는 숫자 줄을 제외하지만, 문장의 동일성 비교에는 원래 숫자가 필요하다.
+    raw = selected.evidence.original_text
+    start = 0
+    body_start = 0
+    for end in sentence_ends(raw):
+        original = raw[start:end]
+        body = evidence_body(original)
+        if not body:
+            start = end
+            continue
+        body_end = body_start + len(body)
+        if (selected.start <= body_start and body_end <= selected.end
+                and (start or not selected.evidence.starts_mid_sentence)):
+            yield ' '.join(original.split())
+        start = end
+        body_start = body_end + 1
 
 
 def claim_has_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInput]) -> bool:

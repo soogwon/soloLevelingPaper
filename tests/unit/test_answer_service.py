@@ -230,6 +230,42 @@ def test_fragment_flags_are_passed_to_generator(parts):
     assert flags == [(True, False), (False, False)]
 
 
+@pytest.mark.parametrize('second_quote,second_ko,keep_other,expected', [
+    ('Same finding.', '반대 해석.', False, AnswerStatus.INSUFFICIENT_EVIDENCE),
+    ('Same finding.', '반대 해석.', True, AnswerStatus.PARTIAL),
+    ('Same finding.', '같은 해석.', False, AnswerStatus.OK),
+    ('Another finding.', '다른 설명.', False, AnswerStatus.OK),
+])
+def test_overlap_citations_with_different_translations(parts, second_quote, second_ko, keep_other, expected):
+    from dataclasses import replace
+    service, search, saved, _ = parts
+    originals = ('Earlier context. Same finding.', 'Same finding. Another finding.')
+    items = tuple(replace(item, chunk=replace(item.chunk, original_text=original,
+                  text=ko, pdf_page=6)) for item, original, ko in
+                  zip(search.items, originals, ('같은 해석.', second_ko)))
+    service.search = SimpleNamespace(search=lambda *a, **kw:
+        ContextSearchResponse('ctx', replace(search, items=items)))
+
+    def generate(question, evidence):
+        left, right = (e.evidence_id for e in evidence)
+        claims = [GeneratedClaim('두 근거를 함께 인용한 주장', (left, right),
+                  (ClaimSupport(left, 'Same finding.'), ClaimSupport(right, second_quote)))]
+        if keep_other:
+            claims.append(GeneratedClaim('독립 주장', (left,), (ClaimSupport(left, 'Earlier context.'),)))
+        return GeneratedAnswerDraft(tuple(claims))
+
+    service.generator = SimpleNamespace(generate_claims=generate)
+    result = service.answer('질문', context_id='ctx').result
+    assert result.status == expected
+    if expected == AnswerStatus.OK:
+        assert {c.chunk_id for c in result.citations} == {'c0', 'c1'}
+    elif keep_other:
+        assert [c.text for c in result.claims] == ['독립 주장']
+        assert [e.chunk_id for e in saved[0][1]] == ['c0']
+    else:
+        assert not result.claims and not result.citations and not saved
+
+
 def test_duplicate_generated_ids_fail_before_saving(parts):
     service, _, saved, _ = parts
     service.id_factory = lambda: 'same'

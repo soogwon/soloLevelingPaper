@@ -25,6 +25,21 @@ def test_split_supports_require_contiguous_coverage_and_adjacency(gap, linked):
                              else ExtractionReason.UNFINISHED_TAIL)
 
 
+@pytest.mark.parametrize('count,page,expected', [
+    ('20', 6, ExtractionReason.NONE),
+    ('10', 7, ExtractionReason.NONE),
+    ('10', 6, ExtractionReason.AMBIGUOUS_OVERLAP),
+])
+def test_overlap_uses_original_numbers_and_page(count, page, expected):
+    left = EvidenceInput('e1', 'c1', '첫 번역', 'Earlier. We tested\n10\ncases.', None, 6)
+    right = EvidenceInput('e2', 'c2', '다른 번역', f'We tested\n{count}\ncases. Next.', None, page)
+    claim = GeneratedClaim('실험 결과', ('e1', 'e2'), (
+        ClaimSupport('e1', 'We tested\n10\ncases.'),
+        ClaimSupport('e2', f'We tested\n{count}\ncases.'),
+    ))
+    assert assess_extraction_risk(claim, (left, right)).reason == expected
+
+
 def test_overlapping_supports_do_not_change_original_or_ids():
     original = 'Faster when the sequence\n6'
     left = EvidenceInput('e1', 'c1', '번역', original, None, 6, False, True)

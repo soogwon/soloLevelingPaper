@@ -321,7 +321,7 @@ class AnswerService:
         # 보완 후보가 없거나 보완을 지원하지 않아도 미완결 근거의 주장은 노출하지 않는다.
         # 숫자만 있는 줄에서 가져온 숫자는 경계 검사보다 먼저 판정되므로 함께 제외한다.
         final_exclusion_reasons = exclusion_reasons | {
-            ExtractionReason.UNFINISHED_TAIL, ExtractionReason.STANDALONE_NUMBER,
+            ExtractionReason.UNFINISHED_TAIL, ExtractionReason.STANDALONE_NUMBER, ExtractionReason.AMBIGUOUS_OVERLAP,
         }
         retained, retained_assessments = [], []
         excluded = 0
