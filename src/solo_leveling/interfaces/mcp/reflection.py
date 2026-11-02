@@ -1,6 +1,7 @@
 """읽기 전 질문과 사용자 작성 답변을 기존 저장 서비스에 연결한다."""
 
 from dataclasses import asdict
+from importlib.resources import files
 from typing import Annotated, Literal
 
 import anyio
@@ -17,6 +18,7 @@ from .errors import to_tool_error
 
 
 _READING_TOOLS = frozenset({'get_reading_questions', 'save_reading_answer'})
+READING_BEFORE_URI = 'ui://solo-leveling/reading-before.html'
 
 
 class ReflectionInputServer(FastMCP):
@@ -94,7 +96,14 @@ def _context_id(value: str) -> str:
 
 
 def register_reflection(server: FastMCP, service: ReflectionService) -> None:
+    @server.resource(READING_BEFORE_URI, name='reading-before', title='읽기 전 질문',
+                     mime_type='text/html;profile=mcp-app',
+                     meta={'ui': {'csp': {'connectDomains': [], 'resourceDomains': []}}})
+    def reading_before_html() -> str:
+        return files('solo_leveling.interfaces.mcp').joinpath('assets/reading-before.html').read_text(encoding='utf-8')
+
     @server.tool(name='get_reading_questions', structured_output=True,
+                 meta={'ui': {'resourceUri': READING_BEFORE_URI}},
                  annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                              idempotentHint=True, openWorldHint=False))
     async def get_reading_questions(
