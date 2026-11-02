@@ -202,6 +202,16 @@ CREATE TABLE IF NOT EXISTS quiz_attempt_answers (
     PRIMARY KEY (attempt_id, position)
 );
 
+-- 퀴즈 제출 요청 기록(#110). 같은 request_key의 제출은 한 번만 저장한다.
+-- 시도와 같은 트랜잭션에서 쓰므로 완료된 요청만 남고, 예약 행은 없다. 이전 시도에는 요청 키를 만들어 넣지 않는다.
+-- input_hash는 context_id·step·quiz_id·답안으로 계산한 해시라 답안 본문은 저장하지 않는다.
+CREATE TABLE IF NOT EXISTS quiz_submit_requests (
+    request_key TEXT PRIMARY KEY,
+    input_hash TEXT NOT NULL,
+    attempt_id TEXT NOT NULL REFERENCES quiz_attempts(attempt_id),
+    created_at TEXT NOT NULL
+);
+
 -- 읽기 전·후 질문 답변(M1-07/M1-08). 학습 맥락(세션)·시점·질문 템플릿마다 한 행이고, 다시 쓰면 같은 행을 고친다.
 -- 질문 문구는 코드의 템플릿이 정하므로 저장하지 않는다. 본문은 사용자 데이터라 로그에 남기지 않는다.
 CREATE TABLE IF NOT EXISTS reflection_answers (
