@@ -184,6 +184,8 @@ class QuizServicePort(Protocol):
 
     def history(self, context_id: str, step: str | None) -> tuple[QuizAttempt, ...]: ...
 
+    def history_page(self, context_id: str, step: str | None, limit: int, cursor: str | None): ...
+
     def scores(self, context_id: str) -> tuple[StepScore, ...]: ...
 
     def review(self, context_id: str, attempt_id: str) -> tuple[ReviewItem, ...]: ...
@@ -279,25 +281,15 @@ class QuizContractAdapter:
 
     def list_attempts(self, payload) -> HistoryOutput:
         request = self._input(HistoryInput, payload)
-        attempts = self._call(
-            self.service.history, context_id=request.context_id, step=request.step)
+        page = self._call(self.service.history_page, context_id=request.context_id, step=request.step,
+                          limit=request.limit, cursor=request.cursor)
         if any(a.context_id != request.context_id or (request.step and a.step != request.step)
-               for a in attempts):
+               for a in page.items):
             raise ContractError('INTERNAL_ERROR')
-        # 점수 집계와 같은 저장 순서를 사용해 제출 시각이 같은 시도도 일관되게 표시한다.
-        ordered = attempts[::-1]
-        start = 0
-        if request.cursor is not None:
-            for start, attempt in enumerate(ordered, start=1):
-                if attempt.attempt_id == request.cursor:
-                    break
-            else:
-                raise ContractError('INVALID_ARGUMENT')
-        page = ordered[start:start + request.limit]
         return HistoryOutput(
             context_id=request.context_id,
-            items=[AttemptSummary.model_validate(a, from_attributes=True) for a in page],
-            next_cursor=page[-1].attempt_id if start + len(page) < len(ordered) else None,
+            items=[AttemptSummary.model_validate(a, from_attributes=True) for a in page.items],
+            next_cursor=page.next_cursor,
         )
 
 
