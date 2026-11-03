@@ -85,6 +85,40 @@ PYTHONPATH=src python -m pytest tests/unit/mcp/test_status_app.py tests/unit/mcp
 
 ## 담당과 다음 단계
 
+### B 답변 반영과 남은 A 확인
+
+[B의 최신 답변](https://github.com/soogwon/soloLevelingPaper/issues/60#issuecomment-6605195421)을
+반영했다. 아래는 B/C의 권고이며 A의 최종 정책 확정이나 제품 구현을 의미하지 않는다.
+
+| 상황 | B/C 권고 | C 표시 방향 |
+| --- | --- | --- |
+| ready/index + provider_unavailable | outcome=partial, failed_stage=translate, retryable=null, next_action=null | 검색 가능, 일부 구간 번역 누락 |
+| ready/index + empty_translation | 위와 동일. 빈 번역이 나온 원인은 코드만으로 알 수 없음 | 검색 가능, 일부 구간 번역 누락 |
+| failed/translate + translation_failed | outcome=failed, retryable=null 권고. 재등록 행동·요청 키 정책은 A 확인 필요 | 번역 실패, 재시도 가능 여부 미확인 |
+
+- retryable=null은 false가 아니다. true도 성공 보장이나 자동 재실행 허가가 아니다.
+- ready/partial의 stage=index는 마지막 단계이며 failed_stage=translate와 모순되지 않는다.
+- run_translation_recovery는 현재 공개 도구가 아니다. #141·#147만으로 복구 버튼을
+  제공하거나 동일 파일 재등록으로 게시된 색인의 누락 구간이 복구된다고 안내하지 않는다.
+- 전체 번역 실패 실험의 next_action=null은 미확정 행동을 넣지 않기 위한 합성 값이다.
+  B가 전체 실패의 next_action까지 null로 확정했다는 의미가 아니다.
+- 재현 실험의 기존 retryable=true / run_translation_recovery 값은 초기 A안의
+  누락 재현용이었다. 최신 B 권고를 반영한 세 사례로 교체했다.
+
+실험은 MCP ClientSession의 메모리 전송에서 세 응답을 각각 조회한다. JSON 텍스트와
+구조화 응답의 일치, ready/failed와 현재 단계 보존, 부분 성공의 start_learning 유지,
+각 사례의 조회 1회·그 외 ingestion 호출 0회를 확인한다. 누락된 필드는 관찰 결과로
+출력하며, 스크립트 종료 코드 0을 신규 계약 전달 성공으로 해석하지 않는다.
+
+보완 후 PR #148 브랜치(main `2230865` 기반)에서 재실행한 결과, 세 사례 모두
+신규 5개 필드가 스키마·응답에서 누락됐다. 기존 status/stage/capabilities와
+텍스트 일치, 조회 외 호출 없음은 확인했다. 위 기존 회귀 16개도 다시 통과했다.
+최신 main 전체·실제 실패 처리·Desktop 화면을 재검증한 결과는 아니다.
+
+A에게 남은 확인은 대표 원인 우선순위, 미분류·중단 fallback, next_action의 최종
+목록/null 정책, 의도적 재등록의 요청 키 정책이다. 합의 전에는 C가 limitations
+문자열에서 실패 상태를 추론해 제품 필드를 채우지 않는다.
+
 - A: DB 값 기반 대표 실패 선택·필드 계산·재시도 및 중단 정책과 단위 테스트.
 - B: 번역 실패 코드 목록과 #30 복구 서비스 가용성·호출 계약 확인.
 - C: 합의된 5개 필드의 TypedDict·응답 매핑·도구 설명·화면 안내 및 계약 테스트.
