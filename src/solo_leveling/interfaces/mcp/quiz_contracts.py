@@ -1,4 +1,4 @@
-"""#110 연결 준비용 계약. 운영 MCP 도구에는 아직 등록하지 않는다."""
+"""퀴즈 MCP 도구의 입력 검증과 공개 응답 변환."""
 
 from dataclasses import dataclass
 from typing import Annotated, Literal, Protocol
@@ -6,9 +6,14 @@ from typing import Annotated, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from solo_leveling.domain.quiz import Quiz
+from solo_leveling.application.quiz.attempts import ReviewItem, StepScore
+from solo_leveling.domain.evidence_qa import EvidenceDetail
 from solo_leveling.domain.quiz_attempt import QuizAttempt
 
 Step = Literal['preview', 'structure', 'deep_read', 'review']
+MAX_SUBMITTED_ANSWERS = 64
+MAX_QUIZ_ANSWER_CHARS = 5000
+MAX_SUBMISSION_BYTES = 64 * 1024
 Text = Annotated[str, Field(strict=True, min_length=1, pattern=r'\S')]
 Index = Annotated[int, Field(strict=True, ge=0)]
 
@@ -29,13 +34,13 @@ class ChoiceAnswer(ContractModel):
 
 class TextAnswer(ContractModel):
     question_index: Index
-    text: str
+    text: Annotated[str, Field(max_length=MAX_QUIZ_ANSWER_CHARS)]
 
 
 class SubmitInput(QuizInput):
     quiz_id: Text
     request_key: Annotated[Text, Field(max_length=128)]
-    answers: Annotated[list[ChoiceAnswer | TextAnswer], Field(min_length=1)]
+    answers: Annotated[list[ChoiceAnswer | TextAnswer], Field(min_length=1, max_length=MAX_SUBMITTED_ANSWERS)]
 
     @field_validator('request_key')
     @classmethod
@@ -45,10 +50,16 @@ class SubmitInput(QuizInput):
         return value
 
     @model_validator(mode='after')
-    def unique_questions(self):
+    def validate_submission(self):
+        # 긴 식별자를 다시 직렬화하기 전에 전체 바이트 한도를 넘는 경우를 먼저 거른다.
+        if len(self.context_id) + len(self.quiz_id) > MAX_SUBMISSION_BYTES:
+            raise ValueError('퀴즈 제출 크기를 초과했습니다.')
         positions = [answer.question_index for answer in self.answers]
         if len(positions) != len(set(positions)):
             raise ValueError('문항 위치는 중복될 수 없습니다.')
+        # 전송 시 공백·이스케이프 표기 차이와 무관하게 검증된 입력의 UTF-8 JSON 크기를 센다.
+        if len(self.model_dump_json().encode('utf-8')) > MAX_SUBMISSION_BYTES:
+            raise ValueError('퀴즈 제출 크기를 초과했습니다.')
         return self
 
     def answer_mapping(self) -> dict[int, int | str]:
@@ -64,6 +75,14 @@ class SubmitInput(QuizInput):
 class AttemptInput(ContractModel):
     context_id: Text
     attempt_id: Text
+
+
+class ScoresInput(ContractModel):
+    context_id: Text
+
+
+class ScoresOutput(ScoresInput):
+    scores: list[StepScore]
 
 
 class HistoryInput(ContractModel):
@@ -112,6 +131,15 @@ class AttemptOutput(AttemptSummary):
     results: list[QuestionResult]
 
 
+class ReviewQuestion(ContractModel):
+    result: QuestionResult
+    evidence: list[EvidenceDetail]
+
+
+class ReviewOutput(AttemptInput):
+    items: list[ReviewQuestion]
+
+
 class SubmitOutput(AttemptOutput):
     reused: bool
 
@@ -154,6 +182,12 @@ class QuizServicePort(Protocol):
 
     def get_attempt(self, *, context_id: str, attempt_id: str) -> QuizAttempt: ...
 
+    def history(self, context_id: str, step: str | None) -> tuple[QuizAttempt, ...]: ...
+
+    def scores(self, context_id: str) -> tuple[StepScore, ...]: ...
+
+    def review(self, context_id: str, attempt_id: str) -> tuple[ReviewItem, ...]: ...
+
 
 class ContractError(Exception):
     """입력 본문·서비스 예외 원문 없이 고정 코드만 경계 밖으로 전달한다."""
@@ -166,9 +200,9 @@ class ContractError(Exception):
 
 
 class QuizContractAdapter:
-    """대역 검증용 어댑터. DB 조회·채점·재시도·도구 등록은 하지 않는다."""
+    """입력을 검증하고 서비스의 저장 결과를 공개 응답으로 변환한다."""
 
-    def __init__(self, service: QuizServicePort, policy: InputPolicy):
+    def __init__(self, service: QuizServicePort, policy: InputPolicy | None = None):
         self.service, self.policy = service, policy
 
     @staticmethod
@@ -199,10 +233,10 @@ class QuizContractAdapter:
 
     def submit(self, payload) -> SubmitOutput:
         request = self._input(SubmitInput, payload)
-        if len(request.answers) > self.policy.max_answers:
+        if self.policy and len(request.answers) > self.policy.max_answers:
             raise ContractError('INVALID_ARGUMENT')
         for answer in request.answers:
-            if isinstance(answer, TextAnswer) and (
+            if self.policy and isinstance(answer, TextAnswer) and (
                 len(answer.text) > self.policy.max_text_length
                 or (self.policy.reject_blank_text and not answer.text.strip())
             ):
@@ -230,6 +264,42 @@ class QuizContractAdapter:
             raise ContractError('NOT_FOUND')
         return self._call(serialize_attempt, attempt=attempt)
 
+    def scores(self, payload) -> ScoresOutput:
+        request = self._input(ScoresInput, payload)
+        scores = self._call(self.service.scores, context_id=request.context_id)
+        return ScoresOutput(context_id=request.context_id, scores=list(scores))
+
+    def review(self, payload) -> ReviewOutput:
+        request = self._input(AttemptInput, payload)
+        items = self._call(self.service.review, context_id=request.context_id, attempt_id=request.attempt_id)
+        return ReviewOutput(**request.model_dump(), items=[
+            ReviewQuestion(result=serialize_question_result(item.result), evidence=list(item.evidence))
+            for item in items
+        ])
+
+    def list_attempts(self, payload) -> HistoryOutput:
+        request = self._input(HistoryInput, payload)
+        attempts = self._call(
+            self.service.history, context_id=request.context_id, step=request.step)
+        if any(a.context_id != request.context_id or (request.step and a.step != request.step)
+               for a in attempts):
+            raise ContractError('INTERNAL_ERROR')
+        # 점수 집계와 같은 저장 순서를 사용해 제출 시각이 같은 시도도 일관되게 표시한다.
+        ordered = attempts[::-1]
+        start = 0
+        if request.cursor is not None:
+            for start, attempt in enumerate(ordered, start=1):
+                if attempt.attempt_id == request.cursor:
+                    break
+            else:
+                raise ContractError('INVALID_ARGUMENT')
+        page = ordered[start:start + request.limit]
+        return HistoryOutput(
+            context_id=request.context_id,
+            items=[AttemptSummary.model_validate(a, from_attributes=True) for a in page],
+            next_cursor=page[-1].attempt_id if start + len(page) < len(ordered) else None,
+        )
+
 
 def serialize_quiz(quiz: Quiz) -> PublicQuiz:
     """제출 전에는 공개 문항 필드만 반환한다."""
@@ -247,9 +317,14 @@ def serialize_attempt(attempt: QuizAttempt) -> AttemptOutput:
         attempt_id=attempt.attempt_id, context_id=attempt.context_id, quiz_id=attempt.quiz_id,
         step=attempt.step, submitted_at=attempt.submitted_at, correct_count=attempt.correct_count,
         total_count=attempt.total_count, score=attempt.score,
-        results=[QuestionResult(question_index=r.position, question_type=r.question_type,
-                                prompt=r.prompt, choices=list(r.choices), selected_index=r.selected_index,
-                                submitted_text=r.submitted_text, correct_answer=r.correct_answer,
-                                grading_criteria=r.grading_criteria, is_correct=r.is_correct,
-                                evidence_ids=list(r.evidence_ids)) for r in attempt.results],
+        results=[serialize_question_result(result) for result in attempt.results],
+    )
+
+
+def serialize_question_result(result) -> QuestionResult:
+    return QuestionResult(
+        question_index=result.position, question_type=result.question_type, prompt=result.prompt,
+        choices=list(result.choices), selected_index=result.selected_index, submitted_text=result.submitted_text,
+        correct_answer=result.correct_answer, grading_criteria=result.grading_criteria,
+        is_correct=result.is_correct, evidence_ids=list(result.evidence_ids),
     )

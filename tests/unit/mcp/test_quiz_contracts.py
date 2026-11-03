@@ -194,7 +194,7 @@ def test_blank_policy_can_preserve_input_when_explicitly_allowed(prepared):
     assert service.submit.call_args.kwargs['answers'] == {0: '  '}
 
 
-def test_preparation_does_not_register_quiz_tools():
+def test_server_without_quiz_service_omits_quiz_tools():
     server = create_server(MCPServices(Mock(), Mock()))
     names = {tool.name for tool in asyncio.run(server.list_tools())}
     assert not names.intersection({'get_quiz', 'submit_quiz', 'get_quiz_attempt',

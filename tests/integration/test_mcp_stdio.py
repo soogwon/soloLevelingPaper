@@ -35,6 +35,8 @@ def test_stdio_server_lists_tools(tmp_path):
                         'list_paper_jobs', 'get_paper_detail',
                         'get_learning_dashboard',
                         'get_reading_questions', 'save_reading_answer',
+                        'get_quiz', 'submit_quiz', 'get_quiz_attempt', 'list_quiz_attempts',
+                        'get_quiz_scores', 'review_quiz_attempt',
                     }
                     ask = next(tool for tool in tools.tools if tool.name == 'ask_paper')
                     assert ask.outputSchema is not None

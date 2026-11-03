@@ -24,6 +24,7 @@ from solo_leveling.application.paper_detail.service import PaperDetailService
 from solo_leveling.application.reflection.service import ReflectionService
 from solo_leveling.infrastructure.retrieval.paper_detail import SQLitePaperDetailReader
 from .server import MCPServices, create_server
+from .quiz_tools import QuizContractAdapter, StoredQuizService
 from .ingestion import IngestionServices, LocalIngestionManager
 from .local_files import LocalPdfStore
 from .lifecycle import RequestGate, RuntimeLifetime, report, track_lifetime
@@ -159,6 +160,7 @@ def build_runtime_server(values: Mapping[str, str]):
             detail=gate.wrap(PaperDetailService(SQLitePaperDetailReader(str(paths.db_path)))),
             dashboard=gate.wrap(DashboardReader(str(paths.db_path))),
             reflection=gate.wrap(ReflectionService(str(paths.db_path))),
+            quiz=gate.wrap(QuizContractAdapter(StoredQuizService(str(paths.db_path)))),
         ), lifespan=lifespan)
         track_lifetime(lifetime)
         return server
