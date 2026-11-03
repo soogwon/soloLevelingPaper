@@ -40,7 +40,7 @@ def test_schema_and_hints(ctx):
     assert read.annotations.readOnlyHint and read.annotations.idempotentHint
     assert not save.annotations.readOnlyHint and save.annotations.destructiveHint
     assert not save.annotations.idempotentHint and not save.annotations.openWorldHint
-    assert save.inputSchema['properties']['phase']['const'] == 'before'
+    assert save.inputSchema['properties']['phase']['enum'] == ['before', 'after']
     assert save.inputSchema['properties']['text']['maxLength'] == 5000
     assert read.inputSchema['additionalProperties'] is False
     assert save.inputSchema['additionalProperties'] is False
@@ -110,6 +110,7 @@ def test_invalid_save_writes_nothing(ctx, changes):
 
 @pytest.mark.parametrize('name,args', [
     ('get_reading_questions', {}),
+    ('get_reading_comparison', {}),
     ('save_reading_answer', {'template_id': 'before.background', 'text': '답'}),
 ])
 def test_missing_context_returns_safe_not_found(ctx, name, args):
@@ -179,6 +180,8 @@ def test_protocol_roundtrip_and_reconnect(ctx):
     ('save_reading_answer', {'context_id': ['PRIVATE_INPUT_MARKER']}),
     ('save_reading_answer', {'expected_revision': 'PRIVATE_INPUT_MARKER'}),
     ('save_reading_answer', {'statuz': 'PRIVATE_INPUT_MARKER'}),
+    ('get_reading_comparison', {'phase': 'PRIVATE_INPUT_MARKER'}),
+    ('get_reading_comparison', {'context_id': ['PRIVATE_INPUT_MARKER']}),
     ('get_reading_questions', {'step': 'PRIVATE_INPUT_MARKER'}),
     ('get_reading_questions', {'phase': 'PRIVATE_INPUT_MARKER'}),
     ('get_reading_questions', {'unknown': 'PRIVATE_INPUT_MARKER'}),
@@ -204,6 +207,7 @@ def test_protocol_rejects_unsafe_input_before_service(ctx, name, changes, capsys
             assert result.structuredContent is None
             spy.get_session.assert_not_called()
             spy.save_answer.assert_not_called()
+            spy.get_comparison.assert_not_called()
             # 검증 실패 뒤에도 같은 연결에서 정상 조회할 수 있다.
             valid = await client.call_tool('get_reading_questions', {'context_id': context_id})
             assert not valid.isError
@@ -227,5 +231,81 @@ def test_missing_required_field_is_safe_without_calling_service(ctx):
             assert result.isError
             assert result.content[0].text == 'INVALID_ARGUMENT: 입력값을 확인해주세요.'
             spy.save_answer.assert_not_called()
+            spy.get_comparison.assert_not_called()
 
     asyncio.run(scenario())
+
+
+def test_after_comparison_roundtrip_is_read_only_and_preserves_groups(ctx):
+    db, context_id, server = ctx
+    spy = Mock(wraps=ReflectionService(db))
+    comparison_server = server_for(db, spy)
+    call(server, 'save_reading_answer', context_id=context_id,
+         template_id='before.hypothesis', text='가설', status='completed')
+    for key in ('claim', 'evidence', 'limitation', 'application'):
+        call(server, 'save_reading_answer', context_id=context_id, phase='after',
+             template_id=f'after.{key}', text='' if key == 'evidence' else '확인할 내용',
+             status='draft' if key == 'evidence' else 'completed')
+    before = repo.get_reflection_answers_all(db, context_id)
+    progress = repo.get_learning_progress(db, context_id)
+
+    async def scenario():
+        async with create_connected_server_and_client_session(comparison_server) as client:
+            tool = next(t for t in (await client.list_tools()).tools
+                        if t.name == 'get_reading_comparison')
+            assert tool.annotations.readOnlyHint and not tool.annotations.destructiveHint
+            assert tool.annotations.idempotentHint and not tool.annotations.openWorldHint
+            assert tool.inputSchema['additionalProperties'] is False
+            resource = await client.read_resource(tool.meta['ui']['resourceUri'])
+            assert resource.contents[0].mimeType == 'text/html;profile=mcp-app'
+            assert '<title>읽기 전후 비교</title>' in resource.contents[0].text
+            result = await client.call_tool('get_reading_comparison', {'context_id': context_id})
+            assert not result.isError
+            assert json.loads(result.content[0].text) == result.structuredContent
+            return result.structuredContent
+
+    result = asyncio.run(scenario())
+    spy.get_comparison.assert_called_once_with(context_id)
+    spy.get_session.assert_not_called()
+    spy.save_answer.assert_not_called()
+    assert [g['group_id'] for g in result['groups']] == [
+        'hypothesis_vs_paper', 'background_vs_limitation', 'expectation_vs_application']
+    group = result['groups'][0]
+    assert group['before']['answer']['text'] == '가설'
+    assert [i['template']['template_id'] for i in group['after']] == ['after.claim', 'after.evidence']
+    assert group['after'][1]['answer']['text'] == ''
+    assert result['groups'][1]['before']['answer'] is None
+    assert (result['before']['written'], result['before']['completed']) == (1, 1)
+    assert (result['after']['written'], result['after']['completed']) == (4, 3)
+    assert repo.get_reflection_answers_all(db, context_id) == before
+    assert repo.get_learning_progress(db, context_id) == progress
+    assert call(server_for(db), 'get_reading_comparison', context_id=context_id) == result
+    original = group['after'][0]['answer']
+    call(server, 'save_reading_answer', context_id=context_id, phase='after',
+         template_id='after.claim', text='수정한 주장', status='completed')
+    updated = call(server, 'get_reading_comparison', context_id=context_id)
+    answer = updated['groups'][0]['after'][0]['answer']
+    assert answer['text'] == '수정한 주장' and answer['created_at'] == original['created_at']
+    assert call(server, 'get_reading_questions', context_id=context_id)['phase'] == 'before'
+    assert call(server, 'get_reading_questions', context_id=context_id,
+                phase='after', step='preview')['total'] == 0
+    assert call(server, 'get_reading_questions', context_id=context_id,
+                phase='after', step='review')['total'] == 4
+    other = replace(repo.get_learning_context(db, context_id), context_id='other')
+    repo.create_learning_context(db, other)
+    isolated = call(server, 'get_reading_comparison', context_id='other')
+    assert isolated['before']['written'] == isolated['after']['written'] == 0
+
+
+def test_comparison_storage_error_and_shutdown_are_safe(ctx):
+    db, context_id, _ = ctx
+    service = Mock()
+    service.get_comparison.side_effect = RuntimeError('PRIVATE_ANSWER_PATH')
+    with pytest.raises(ToolError, match='INTERNAL_ERROR') as error:
+        call(server_for(db, service), 'get_reading_comparison', context_id=context_id)
+    assert 'PRIVATE_ANSWER_PATH' not in str(error.value)
+    gate = RequestGate()
+    server = server_for(db, gate.wrap(ReflectionService(db)))
+    gate.stop()
+    with pytest.raises(ToolError, match='SERVER_SHUTTING_DOWN'):
+        call(server, 'get_reading_comparison', context_id=context_id)
