@@ -31,6 +31,8 @@ def save_verification_history(db_path: str, record: VerificationHistoryRecord) -
             if context is None or any(context[key] != getattr(record, key) for key in (
                     'version_id', 'parse_revision_id', 'translation_revision_id', 'embedding_set_id')):
                 return HistoryResult(HistoryOutcome.REFERENCE_MISMATCH)
+            if record.claims and not _published_set_intact(conn, context):
+                return HistoryResult(HistoryOutcome.REFERENCE_MISMATCH)
             for claim in record.claims:
                 for ref in claim.references:
                     chunk = conn.execute(
@@ -39,6 +41,7 @@ def save_verification_history(db_path: str, record: VerificationHistoryRecord) -
                     if (chunk is None or chunk['parse_revision_id'] != context['parse_revision_id']
                             or chunk['translation_revision_id'] != context['translation_revision_id']
                             or chunk['text'] is None
+                            or not _was_published(conn, context, ref.chunk_id)
                             or chunk_content_hash(chunk['original_text']) != ref.content_hash):
                         return HistoryResult(HistoryOutcome.REFERENCE_MISMATCH)
             conn.execute('INSERT INTO verification_runs (run_id, context_id, version_id, parse_revision_id, '
@@ -59,6 +62,25 @@ def save_verification_history(db_path: str, record: VerificationHistoryRecord) -
             return HistoryResult(HistoryOutcome.SAVED, record.run_id)
     except sqlite3.Error:
         return HistoryResult(HistoryOutcome.SAVE_FAILED)  # 세부 내용은 남기지 않는다. with 블록이 되돌렸다.
+
+
+def _was_published(conn, context, chunk_id: str) -> bool:
+    """청크가 게시 당시의 성공 번역 집합에 속하는지 확인한다(번역 결과 행이 성공으로 기록된 청크만)."""
+    return conn.execute('SELECT 1 FROM translation_results WHERE translation_revision_id=? AND chunk_id=? '
+                        'AND failure_code IS NULL', (context['translation_revision_id'], chunk_id)).fetchone() is not None
+
+
+def _published_set_intact(conn, context) -> bool:
+    """게시 색인의 청크 수와 현재 성공 번역 청크 수가 같은지 확인한다. 게시 뒤 집합이 바뀌었다면 근거로 쓰지 않는다."""
+    index = conn.execute('SELECT chunk_count FROM search_indexes WHERE embedding_set_id=?',
+                         (context['embedding_set_id'],)).fetchone()
+    if index is None:
+        return False
+    actual = conn.execute(
+        'SELECT COUNT(*) FROM translation_results r JOIN chunks c ON c.chunk_id=r.chunk_id '
+        'WHERE r.translation_revision_id=? AND c.parse_revision_id=? AND r.failure_code IS NULL '
+        'AND c.text IS NOT NULL', (context['translation_revision_id'], context['parse_revision_id'])).fetchone()[0]
+    return actual == index['chunk_count']
 
 
 def get_verification_history(db_path: str, context_id: str, run_id: str) -> Optional[VerificationHistoryRecord]:

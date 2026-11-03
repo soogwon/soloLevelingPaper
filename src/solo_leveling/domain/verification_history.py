@@ -91,6 +91,8 @@ def validate_record(record: VerificationHistoryRecord) -> None:
         raise HistoryValidationError('지원하지 않는 실패 코드입니다.')
     if not isinstance(record.claims, tuple) or len(record.claims) > MAX_CLAIMS_PER_RUN:
         raise HistoryValidationError('claims 형식이 올바르지 않습니다.')
+    if record.failure is not None and record.level != VerificationLevel.STRUCTURAL_ONLY.value:
+        raise HistoryValidationError('실패한 검증 실행은 structural_only로만 기록합니다.')
     if record.failure is not None and record.claims:
         raise HistoryValidationError('실패한 검증 실행에는 주장 판정을 남기지 않습니다.')
     if record.failure is None and not record.claims:

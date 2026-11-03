@@ -66,10 +66,31 @@ def test_verdict_and_retained_are_independent(env):
 
 
 def test_failed_run_keeps_the_run_with_zero_claim_rows(env):
-    result = vh.save_verification_history(env, record(claims=[], failure='timeout'))
+    result = vh.save_verification_history(env, record(claims=[], failure='timeout', level='structural_only'))
     assert result.outcome is HistoryOutcome.SAVED and counts(env) == (1, 0, 0)
     saved = vh.get_verification_history(env, 'ctx', 'r1')
-    assert saved.failure == 'timeout' and saved.claims == ()
+    assert (saved.failure, saved.level, saved.claims) == ('timeout', 'structural_only', ())
+
+
+def test_failed_run_with_model_checked_level_is_rejected(env):
+    with pytest.raises(HistoryValidationError):
+        vh.save_verification_history(env, record(claims=[], failure='timeout', level='model_checked'))
+    assert counts(env) == (0, 0, 0)
+
+
+def test_chunk_added_after_publication_is_rejected_and_nothing_is_saved(env):
+    with closing(get_connection(env)) as conn, conn:
+        conn.execute("INSERT INTO chunks (chunk_id, parse_revision_id, chunk_index, original_text, text, "
+                     "translation_revision_id, pdf_page) VALUES ('c3', 'p1', 2, 'Third.', '셋째.', 't1', 2)")
+    for refs in ([ref('c3', 'Third.')], [ref('c1', 'First.'), ref('c3', 'Third.')]):
+        assert vh.save_verification_history(env, record(claims=[claim(refs=refs)])).outcome \
+            is HistoryOutcome.REFERENCE_MISMATCH
+    with closing(get_connection(env)) as conn, conn:  # 번역 결과 행까지 만들어도 게시 색인의 청크 수와 달라 거부한다
+        conn.execute("INSERT INTO translation_results (translation_revision_id, chunk_id, failure_code) "
+                     "VALUES ('t1', 'c3', NULL)")
+    assert vh.save_verification_history(env, record(claims=[claim(refs=[ref('c3', 'Third.')])])).outcome \
+        is HistoryOutcome.REFERENCE_MISMATCH
+    assert counts(env) == (0, 0, 0)
 
 
 def test_all_claims_excluded_still_keeps_every_real_judgment(env):
@@ -172,12 +193,23 @@ def test_invalid_input_raises_and_saves_nothing(env, kw):
 
 
 # ── 삭제 범위·마이그레이션 ──────────────────────────────────
-def test_context_and_chunks_cannot_be_deleted_while_history_references_them(env):
+def test_chunks_cannot_be_deleted_while_history_references_them(env):
     vh.save_verification_history(env, record())
-    for sql in ("DELETE FROM learning_contexts WHERE context_id='ctx'", "DELETE FROM chunks WHERE chunk_id='c1'"):
-        with closing(get_connection(env)) as conn, pytest.raises(sqlite3.IntegrityError), conn:
-            conn.execute(sql)
+    with closing(get_connection(env)) as conn, pytest.raises(sqlite3.IntegrityError), conn:
+        conn.execute("DELETE FROM chunks WHERE chunk_id='c1'")
     assert counts(env) == (1, 1, 1)
+
+
+def test_deleting_a_context_cascades_only_its_own_history(env):
+    repo.create_learning_context(env, LearningContext('ctx2', 'v1', 'p1', 't1', known_concepts=[],
+                                                      embedding_set_id='idx'))
+    vh.save_verification_history(env, record('r1'))
+    vh.save_verification_history(env, record('r2', context_id='ctx2'))
+    with closing(get_connection(env)) as conn, conn:
+        conn.execute("DELETE FROM learning_contexts WHERE context_id='ctx'")
+    assert counts(env) == (1, 1, 1)
+    assert vh.get_verification_history(env, 'ctx', 'r1') is None
+    assert vh.get_verification_history(env, 'ctx2', 'r2') is not None
 
 
 def test_delete_context_history_removes_only_that_contexts_runs_in_order(env):
@@ -188,7 +220,7 @@ def test_delete_context_history_removes_only_that_contexts_runs_in_order(env):
     assert vh.delete_context_verification_history(env, 'ctx') == 1
     assert counts(env) == (1, 1, 1)  # 실행·주장·참조가 함께 지워지고 다른 맥락의 것은 남는다
     assert vh.get_verification_history(env, 'ctx2', 'r2') is not None
-    with closing(get_connection(env)) as conn, conn:  # 이력을 지운 뒤에는 맥락 삭제가 이력 때문에 막히지 않는다
+    with closing(get_connection(env)) as conn, conn:  # 이력을 지운 뒤에도 맥락 삭제가 정상이다
         conn.execute("DELETE FROM learning_contexts WHERE context_id='ctx'")
 
 

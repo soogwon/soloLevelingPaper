@@ -218,7 +218,7 @@ CREATE TABLE IF NOT EXISTS quiz_submit_requests (
 -- 맥락·청크는 이력이 참조하는 동안 지울 수 없다(RESTRICT). 맥락을 지우려면 이력을 먼저 지운다.
 CREATE TABLE IF NOT EXISTS verification_runs (
     run_id TEXT PRIMARY KEY,
-    context_id TEXT NOT NULL REFERENCES learning_contexts(context_id) ON DELETE RESTRICT,
+    context_id TEXT NOT NULL REFERENCES learning_contexts(context_id) ON DELETE CASCADE,
     version_id TEXT NOT NULL REFERENCES paper_versions(version_id),
     parse_revision_id TEXT NOT NULL REFERENCES parse_revisions(parse_revision_id),
     translation_revision_id TEXT NOT NULL REFERENCES translation_revisions(translation_revision_id),
