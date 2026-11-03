@@ -1,3 +1,5 @@
+import { mountDetailApp } from '../paper-detail/detail.js';
+
 const steps = { preview: '훑어보기', structure: '구조 파악', deep_read: '깊이 읽기', review: '복습' };
 const statuses = { queued: '처리 대기', processing: '처리 중', ready: '검색 준비 완료', failed: '처리 실패', interrupted: '처리 중단' };
 const stages = { download: '파일 준비', parse: '원문 추출', translate: '번역', index: '검색 색인' };
@@ -37,13 +39,20 @@ function valid(data) {
 export function mountDashboard(app, doc, timeoutMs = 15000) {
   const el = (id) => doc.getElementById(id);
   let contextId = null, connected = false, busy = true, revision = 0, waiting;
+  let snapshot = null, detailApp = null;
   function message(value, loading = false) {
     busy = loading;
     el('message').textContent = value;
     doc.querySelector('main').setAttribute('aria-busy', String(loading));
     el('refresh').disabled = !connected || !contextId || busy;
+    el('open-detail').disabled = !connected || !snapshot || busy;
   }
-  function hide() { el('details').hidden = true; }
+  function hide() {
+    el('details').hidden = true;
+    el('detail-view').hidden = true;
+    detailApp?.ontoolcancelled();
+    snapshot = null;
+  }
   function wait() {
     clearTimeout(waiting);
     const current = revision;
@@ -60,6 +69,7 @@ export function mountDashboard(app, doc, timeoutMs = 15000) {
       message('응답 형식 또는 학습 맥락을 확인하지 못했습니다. 채팅에서 다시 조회해 주세요.'); return;
     }
     contextId = data.context_id;
+    snapshot = data;
     const p = data.progress;
     el('paper-title').textContent = data.title || data.file_display_name || '제목 없는 논문';
     el('identity').textContent = `${data.context_id} · ${data.version_id}`;
@@ -109,6 +119,66 @@ export function mountDashboard(app, doc, timeoutMs = 15000) {
   };
   app.ontoolresult = (result) => { revision += 1; display(result); };
   app.ontoolcancelled = () => { revision += 1; clearTimeout(waiting); hide(); message('조회가 취소되었습니다. 채팅에서 다시 조회할 수 있습니다.'); };
+  el('back-dashboard').addEventListener('click', () => {
+    revision += 1;
+    detailApp?.ontoolcancelled();
+    el('detail-view').hidden = true;
+    el('details').hidden = !snapshot;
+    message('저장된 학습 현황입니다.');
+    el('open-detail').focus();
+  });
+  el('open-detail').addEventListener('click', async () => {
+    if (!connected || !snapshot || busy) return;
+    const source = snapshot;
+    const current = ++revision;
+    el('details').hidden = true;
+    el('detail-view').hidden = false;
+    if (!detailApp) {
+      // 기존 상세 렌더러의 DOM을 별도 영역에 연결해 호스트 이벤트와 분리한다.
+      detailApp = { connect: async () => {} };
+      mountDetailApp(detailApp, {
+        getElementById: (id) => el(`paper-detail-${id}`),
+        querySelector: () => el('detail-view'),
+        createElement: (tag) => doc.createElement(tag),
+      }, timeoutMs);
+    }
+    detailApp.ontoolinput();
+    el('back-dashboard').focus();
+    message('논문 상세를 불러오고 있습니다.', true);
+    let timer;
+    try {
+      const args = { context_id: source.context_id, scope: 'paper', offset: 0, limit: 20 };
+      if (source.summary) args.summary_id = source.summary.summary_id;
+      const result = await Promise.race([
+        app.callServerTool({ name: 'get_paper_detail', arguments: args }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), timeoutMs); }),
+      ]);
+      if (current !== revision) return;
+      const data = result?.structuredContent;
+      if (result?.isError || !data || data.context_id !== source.context_id
+          || data.version_id !== source.version_id || data.paper_id !== source.paper_id
+          || data.scope !== 'paper'
+          // 상세 계약이 누락된 응답을 일반 근거·답변 응답으로 해석하지 않는다.
+          || !Object.hasOwn(data, 'summary') || Object.hasOwn(data, 'citations')
+          || !text(data.parse_revision_id) || !text(data.translation_revision_id)
+          || !Array.isArray(data.evidence)
+          || !data.evidence.every((evidence) => evidence
+            && ['version_id', 'parse_revision_id', 'translation_revision_id']
+              .every((key) => evidence[key] === data[key]))
+          || (source.summary && data.summary?.summary_id !== source.summary.summary_id)) {
+        throw new Error('invalid-detail');
+      }
+      detailApp.ontoolresult(result);
+      message(el('paper-detail-content').hidden
+        ? '상세 응답의 출처 연결을 확인하지 못했습니다. 채팅의 안내를 확인하세요.'
+        : '논문 상세 조회가 끝났습니다.');
+    } catch {
+      if (current === revision) {
+        detailApp.ontoolresult({ isError: true });
+        message('논문 상세를 확인하지 못했습니다. 돌아가서 다시 조회하거나 채팅에서 같은 학습 맥락의 논문 상세를 요청하세요.');
+      }
+    } finally { clearTimeout(timer); }
+  });
   el('refresh').addEventListener('click', async () => {
     if (!connected || !contextId || busy) return;
     const current = ++revision; let timer;
@@ -125,5 +195,6 @@ export function mountDashboard(app, doc, timeoutMs = 15000) {
   wait();
   Promise.resolve().then(() => app.connect()).then(() => {
     connected = true; el('refresh').disabled = !contextId || busy;
+    el('open-detail').disabled = !snapshot || busy;
   }).catch(() => { clearTimeout(waiting); hide(); message('화면을 연결하지 못했습니다. 채팅의 도구 응답으로 확인하세요.'); });
 }

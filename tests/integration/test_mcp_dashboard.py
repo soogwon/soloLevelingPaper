@@ -37,6 +37,16 @@ def test_dashboard_reads_saved_context_over_stdio(setup_db, tmp_path):
                     assert data.structuredContent['progress']['completion_ratio'] == .25
                     assert data.structuredContent['processing']['job_id'] == 'job'
                     assert json.loads(data.content[0].text) == data.structuredContent
+                    # 대시보드에서 선택한 맥락을 그대로 상세 조회에 전달한다.
+                    detail = await session.call_tool('get_paper_detail', {
+                        'context_id': data.structuredContent['context_id'],
+                        'scope': 'paper', 'offset': 0, 'limit': 20,
+                    })
+                    assert not detail.isError
+                    for key in ('context_id', 'version_id', 'paper_id'):
+                        assert detail.structuredContent[key] == data.structuredContent[key]
+                    assert detail.structuredContent['summary'] is None
+                    assert json.loads(detail.content[0].text) == detail.structuredContent
                     other = await session.call_tool('get_learning_dashboard', {'context_id': 'other'})
                     assert not other.isError
                     assert other.structuredContent['progress']['recorded'] is False
