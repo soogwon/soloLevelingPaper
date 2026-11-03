@@ -170,7 +170,7 @@ def list_annotations(db_path: str, context_id: str, step: Optional[str] = None,
 def get_segment_texts(db_path: str, context_id: str, annotation_id: str) -> Dict[int, Optional[str]]:
     """구간별 '지금' 청크 텍스트(구간 위치 → 문자열). 서비스가 저장된 위치·인용문과 비교해 위치 확인 불가를 판정한다.
 
-    번역 구간은 청크의 현재 번역이 같은 번역 리비전일 때만 텍스트를 주고, 아니면 None이다.
+    번역 구간은 그 구간이 가리키는 번역 리비전에 성공한 번역문이 있을 때만 텍스트를 주고, 아니면 None이다.
     다른 맥락의 기록이면 없는 기록과 똑같이 ResourceNotFoundError를 내고 본문·구간을 돌려주지 않는다.
     """
     with closing(get_connection(db_path)) as conn:
@@ -179,13 +179,17 @@ def get_segment_texts(db_path: str, context_id: str, annotation_id: str) -> Dict
             raise ResourceNotFoundError('annotation not found')
         texts: Dict[int, Optional[str]] = {}
         for seg in annotation.segments:
-            row = conn.execute('SELECT original_text, text, translation_revision_id FROM chunks WHERE chunk_id=?',
-                               (seg.chunk_id,)).fetchone()
+            row = conn.execute('SELECT original_text FROM chunks WHERE chunk_id=?', (seg.chunk_id,)).fetchone()
             if row is None:
                 texts[seg.position] = None
             elif seg.target == TARGET_ORIGINAL:
                 texts[seg.position] = row['original_text']
             else:
-                texts[seg.position] = (row['text'] if row['translation_revision_id'] == seg.translation_revision_id
-                                       else None)
+                # 번역문은 chunks.text가 아니라 그 번역 리비전의 결과(translation_results)에서 읽는다.
+                # 복구로 만든 새 리비전의 번역도 같은 방식으로 읽히고, 그 리비전에 성공 번역이 없으면 None이다.
+                result = conn.execute(
+                    'SELECT translated_text FROM translation_results WHERE translation_revision_id=? AND chunk_id=? '
+                    'AND failure_code IS NULL AND translated_text IS NOT NULL',
+                    (seg.translation_revision_id, seg.chunk_id)).fetchone()
+                texts[seg.position] = result['translated_text'] if result else None
         return texts
