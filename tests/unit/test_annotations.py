@@ -52,7 +52,7 @@ def test_create_highlight_stores_record_and_segment_together(env):
     s = a.segments[0]
     assert (s.position, s.chunk_id, s.parse_revision_id, s.target) == (0, 'c1', 'p1', 'original')
     assert (s.start_offset, s.end_offset, s.quote_snapshot) == (0, 5, 'First')
-    assert counts(db) == (1, 1) and ann.get_annotation(db, a.annotation_id) == a
+    assert counts(db) == (1, 1) and ann.get_annotation(db, ctx, a.annotation_id) == a
 
 
 def test_create_note_with_and_without_segments(env):
@@ -147,43 +147,43 @@ def test_translation_segment_needs_the_contexts_translation_revision(env):
 def test_update_changes_body_and_step_and_bumps_revision_only(env):
     db, ctx = env
     a = make(db, ctx, 'note', '처음', segments=[seg()])
-    result = ann.update_annotation(db, a.annotation_id, 1, '고친 본문', 'deep_read')
+    result = ann.update_annotation(db, ctx, a.annotation_id, 1, '고친 본문', 'deep_read')
     assert result.outcome is AnnotationOutcome.SAVED
     b = result.annotation
     assert (b.body, b.step, b.revision) == ('고친 본문', 'deep_read', 2)
     assert b.segments == a.segments and b.context_id == a.context_id and b.created_at == a.created_at
-    assert ann.update_annotation(db, a.annotation_id, 2, '또', None).annotation.step is None
+    assert ann.update_annotation(db, ctx, a.annotation_id, 2, '또', None).annotation.step is None
 
 
 def test_update_with_stale_revision_conflicts_and_changes_nothing(env):
     db, ctx = env
     a = make(db, ctx, 'note', '처음', segments=[])
-    ann.update_annotation(db, a.annotation_id, 1, '둘째', None)
-    result = ann.update_annotation(db, a.annotation_id, 1, '낡은 수정', None)
+    ann.update_annotation(db, ctx, a.annotation_id, 1, '둘째', None)
+    result = ann.update_annotation(db, ctx, a.annotation_id, 1, '낡은 수정', None)
     assert result.outcome is AnnotationOutcome.CONFLICT and result.annotation is None
-    current = ann.get_annotation(db, a.annotation_id)
+    current = ann.get_annotation(db, ctx, a.annotation_id)
     assert (current.body, current.revision) == ('둘째', 2)
 
 
 def test_update_not_found_and_invalid_input(env):
     db, ctx = env
-    assert ann.update_annotation(db, 'nope', 1, 'x', None).outcome is AnnotationOutcome.NOT_FOUND
+    assert ann.update_annotation(db, ctx, 'nope', 1, 'x', None).outcome is AnnotationOutcome.NOT_FOUND
     note = make(db, ctx, 'note', '본문', segments=[])
     for bad in ('  ', 'x' * (MAX_BODY_LENGTH + 1)):
         with pytest.raises(AnnotationValidationError):
-            ann.update_annotation(db, note.annotation_id, 1, bad, None)
+            ann.update_annotation(db, ctx, note.annotation_id, 1, bad, None)
     with pytest.raises(AnnotationValidationError):
-        ann.update_annotation(db, note.annotation_id, 1, '본문', 'bogus-step')
+        ann.update_annotation(db, ctx, note.annotation_id, 1, '본문', 'bogus-step')
     for bad_revision in (0, -1, True, '1', None):
         with pytest.raises(AnnotationValidationError):
-            ann.update_annotation(db, note.annotation_id, bad_revision, '본문', None)
-    assert ann.get_annotation(db, note.annotation_id).revision == 1  # 실패한 시도는 revision을 올리지 않는다
+            ann.update_annotation(db, ctx, note.annotation_id, bad_revision, '본문', None)
+    assert ann.get_annotation(db, ctx, note.annotation_id).revision == 1  # 실패한 시도는 revision을 올리지 않는다
 
 
 def test_highlight_body_may_be_emptied_but_a_note_may_not(env):
     db, ctx = env
     h = make(db, ctx, 'highlight', '메모', segments=[seg()])
-    assert ann.update_annotation(db, h.annotation_id, 1, '', None).annotation.body == ''
+    assert ann.update_annotation(db, ctx, h.annotation_id, 1, '', None).annotation.body == ''
 
 
 def test_concurrent_updates_with_same_revision_only_one_wins(env):
@@ -193,7 +193,7 @@ def test_concurrent_updates_with_same_revision_only_one_wins(env):
 
     def worker(i):
         barrier.wait()
-        outcomes.append(ann.update_annotation(db, a.annotation_id, 1, f'수정 {i}', None).outcome)
+        outcomes.append(ann.update_annotation(db, ctx, a.annotation_id, 1, f'수정 {i}', None).outcome)
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(6)]
     for t in threads:
@@ -201,7 +201,7 @@ def test_concurrent_updates_with_same_revision_only_one_wins(env):
     for t in threads:
         t.join()
     assert sorted(o.value for o in outcomes) == ['conflict'] * 5 + ['saved']
-    assert ann.get_annotation(db, a.annotation_id).revision == 2
+    assert ann.get_annotation(db, ctx, a.annotation_id).revision == 2
 
 
 # ── 삭제 ────────────────────────────────────────────────────
@@ -209,10 +209,10 @@ def test_delete_removes_only_the_record_and_its_segments(env):
     db, ctx = env
     keep = make(db, ctx, segments=[seg('c2', 0, 6, 'Second')])
     gone = make(db, ctx, 'note', '지울 메모', segments=[seg(), seg('c2', 0, 6, 'Second')])
-    result = ann.delete_annotation(db, gone.annotation_id, 1)
+    result = ann.delete_annotation(db, ctx, gone.annotation_id, 1)
     assert result.outcome is AnnotationOutcome.DELETED
-    assert ann.get_annotation(db, gone.annotation_id) is None
-    assert ann.get_annotation(db, keep.annotation_id) == keep
+    assert ann.get_annotation(db, ctx, gone.annotation_id) is None
+    assert ann.get_annotation(db, ctx, keep.annotation_id) == keep
     assert counts(db) == (1, 1)
     with closing(get_connection(db)) as conn:  # 논문·맥락·청크는 그대로
         assert conn.execute('SELECT COUNT(*) FROM chunks').fetchone()[0] == 3
@@ -222,11 +222,11 @@ def test_delete_removes_only_the_record_and_its_segments(env):
 def test_delete_with_stale_revision_conflicts_and_keeps_everything(env):
     db, ctx = env
     a = make(db, ctx)
-    ann.update_annotation(db, a.annotation_id, 1, '수정', None)
-    assert ann.delete_annotation(db, a.annotation_id, 1).outcome is AnnotationOutcome.CONFLICT
+    ann.update_annotation(db, ctx, a.annotation_id, 1, '수정', None)
+    assert ann.delete_annotation(db, ctx, a.annotation_id, 1).outcome is AnnotationOutcome.CONFLICT
     assert counts(db) == (1, 1)
-    assert ann.delete_annotation(db, a.annotation_id, 2).outcome is AnnotationOutcome.DELETED
-    assert ann.delete_annotation(db, a.annotation_id, 2).outcome is AnnotationOutcome.NOT_FOUND
+    assert ann.delete_annotation(db, ctx, a.annotation_id, 2).outcome is AnnotationOutcome.DELETED
+    assert ann.delete_annotation(db, ctx, a.annotation_id, 2).outcome is AnnotationOutcome.NOT_FOUND
 
 
 def test_referenced_chunk_and_context_cannot_be_deleted_until_annotation_is_removed(env):
@@ -238,8 +238,8 @@ def test_referenced_chunk_and_context_cannot_be_deleted_until_annotation_is_remo
             assert fk['on_delete'] == 'RESTRICT'
         with pytest.raises(sqlite3.IntegrityError), conn:
             conn.execute("DELETE FROM chunks WHERE chunk_id='c3'")
-    assert ann.get_annotation(db, a.annotation_id) is not None  # 거부됐으니 메모는 그대로
-    ann.delete_annotation(db, a.annotation_id, 1)
+    assert ann.get_annotation(db, ctx, a.annotation_id) is not None  # 거부됐으니 메모는 그대로
+    ann.delete_annotation(db, ctx, a.annotation_id, 1)
     with closing(get_connection(db)) as conn, conn:
         conn.execute("DELETE FROM chunks WHERE chunk_id='c3'")  # 메모를 지운 뒤에는 지워진다
 
@@ -264,16 +264,69 @@ def test_get_segment_texts_returns_current_text_so_service_can_detect_drift(env)
     db, ctx = env
     a = make(db, ctx, segments=[seg(), seg('c1', 0, 3, '첫째.', target='translation',
                                           translation_revision_id='t1')])
-    assert ann.get_segment_texts(db, a.annotation_id) == {0: 'First.', 1: '첫째.'}
+    assert ann.get_segment_texts(db, ctx, a.annotation_id) == {0: 'First.', 1: '첫째.'}
     with closing(get_connection(db)) as conn, conn:  # 원문이 바뀌면 현재 텍스트가 달라 보인다
         conn.execute("UPDATE chunks SET original_text='Changed.' WHERE chunk_id='c1'")
-    assert ann.get_segment_texts(db, a.annotation_id)[0] == 'Changed.'
-    assert ann.get_annotation(db, a.annotation_id).segments[0].quote_snapshot == 'First'  # 스냅샷은 보존
+    assert ann.get_segment_texts(db, ctx, a.annotation_id)[0] == 'Changed.'
+    assert ann.get_annotation(db, ctx, a.annotation_id).segments[0].quote_snapshot == 'First'  # 스냅샷은 보존
     with closing(get_connection(db)) as conn, conn:  # 청크의 번역 리비전이 달라지면 번역 구간은 None
         conn.execute("UPDATE chunks SET translation_revision_id=NULL WHERE chunk_id='c1'")
-    assert ann.get_segment_texts(db, a.annotation_id)[1] is None
+    assert ann.get_segment_texts(db, ctx, a.annotation_id)[1] is None
     with pytest.raises(ResourceNotFoundError):
-        ann.get_segment_texts(db, 'nope')
+        ann.get_segment_texts(db, ctx, 'nope')
+
+
+# ── 맥락 범위·읽기 일관성 ───────────────────────────────────
+def _other_context(db):
+    repo.create_learning_context(db, LearningContext('ctx2', 'v1', 'p1', 't1', known_concepts=[],
+                                                     embedding_set_id='idx'))
+    return 'ctx2'
+
+
+def test_other_context_cannot_read_update_or_delete_an_annotation_by_id(env):
+    db, ctx = env
+    mine = make(db, ctx, 'note', SECRET, segments=[seg()], step='preview')
+    other = _other_context(db)
+    before = counts(db)
+    assert ann.get_annotation(db, other, mine.annotation_id) is None
+    with pytest.raises(ResourceNotFoundError):
+        ann.get_segment_texts(db, other, mine.annotation_id)
+    # revision이 맞아도 소속이 다르면 NOT_FOUND이고, 결과에 본문·구간이 없다.
+    updated = ann.update_annotation(db, other, mine.annotation_id, 1, '침범', None)
+    deleted = ann.delete_annotation(db, other, mine.annotation_id, 1)
+    for result in (updated, deleted):
+        assert result.outcome is AnnotationOutcome.NOT_FOUND and result.annotation is None
+    # revision이 틀려도 CONFLICT가 아니라 NOT_FOUND다(소속 확인이 먼저라 존재 여부가 드러나지 않는다).
+    assert ann.update_annotation(db, other, mine.annotation_id, 99, '침범', None).outcome is AnnotationOutcome.NOT_FOUND
+    assert ann.delete_annotation(db, other, mine.annotation_id, 99).outcome is AnnotationOutcome.NOT_FOUND
+    # 원래 맥락의 기록과 revision은 그대로다.
+    assert counts(db) == before and ann.get_annotation(db, ctx, mine.annotation_id) == mine
+    assert ann.get_annotation(db, ctx, mine.annotation_id).revision == 1
+    assert ann.get_segment_texts(db, ctx, mine.annotation_id) == {0: 'First.'}
+
+
+def test_list_reads_annotations_and_segments_in_one_snapshot_even_if_deleted_concurrently(env, monkeypatch):
+    db, ctx = env
+    made = [make(db, ctx, 'highlight', '', segments=[seg()], step='preview') for _ in range(3)]
+    original, state = ann._load, {'raced': False}
+
+    def racing_load(conn, annotation_id, context_id=None):
+        if not state['raced']:  # 목록 ID를 읽은 직후, 다른 연결이 마지막 기록을 지우려 한다.
+            state['raced'] = True
+            try:
+                with closing(sqlite3.connect(db, timeout=0.2)) as other, other:
+                    other.execute('PRAGMA foreign_keys=ON')
+                    other.execute('DELETE FROM annotation_segments WHERE annotation_id=?', (made[-1].annotation_id,))
+                    other.execute('DELETE FROM annotations WHERE annotation_id=?', (made[-1].annotation_id,))
+            except sqlite3.OperationalError:
+                pass  # 읽기 스냅샷이 쓰기를 막았다.
+        return original(conn, annotation_id, context_id)
+
+    monkeypatch.setattr(ann, '_load', racing_load)
+    listed = ann.list_annotations(db, ctx)
+    assert state['raced']
+    assert all(a is not None and a.segments for a in listed)  # None이 섞이거나 구간이 빠지지 않는다
+    assert [a.annotation_id for a in listed] == [m.annotation_id for m in made]  # 읽기 시점의 목록 그대로
 
 
 # ── 마이그레이션·로그 ───────────────────────────────────────
@@ -282,7 +335,7 @@ def test_init_db_is_repeatable_and_adds_tables_to_an_older_database(env):
     a = make(db, ctx)
     init_db(db)
     init_db(db)
-    assert ann.get_annotation(db, a.annotation_id) == a
+    assert ann.get_annotation(db, ctx, a.annotation_id) == a
     with closing(get_connection(db)) as conn, conn:
         conn.execute('DROP TABLE annotation_segments')
         conn.execute('DROP TABLE annotations')  # 이 기능 이전의 DB를 흉내

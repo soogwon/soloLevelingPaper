@@ -6,6 +6,9 @@
 - 위치(맥락·청크·구간)는 바꾸지 않는다. 본문과 학습 단계만 수정한다.
 - 원문 구간은 저장 시점에 청크 원문의 해당 구간과 인용문 스냅샷이 같은지 확인한다.
   번역 구간은 번역 리비전이 맥락의 것과 같은지만 확인하고 인용문 대조는 하지 않는다(번역 저장 구조가 #30에서 바뀔 수 있다).
+- 단건 조회·수정·삭제·구간 원문 조회는 호출자의 context_id를 받아 DB 조건에서 소속을 확인한다. 다른 맥락의 기록은
+  없는 것(NOT_FOUND / None / ResourceNotFoundError)과 똑같이 처리하고, 수정·삭제는 이 확인을 revision 판정보다 먼저 한다.
+- 목록은 한 번의 읽기 트랜잭션(스냅샷)에서 목록과 구간을 함께 읽어, 동시에 삭제돼도 응답 항목이 온전하다.
 - 본문·인용문은 로그에 남기지 않는다. 이유는 고정 코드로만 알린다.
 """
 from contextlib import closing
@@ -30,8 +33,12 @@ def _check_revision(expected_revision) -> None:
         raise AnnotationValidationError('expected_revision은 1 이상의 정수여야 함')
 
 
-def _load(conn, annotation_id: str) -> Optional[Annotation]:
-    row = conn.execute('SELECT * FROM annotations WHERE annotation_id=?', (annotation_id,)).fetchone()
+def _load(conn, annotation_id: str, context_id: Optional[str] = None) -> Optional[Annotation]:
+    """context_id를 주면 그 맥락의 기록만 읽는다(다른 맥락의 기록은 없는 것과 같다)."""
+    query, params = 'SELECT * FROM annotations WHERE annotation_id=?', [annotation_id]
+    if context_id is not None:
+        query, params = query + ' AND context_id=?', params + [context_id]
+    row = conn.execute(query, params).fetchone()
     if row is None:
         return None
     segments = tuple(
@@ -93,16 +100,17 @@ def create_annotation(db_path: str, context_id: str, kind: str, body: str,
         return AnnotationResult(AnnotationOutcome.SAVED, _load(conn, annotation_id))
 
 
-def update_annotation(db_path: str, annotation_id: str, expected_revision: int, body: str,
+def update_annotation(db_path: str, context_id: str, annotation_id: str, expected_revision: int, body: str,
                       step: Optional[str] = None) -> AnnotationResult:
     """본문과 학습 단계를 고친다(둘 다 새 값으로 바꾼다. step=None이면 단계 연결을 지운다).
 
-    revision이 expected_revision과 다르면 아무것도 바꾸지 않고 CONFLICT. 맥락·구간은 바꿀 수 없다.
+    다른 맥락의 기록이면 revision을 보기 전에 NOT_FOUND(아무것도 바꾸지 않음). revision이 expected_revision과
+    다르면 아무것도 바꾸지 않고 CONFLICT. 맥락·구간은 바꿀 수 없다.
     """
     _check_revision(expected_revision)
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
-        current = _load(conn, annotation_id)
+        current = _load(conn, annotation_id, context_id)
         if current is None:
             return AnnotationResult(AnnotationOutcome.NOT_FOUND)
         if current.revision != expected_revision:
@@ -110,32 +118,33 @@ def update_annotation(db_path: str, annotation_id: str, expected_revision: int, 
         validate_annotation_fields(current.kind, body, step, len(current.segments))
         changed = conn.execute(
             'UPDATE annotations SET body=?, step=?, revision=revision+1, updated_at=? '
-            'WHERE annotation_id=? AND revision=?',
-            (body, step, now_iso(), annotation_id, expected_revision)).rowcount
+            'WHERE annotation_id=? AND context_id=? AND revision=?',
+            (body, step, now_iso(), annotation_id, context_id, expected_revision)).rowcount
         if changed != 1:  # BEGIN IMMEDIATE라 일어나지 않지만, 어긋나면 조용히 덮지 않는다.
             return AnnotationResult(AnnotationOutcome.CONFLICT)
-        return AnnotationResult(AnnotationOutcome.SAVED, _load(conn, annotation_id))
+        return AnnotationResult(AnnotationOutcome.SAVED, _load(conn, annotation_id, context_id))
 
 
-def delete_annotation(db_path: str, annotation_id: str, expected_revision: int) -> AnnotationResult:
-    """기록과 소속 구간만 한 트랜잭션으로 지운다. 논문·맥락·청크·근거는 그대로 둔다."""
+def delete_annotation(db_path: str, context_id: str, annotation_id: str, expected_revision: int) -> AnnotationResult:
+    """기록과 소속 구간만 한 트랜잭션으로 지운다. 논문·맥락·청크·근거는 그대로 둔다. 다른 맥락의 기록은 NOT_FOUND."""
     _check_revision(expected_revision)
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
-        current = _load(conn, annotation_id)
+        current = _load(conn, annotation_id, context_id)
         if current is None:
             return AnnotationResult(AnnotationOutcome.NOT_FOUND)
         if current.revision != expected_revision:
             return AnnotationResult(AnnotationOutcome.CONFLICT)
         conn.execute('DELETE FROM annotation_segments WHERE annotation_id=?', (annotation_id,))
-        conn.execute('DELETE FROM annotations WHERE annotation_id=? AND revision=?',
-                     (annotation_id, expected_revision))
+        conn.execute('DELETE FROM annotations WHERE annotation_id=? AND context_id=? AND revision=?',
+                     (annotation_id, context_id, expected_revision))
         return AnnotationResult(AnnotationOutcome.DELETED)
 
 
-def get_annotation(db_path: str, annotation_id: str) -> Optional[Annotation]:
+def get_annotation(db_path: str, context_id: str, annotation_id: str) -> Optional[Annotation]:
+    """그 맥락의 기록 하나. 없거나 다른 맥락의 기록이면 None."""
     with closing(get_connection(db_path)) as conn:
-        return _load(conn, annotation_id)
+        return _load(conn, annotation_id, context_id)
 
 
 def list_annotations(db_path: str, context_id: str, step: Optional[str] = None,
@@ -147,19 +156,25 @@ def list_annotations(db_path: str, context_id: str, step: Optional[str] = None,
     if kind is not None:
         query, params = query + ' AND kind=?', params + [kind]
     with closing(get_connection(db_path)) as conn:
-        if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
-            raise ResourceNotFoundError('context not found')
-        ids = [r['annotation_id'] for r in conn.execute(query + ' ORDER BY created_at, rowid', params)]
-        return [_load(conn, annotation_id) for annotation_id in ids]
+        conn.execute('BEGIN')  # 읽기 스냅샷: 목록과 구간을 같은 시점에서 읽는다.
+        try:
+            if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
+                raise ResourceNotFoundError('context not found')
+            ids = [r['annotation_id'] for r in conn.execute(query + ' ORDER BY created_at, rowid', params)]
+            loaded = [_load(conn, annotation_id, context_id) for annotation_id in ids]
+        finally:
+            conn.rollback()
+        return [a for a in loaded if a is not None]  # 스냅샷 안이라 None은 생기지 않지만 방어한다.
 
 
-def get_segment_texts(db_path: str, annotation_id: str) -> Dict[int, Optional[str]]:
+def get_segment_texts(db_path: str, context_id: str, annotation_id: str) -> Dict[int, Optional[str]]:
     """구간별 '지금' 청크 텍스트(구간 위치 → 문자열). 서비스가 저장된 위치·인용문과 비교해 위치 확인 불가를 판정한다.
 
     번역 구간은 청크의 현재 번역이 같은 번역 리비전일 때만 텍스트를 주고, 아니면 None이다.
+    다른 맥락의 기록이면 없는 기록과 똑같이 ResourceNotFoundError를 내고 본문·구간을 돌려주지 않는다.
     """
     with closing(get_connection(db_path)) as conn:
-        annotation = _load(conn, annotation_id)
+        annotation = _load(conn, annotation_id, context_id)
         if annotation is None:
             raise ResourceNotFoundError('annotation not found')
         texts: Dict[int, Optional[str]] = {}
