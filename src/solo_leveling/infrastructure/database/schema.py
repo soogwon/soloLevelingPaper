@@ -259,6 +259,71 @@ CREATE TABLE IF NOT EXISTS quiz_submit_requests (
     created_at TEXT NOT NULL
 );
 
+-- 의미 검증 이력(#83). 검증 실행 한 번과 그때 검사한 주장·참조를 저장한다.
+-- 질문·청크 원문·번역·키·전체 API 응답은 저장하지 않고, 주장 문구와 청크 참조(chunk_id + 원문 해시)만 남긴다.
+-- 최종 근거(evidences)에는 FK를 걸지 않는다: 제외된 주장만 참조한 근거는 최종 근거 테이블에 없을 수 있다.
+-- 맥락을 지우면 그 맥락의 이력(실행·주장·참조)만 함께 지워진다(CASCADE). 이력이 참조하는 청크는 지울 수 없다(RESTRICT).
+-- 이력이 근거로 삼을 수 있는 청크는 색인 게시 당시의 성공 청크 집합(search_index_chunks)뿐이다.
+CREATE TABLE IF NOT EXISTS search_index_chunks (
+    embedding_set_id TEXT NOT NULL REFERENCES embedding_sets(embedding_set_id) ON DELETE CASCADE,
+    chunk_id TEXT NOT NULL,
+    PRIMARY KEY (embedding_set_id, chunk_id)
+);
+-- 임베딩 세트를 만드는 순간(색인 게시와 같은 트랜잭션) 그 번역 리비전의 성공 청크 집합을 기록한다.
+CREATE TRIGGER IF NOT EXISTS trg_embedding_set_chunks AFTER INSERT ON embedding_sets
+BEGIN
+    INSERT OR IGNORE INTO search_index_chunks (embedding_set_id, chunk_id)
+    SELECT NEW.embedding_set_id, r.chunk_id
+    FROM translation_results r
+    JOIN translation_revisions t ON t.translation_revision_id = r.translation_revision_id
+    JOIN chunks c ON c.chunk_id = r.chunk_id AND c.parse_revision_id = t.parse_revision_id
+    WHERE r.translation_revision_id = NEW.translation_revision_id AND r.failure_code IS NULL;
+END;
+-- 이 기능 이전에 만든 임베딩 세트는 현재의 성공 청크 집합으로 한 번 채운다(이미 기록된 세트는 건드리지 않는다).
+INSERT OR IGNORE INTO search_index_chunks (embedding_set_id, chunk_id)
+SELECT e.embedding_set_id, r.chunk_id
+FROM embedding_sets e
+JOIN translation_revisions t ON t.translation_revision_id = e.translation_revision_id
+JOIN translation_results r ON r.translation_revision_id = e.translation_revision_id AND r.failure_code IS NULL
+JOIN chunks c ON c.chunk_id = r.chunk_id AND c.parse_revision_id = t.parse_revision_id
+WHERE NOT EXISTS (SELECT 1 FROM search_index_chunks x WHERE x.embedding_set_id = e.embedding_set_id);
+CREATE TABLE IF NOT EXISTS verification_runs (
+    run_id TEXT PRIMARY KEY,
+    context_id TEXT NOT NULL REFERENCES learning_contexts(context_id) ON DELETE CASCADE,
+    version_id TEXT NOT NULL REFERENCES paper_versions(version_id),
+    parse_revision_id TEXT NOT NULL REFERENCES parse_revisions(parse_revision_id),
+    translation_revision_id TEXT NOT NULL REFERENCES translation_revisions(translation_revision_id),
+    embedding_set_id TEXT NOT NULL REFERENCES embedding_sets(embedding_set_id),
+    model TEXT NOT NULL,
+    instruction_version TEXT NOT NULL,
+    elapsed_ms INTEGER NOT NULL CHECK (elapsed_ms >= 0),
+    level TEXT NOT NULL CHECK (level IN ('structural_only', 'model_checked')),
+    failure_code TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_verification_runs_context ON verification_runs(context_id, created_at);
+CREATE TABLE IF NOT EXISTS verification_claims (
+    run_id TEXT NOT NULL REFERENCES verification_runs(run_id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    claim_id TEXT NOT NULL,
+    claim_text TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK (verdict IN ('supported', 'partially_supported', 'contradicted', 'undetermined')),
+    reason TEXT NOT NULL,
+    retained INTEGER NOT NULL CHECK (retained IN (0, 1)),
+    PRIMARY KEY (run_id, position),
+    UNIQUE (run_id, claim_id)
+);
+CREATE TABLE IF NOT EXISTS verification_claim_refs (
+    run_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    ref_position INTEGER NOT NULL,
+    chunk_id TEXT NOT NULL REFERENCES chunks(chunk_id) ON DELETE RESTRICT,
+    content_hash TEXT NOT NULL,
+    PRIMARY KEY (run_id, position, ref_position),
+    FOREIGN KEY (run_id, position) REFERENCES verification_claims(run_id, position) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_verification_refs_chunk ON verification_claim_refs(chunk_id);
+
 -- 읽기 전·후 질문 답변(M1-07/M1-08). 학습 맥락(세션)·시점·질문 템플릿마다 한 행이고, 다시 쓰면 같은 행을 고친다.
 -- 질문 문구는 코드의 템플릿이 정하므로 저장하지 않는다. 본문은 사용자 데이터라 로그에 남기지 않는다.
 CREATE TABLE IF NOT EXISTS reflection_answers (
