@@ -22,6 +22,7 @@ from .detail_app import DETAIL_APP_URI, register_detail_app
 from .status_app import STATUS_APP_URI, register_status_app
 from .dashboard import DashboardService, register_dashboard
 from .reflection import ReflectionInputServer, ReflectionService, register_reflection
+from .quiz_tools import QuizContractAdapter, register_quiz
 
 
 HOST_INSTRUCTIONS = '''등록된 논문에서 한국어 근거 답변과 원문 근거를 조회합니다.
@@ -88,6 +89,7 @@ class MCPServices:
     dashboard: DashboardService | None = None
     detail: PaperDetailService | None = None
     reflection: ReflectionService | None = None
+    quiz: QuizContractAdapter | None = None
 
 
 class Focus(BaseModel):
@@ -265,6 +267,8 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         register_dashboard(server, services.dashboard)
     if services.reflection is not None:
         register_reflection(server, services.reflection)
+    if services.quiz is not None:
+        register_quiz(server, services.quiz)
 
     if services.ingestion is not None:
         register_status_app(server)

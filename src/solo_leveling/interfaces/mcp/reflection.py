@@ -9,20 +9,26 @@ from jsonschema import Draft202012Validator, ValidationError
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
+from pydantic import ValidationError as ModelValidationError
 from typing_extensions import TypedDict
 
 from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
 from solo_leveling.application.reflection.service import ReflectionService, ReflectionSession
 from solo_leveling.domain.reflection import MAX_ANSWER_LENGTH, ReflectionValidationError
 from .errors import to_tool_error
+from .input_privacy import SafeInputServer
+from .quiz_contracts import AttemptInput, HistoryInput, QuizInput, ScoresInput, SubmitInput
 
 
 _READING_TOOLS = frozenset({'get_reading_questions', 'save_reading_answer'})
 READING_BEFORE_URI = 'ui://solo-leveling/reading-before.html'
+_QUIZ_INPUTS = {'get_quiz': QuizInput, 'submit_quiz': SubmitInput,
+                'get_quiz_attempt': AttemptInput, 'list_quiz_attempts': HistoryInput,
+                'get_quiz_scores': ScoresInput, 'review_quiz_attempt': AttemptInput}
 
 
-class ReflectionInputServer(FastMCP):
-    """두 읽기 도구만 SDK의 입력 오류 직렬화 전에 안전하게 검증한다."""
+class ReflectionInputServer(SafeInputServer):
+    """읽기 질문과 퀴즈 도구의 입력을 SDK 오류 직렬화 전에 검증한다."""
 
     async def list_tools(self):
         tools = await super().list_tools()
@@ -30,9 +36,16 @@ class ReflectionInputServer(FastMCP):
             if tool.name in _READING_TOOLS:
                 # 함수 서명에서 만든 스키마를 그대로 사용해 검증 기준의 중복을 피한다.
                 tool.inputSchema = {**tool.inputSchema, 'additionalProperties': False}
+            elif tool.name in _QUIZ_INPUTS:
+                tool.inputSchema = _QUIZ_INPUTS[tool.name].model_json_schema()
         return tools
 
     async def call_tool(self, name, arguments):
+        if name in _QUIZ_INPUTS:
+            try:
+                _QUIZ_INPUTS[name].model_validate(arguments)
+            except ModelValidationError:
+                raise to_tool_error(InvalidArgumentError('입력값을 확인해주세요.')) from None
         if name in _READING_TOOLS:
             tool = next((tool for tool in await self.list_tools() if tool.name == name), None)
             if tool is not None:

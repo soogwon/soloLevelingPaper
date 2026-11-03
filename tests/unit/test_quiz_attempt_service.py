@@ -1,5 +1,8 @@
 """퀴즈 제출·채점·시도 조회(M1-10, #55): 채점 규칙, 점수 집계, 오답 복습을 실제 SQLite로 검증한다."""
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from unittest.mock import Mock
 
 import pytest
 
@@ -9,7 +12,7 @@ from solo_leveling.application.quiz.attempts import (
 )
 from solo_leveling.domain.models import Evidence
 from solo_leveling.domain.quiz import QuizQuestion
-from solo_leveling.domain.quiz_attempt import AttemptValidationError
+from solo_leveling.domain.quiz_attempt import AttemptValidationError, SubmitOutcome
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.database.schema import get_connection
 from tests.unit.test_learning_persistence import setup_db, publish
@@ -45,6 +48,88 @@ def svc(db, **kw):
 
 
 ALL_CORRECT = {0: 1, 1: 'self attention', 2: '0.5'}
+
+
+def test_completed_submission_survives_quiz_replacement(ctx):
+    db, cid = ctx
+    quiz = repo.get_quiz(db, cid, 'preview')
+    args = dict(context_id=cid, step='preview', quiz_id=quiz.quiz_id, answers={1: 'Self Attention'})
+    first = svc(db).submit_once(request_key='first', **args)
+    assert first.outcome is SubmitOutcome.SAVED
+    repo.save_quiz(db, cid, 'preview', [quiz.questions[0]])
+    grader = Mock()
+    service = QuizAttemptService(db, grader=grader)
+    replay = service.submit_once(request_key='first', **args)
+    assert replay.outcome is SubmitOutcome.REUSED_EXISTING and replay.attempt == first.attempt
+    assert service.submit_once(request_key='new', **args).outcome is SubmitOutcome.QUIZ_CHANGED
+    args['answers'] = {1: 'self attention'}
+    assert service.submit_once(request_key='first', **args).outcome is SubmitOutcome.REQUEST_CONFLICT
+    grader.is_correct.assert_not_called()
+    assert len(service.history(cid)) == 1
+
+
+def test_concurrent_submission_then_intentional_retake(ctx):
+    db, cid = ctx
+    args = dict(context_id=cid, step='preview', quiz_id=repo.get_quiz(db, cid, 'preview').quiz_id,
+                answers={1: 'Self Attention'})
+    barrier = Barrier(2)
+    grader = Mock()
+    def grade(*_):
+        barrier.wait(timeout=10)
+        return True
+    grader.is_correct.side_effect = grade
+    service = QuizAttemptService(db, grader=grader)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(service.submit_once, request_key='same', **args) for _ in range(2)]
+        a, b = [future.result(timeout=15) for future in futures]
+    assert {a.outcome, b.outcome} == {SubmitOutcome.SAVED, SubmitOutcome.REUSED_EXISTING}
+    assert a.attempt == b.attempt
+    assert service.step_scores(cid)[0].attempt_count == 1
+    retake = QuizAttemptService(db).submit_once(request_key='another', **args)
+    assert retake.outcome is SubmitOutcome.SAVED and retake.attempt.attempt_id != a.attempt.attempt_id
+    assert service.step_scores(cid)[0].attempt_count == 2
+
+
+def test_quiz_replaced_during_grading_is_not_saved(ctx):
+    db, cid = ctx
+    quiz = repo.get_quiz(db, cid, 'preview')
+    grader = Mock()
+    def regenerate(*_):
+        repo.save_quiz(db, cid, 'preview', [quiz.questions[0]])
+        return True
+    grader.is_correct.side_effect = regenerate
+    service = QuizAttemptService(db, grader=grader)
+    result = service.submit_once(context_id=cid, step='preview', quiz_id=quiz.quiz_id,
+                                 request_key='r', answers={1: 'Self Attention'})
+    assert result.outcome is SubmitOutcome.QUIZ_CHANGED
+    assert not service.history(cid)
+
+
+@pytest.mark.parametrize('answers', [{True: 'x'}, {'0': 1}, {0: True}, {0: '1'}, {0: 3}, {3: 0}])
+def test_invalid_keyed_answer_does_not_consume_key(ctx, answers):
+    db, cid = ctx
+    args = dict(context_id=cid, step='preview', quiz_id=repo.get_quiz(db, cid, 'preview').quiz_id,
+                request_key='retry')
+    service = svc(db)
+    with pytest.raises(AttemptValidationError):
+        service.submit_once(**args, answers=answers)
+    assert not service.history(cid)
+    assert service.submit_once(**args, answers={0: 1}).outcome is SubmitOutcome.SAVED
+
+
+@pytest.mark.parametrize('answers', [
+    pytest.param({1: '\ud800'}, id='invalid-utf8'),
+    pytest.param({0: 10**5000}, id='oversized-integer'),
+])
+def test_unserializable_submission_rejects_safely_and_key_can_be_reused(ctx, answers):
+    db, cid = ctx
+    args = dict(context_id=cid, step='preview', quiz_id=repo.get_quiz(db, cid, 'preview').quiz_id,
+                request_key='retry')
+    service = svc(db)
+    with pytest.raises(AttemptValidationError, match='^퀴즈 제출 입력을 직렬화할 수 없습니다.$'):
+        service.submit_once(**args, answers=answers)
+    assert not service.history(cid)
+    assert service.submit_once(**args, answers={0: 1}).outcome is SubmitOutcome.SAVED
 
 
 # ── 정규화·기본 채점기 ─────────────────────────────────────────
