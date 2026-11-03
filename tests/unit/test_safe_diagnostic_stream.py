@@ -234,6 +234,8 @@ def test_extraction_diagnostic_rejects_unapproved_data(changes):
 @pytest.mark.parametrize('event,reason,number', [
     ('quality', 'NO_EXTRACTION_RISK', 1),
     ('quality', 'UNFINISHED_TAIL', 2),
+    ('quality', 'AMBIGUOUS_OVERLAP', 1),
+    ('claim_excluded', 'AMBIGUOUS_OVERLAP', 1),
     ('claim_excluded', 'SUPPORT_NOT_FOUND', 1),
     ('claim_excluded', 'UNRESOLVED_PREFIX', 2),
     ('repair_outcome', 'REPAIR_ADOPTED', None),
@@ -269,6 +271,20 @@ def test_extraction_events_survive_filter_without_evidence_metadata(monkeypatch,
     assert result['request_id'] == rows[0]['request_id'] == rows[2]['request_id']
     assert set(result) == set(extraction_record())
     assert 'PRIVATE' not in output.getvalue()
+
+
+@pytest.mark.parametrize('event', ['quality', 'claim_excluded'])
+@pytest.mark.parametrize('field', ['quote_original', 'original_text', 'text_ko',
+                                   'claim_text', 'chunk_body'])
+def test_ambiguous_overlap_rejects_quote_body_and_translation_fields(event, field):
+    output = StringIO()
+    row = extraction_record() | dict(event=event, reason_code='AMBIGUOUS_OVERLAP')
+    stream = SafeDiagnosticStream(output)
+    stream.write(json.dumps(row | {field: 'PRIVATE_MARKER'}) + '\n')
+    assert output.getvalue() == ''
+    # 비허용 필드가 있는 행만 버리고 다음 정상 고정 코드 행은 보존한다.
+    stream.write(json.dumps(row) + '\n')
+    assert json.loads(output.getvalue()) == row
 
 
 @pytest.mark.parametrize('changes', [

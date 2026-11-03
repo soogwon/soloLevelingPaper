@@ -89,21 +89,38 @@ CREATE TABLE IF NOT EXISTS ingestion_requests (
     created_at TEXT NOT NULL
 );
 
+-- 번역 결과는 (번역 리비전, 청크)마다 한 행이다(#30). 성공 행은 failure_code가 비고 translated_text가 있다.
+-- 이전 DB에서는 번역 본문이 chunks.text에만 있었으므로 init_db가 translated_text를 채운다(chunks.text는 아직 지우지 않는다).
 CREATE TABLE IF NOT EXISTS translation_results (
     translation_revision_id TEXT NOT NULL REFERENCES translation_revisions(translation_revision_id),
     chunk_id TEXT NOT NULL REFERENCES chunks(chunk_id),
     failure_code TEXT,
+    translated_text TEXT,
     PRIMARY KEY (translation_revision_id, chunk_id)
 );
 
 -- 저장된 벡터를 다시 읽어 검증한 후에만 색인 정보를 게시한다.
+-- 논문 버전에 색인이 여러 개 있을 수 있다(#30: 번역 실패 구간을 복구한 새 색인). 새 학습이 고르는 기본 색인은
+-- is_default=1인 행이고 버전당 하나만 허용한다(부분 유일 인덱스는 init_db가 이관 뒤에 만든다).
+-- 기존 context는 자신이 가리키는 embedding_set_id의 색인을 그대로 쓴다.
 CREATE TABLE IF NOT EXISTS search_indexes (
     embedding_set_id TEXT PRIMARY KEY REFERENCES embedding_sets(embedding_set_id),
-    version_id TEXT NOT NULL UNIQUE REFERENCES paper_versions(version_id),
+    version_id TEXT NOT NULL REFERENCES paper_versions(version_id),
     parse_revision_id TEXT NOT NULL REFERENCES parse_revisions(parse_revision_id),
     translation_revision_id TEXT NOT NULL REFERENCES translation_revisions(translation_revision_id),
     job_id TEXT NOT NULL REFERENCES processing_jobs(job_id),
-    chunk_count INTEGER NOT NULL CHECK (chunk_count > 0)
+    chunk_count INTEGER NOT NULL CHECK (chunk_count > 0),
+    is_default INTEGER NOT NULL DEFAULT 1 CHECK (is_default IN (0, 1))
+);
+
+-- 번역 복구 작업 잠금(#30). 논문 버전당 진행 중인 복구는 하나만 허용한다(version_id가 기본 키).
+-- 잠금 행은 복구 게시나 실패 처리와 같은 트랜잭션에서 지우고, 작업이 중단돼 남은 행은 다음 시작 때 치운다.
+CREATE TABLE IF NOT EXISTS translation_recovery_locks (
+    version_id TEXT PRIMARY KEY REFERENCES paper_versions(version_id),
+    job_id TEXT NOT NULL UNIQUE REFERENCES processing_jobs(job_id),
+    base_translation_revision_id TEXT NOT NULL REFERENCES translation_revisions(translation_revision_id),
+    new_translation_revision_id TEXT REFERENCES translation_revisions(translation_revision_id),
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS learning_contexts (
@@ -202,6 +219,36 @@ CREATE TABLE IF NOT EXISTS quiz_attempt_answers (
     PRIMARY KEY (attempt_id, position)
 );
 
+-- 메모·하이라이트(M1-11, #56). 기록 하나에 선택 구간이 0개 이상 붙는다(공통 기록 + 선택 구간 두 테이블).
+-- 학습 맥락(context)마다 따로 저장하고 다른 맥락에 자동으로 공유하지 않는다.
+-- 위치는 저장된 청크 텍스트의 문자 위치(코드 포인트, 0부터, [start_offset, end_offset))와 인용문 스냅샷으로 고정한다.
+-- 메모가 가리키는 맥락·청크는 삭제를 막는다(RESTRICT). 메모를 지우면 소속 구간도 같은 트랜잭션에서 함께 지운다.
+-- 본문과 인용문은 사용자 데이터라 로그에 남기지 않는다.
+CREATE TABLE IF NOT EXISTS annotations (
+    annotation_id TEXT PRIMARY KEY,
+    context_id TEXT NOT NULL REFERENCES learning_contexts(context_id) ON DELETE RESTRICT,
+    kind TEXT NOT NULL CHECK (kind IN ('note', 'highlight')),
+    body TEXT NOT NULL DEFAULT '',
+    step TEXT,
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_context ON annotations(context_id, step, created_at);
+CREATE TABLE IF NOT EXISTS annotation_segments (
+    annotation_id TEXT NOT NULL REFERENCES annotations(annotation_id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    chunk_id TEXT NOT NULL REFERENCES chunks(chunk_id) ON DELETE RESTRICT,
+    parse_revision_id TEXT NOT NULL REFERENCES parse_revisions(parse_revision_id),
+    target TEXT NOT NULL CHECK (target IN ('original', 'translation')),
+    translation_revision_id TEXT REFERENCES translation_revisions(translation_revision_id),
+    start_offset INTEGER NOT NULL,
+    end_offset INTEGER NOT NULL,
+    quote_snapshot TEXT NOT NULL,
+    PRIMARY KEY (annotation_id, position),
+    CHECK (start_offset >= 0 AND end_offset > start_offset)
+);
+CREATE INDEX IF NOT EXISTS idx_annotation_segments_chunk ON annotation_segments(chunk_id);
 -- 퀴즈 제출 요청 기록(#110). 같은 request_key의 제출은 한 번만 저장한다.
 -- 시도와 같은 트랜잭션에서 쓰므로 완료된 요청만 남고, 예약 행은 없다. 이전 시도에는 요청 키를 만들어 넣지 않는다.
 -- input_hash는 context_id·step·quiz_id·답안으로 계산한 해시라 답안 본문은 저장하지 않는다.
@@ -315,6 +362,8 @@ def init_db(db_path: str) -> None:
     conn = get_connection(db_path)
     try:
         conn.executescript(SCHEMA_SQL)
+        _migrate_translation_results(conn)
+        _migrate_search_indexes(conn)
         # 기존 생성된 DB에 컬럼을 추가하는 형식.
         # 초기값은 NULL로 번역 설정을 임의로 채우지 않는다.
         with conn:
@@ -324,3 +373,63 @@ def init_db(db_path: str) -> None:
                     conn.execute(f'ALTER TABLE translation_revisions ADD COLUMN {name} TEXT')
     finally:
         conn.close()
+
+
+_SEARCH_INDEXES_COLUMNS = ('embedding_set_id', 'version_id', 'parse_revision_id', 'translation_revision_id',
+                           'job_id', 'chunk_count')
+
+
+def _migrate_translation_results(conn: sqlite3.Connection) -> None:
+    """translated_text 컬럼을 더하고, 성공 행의 번역 본문을 chunks.text에서 채운다. 반복 실행해도 같은 결과다."""
+    with conn:
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(translation_results)')}
+        if 'translated_text' not in columns:
+            conn.execute('ALTER TABLE translation_results ADD COLUMN translated_text TEXT')
+        conn.execute(
+            'UPDATE translation_results SET translated_text=(SELECT c.text FROM chunks c '
+            'WHERE c.chunk_id=translation_results.chunk_id '
+            'AND c.translation_revision_id=translation_results.translation_revision_id) '
+            'WHERE failure_code IS NULL AND translated_text IS NULL')
+
+
+def _migrate_search_indexes(conn: sqlite3.Connection) -> None:
+    """버전당 하나 제약(UNIQUE)을 풀고 is_default를 더한다. SQLite는 제약을 직접 지울 수 없어 표를 새로 만들어 교체한다.
+
+    한 트랜잭션에서 하고, 기존 행은 모두 기본 색인(is_default=1)으로 옮긴다. 외래 키 확인에 실패하면 되돌린다.
+    이미 새 모양이면 아무것도 하지 않는다. 마지막에 버전당 기본 색인 하나를 보장하는 부분 유일 인덱스를 만든다.
+    """
+    columns = {row['name'] for row in conn.execute('PRAGMA table_info(search_indexes)')}
+    if 'is_default' not in columns:
+        conn.commit()
+        conn.execute('PRAGMA foreign_keys = OFF')  # 표를 바꾸는 동안만 끈다(트랜잭션 밖에서만 바뀐다).
+        try:
+            conn.execute('BEGIN')
+            conn.execute(_SEARCH_INDEXES_NEW_DDL)
+            conn.execute(f"INSERT INTO search_indexes_new ({', '.join(_SEARCH_INDEXES_COLUMNS)}, is_default) "
+                         f"SELECT {', '.join(_SEARCH_INDEXES_COLUMNS)}, 1 FROM search_indexes")
+            conn.execute('DROP TABLE search_indexes')
+            conn.execute('ALTER TABLE search_indexes_new RENAME TO search_indexes')
+            if conn.execute('PRAGMA foreign_key_check').fetchall():
+                raise sqlite3.IntegrityError('search_indexes migration broke a foreign key')
+            conn.execute('COMMIT')
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute('ROLLBACK')
+            raise
+        finally:
+            conn.execute('PRAGMA foreign_keys = ON')
+    with conn:
+        conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_search_indexes_default '
+                     'ON search_indexes(version_id) WHERE is_default = 1')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_search_indexes_version ON search_indexes(version_id)')
+
+
+_SEARCH_INDEXES_NEW_DDL = """CREATE TABLE search_indexes_new (
+    embedding_set_id TEXT PRIMARY KEY REFERENCES embedding_sets(embedding_set_id),
+    version_id TEXT NOT NULL REFERENCES paper_versions(version_id),
+    parse_revision_id TEXT NOT NULL REFERENCES parse_revisions(parse_revision_id),
+    translation_revision_id TEXT NOT NULL REFERENCES translation_revisions(translation_revision_id),
+    job_id TEXT NOT NULL REFERENCES processing_jobs(job_id),
+    chunk_count INTEGER NOT NULL CHECK (chunk_count > 0),
+    is_default INTEGER NOT NULL DEFAULT 1 CHECK (is_default IN (0, 1))
+)"""

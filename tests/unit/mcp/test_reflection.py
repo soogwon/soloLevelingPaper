@@ -148,6 +148,11 @@ def test_protocol_roundtrip_and_reconnect(ctx):
 
     async def scenario():
         async with create_connected_server_and_client_session(server) as client:
+            tools = (await client.list_tools()).tools
+            read = next(tool for tool in tools if tool.name == 'get_reading_questions')
+            resource = await client.read_resource(read.meta['ui']['resourceUri'])
+            assert resource.contents[0].mimeType == 'text/html;profile=mcp-app'
+            assert '<title>읽기 전 질문</title>' in resource.contents[0].text
             result = await client.call_tool('save_reading_answer', {
                 'context_id': context_id, 'template_id': 'before.hypothesis',
                 'text': '사용자가 작성한 가설', 'status': 'draft',

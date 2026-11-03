@@ -92,7 +92,7 @@ def evidence_diagnostic(event, *, attempt_id, evidence_id=None, chunk_id=None,
                      'verification_failure', 'claim_excluded'):
         return
     reasons = {'NO_EXTRACTION_RISK', 'STANDALONE_NUMBER', 'EMPTY_BODY',
-               'SUPPORT_NOT_FOUND', 'SUPPORT_LOCATION_UNRESOLVED',
+               'SUPPORT_NOT_FOUND', 'SUPPORT_LOCATION_UNRESOLVED', 'AMBIGUOUS_OVERLAP',
                'UNFINISHED_TAIL', 'UNRESOLVED_PREFIX', 'REPAIR_ADOPTED',
                'REPAIR_UNAVAILABLE', 'REPAIR_INVALID', 'REPAIR_PARTIAL',
                'REPAIR_NO_USABLE_CLAIMS', 'GENERATION_FORMAT_INVALID',
