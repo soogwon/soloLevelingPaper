@@ -381,6 +381,14 @@ def get_search_index(db_path: str, version_id: str, parse_revision_id: str | Non
         return result
 
 
+def get_search_index_for_job(db_path: str, job_id: str) -> Optional[dict]:
+    """작업이 게시한 색인을 조회한다. 이후 복구로 기본 색인이 바뀌어도 그 작업의 결과는 그대로다."""
+    with closing(get_connection(db_path)) as conn:
+        row = conn.execute('''SELECT s.*, e.model_name, e.dimension FROM search_indexes s
+                              JOIN embedding_sets e USING(embedding_set_id) WHERE s.job_id=?''', (job_id,)).fetchone()
+        return dict(row) if row else None
+
+
 def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
                          embedding_set: EmbeddingSet, job_id: str, chunk_count: int,
                          limitations: list[str]) -> None:
@@ -595,7 +603,7 @@ def prepare_ingestion(db_path: str, paper: Paper, candidate: PaperVersion,
                             VALUES (?, ?, ?, ?, ?, ?)''',
                          (version_id, paper.paper_id, candidate.file_hash, candidate.stored_path,
                           candidate.original_filename, candidate.created_at))
-        published = conn.execute('SELECT job_id FROM search_indexes WHERE version_id=?',
+        published = conn.execute('SELECT job_id FROM search_indexes WHERE version_id=? AND is_default=1',
                                  (version_id,)).fetchone()
         if published:
             registration = IngestionRegistration(IngestionDisposition.COMPLETED, version_id,

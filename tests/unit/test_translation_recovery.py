@@ -269,3 +269,16 @@ def test_scaled_96_of_98_scenario(tmp_path):
     assert repo.get_search_index(path, 'v1')['chunk_count'] == 98
     assert len(repo.get_translated_chunks(path, 'p1', 't2')) == 98
     assert len(repo.get_translated_chunks(path, 'p1', 't1')) == 96
+
+
+def test_status_and_registration_after_recovery(db):
+    from solo_leveling.workers.ingestion import get_ingestion_status
+    repo.update_job_status(db, 'j1', JobStatus.READY)
+    run_recovery(db)
+    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), N, [])
+    old = get_ingestion_status(db, 'j1')
+    new = get_ingestion_status(db, 'j2')
+    assert old['result']['embedding_set_id'] == 'e1' and new['result']['embedding_set_id'] == 'e2'
+    from solo_leveling.domain.models import IngestionDisposition
+    reg = repo.prepare_ingestion(db, Paper('paper'), PaperVersion('vX', 'paper', 'h', 'x.pdf', 'x.pdf'), 'jnew')
+    assert reg.disposition == IngestionDisposition.COMPLETED and reg.job_id == 'j2'
