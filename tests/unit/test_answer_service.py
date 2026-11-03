@@ -236,7 +236,7 @@ def test_fragment_flags_are_passed_to_generator(parts):
     ('Same finding.', '같은 해석.', False, AnswerStatus.OK),
     ('Another finding.', '다른 설명.', False, AnswerStatus.OK),
 ])
-def test_overlap_citations_with_different_translations(parts, second_quote, second_ko, keep_other, expected):
+def test_overlap_citations_with_different_translations(parts, capsys, second_quote, second_ko, keep_other, expected):
     from dataclasses import replace
     service, search, saved, _ = parts
     originals = ('Earlier context. Same finding.', 'Same finding. Another finding.')
@@ -257,6 +257,19 @@ def test_overlap_citations_with_different_translations(parts, second_quote, seco
     service.generator = SimpleNamespace(generate_claims=generate)
     result = service.answer('질문', context_id='ctx').result
     assert result.status == expected
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    for private in (*originals, 'Same finding.', 'Earlier context.', second_quote,
+                    '같은 해석.', second_ko, '두 근거를 함께 인용한 주장', '독립 주장'):
+        assert private not in captured.err
+    if expected != AnswerStatus.OK:
+        import json
+        rows = [json.loads(line) for line in captured.err.splitlines()]
+        overlap = [row for row in rows if row.get('reason_code') == 'AMBIGUOUS_OVERLAP']
+        assert {row['event'] for row in overlap} == {'quality', 'claim_excluded'}
+        assert all(set(row) == {'request_id', 'span_id', 'stage', 'event', 'elapsed_ms',
+                               'error_code', 'attempt_id', 'claim_number', 'round_number',
+                               'reason_code'} for row in overlap)
     if expected == AnswerStatus.OK:
         assert {c.chunk_id for c in result.citations} == {'c0', 'c1'}
     elif keep_other:
