@@ -781,17 +781,22 @@ def save_quiz(db_path: str, context_id: str, step: str, questions: List[QuizQues
 
 def get_quiz(db_path: str, context_id: str, step: str) -> Optional[Quiz]:
     with closing(get_connection(db_path)) as conn:
-        row = conn.execute('SELECT * FROM quizzes WHERE context_id=? AND step=?',
-                           (context_id, step)).fetchone()
-        if not row:
-            return None
-        questions = tuple(
-            QuizQuestion(r['question_type'], r['prompt'], tuple(json.loads(r['evidence_ids'])),
-                         tuple(json.loads(r['choices'])), r['correct_index'], r['answer'],
-                         r['grading_criteria'])
-            for r in conn.execute('SELECT * FROM quiz_questions WHERE quiz_id=? ORDER BY position',
-                                  (row['quiz_id'],)))
-        return Quiz(row['quiz_id'], context_id, row['step'], questions, row['created_at'])
+        conn.execute('BEGIN')
+        return _read_quiz(conn, context_id, step)
+
+
+def _read_quiz(conn, context_id: str, step: str) -> Optional[Quiz]:
+    row = conn.execute('SELECT * FROM quizzes WHERE context_id=? AND step=?',
+                       (context_id, step)).fetchone()
+    if not row:
+        return None
+    questions = tuple(
+        QuizQuestion(r['question_type'], r['prompt'], tuple(json.loads(r['evidence_ids'])),
+                     tuple(json.loads(r['choices'])), r['correct_index'], r['answer'],
+                     r['grading_criteria'])
+        for r in conn.execute('SELECT * FROM quiz_questions WHERE quiz_id=? ORDER BY position',
+                              (row['quiz_id'],)))
+    return Quiz(row['quiz_id'], context_id, row['step'], questions, row['created_at'])
 
 
 def list_quiz_steps(db_path: str, context_id: str) -> List[str]:
@@ -840,6 +845,37 @@ def save_quiz_attempt(db_path: str, attempt: QuizAttempt) -> QuizAttempt:
         return attempt
 
 
+def _completed_submission(conn, request_key: str, input_hash: str, context_id: str,
+                          step: str, quiz_id: str) -> Optional[SubmitResult]:
+    row = conn.execute('SELECT input_hash, attempt_id FROM quiz_submit_requests WHERE request_key=?',
+                       (request_key,)).fetchone()
+    if row:
+        if row['input_hash'] != input_hash:
+            return SubmitResult(SubmitOutcome.REQUEST_CONFLICT)
+        existing = conn.execute('SELECT * FROM quiz_attempts WHERE attempt_id=? '
+                                'AND context_id=? AND step=? AND quiz_id=?',
+                                (row['attempt_id'], context_id, step, quiz_id)).fetchone()
+        if existing is None:
+            return SubmitResult(SubmitOutcome.REQUEST_CONFLICT)
+        return SubmitResult(SubmitOutcome.REUSED_EXISTING, _attempt_from_row(conn, existing))
+    return None
+
+
+def prepare_quiz_submission(db_path: str, context_id: str, step: str, quiz_id: str,
+                            request_key: str, input_hash: str) -> Quiz | SubmitResult:
+    """한 읽기 시점에서 완료 요청을 먼저 확인하고 새 제출에만 채점할 문항을 반환한다."""
+    with closing(get_connection(db_path)) as conn:
+        conn.execute('BEGIN')
+        completed = _completed_submission(conn, request_key, input_hash, context_id, step, quiz_id)
+        if completed is not None:
+            return completed
+        _require_context(conn, context_id)
+        quiz = _read_quiz(conn, context_id, step)
+        if quiz is None or quiz.quiz_id != quiz_id:
+            return SubmitResult(SubmitOutcome.QUIZ_CHANGED)
+        return quiz
+
+
 def save_quiz_attempt_once(db_path: str, request_key: str, input_hash: str,
                            attempt: QuizAttempt) -> SubmitResult:
     """요청 키 단위로 한 번만 시도를 저장한다(#110). 짧은 쓰기 트랜잭션 하나에서 아래 순서로 판정한다.
@@ -854,14 +890,10 @@ def save_quiz_attempt_once(db_path: str, request_key: str, input_hash: str,
     validate_request_key(request_key)
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
-        row = conn.execute('SELECT input_hash, attempt_id FROM quiz_submit_requests WHERE request_key=?',
-                           (request_key,)).fetchone()
-        if row:
-            if row['input_hash'] != input_hash:
-                return SubmitResult(SubmitOutcome.REQUEST_CONFLICT)
-            existing = conn.execute('SELECT * FROM quiz_attempts WHERE attempt_id=?',
-                                    (row['attempt_id'],)).fetchone()
-            return SubmitResult(SubmitOutcome.REUSED_EXISTING, _attempt_from_row(conn, existing))
+        completed = _completed_submission(conn, request_key, input_hash,
+                                          attempt.context_id, attempt.step, attempt.quiz_id)
+        if completed is not None:
+            return completed
         _require_context(conn, attempt.context_id)
         current = conn.execute('SELECT quiz_id FROM quizzes WHERE context_id=? AND step=?',
                                (attempt.context_id, attempt.step)).fetchone()

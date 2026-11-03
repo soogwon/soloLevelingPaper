@@ -3,6 +3,7 @@
 결과 4종(저장/기존 결과 재사용/요청 충돌/퀴즈 변경), 시도·요청 기록의 원자성, 동시 요청, 마이그레이션을 본다.
 """
 import threading
+from dataclasses import replace
 from contextlib import closing
 
 import pytest
@@ -80,6 +81,23 @@ def test_same_key_different_answer_is_conflict_and_saves_nothing(ctx):
     assert counts(db) == (1, 1, 1)
 
 
+@pytest.mark.parametrize('change', [
+    {'context_id': 'other-context'}, {'step': 'review'}, {'quiz_id': 'other-quiz'},
+])
+def test_matching_digest_cannot_reuse_another_submission_scope(ctx, change):
+    db, cid, qid = ctx
+    submit(db, 'key', cid, qid)
+    digest = submit_input_hash(cid, STEP, qid, {0: 1})
+    other = replace(make_attempt(cid, qid, attempt_id='a2'), **change)
+    prepared = repo.prepare_quiz_submission(db, other.context_id, other.step, other.quiz_id, 'key', digest)
+    saved = repo.save_quiz_attempt_once(db, 'key', digest, other)
+    for result in (prepared, saved):
+        assert result.outcome is SubmitOutcome.REQUEST_CONFLICT
+        assert result.attempt is None
+    assert counts(db) == (1, 1, 1)
+    assert submit(db, 'key', cid, qid).attempt.attempt_id == 'a1'
+
+
 def test_completed_request_returns_original_even_after_quiz_regenerated(ctx):
     db, context_id, quiz_id = ctx
     submit(db, 'k1', context_id, quiz_id)
@@ -125,6 +143,15 @@ def test_failure_after_attempt_insert_rolls_back_request_row(ctx):
         submit(db, 'k1', context_id, quiz_id, attempt_id='dup')
     assert counts(db) == before
     assert submit(db, 'k1', context_id, quiz_id, attempt_id='ok').outcome is SubmitOutcome.SAVED
+
+
+def test_prepare_new_request_with_unknown_context_raises_not_found(ctx):
+    db, _, quiz_id = ctx
+    context_id = 'missing-context'
+    digest = submit_input_hash(context_id, STEP, quiz_id, {0: 1})
+    with pytest.raises(ResourceNotFoundError):
+        repo.prepare_quiz_submission(db, context_id, STEP, quiz_id, 'new-key', digest)
+    assert counts(db) == (0, 0, 0)
 
 
 def test_unknown_context_raises_not_found(ctx):

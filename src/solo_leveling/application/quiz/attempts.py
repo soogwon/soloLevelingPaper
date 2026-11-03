@@ -15,8 +15,10 @@ from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
 from solo_leveling.domain.evidence_qa import EvidenceDetail
 from solo_leveling.domain.learning_progress import LEARNING_STEPS
 from solo_leveling.domain.models import now_iso
-from solo_leveling.domain.quiz import QuizQuestion
-from solo_leveling.domain.quiz_attempt import AnswerResult, AttemptValidationError, QuizAttempt
+from solo_leveling.domain.quiz import Quiz, QuizQuestion
+from solo_leveling.domain.quiz_attempt import (
+    AnswerResult, AttemptValidationError, QuizAttempt, SubmitResult, submit_input_hash, validate_request_key,
+)
 from solo_leveling.infrastructure.database import repository as repo
 
 Answer = Union[int, str]  # 객관식은 고른 선택지 위치(0부터), 단답형은 답안 문자열
@@ -84,11 +86,40 @@ class QuizAttemptService:
         quiz = repo.get_quiz(self.db_path, context_id, step)
         if quiz is None:
             raise ResourceNotFoundError('이 단계의 퀴즈가 아직 없습니다.')
+        return repo.save_quiz_attempt(self.db_path, self._make_attempt(quiz, answers))
+
+    def submit_once(self, *, context_id: str, step: str, quiz_id: str, request_key: str,
+                    answers: Mapping[int, Answer]) -> SubmitResult:
+        """완료된 제출을 우선 재사용하고, 새 제출만 채점한 뒤 원자적으로 저장한다."""
+        validate_request_key(request_key)
+        if step not in LEARNING_STEPS or not isinstance(quiz_id, str) or not quiz_id.strip():
+            raise AttemptValidationError('단계 또는 퀴즈 ID가 올바르지 않습니다.')
+        if not isinstance(context_id, str) or not context_id.strip():
+            raise AttemptValidationError('맥락 ID가 올바르지 않습니다.')
+        if not isinstance(answers, Mapping) or not answers:
+            raise AttemptValidationError('제출할 답안이 없습니다.')
+        answers = dict(answers)
+        # 요청 해시를 만들기 전 문항 위치와 값의 타입을 확인해 bool 등을 정수와 구분한다.
+        for position, value in answers.items():
+            if type(position) is not int or position < 0 or type(value) not in (int, str):
+                raise AttemptValidationError('문항 위치 또는 답안 형식이 올바르지 않습니다.')
+        try:
+            digest = submit_input_hash(context_id, step, quiz_id, answers)
+        except ValueError:
+            # UTF-8 인코딩 및 정수 직렬화 오류에 포함된 입력 정보를 노출하지 않는다.
+            raise AttemptValidationError('퀴즈 제출 입력을 직렬화할 수 없습니다.') from None
+        prepared = repo.prepare_quiz_submission(self.db_path, context_id, step, quiz_id,
+                                                request_key, digest)
+        if isinstance(prepared, SubmitResult):
+            return prepared
+        attempt = self._make_attempt(prepared, answers)
+        return repo.save_quiz_attempt_once(self.db_path, request_key, digest, attempt)
+
+    def _make_attempt(self, quiz: Quiz, answers: Mapping[int, Answer]) -> QuizAttempt:
         self._validate(quiz.questions, answers)
         results = tuple(self._grade(position, question, answers.get(position))
                         for position, question in enumerate(quiz.questions))
-        attempt = QuizAttempt(self.new_id(), context_id, quiz.quiz_id, step, results, self.clock())
-        return repo.save_quiz_attempt(self.db_path, attempt)
+        return QuizAttempt(self.new_id(), quiz.context_id, quiz.quiz_id, quiz.step, results, self.clock())
 
     @staticmethod
     def _validate(questions, answers) -> None:
