@@ -15,6 +15,7 @@ from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
 from solo_leveling.application.reflection.service import ReflectionService, ReflectionSession
 from solo_leveling.domain.reflection import MAX_ANSWER_LENGTH, ReflectionValidationError
 from .errors import to_tool_error
+from .input_privacy import SafeInputServer
 from .quiz_contracts import AttemptInput, HistoryInput, QuizInput, ScoresInput, SubmitInput
 
 
@@ -24,7 +25,7 @@ _QUIZ_INPUTS = {'get_quiz': QuizInput, 'submit_quiz': SubmitInput,
                 'get_quiz_scores': ScoresInput, 'review_quiz_attempt': AttemptInput}
 
 
-class ReflectionInputServer(FastMCP):
+class ReflectionInputServer(SafeInputServer):
     """읽기 질문과 퀴즈 도구의 입력을 SDK 오류 직렬화 전에 검증한다."""
 
     async def list_tools(self):
