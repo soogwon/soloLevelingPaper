@@ -1230,6 +1230,15 @@ def save_reflection_answer(db_path: str, context_id: str, phase: str, template_i
         return ReflectionAnswer(**dict(row))
 
 
+def get_reflection_answers_all(db_path: str, context_id: str) -> List[ReflectionAnswer]:
+    """한 맥락의 읽기 전·후 답변을 한 번의 읽기(한 연결, 한 SELECT)로 돌려준다. 맥락이 없으면 ResourceNotFoundError."""
+    with closing(get_connection(db_path)) as conn:
+        if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
+            raise ResourceNotFoundError('context not found')
+        return [ReflectionAnswer(**dict(r)) for r in conn.execute(
+            'SELECT * FROM reflection_answers WHERE context_id=? ORDER BY created_at, template_id', (context_id,))]
+
+
 def get_reflection_answers(db_path: str, context_id: str, phase: str) -> List[ReflectionAnswer]:
     """한 맥락의 한 시점 답변을 최초 작성 순서로 돌려준다. 맥락이 없으면 ResourceNotFoundError."""
     from solo_leveling.domain.reflection import templates_for
