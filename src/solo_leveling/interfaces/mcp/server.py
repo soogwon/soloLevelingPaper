@@ -8,7 +8,7 @@ import anyio
 from solo_leveling.diagnostics import traced
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 from solo_leveling.application.evidence_qa.serialization import (
     serialize_answer_response, serialize_stored_evidence_result,
@@ -126,7 +126,11 @@ class CitationOutput(TypedDict):
     quote_original: str
 
 
-class AskPaperOutput(TypedDict):
+class VerificationHistoryOutput(TypedDict):
+    status: Literal['not_used', 'saved', 'failed']
+
+
+class AskPaperOutput(BaseModel):
     context_id: str
     verification_level: str
     status: str
@@ -134,6 +138,15 @@ class AskPaperOutput(TypedDict):
     claims: list[ClaimOutput]
     citations: list[CitationOutput]
     reason_code: str | None
+    verification_history: VerificationHistoryOutput | None = None
+
+    @model_serializer(mode='wrap')
+    def serialize_without_missing_history(self, handler):
+        # SDK의 기본값 직렬화에서도 구버전 응답에 null 필드를 추가하지 않는다.
+        payload = handler(self)
+        if self.verification_history is None:
+            payload.pop('verification_history', None)
+        return payload
 
 
 class EvidenceOutput(CitationOutput):
@@ -224,13 +237,20 @@ class StartLearningOutput(TypedDict):
     capabilities: list[str]
 
 
-def _answer_payload(response) -> AskPaperOutput:
+def _answer_payload(response) -> dict:
     serialized = serialize_answer_response(response)
-    return {
+    payload = {
         'context_id': serialized['context_id'],
         'verification_level': serialized['verification_level'],
         **serialized['answer'],
     }
+    # B의 선택적 상태만 전달한다. 누락·잘못된 값으로 저장 성공이나 미사용을 추정하지 않는다.
+    history = getattr(response, 'verification_history', None)
+    if isinstance(history, dict):
+        status = history.get('status')
+        if isinstance(status, str) and status in ('not_used', 'saved', 'failed'):
+            payload['verification_history'] = {'status': status}
+    return payload
 
 
 def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
@@ -379,6 +399,11 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         model_checked는 실제 인용 원문을 대상으로 모델 기반 의미 검증을 완료했다는 뜻입니다.
         반환된 주장은 의미 검증을 통과했지만, 모델의 오판 가능성이 있으므로 사실성 보증은 아닙니다.
         verification_level은 검증 수준, status와 reason_code는 답변의 제한을 나타냅니다.
+        verification_history가 없으면 이력 상태 미제공이며 미사용이나 저장 성공을 추정하지 마세요.
+        이력 status의 not_used는 검증 이력 미사용, saved는 검증 이력 저장됨입니다.
+        saved는 의미 검증 성공을 뜻하지 않습니다. 실패한 검증 실행의 이력도 저장될 수 있습니다.
+        failed는 이력 저장을 확인하지 못했습니다로 안내하고 답변 상태·검증 수준·근거는 그대로 표시하세요.
+        이력 저장 실패를 이유로 질문을 자동 재호출하지 마세요.
         일부 주장이 추출 문제로 제외되면 model_checked와 partial/extraction_limited가 함께 반환될 수 있습니다.
         의미 검증에서 일부 주장이 제외되면 partial/semantic_limited로 반환합니다.
         검증 전에 모든 주장이 제외되면 structural_only일 수 있으며, 이것만으로 설정 비활성화를 단정하지 마세요.

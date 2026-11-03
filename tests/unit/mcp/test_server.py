@@ -4,9 +4,11 @@ import asyncio
 import json
 from dataclasses import replace
 from unittest.mock import Mock
+from types import SimpleNamespace
 
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.shared.memory import create_connected_server_and_client_session
 
 from solo_leveling.application.evidence_qa.answer import AnswerGenerationError, AnswerResponse
 from solo_leveling.domain.semantic_verification import VerificationLevel
@@ -104,6 +106,62 @@ def test_ask_preserves_model_checked_level():
     result = payload(run(server.call_tool('ask_paper',
         {'context_id': 'context', 'question': '질문'})))
     assert result['verification_level'] == 'model_checked'
+
+
+@pytest.mark.parametrize('history', [
+    {'status': 'not_used'}, {'status': 'saved'}, {'status': 'failed'},
+    None, {}, {'status': 'duplicate_run'}, {'status': ['saved']}, 'saved',
+])
+@pytest.mark.parametrize('outcome', ['ok', 'empty', 'partial'])
+@pytest.mark.parametrize('level', list(VerificationLevel))
+def test_history_protocol_preserves_answer_and_filters_private_fields(history, outcome, level, caplog, capsys):
+    """실제 MCP 전송의 구조화·텍스트 응답에서 이력과 답변 상태를 독립적으로 보존한다."""
+    response = replace(answer_response(), verification_level=level)
+    if outcome == 'empty':
+        response = replace(response, result=AnswerResult(
+            AnswerStatus.INSUFFICIENT_EVIDENCE, '근거를 확인할 수 없습니다.', (), (), ReasonCode.EVIDENCE_NOT_FOUND))
+    elif outcome == 'partial':
+        response = replace(response, result=replace(
+            response.result, status=AnswerStatus.PARTIAL, reason_code=ReasonCode.EXTRACTION_LIMITED))
+    server, answer, _ = make_server()
+    marker = 'SYNTHETIC_PRIVATE_HISTORY'
+    if isinstance(history, dict):
+        history = {**history, 'question': marker, 'error': marker}
+
+    async def scenario():
+        async with create_connected_server_and_client_session(server) as client:
+            answer.answer.return_value = response
+            baseline = await client.call_tool('ask_paper', {'context_id': 'context', 'question': '질문'})
+            assert not baseline.isError
+            assert 'verification_history' not in baseline.structuredContent
+            answer.answer.return_value = SimpleNamespace(**vars(response), verification_history=history)
+            result = await client.call_tool('ask_paper', {'context_id': 'context', 'question': '질문'})
+            assert not result.isError
+            expected = dict(baseline.structuredContent)
+            status = history.get('status') if isinstance(history, dict) else None
+            if isinstance(status, str) and status in ('not_used', 'saved', 'failed'):
+                expected['verification_history'] = {'status': status}
+            assert result.structuredContent == expected
+            assert json.loads(result.content[0].text) == expected
+            assert marker not in result.model_dump_json()
+            assert answer.answer.call_count == 2
+
+    run(scenario())
+    captured = capsys.readouterr()
+    assert marker not in captured.out + captured.err + caplog.text
+
+
+def test_history_schema_is_optional_and_host_guidance_is_explicit():
+    server, _, _ = make_server()
+    tool = next(tool for tool in run(server.list_tools()) if tool.name == 'ask_paper')
+    schema = tool.outputSchema
+    assert 'verification_history' not in schema['required']
+    history = schema['$defs']['VerificationHistoryOutput']
+    assert history['required'] == ['status']
+    assert history['properties']['status']['enum'] == ['not_used', 'saved', 'failed']
+    assert '이력 상태 미제공' in tool.description
+    assert 'saved는 의미 검증 성공을 뜻하지 않습니다' in tool.description
+    assert '이력 저장 실패를 이유로 질문을 자동 재호출하지 마세요' in tool.description
 
 
 def test_get_evidence_returns_stored_details():
@@ -281,7 +339,8 @@ def test_complete_tool_contract(name, required, optional, outputs, hints):
     assert set(tool.inputSchema.get('required', [])) == required
     assert set(tool.inputSchema['properties']) == required | optional
     assert set(tool.outputSchema['required']) == outputs
-    assert set(tool.outputSchema['properties']) == outputs
+    extra_outputs = {'verification_history'} if name == 'ask_paper' else set()
+    assert set(tool.outputSchema['properties']) == outputs | extra_outputs
     assert (tool.annotations.readOnlyHint, tool.annotations.idempotentHint,
             tool.annotations.openWorldHint) == hints
     assert tool.annotations.destructiveHint is False
