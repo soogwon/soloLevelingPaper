@@ -84,6 +84,10 @@ async def run():
             assert dashboard.annotations.readOnlyHint is True
             dashboard_resource = await session.read_resource('ui://solo-leveling/learning-dashboard.html')
             assert '학습 대시보드' in dashboard_resource.contents[0].text
+            reading = next(t for t in tools.tools if t.name == 'get_reading_questions')
+            reading_resource = await session.read_resource(reading.meta['ui']['resourceUri'])
+            assert reading_resource.contents[0].mimeType == 'text/html;profile=mcp-app'
+            assert '<title>읽기 전 질문</title>' in reading_resource.contents[0].text
             missing = await session.call_tool('get_learning_dashboard', {'context_id': 'missing'})
             assert missing.isError and 'NOT_FOUND' in missing.content[0].text
             resource = await session.read_resource('ui://solo-leveling/paper-status.html')
