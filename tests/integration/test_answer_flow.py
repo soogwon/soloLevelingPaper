@@ -46,7 +46,7 @@ def test_changed_quote_causes_atomic_save_rollback(setup_search):
     def generate(question, evidence):
         # 검색 이후 DB 번역문이 바뀌면 앞선 정상 근거까지 함께 저장 취소해야 한다.
         with closing(get_connection(db)) as conn, conn:
-            conn.execute("UPDATE chunks SET text='변경된 번역' WHERE chunk_id='b'")
+            conn.execute("UPDATE translation_results SET translated_text='변경된 번역' WHERE chunk_id='b'")
         return FakeClaimGenerator().generate_claims(question, evidence)
 
     service = AnswerService(SearchEntryService(SQLiteContextReader(db), retriever),

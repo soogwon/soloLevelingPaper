@@ -83,12 +83,12 @@ class SQLiteChromaRetriever:
                     AND e.translation_revision_id=t.translation_revision_id
                 JOIN processing_jobs j ON j.job_id=s.job_id AND j.version_id=v.version_id AND j.status='ready'
                 WHERE s.version_id=? AND s.parse_revision_id=? AND s.translation_revision_id=?
-                ''', (scope.version_id, scope.parse_revision_id, scope.translation_revision_id)).fetchone()
+                  AND (s.embedding_set_id=? OR (? IS NULL AND s.is_default=1))
+                ''', (scope.version_id, scope.parse_revision_id, scope.translation_revision_id,
+                      scope.embedding_set_id, scope.embedding_set_id)).fetchone()
             if row is None:
                 raise ValueError('검색 범위에 일치하는 게시 완료 색인이 없습니다.')
-            chunks = [Chunk(**dict(c)) for c in conn.execute('''
-                SELECT * FROM chunks WHERE parse_revision_id=? AND translation_revision_id=? AND text IS NOT NULL
-                ''', (scope.parse_revision_id, scope.translation_revision_id))]
+            chunks = repo.read_translated_chunks(conn, scope.parse_revision_id, scope.translation_revision_id)
         index = dict(row)
         positive_int(index['dimension'], 'dimension')
         require_text(index['model_name'], 'model_name')
