@@ -12,7 +12,7 @@ from solo_leveling.infrastructure.database import repository
 from solo_leveling.interfaces.mcp.quiz_contracts import QuizContractAdapter, SubmitInput
 from solo_leveling.interfaces.mcp.quiz_tools import StoredQuizService
 from solo_leveling.interfaces.mcp.server import MCPServices, create_server
-from tests.unit.test_quiz_submit_once import counts, ctx, question, setup_db  # noqa: F401
+from tests.unit.test_quiz_submit_once import counts, ctx, question, setup_db, submit  # noqa: F401
 
 
 def test_submission_accepts_inclusive_limits_and_counts_utf8_bytes():
@@ -35,6 +35,22 @@ def test_submission_accepts_inclusive_limits_and_counts_utf8_bytes():
 def test_submission_rejects_field_limits_even_below_byte_budget(answers):
     with pytest.raises(ValidationError):
         SubmitInput(context_id='c', step='preview', quiz_id='q', request_key='k', answers=answers)
+
+
+def test_history_cursor_and_latest_score_agree_for_equal_timestamps(ctx):
+    db, cid, qid = ctx
+    first = submit(db, 'key1', cid, qid, attempt_id='z-first')
+    second = submit(db, 'key2', cid, qid, attempt_id='a-second', selected=0)
+    assert first.attempt.submitted_at == second.attempt.submitted_at
+    adapter = QuizContractAdapter(StoredQuizService(db))
+    args = dict(context_id=cid, step='preview', limit=1)
+    score = next(s for s in adapter.scores({'context_id': cid}).scores if s.step == 'preview')
+    page = adapter.list_attempts(args)
+    assert page.items[0].attempt_id == score.latest_attempt_id == 'a-second'
+    assert page.next_cursor == 'a-second'
+    last = adapter.list_attempts(dict(args, cursor=page.next_cursor))
+    assert [a.attempt_id for a in last.items] == ['z-first']
+    assert last.next_cursor is None
 
 
 def test_quiz_protocol_with_persisted_replay(ctx):

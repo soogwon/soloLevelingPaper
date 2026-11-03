@@ -284,7 +284,8 @@ class QuizContractAdapter:
         if any(a.context_id != request.context_id or (request.step and a.step != request.step)
                for a in attempts):
             raise ContractError('INTERNAL_ERROR')
-        ordered = sorted(attempts, key=lambda a: (a.submitted_at, a.attempt_id), reverse=True)
+        # 점수 집계와 같은 저장 순서를 사용해 제출 시각이 같은 시도도 일관되게 표시한다.
+        ordered = attempts[::-1]
         start = 0
         if request.cursor is not None:
             for start, attempt in enumerate(ordered, start=1):
