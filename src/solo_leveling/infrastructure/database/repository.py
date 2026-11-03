@@ -318,9 +318,12 @@ def save_translation_batch(db_path: str, batch: TranslationBatchResult) -> None:
                                      (item.text, rev.translation_revision_id, row['chunk_id'])).rowcount
                 if count != 1:
                     raise ValueError('translation update conflict')
-            conn.execute('''INSERT INTO translation_results VALUES (?, ?, ?)
-                            ON CONFLICT(translation_revision_id, chunk_id) DO UPDATE SET failure_code=excluded.failure_code''',
-                         (rev.translation_revision_id, row['chunk_id'], code))
+            conn.execute('''INSERT INTO translation_results (translation_revision_id, chunk_id, failure_code, translated_text)
+                            VALUES (?, ?, ?, ?)
+                            ON CONFLICT(translation_revision_id, chunk_id) DO UPDATE SET
+                            failure_code=excluded.failure_code, translated_text=excluded.translated_text''',
+                         (rev.translation_revision_id, row['chunk_id'], code,
+                          item.text if item.succeeded else None))
 
 
 def get_translation_failures(db_path: str, translation_revision_id: str) -> list[dict]:
@@ -332,23 +335,43 @@ def get_translation_failures(db_path: str, translation_revision_id: str) -> list
 
 
 def get_translated_chunks(db_path: str, parse_revision_id: str, translation_revision_id: str) -> List[Chunk]:
+    """지정한 파싱 P의 원문 청크와 번역 T의 성공 행을 합쳐 돌려준다(chunk_index 순서). 반환 타입은 Chunk 그대로다.
+
+    번역문은 chunks.text가 아니라 번역 리비전별 결과(translation_results)에서 읽는다.
+    """
     with closing(get_connection(db_path)) as conn:
         if not conn.execute('SELECT 1 FROM translation_revisions WHERE translation_revision_id=? AND parse_revision_id=?',
                             (translation_revision_id, parse_revision_id)).fetchone():
             raise ValueError('translation does not belong to parse revision')
         return [Chunk(**dict(row)) for row in conn.execute(
-            'SELECT * FROM chunks WHERE parse_revision_id=? AND translation_revision_id=? AND text IS NOT NULL ORDER BY chunk_index',
+            '''SELECT c.chunk_id, c.parse_revision_id, c.chunk_index, c.original_text,
+                      r.translated_text AS text, r.translation_revision_id AS translation_revision_id,
+                      c.printed_page_label, c.pdf_page, c.section_id
+               FROM chunks c JOIN translation_results r ON r.chunk_id=c.chunk_id
+               WHERE c.parse_revision_id=? AND r.translation_revision_id=?
+                 AND r.failure_code IS NULL AND r.translated_text IS NOT NULL
+               ORDER BY c.chunk_index''',
             (parse_revision_id, translation_revision_id),
         )]
 
 
 def get_search_index(db_path: str, version_id: str, parse_revision_id: str | None = None,
-                     translation_revision_id: str | None = None) -> Optional[dict]:
-    """게시된 색인만 조회하며, 리비전을 지정하면 정확히 일치하는 경우만 반환한다."""
+                     translation_revision_id: str | None = None,
+                     embedding_set_id: str | None = None) -> Optional[dict]:
+    """게시된 색인만 조회한다. 리비전을 지정하면 정확히 일치하는 경우만 반환한다.
+
+    embedding_set_id를 주면 그 색인을 정확히 조회한다(기존 context가 가리키는 색인). 주지 않으면 논문 버전의
+    기본 색인(is_default=1)을 돌려주며, 버전만으로 임의의 색인을 고르는 경로는 없다.
+    """
+    query = '''SELECT s.*, e.model_name, e.dimension FROM search_indexes s
+               JOIN embedding_sets e USING(embedding_set_id) WHERE s.version_id=?'''
+    params: list = [version_id]
+    if embedding_set_id is not None:
+        query, params = query + ' AND s.embedding_set_id=?', params + [embedding_set_id]
+    else:
+        query += ' AND s.is_default=1'
     with closing(get_connection(db_path)) as conn:
-        row = conn.execute('''SELECT s.*, e.model_name, e.dimension FROM search_indexes s
-                              JOIN embedding_sets e USING(embedding_set_id) WHERE s.version_id=?''',
-                           (version_id,)).fetchone()
+        row = conn.execute(query, params).fetchone()
         if not row:
             return None
         result = dict(row)
@@ -356,6 +379,14 @@ def get_search_index(db_path: str, version_id: str, parse_revision_id: str | Non
                 or (translation_revision_id is not None and result['translation_revision_id'] != translation_revision_id)):
             return None
         return result
+
+
+def get_search_index_for_job(db_path: str, job_id: str) -> Optional[dict]:
+    """작업이 게시한 색인을 조회한다. 이후 복구로 기본 색인이 바뀌어도 그 작업의 결과는 그대로다."""
+    with closing(get_connection(db_path)) as conn:
+        row = conn.execute('''SELECT s.*, e.model_name, e.dimension FROM search_indexes s
+                              JOIN embedding_sets e USING(embedding_set_id) WHERE s.job_id=?''', (job_id,)).fetchone()
+        return dict(row) if row else None
 
 
 def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
@@ -381,11 +412,153 @@ def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
         conn.execute('INSERT INTO embedding_sets VALUES (?, ?, ?, ?, ?)',
                      (embedding_set.embedding_set_id, embedding_set.translation_revision_id,
                       embedding_set.model_name, embedding_set.dimension, embedding_set.created_at))
-        conn.execute('INSERT INTO search_indexes VALUES (?, ?, ?, ?, ?, ?)',
+        conn.execute('INSERT INTO search_indexes (embedding_set_id, version_id, parse_revision_id, '
+                     'translation_revision_id, job_id, chunk_count, is_default) VALUES (?, ?, ?, ?, ?, ?, 1)',
                      (embedding_set.embedding_set_id, version_id, parse_revision_id,
                       embedding_set.translation_revision_id, job_id, chunk_count))
         conn.execute("UPDATE processing_jobs SET status='ready', stage='index', limitations=?, updated_at=? WHERE job_id=?",
                      (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
+
+
+# ── 번역 실패 구간 복구(#30) ─────────────────────────────────────
+def claim_translation_recovery(db_path: str, job: ProcessingJob, base_translation_revision_id: str) -> None:
+    """번역 복구 작업을 시작한다. 논문 버전당 진행 중인 복구는 하나만 허용한다.
+
+    기본 색인이 base 번역 리비전을 가리키고 그 리비전에 실패한 청크가 있어야 한다. 같은 버전에 진행 중인 작업이
+    있으면 REQUEST_IN_PROGRESS. 중단돼 남은 잠금은 이 호출이 치운다(잠금은 version_id가 기본 키라 DB도 중복을 막는다).
+    """
+    require_text(job.job_id, 'job_id')
+    require_text(base_translation_revision_id, 'translation_revision_id')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        index = conn.execute('SELECT translation_revision_id FROM search_indexes WHERE version_id=? AND is_default=1',
+                             (job.version_id,)).fetchone()
+        if index is None or index['translation_revision_id'] != base_translation_revision_id:
+            raise ValueError('recovery base must be the default published index')
+        if not conn.execute('SELECT 1 FROM translation_results WHERE translation_revision_id=? '
+                            'AND failure_code IS NOT NULL LIMIT 1', (base_translation_revision_id,)).fetchone():
+            raise ValueError('no failed translation to recover')
+        conn.execute("DELETE FROM translation_recovery_locks WHERE version_id=? AND job_id IN "
+                     "(SELECT job_id FROM processing_jobs WHERE status NOT IN ('queued', 'processing'))",
+                     (job.version_id,))
+        if conn.execute("SELECT 1 FROM processing_jobs WHERE version_id=? AND status IN ('queued', 'processing')",
+                        (job.version_id,)).fetchone():
+            raise ValueError('REQUEST_IN_PROGRESS')
+        conn.execute('INSERT INTO processing_jobs (job_id, version_id, status, stage, limitations, created_at, '
+                     "updated_at) VALUES (?, ?, 'processing', 'translate', '[]', ?, ?)",
+                     (job.job_id, job.version_id, job.created_at, job.updated_at))
+        conn.execute('INSERT INTO translation_recovery_locks (version_id, job_id, base_translation_revision_id, '
+                     'created_at) VALUES (?, ?, ?, ?)',
+                     (job.version_id, job.job_id, base_translation_revision_id, now_iso()))
+
+
+def _active_recovery(conn, job_id: str):
+    lock = conn.execute('SELECT * FROM translation_recovery_locks WHERE job_id=?', (job_id,)).fetchone()
+    job = conn.execute('SELECT status FROM processing_jobs WHERE job_id=?', (job_id,)).fetchone()
+    if lock is None or job is None or job['status'] != 'processing':
+        raise ValueError('recovery job is not active')
+    return lock
+
+
+def save_recovery_translation(db_path: str, job_id: str, batch: TranslationBatchResult) -> None:
+    """복구 번역을 새 번역 리비전에 저장한다. 기존 번역은 바꾸지 않고, 기존 성공 번역은 그대로 재사용한다.
+
+    batch는 기존 리비전에서 실패한 청크 전체(그 청크만)를 다시 번역한 결과여야 하고, 같은 번역 설정을 써야 한다.
+    새 리비전에는 기존 성공 행의 번역문을 복사하고 batch 결과를 더한다. 게시된 번역·chunks.text는 건드리지 않는다.
+    """
+    batch.validate()
+    rev, settings = batch.revision, batch.settings
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        lock = _active_recovery(conn, job_id)
+        base = conn.execute('SELECT * FROM translation_revisions WHERE translation_revision_id=?',
+                            (lock['base_translation_revision_id'],)).fetchone()
+        if rev.parse_revision_id != base['parse_revision_id']:
+            raise ValueError('recovery must use the same parse revision')
+        if (settings.provider, settings.model, settings.prompt_version, settings.target_language) != tuple(
+                base[k] for k in ('provider', 'model', 'prompt_version', 'target_language')):
+            raise ValueError('recovery must use the original translation settings')
+        if lock['new_translation_revision_id'] is not None or conn.execute(
+                'SELECT 1 FROM translation_revisions WHERE translation_revision_id=?',
+                (rev.translation_revision_id,)).fetchone():
+            raise ValueError('recovery translation already saved')
+        failed = {r['chunk_id'] for r in conn.execute(
+            'SELECT chunk_id FROM translation_results WHERE translation_revision_id=? AND failure_code IS NOT NULL',
+            (base['translation_revision_id'],))}
+        if {item.request.chunk_id for item in batch.items} != failed or len(batch.items) != len(failed):
+            raise ValueError('recovery must cover exactly the failed chunks')
+        for item in batch.items:
+            row = conn.execute('SELECT parse_revision_id, original_text FROM chunks WHERE chunk_id=?',
+                               (item.request.chunk_id,)).fetchone()
+            if not row or (row['parse_revision_id'], row['original_text']) != (
+                    rev.parse_revision_id, item.request.original_text):
+                raise ValueError('translation source does not match database')
+        conn.execute('INSERT INTO translation_revisions (translation_revision_id, parse_revision_id, provider, model, '
+                     'prompt_version, target_language, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                     (rev.translation_revision_id, rev.parse_revision_id, settings.provider, settings.model,
+                      settings.prompt_version, settings.target_language, rev.created_at))
+        conn.execute('INSERT INTO translation_results (translation_revision_id, chunk_id, failure_code, translated_text) '
+                     'SELECT ?, chunk_id, NULL, translated_text FROM translation_results '
+                     'WHERE translation_revision_id=? AND failure_code IS NULL',
+                     (rev.translation_revision_id, base['translation_revision_id']))
+        for item in batch.items:
+            conn.execute('INSERT INTO translation_results (translation_revision_id, chunk_id, failure_code, '
+                         'translated_text) VALUES (?, ?, ?, ?)',
+                         (rev.translation_revision_id, item.request.chunk_id,
+                          item.failure_code.value if item.failure_code else None,
+                          item.text if item.succeeded else None))
+        conn.execute('UPDATE translation_recovery_locks SET new_translation_revision_id=? WHERE job_id=?',
+                     (rev.translation_revision_id, job_id))
+
+
+def publish_recovered_index(db_path: str, job_id: str, embedding_set: EmbeddingSet, chunk_count: int,
+                            limitations: list[str]) -> None:
+    """복구한 번역의 새 색인을 게시하고 기본 색인을 바꾸고 복구 작업을 완료한다. 모두 한 트랜잭션이다.
+
+    하나라도 맞지 않으면 아무것도 바꾸지 않아 기존 색인이 계속 기본으로 남는다. 새 색인이 기존 색인보다
+    청크가 늘지 않았다면(복구가 모두 실패했다면) 게시하지 않는다.
+    """
+    if type(chunk_count) is not int or chunk_count < 1 or type(embedding_set.dimension) is not int or embedding_set.dimension < 1:
+        raise ValueError('positive chunk count and embedding dimension required')
+    require_text(embedding_set.embedding_set_id, 'embedding_set_id')
+    require_text(embedding_set.model_name, 'model_name')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        lock = _active_recovery(conn, job_id)
+        if lock['new_translation_revision_id'] != embedding_set.translation_revision_id:
+            raise ValueError('index does not match the recovery translation')
+        old = conn.execute('SELECT * FROM search_indexes WHERE version_id=? AND is_default=1',
+                           (lock['version_id'],)).fetchone()
+        if old is None or old['translation_revision_id'] != lock['base_translation_revision_id']:
+            raise ValueError('default index changed during recovery')
+        actual = conn.execute(
+            'SELECT COUNT(*) FROM translation_results r JOIN chunks c ON c.chunk_id=r.chunk_id '
+            'WHERE r.translation_revision_id=? AND c.parse_revision_id=? AND r.failure_code IS NULL '
+            'AND r.translated_text IS NOT NULL',
+            (embedding_set.translation_revision_id, old['parse_revision_id'])).fetchone()[0]
+        if actual != chunk_count or actual <= old['chunk_count']:
+            raise ValueError('recovered index must cover more translated chunks than the current one')
+        conn.execute('INSERT INTO embedding_sets VALUES (?, ?, ?, ?, ?)',
+                     (embedding_set.embedding_set_id, embedding_set.translation_revision_id,
+                      embedding_set.model_name, embedding_set.dimension, embedding_set.created_at))
+        conn.execute('UPDATE search_indexes SET is_default=0 WHERE version_id=? AND is_default=1', (lock['version_id'],))
+        conn.execute('INSERT INTO search_indexes (embedding_set_id, version_id, parse_revision_id, '
+                     'translation_revision_id, job_id, chunk_count, is_default) VALUES (?, ?, ?, ?, ?, ?, 1)',
+                     (embedding_set.embedding_set_id, lock['version_id'], old['parse_revision_id'],
+                      embedding_set.translation_revision_id, job_id, chunk_count))
+        conn.execute("UPDATE processing_jobs SET status='ready', stage='index', limitations=?, updated_at=? "
+                     'WHERE job_id=?', (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
+        conn.execute('DELETE FROM translation_recovery_locks WHERE job_id=?', (job_id,))
+
+
+def fail_translation_recovery(db_path: str, job_id: str, limitations: list[str]) -> None:
+    """복구가 실패했을 때 작업을 failed로 바꾸고 잠금을 푼다. 기존 기본 색인은 그대로 남는다."""
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        _active_recovery(conn, job_id)
+        conn.execute("UPDATE processing_jobs SET status='failed', limitations=?, updated_at=? WHERE job_id=?",
+                     (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
+        conn.execute('DELETE FROM translation_recovery_locks WHERE job_id=?', (job_id,))
 
 
 def prepare_ingestion(db_path: str, paper: Paper, candidate: PaperVersion,
@@ -430,7 +603,7 @@ def prepare_ingestion(db_path: str, paper: Paper, candidate: PaperVersion,
                             VALUES (?, ?, ?, ?, ?, ?)''',
                          (version_id, paper.paper_id, candidate.file_hash, candidate.stored_path,
                           candidate.original_filename, candidate.created_at))
-        published = conn.execute('SELECT job_id FROM search_indexes WHERE version_id=?',
+        published = conn.execute('SELECT job_id FROM search_indexes WHERE version_id=? AND is_default=1',
                                  (version_id,)).fetchone()
         if published:
             registration = IngestionRegistration(IngestionDisposition.COMPLETED, version_id,
@@ -520,7 +693,7 @@ def get_or_create_default_context(db_path: str, version_id: str) -> LearningCont
             JOIN embedding_sets e ON e.embedding_set_id=s.embedding_set_id
                 AND e.translation_revision_id=t.translation_revision_id
             JOIN processing_jobs j ON j.job_id=s.job_id AND j.version_id=s.version_id AND j.status='ready'
-            WHERE s.version_id=?''', (version_id,)).fetchone()
+            WHERE s.version_id=? AND s.is_default=1''', (version_id,)).fetchone()
         if index is None:
             # 손상된 게시 기록을 단순한 등록 대기로 안내하지 않는다.
             if conn.execute('SELECT 1 FROM search_indexes WHERE version_id=?', (version_id,)).fetchone():
@@ -582,7 +755,7 @@ def get_or_create_learning_context(db_path: str, version_id: str, goal: str,
             JOIN embedding_sets e ON e.embedding_set_id=s.embedding_set_id
                 AND e.translation_revision_id=t.translation_revision_id
             JOIN processing_jobs j ON j.job_id=s.job_id AND j.version_id=s.version_id AND j.status='ready'
-            WHERE s.version_id=?''', (version_id,)).fetchone()
+            WHERE s.version_id=? AND s.is_default=1''', (version_id,)).fetchone()
         if index is None:
             if conn.execute(
                 'SELECT 1 FROM search_indexes WHERE version_id=?', (version_id,),

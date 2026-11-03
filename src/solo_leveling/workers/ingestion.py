@@ -155,8 +155,8 @@ def get_ingestion_status(db_path: str, job_id: str) -> dict:
         'limitations': job.limitations, 'result_available': False,
     }
     if job.status == JobStatus.READY:
-        index = repo.get_search_index(db_path, job.version_id)
-        if index is None or index['job_id'] != job.job_id:
+        index = repo.get_search_index_for_job(db_path, job.job_id)
+        if index is None or index['version_id'] != job.version_id:
             raise ValueError('완료 작업과 색인 정보가 일치하지 않습니다.')
         response['result_available'] = True
         response['result'] = _published_result(index, True, db_path)
