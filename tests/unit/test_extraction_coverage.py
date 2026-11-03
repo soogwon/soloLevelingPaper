@@ -40,6 +40,35 @@ def test_overlap_uses_original_numbers_and_page(count, page, expected):
     assert assess_extraction_risk(claim, (left, right)).reason == expected
 
 
+@pytest.mark.parametrize('prefix', ['Earlier. ', 'Earlier.\n'])
+@pytest.mark.parametrize('count,expected', [
+    ('10', ExtractionReason.AMBIGUOUS_OVERLAP), ('20', ExtractionReason.NONE),
+])
+def test_overlap_coordinates_use_whole_chunk_number_lines(prefix, count, expected):
+    left = EvidenceInput('e1', 'c1', '첫 번역', prefix + '10\nSame finding.', None, 6)
+    right = EvidenceInput('e2', 'c2', '반대 번역', f'{count}\nSame finding. Next.', None, 6)
+    claim = GeneratedClaim('결과', ('e1', 'e2'), (
+        ClaimSupport('e1', '10\nSame finding.'),
+        ClaimSupport('e2', f'{count}\nSame finding.'),
+    ))
+    assert assess_extraction_risk(claim, (left, right)).reason == expected
+
+
+def test_overlapping_repeated_quote_has_no_unique_location():
+    item = EvidenceInput('e1', 'c1', '번역', 'Word Word Word.', None, 6)
+    claim = GeneratedClaim('결과', ('e1',), (ClaimSupport('e1', 'Word Word'),))
+    assert assess_extraction_risk(claim, (item,)).reason == ExtractionReason.SUPPORT_LOCATION_UNRESOLVED
+
+
+def test_partial_sentence_does_not_become_complete_after_numeric_prefix():
+    left = EvidenceInput('e1', 'c1', '첫 번역', 'Earlier. 10\nSame finding.', None, 6)
+    right = EvidenceInput('e2', 'c2', '반대 번역', '10\nSame finding. Next.', None, 6)
+    claim = GeneratedClaim('결과', ('e1', 'e2'), (
+        ClaimSupport('e1', 'Same finding.'), ClaimSupport('e2', '10\nSame finding.'),
+    ))
+    assert assess_extraction_risk(claim, (left, right)).reason == ExtractionReason.NONE
+
+
 def test_overlapping_supports_do_not_change_original_or_ids():
     original = 'Faster when the sequence\n6'
     left = EvidenceInput('e1', 'c1', '번역', original, None, 6, False, True)

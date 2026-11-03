@@ -58,8 +58,7 @@ class ExtractionAssessment:
         return self.reason != ExtractionReason.NONE
 
 
-def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInput]) -> ExtractionAssessment:
-    """실제 인용한 근거만 평가하며, 불명확한 구절 위치는 안전하다고 간주하지 않는다."""
+def _select_claim(claim: GeneratedClaim, evidence: Sequence[EvidenceInput]):
     by_id = {item.evidence_id: item for item in evidence}
     cited = [by_id[eid] for eid in claim.evidence_ids]
     if _standalone_number_risk(claim, cited):
@@ -80,11 +79,14 @@ def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInp
             original = ' '.join(item.original_text.split())
             if normalized not in original:
                 return ExtractionAssessment(ExtractionReason.SUPPORT_NOT_FOUND, item.evidence_id)
-            selected = evidence_body(quote)
-            start = body.find(selected)
-            if not selected or start < 0 or body.find(selected, start + 1) >= 0:
+            # 겹쳐 반복되는 구절도 모두 찾아 위치가 유일한 경우에만 사용한다.
+            pattern = r'\s+'.join(re.escape(word) for word in quote.split())
+            matches = list(re.finditer(f'(?=({pattern}))', item.original_text))
+            positions = (_body_range(item.original_text, matches[0].start(1), matches[0].end(1))
+                         if len(matches) == 1 else None)
+            if positions is None:
                 return ExtractionAssessment(ExtractionReason.SUPPORT_LOCATION_UNRESOLVED, item.evidence_id)
-            selections.append(_Selection(item, body, start, start + len(selected)))
+            selections.append(_Selection(item, body, *positions))
 
     # 같은 근거 안에서 겹치거나 공백만 사이에 둔 구절은 실제 인용 범위로 묶는다.
     # 선택하지 않은 단어·조건절을 건너뛰거나 서로 다른 근거의 본문을 합치지는 않는다.
@@ -100,7 +102,14 @@ def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInp
                                          max(previous.end, selected.end))
             else:
                 covered.append(selected)
-    selections = covered
+    return covered
+
+
+def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInput]) -> ExtractionAssessment:
+    """실제 인용한 근거만 평가하며, 불명확한 구절 위치는 안전하다고 간주하지 않는다."""
+    selections = _select_claim(claim, evidence)
+    if isinstance(selections, ExtractionAssessment):
+        return selections
 
     def joined(left: _Selection, right: _Selection) -> bool:
         # 서버가 부여한 인접 관계와 두 조각의 실제 사용 범위가 모두 맞아야 한다.
@@ -150,7 +159,7 @@ def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInp
                 return ExtractionAssessment(ExtractionReason.UNRESOLVED_PREFIX, selected.evidence.evidence_id)
         # 문장별 번역 정렬이 없어 어느 쪽이 맞는지 단정할 수 없다.
         # 이 주장이 같은 페이지에서 실제로 중복 인용한 완결 문장만 비교한다.
-        if len(cited) > 1:
+        if len(claim.evidence_ids) > 1:
             translation = ' '.join((selected.evidence.text_ko or '').split())
             for sentence in _cited_complete_sentences(selected):
                 key = (selected.evidence.pdf_page, sentence)
@@ -160,23 +169,60 @@ def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInp
     return ExtractionAssessment(ExtractionReason.NONE)
 
 
+def _body_range(raw: str, start: int, end: int):
+    """숫자 줄 제거 여부를 전체 청크에서 결정하고 원문 구간을 본문 좌표로 옮긴다."""
+    offset = 0
+    body_offset = 0
+    positions = []
+    for line in raw.splitlines(keepends=True):
+        if not line.strip().isdigit():
+            for token in re.finditer(r'\S+', line):
+                left, right = offset + token.start(), offset + token.end()
+                if left < end and right > start:
+                    positions.append((body_offset + max(start - left, 0),
+                                      body_offset + min(end, right) - left))
+                body_offset += len(token.group()) + 1
+        offset += len(line)
+    return (positions[0][0], positions[-1][1]) if positions else None
+
+
 def _cited_complete_sentences(selected: _Selection):
     # 경계 검사 좌표는 숫자 줄을 제외하지만, 문장의 동일성 비교에는 원래 숫자가 필요하다.
     raw = selected.evidence.original_text
     start = 0
-    body_start = 0
     for end in sentence_ends(raw):
         original = raw[start:end]
-        body = evidence_body(original)
-        if not body:
-            start = end
-            continue
-        body_end = body_start + len(body)
-        if (selected.start <= body_start and body_end <= selected.end
+        positions = _body_range(raw, start, end)
+        if (positions is not None
+                and selected.start <= positions[0] and positions[1] <= selected.end
                 and (start or not selected.evidence.starts_mid_sentence)):
             yield ' '.join(original.split())
         start = end
-        body_start = body_end + 1
+
+
+def assess_answer_overlaps(claims: Sequence[GeneratedClaim], evidence: Sequence[EvidenceInput]):
+    """답변 전체에서 번역이 다른 중복 문장을 인용한 모든 주장의 위치를 반환한다."""
+    cited_sentences = {}
+    conflicts = {}
+    for number, claim in enumerate(claims):
+        selections = _select_claim(claim, evidence)
+        if isinstance(selections, ExtractionAssessment):
+            continue
+        for selected in selections:
+            item = selected.evidence
+            translation = ' '.join((item.text_ko or '').split())
+            for sentence in _cited_complete_sentences(selected):
+                key = (item.pdf_page, sentence)
+                previous = cited_sentences.setdefault(key, [])
+                for other_number, other in previous:
+                    if (other.chunk_id != item.chunk_id
+                            and ' '.join((other.text_ko or '').split()) != translation):
+                        conflicts[other_number] = ExtractionAssessment(
+                            ExtractionReason.AMBIGUOUS_OVERLAP, other.evidence_id)
+                        conflicts[number] = ExtractionAssessment(
+                            ExtractionReason.AMBIGUOUS_OVERLAP, item.evidence_id)
+                previous.append((number, item))
+    return conflicts
 
 
 def claim_has_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInput]) -> bool:

@@ -18,7 +18,7 @@ from .response_parser import GenerationFormatError
 from .errors import InvalidArgumentError
 from .fragments import fragment_flags
 from solo_leveling.domain.semantic_verification import VerificationLevel, SemanticVerdict
-from .evidence_quality import assess_extraction_risk, ExtractionReason
+from .evidence_quality import assess_extraction_risk, assess_answer_overlaps, ExtractionReason
 from .validators import citation_from_evidence, validate_answer_against_search, validate_search_result
 from .answer_audit import audit_effects
 
@@ -323,6 +323,12 @@ class AnswerService:
         final_exclusion_reasons = exclusion_reasons | {
             ExtractionReason.UNFINISHED_TAIL, ExtractionReason.STANDALONE_NUMBER, ExtractionReason.AMBIGUOUS_OVERLAP,
         }
+        # 보완 후 살아남을 주장끼리 비교한다. 이미 제외할 주장이 정상 주장까지 없애지 않는다.
+        candidates = [i for i, assessment in enumerate(assessments)
+                      if assessment.reason not in final_exclusion_reasons]
+        overlaps = assess_answer_overlaps(tuple(draft.claims[i] for i in candidates), inputs)
+        for index, assessment in overlaps.items():
+            assessments[candidates[index]] = assessment
         retained, retained_assessments = [], []
         excluded = 0
         for number, (claim, assessment) in enumerate(zip(draft.claims, assessments), 1):

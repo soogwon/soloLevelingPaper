@@ -266,6 +266,69 @@ def test_overlap_citations_with_different_translations(parts, second_quote, seco
         assert not result.claims and not result.citations and not saved
 
 
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('second_ko,second_page,second_quote,keep_other,expected', [
+    ('반대 해석.', 6, 'Same finding.', False, AnswerStatus.INSUFFICIENT_EVIDENCE),
+    ('반대 해석.', 6, 'Same finding.', True, AnswerStatus.PARTIAL),
+    ('같은 해석.', 6, 'Same finding.', False, AnswerStatus.OK),
+    ('반대 해석.', 7, 'Same finding.', False, AnswerStatus.OK),
+    ('반대 해석.', 6, 'Another finding.', False, AnswerStatus.OK),
+])
+def test_overlap_across_claims_excludes_both_sides(parts, reverse, second_ko,
+                                                 second_page, second_quote, keep_other, expected):
+    from dataclasses import replace
+    service, search, saved, _ = parts
+    items = tuple(replace(item, chunk=replace(item.chunk, original_text=original,
+                  text=ko, pdf_page=page)) for item, original, ko, page in zip(
+                  search.items, ('Earlier context. Same finding.', 'Same finding. Another finding.'),
+                  ('같은 해석.', second_ko), (6, second_page)))
+    service.search = SimpleNamespace(search=lambda *a, **kw:
+        ContextSearchResponse('ctx', replace(search, items=items)))
+
+    def generate(question, evidence):
+        left, right = (item.evidence_id for item in evidence)
+        claims = [GeneratedClaim('첫 주장', (left,), (ClaimSupport(left, 'Same finding.'),)),
+                  GeneratedClaim('둘째 주장', (right,), (ClaimSupport(right, second_quote),))]
+        if keep_other:
+            claims.append(GeneratedClaim('독립 주장', (left,), (ClaimSupport(left, 'Earlier context.'),)))
+        return GeneratedAnswerDraft(tuple(reversed(claims)) if reverse else tuple(claims))
+
+    service.generator = SimpleNamespace(generate_claims=generate)
+    result = service.answer('질문', context_id='ctx').result
+    assert result.status == expected
+    if expected == AnswerStatus.INSUFFICIENT_EVIDENCE:
+        assert not result.claims and not result.citations and not saved
+    elif expected == AnswerStatus.PARTIAL:
+        assert [claim.text for claim in result.claims] == ['독립 주장']
+        assert [item.chunk_id for item in saved[0][1]] == ['c0']
+    else:
+        assert len(result.claims) == 2
+        assert {item.chunk_id for item in saved[0][1]} == {'c0', 'c1'}
+
+
+def test_excluded_claim_does_not_remove_independent_complete_claim(parts):
+    from dataclasses import replace
+    service, search, saved, _ = parts
+    items = tuple(replace(item, chunk=replace(item.chunk, original_text=original,
+                  text=ko, pdf_page=6)) for item, original, ko in zip(search.items,
+                  ('Same finding. Unfinished', 'Same finding.'), ('첫 번역', '다른 번역')))
+    service.search = SimpleNamespace(search=lambda *a, **kw:
+        ContextSearchResponse('ctx', replace(search, items=items)))
+
+    def generate(question, evidence):
+        left, right = (item.evidence_id for item in evidence)
+        return GeneratedAnswerDraft((
+            GeneratedClaim('미완결 주장', (left,), (ClaimSupport(left, 'Same finding. Unfinished'),)),
+            GeneratedClaim('정상 주장', (right,), (ClaimSupport(right, 'Same finding.'),)),
+        ))
+
+    service.generator = SimpleNamespace(generate_claims=generate)
+    result = service.answer('질문', context_id='ctx').result
+    assert result.status == AnswerStatus.PARTIAL
+    assert [claim.text for claim in result.claims] == ['정상 주장']
+    assert [item.chunk_id for item in saved[0][1]] == ['c1']
+
+
 def test_duplicate_generated_ids_fail_before_saving(parts):
     service, _, saved, _ = parts
     service.id_factory = lambda: 'same'
