@@ -145,6 +145,15 @@ def test_failure_after_attempt_insert_rolls_back_request_row(ctx):
     assert submit(db, 'k1', context_id, quiz_id, attempt_id='ok').outcome is SubmitOutcome.SAVED
 
 
+def test_prepare_new_request_with_unknown_context_raises_not_found(ctx):
+    db, _, quiz_id = ctx
+    context_id = 'missing-context'
+    digest = submit_input_hash(context_id, STEP, quiz_id, {0: 1})
+    with pytest.raises(ResourceNotFoundError):
+        repo.prepare_quiz_submission(db, context_id, STEP, quiz_id, 'new-key', digest)
+    assert counts(db) == (0, 0, 0)
+
+
 def test_unknown_context_raises_not_found(ctx):
     db, context_id, quiz_id = ctx
     with pytest.raises(ResourceNotFoundError):
