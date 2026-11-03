@@ -14,12 +14,13 @@ from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
 from solo_leveling.application.reflection.service import ReflectionService, ReflectionSession
 from solo_leveling.domain.reflection import MAX_ANSWER_LENGTH, ReflectionValidationError
 from .errors import to_tool_error
+from .input_privacy import SafeInputServer
 
 
 _READING_TOOLS = frozenset({'get_reading_questions', 'save_reading_answer'})
 
 
-class ReflectionInputServer(FastMCP):
+class ReflectionInputServer(SafeInputServer):
     """두 읽기 도구만 SDK의 입력 오류 직렬화 전에 안전하게 검증한다."""
 
     async def list_tools(self):
