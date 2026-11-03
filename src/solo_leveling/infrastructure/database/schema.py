@@ -215,7 +215,31 @@ CREATE TABLE IF NOT EXISTS quiz_submit_requests (
 -- 의미 검증 이력(#83). 검증 실행 한 번과 그때 검사한 주장·참조를 저장한다.
 -- 질문·청크 원문·번역·키·전체 API 응답은 저장하지 않고, 주장 문구와 청크 참조(chunk_id + 원문 해시)만 남긴다.
 -- 최종 근거(evidences)에는 FK를 걸지 않는다: 제외된 주장만 참조한 근거는 최종 근거 테이블에 없을 수 있다.
--- 맥락·청크는 이력이 참조하는 동안 지울 수 없다(RESTRICT). 맥락을 지우려면 이력을 먼저 지운다.
+-- 맥락을 지우면 그 맥락의 이력(실행·주장·참조)만 함께 지워진다(CASCADE). 이력이 참조하는 청크는 지울 수 없다(RESTRICT).
+-- 이력이 근거로 삼을 수 있는 청크는 색인 게시 당시의 성공 청크 집합(search_index_chunks)뿐이다.
+CREATE TABLE IF NOT EXISTS search_index_chunks (
+    embedding_set_id TEXT NOT NULL REFERENCES embedding_sets(embedding_set_id) ON DELETE CASCADE,
+    chunk_id TEXT NOT NULL,
+    PRIMARY KEY (embedding_set_id, chunk_id)
+);
+-- 임베딩 세트를 만드는 순간(색인 게시와 같은 트랜잭션) 그 번역 리비전의 성공 청크 집합을 기록한다.
+CREATE TRIGGER IF NOT EXISTS trg_embedding_set_chunks AFTER INSERT ON embedding_sets
+BEGIN
+    INSERT OR IGNORE INTO search_index_chunks (embedding_set_id, chunk_id)
+    SELECT NEW.embedding_set_id, r.chunk_id
+    FROM translation_results r
+    JOIN translation_revisions t ON t.translation_revision_id = r.translation_revision_id
+    JOIN chunks c ON c.chunk_id = r.chunk_id AND c.parse_revision_id = t.parse_revision_id
+    WHERE r.translation_revision_id = NEW.translation_revision_id AND r.failure_code IS NULL;
+END;
+-- 이 기능 이전에 만든 임베딩 세트는 현재의 성공 청크 집합으로 한 번 채운다(이미 기록된 세트는 건드리지 않는다).
+INSERT OR IGNORE INTO search_index_chunks (embedding_set_id, chunk_id)
+SELECT e.embedding_set_id, r.chunk_id
+FROM embedding_sets e
+JOIN translation_revisions t ON t.translation_revision_id = e.translation_revision_id
+JOIN translation_results r ON r.translation_revision_id = e.translation_revision_id AND r.failure_code IS NULL
+JOIN chunks c ON c.chunk_id = r.chunk_id AND c.parse_revision_id = t.parse_revision_id
+WHERE NOT EXISTS (SELECT 1 FROM search_index_chunks x WHERE x.embedding_set_id = e.embedding_set_id);
 CREATE TABLE IF NOT EXISTS verification_runs (
     run_id TEXT PRIMARY KEY,
     context_id TEXT NOT NULL REFERENCES learning_contexts(context_id) ON DELETE CASCADE,

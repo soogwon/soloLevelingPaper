@@ -247,3 +247,70 @@ def test_results_and_errors_never_carry_claim_text(env):
     with pytest.raises(HistoryValidationError) as error:
         vh.save_verification_history(env, record('r3', claims=[claim(text=SECRET, refs=[])]))
     assert SECRET not in str(error.value)
+
+
+def test_same_count_replacement_cannot_make_an_unpublished_chunk_evidence(env):
+    # 게시 뒤 c3와 성공 번역을 추가하고 c2의 번역을 실패로 바꿔도 성공 청크 수는 2개로 같다.
+    with closing(get_connection(env)) as conn, conn:
+        conn.execute("INSERT INTO chunks (chunk_id, parse_revision_id, chunk_index, original_text, text, "
+                     "translation_revision_id, pdf_page) VALUES ('c3', 'p1', 2, 'Third.', '셋째.', 't1', 2)")
+        conn.execute("INSERT INTO translation_results (translation_revision_id, chunk_id, failure_code) "
+                     "VALUES ('t1', 'c3', NULL)")
+        conn.execute("UPDATE translation_results SET failure_code='provider_unavailable' "
+                     "WHERE translation_revision_id='t1' AND chunk_id='c2'")
+        conn.execute("UPDATE chunks SET text=NULL WHERE chunk_id='c2'")
+    result = vh.save_verification_history(env, record(claims=[claim(refs=[ref('c3', 'Third.')])]))
+    assert result.outcome is HistoryOutcome.REFERENCE_MISMATCH
+    assert counts(env) == (0, 0, 0)
+    # 게시 당시 집합에 있던 c1은 여전히 근거로 저장할 수 있다.
+    assert vh.save_verification_history(env, record('r2')).outcome is HistoryOutcome.SAVED
+
+
+def test_published_set_is_recorded_at_publication_and_backfilled_for_old_databases(env):
+    def members():
+        with closing(get_connection(env)) as conn:
+            return sorted(r[0] for r in conn.execute(
+                "SELECT chunk_id FROM search_index_chunks WHERE embedding_set_id='idx'"))
+    assert members() == ['c1', 'c2']
+    with closing(get_connection(env)) as conn, conn:  # 이 기능 이전의 DB를 흉내
+        conn.execute('DROP TRIGGER trg_embedding_set_chunks')
+        conn.execute('DELETE FROM search_index_chunks')
+    init_db(env)
+    init_db(env)
+    assert members() == ['c1', 'c2']
+
+
+def test_chunk_recovered_by_translation_recovery_can_be_cited_only_after_the_new_index(tmp_path):
+    from solo_leveling.domain.models import (EmbeddingSet, JobStage, JobStatus, Paper, PaperVersion,
+                                             ProcessingJob, TranslationRevision)
+    from solo_leveling.domain.translation import (ChunkTranslationResult, TranslationBatchResult,
+                                                  TranslationFailureCode, TranslationRequest, TranslationSettings)
+    db = str(tmp_path / 'r.db')
+    init_db(db)
+    repo.insert_paper(db, Paper('paper'))
+    repo.insert_version(db, PaperVersion('v1', 'paper', 'h', 'x.pdf', 'x.pdf'))
+    repo.insert_parse_revision(db, ParseRevision('p1', 'v1', 1))
+    repo.insert_chunks(db, [Chunk('c1', 'p1', 0, 'First.'), Chunk('c2', 'p1', 1, 'Second.')])
+    settings = TranslationSettings('p', 'm', 'v1')
+
+    def batch(rev, items):
+        return TranslationBatchResult(TranslationRevision(rev, 'p1', 'p', 'm'), settings, tuple(items))
+
+    def req(chunk_id, text):
+        return TranslationRequest(chunk_id, 'p1', text)
+    repo.insert_job(db, ProcessingJob('j1', 'v1', JobStatus.PROCESSING, JobStage.TRANSLATE))
+    repo.save_translation_batch(db, batch('t1', [
+        ChunkTranslationResult(req('c1', 'First.'), '첫째.'),
+        ChunkTranslationResult(req('c2', 'Second.'), None, TranslationFailureCode.PROVIDER_UNAVAILABLE)]))
+    repo.publish_search_index(db, 'v1', 'p1', EmbeddingSet('e1', 't1', 'm', 2), 'j1', 1, [])
+    repo.create_learning_context(db, LearningContext('old', 'v1', 'p1', 't1', known_concepts=[], embedding_set_id='e1'))
+    old = record(context_id='old', embedding_set_id='e1', claims=[claim(refs=[ref('c2', 'Second.')])])
+    assert vh.save_verification_history(db, old).outcome is HistoryOutcome.REFERENCE_MISMATCH  # 게시되지 않은 청크
+    repo.claim_translation_recovery(db, ProcessingJob('j2', 'v1', JobStatus.PROCESSING, JobStage.TRANSLATE), 't1')
+    repo.save_recovery_translation(db, 'j2', batch('t2', [ChunkTranslationResult(req('c2', 'Second.'), '둘째.')]))
+    repo.publish_recovered_index(db, 'j2', EmbeddingSet('e2', 't2', 'm', 2), 2, [])
+    repo.create_learning_context(db, LearningContext('new', 'v1', 'p1', 't2', known_concepts=[], embedding_set_id='e2'))
+    new = record('r2', context_id='new', translation_revision_id='t2', embedding_set_id='e2',
+                 claims=[claim(refs=[ref('c1', 'First.'), ref('c2', 'Second.')])])
+    assert vh.save_verification_history(db, new).outcome is HistoryOutcome.SAVED
+    assert vh.save_verification_history(db, replace(old, run_id='r3')).outcome is HistoryOutcome.REFERENCE_MISMATCH

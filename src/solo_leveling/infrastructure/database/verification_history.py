@@ -3,7 +3,7 @@
 - 저장은 짧은 쓰기 트랜잭션 하나(BEGIN IMMEDIATE)다. 실행·주장·참조 중 하나라도 실패하면 모두 되돌린다.
 - 계약 결과는 예외 대신 HistoryResult의 outcome으로 돌려준다. 형식 오류만 HistoryValidationError.
 - 저장 직전에 같은 트랜잭션에서 확인한다: 맥락이 있고 버전·리비전·색인이 맥락과 같은지, 참조한 청크가 그 맥락의
-  파싱·번역 리비전 범위에 속하는지, 청크의 현재 원문 해시가 기록한 해시와 같은지.
+  파싱 리비전에 속하고 색인 게시 당시의 성공 청크 집합에 들어 있는지, 청크의 현재 원문 해시가 기록한 해시와 같은지.
 - 이력 저장 실패가 답변·최종 근거를 되돌리지는 않는다(호출자가 최종 근거 저장 뒤에 부른다).
 - 주장 문구·청크 내용은 로그에 남기지 않는다. 실패 이유는 고정 코드로만 알린다.
 """
@@ -31,16 +31,12 @@ def save_verification_history(db_path: str, record: VerificationHistoryRecord) -
             if context is None or any(context[key] != getattr(record, key) for key in (
                     'version_id', 'parse_revision_id', 'translation_revision_id', 'embedding_set_id')):
                 return HistoryResult(HistoryOutcome.REFERENCE_MISMATCH)
-            if record.claims and not _published_set_intact(conn, context):
-                return HistoryResult(HistoryOutcome.REFERENCE_MISMATCH)
             for claim in record.claims:
                 for ref in claim.references:
                     chunk = conn.execute(
-                        'SELECT original_text, parse_revision_id, translation_revision_id, text FROM chunks '
-                        'WHERE chunk_id=?', (ref.chunk_id,)).fetchone()
+                        'SELECT original_text, parse_revision_id FROM chunks WHERE chunk_id=?',
+                        (ref.chunk_id,)).fetchone()
                     if (chunk is None or chunk['parse_revision_id'] != context['parse_revision_id']
-                            or chunk['translation_revision_id'] != context['translation_revision_id']
-                            or chunk['text'] is None
                             or not _was_published(conn, context, ref.chunk_id)
                             or chunk_content_hash(chunk['original_text']) != ref.content_hash):
                         return HistoryResult(HistoryOutcome.REFERENCE_MISMATCH)
@@ -65,22 +61,12 @@ def save_verification_history(db_path: str, record: VerificationHistoryRecord) -
 
 
 def _was_published(conn, context, chunk_id: str) -> bool:
-    """청크가 게시 당시의 성공 번역 집합에 속하는지 확인한다(번역 결과 행이 성공으로 기록된 청크만)."""
-    return conn.execute('SELECT 1 FROM translation_results WHERE translation_revision_id=? AND chunk_id=? '
-                        'AND failure_code IS NULL', (context['translation_revision_id'], chunk_id)).fetchone() is not None
+    """청크가 색인 게시 당시의 성공 청크 집합(search_index_chunks)에 속하는지 확인한다.
 
-
-def _published_set_intact(conn, context) -> bool:
-    """게시 색인의 청크 수와 현재 성공 번역 청크 수가 같은지 확인한다. 게시 뒤 집합이 바뀌었다면 근거로 쓰지 않는다."""
-    index = conn.execute('SELECT chunk_count FROM search_indexes WHERE embedding_set_id=?',
-                         (context['embedding_set_id'],)).fetchone()
-    if index is None:
-        return False
-    actual = conn.execute(
-        'SELECT COUNT(*) FROM translation_results r JOIN chunks c ON c.chunk_id=r.chunk_id '
-        'WHERE r.translation_revision_id=? AND c.parse_revision_id=? AND r.failure_code IS NULL '
-        'AND c.text IS NOT NULL', (context['translation_revision_id'], context['parse_revision_id'])).fetchone()[0]
-    return actual == index['chunk_count']
+    이후 번역 결과나 청크가 바뀌거나 같은 개수로 교체돼도, 게시된 적 없는 청크는 근거로 저장하지 않는다.
+    """
+    return conn.execute('SELECT 1 FROM search_index_chunks WHERE embedding_set_id=? AND chunk_id=?',
+                        (context['embedding_set_id'], chunk_id)).fetchone() is not None
 
 
 def get_verification_history(db_path: str, context_id: str, run_id: str) -> Optional[VerificationHistoryRecord]:
