@@ -130,11 +130,14 @@ def test_history_protocol_preserves_answer_and_filters_private_fields(history, o
 
     async def scenario():
         async with create_connected_server_and_client_session(server) as client:
-            answer.answer.return_value = response
+            # 구버전 서비스는 이력 속성 자체를 제공하지 않는다.
+            legacy = SimpleNamespace(context_id=response.context_id, search=response.search,
+                                     result=response.result, verification_level=response.verification_level)
+            answer.answer.return_value = legacy
             baseline = await client.call_tool('ask_paper', {'context_id': 'context', 'question': '질문'})
             assert not baseline.isError
             assert 'verification_history' not in baseline.structuredContent
-            answer.answer.return_value = SimpleNamespace(**vars(response), verification_history=history)
+            answer.answer.return_value = SimpleNamespace(**vars(legacy), verification_history=history)
             result = await client.call_tool('ask_paper', {'context_id': 'context', 'question': '질문'})
             assert not result.isError
             expected = dict(baseline.structuredContent)
