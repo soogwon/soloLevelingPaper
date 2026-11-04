@@ -105,6 +105,36 @@ def _select_claim(claim: GeneratedClaim, evidence: Sequence[EvidenceInput]):
     return covered
 
 
+def _conflicting_joined_comparisons(claim: GeneratedClaim, left: _Selection, right: _Selection,
+                                    selections: Sequence[_Selection]) -> bool:
+    """겹친 두 번역의 서로 다른 비교 조건을 한 원문 조건에서 가져온 경우를 감지한다."""
+    def conditions(text):
+        return set(re.findall(r'[가-힣]+수록', text or ''))
+
+    asserted = conditions(claim.text)
+    first = conditions(left.evidence.text_ko) & asserted
+    second = conditions(right.evidence.text_ko) & asserted
+    if not (first - second and second - first):
+        return False
+    # 하나의 영어 상관 비교에 근거한 경우만 판정한다. 추가 원문을 인용했거나
+    # 하나 이상의 조건이 명시된 경우에는 구조만으로 추가 비교를 배제하지 않는다.
+    if len(selections) != 2:
+        return False
+    tail = incomplete_tail_start(left.body)
+    end = sentence_ends(right.body)[0]
+    if left.start != tail or right.end != end:
+        return False
+    start, continuation = left.body[tail:], right.body[:end]
+    # 단어 중간에서 시작하는 중복 구간도 한 번만 센다.
+    overlap = next((len(start) - i for i in range(len(start))
+                    if start[i] == continuation[0] and continuation.startswith(start[i:])), 0)
+    source = start + (' ' if not overlap else '') + continuation[overlap:]
+    comparisons = re.findall(r'\bthe\s+(?:shorter|longer|smaller|larger|greater|'
+                             r'easier|harder|fewer|more|less|better|worse)\b', source, re.I)
+    return len(comparisons) == 2 and not re.search(r'\b(?:and|or)\s+(?:shorter|longer|'
+        r'smaller|larger|greater|more|less|fewer)\b', source, re.I)
+
+
 def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInput]) -> ExtractionAssessment:
     """실제 인용한 근거만 평가하며, 불명확한 구절 위치는 안전하다고 간주하지 않는다."""
     selections = _select_claim(claim, evidence)
@@ -149,9 +179,13 @@ def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInp
     for selected in selections:
         tail = incomplete_tail_start(selected.body)
         if tail is not None and selected.end > tail:
-            if not any(joined(selected, other) for other in selections):
+            following = [other for other in selections if joined(selected, other)]
+            if not following:
                 return ExtractionAssessment(ExtractionReason.UNFINISHED_TAIL,
                     selected.evidence.evidence_id, tail_detail(selected, tail))
+            if any(_conflicting_joined_comparisons(claim, selected, other, selections)
+                   for other in following):
+                return ExtractionAssessment(ExtractionReason.AMBIGUOUS_OVERLAP, selected.evidence.evidence_id)
         ends = sentence_ends(selected.body)
         prefix_end = ends[0] if ends else len(selected.body)
         if fragment_flags(selected.body)[0] and selected.start < prefix_end:

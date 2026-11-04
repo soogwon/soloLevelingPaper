@@ -883,3 +883,46 @@ def test_condition_repair_respects_page_scope(repair_parts, pages):
         assert [c.pdf_page for c in result.citations] == [6, 7]
         service.generator.repair_claims.assert_called_once()
     lookup.assert_called_once()
+
+@pytest.mark.parametrize('mode', ['joined', 'mixed', 'split', 'two_supported'])
+def test_joined_comparison_does_not_import_a_second_relation(parts, mode):
+    from dataclasses import replace
+
+    service, search, saved, _ = parts
+    good = '경로가 짧을수록 학습하기 쉽다.'
+    extra = '위치의 상대성이 클수록 학습하기 쉽다.'
+    rows = [
+        ('The shorter these paths between any combination of positions in the sequences, the easier it is to learn', good),
+        ('ation of positions in the sequences, the easier it is to learn.', extra),
+        ('Training is parallel.', '병렬 학습이 가능하다.'),
+    ]
+    if mode == 'two_supported':
+        rows[0] = ('The shorter these paths and the greater the relative position', good)
+        rows[1] = ('relative position, the easier it is to learn.', extra)
+    items = tuple(RetrievedChunk(replace(search.items[0].chunk, chunk_id=f'c{i}', chunk_index=i,
+        original_text=original, text=translation, pdf_page=6), 1., i + 1)
+        for i, (original, translation) in enumerate(rows))
+    service.search = SimpleNamespace(search=lambda *a, **kw:
+        ContextSearchResponse('ctx', replace(search, items=items)))
+
+    def generate(question, evidence):
+        def claim(text, *indices):
+            used = [evidence[i] for i in indices]
+            return GeneratedClaim(text, tuple(e.evidence_id for e in used),
+                tuple(ClaimSupport(e.evidence_id, e.original_text) for e in used))
+
+        claims = ([claim(good, 0), claim(extra, 1)] if mode == 'split' else
+                  [claim(good if mode == 'joined' else good + ' ' + extra, 0, 1)])
+        return GeneratedAnswerDraft(tuple(claims + [claim(rows[2][1], 2)]))
+
+    service.generator = SimpleNamespace(generate_claims=generate)
+    result = service.answer('장거리 의존성에 어떤 영향을 주는가?', context_id='ctx', top_k=3).result
+    supported = mode in ('joined', 'two_supported')
+    expected = ['c0', 'c1', 'c2'] if supported else ['c2']
+    expected_texts = [rows[2][1]]
+    if supported:
+        expected_texts.insert(0, good if mode == 'joined' else good + ' ' + extra)
+    assert result.status == (AnswerStatus.OK if supported else AnswerStatus.PARTIAL)
+    assert [c.text for c in result.claims] == expected_texts
+    assert [e.chunk_id for e in result.citations] == expected
+    assert [e.chunk_id for e in saved[0][1]] == expected
