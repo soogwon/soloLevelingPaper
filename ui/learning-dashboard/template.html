@@ -24,6 +24,10 @@
     #summary-list li { padding-bottom: 12px; } .evidence { display: block; font-size: 12px; color: var(--color-text-secondary, #526858); }
     .table-wrap { overflow-x: auto; } table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--color-border-primary, #d1dbd2); white-space: nowrap; } caption { text-align: left; margin-bottom: 8px; }
+    #detail-view pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+    #detail-view .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; }
+    #detail-view .panel { border: 1px solid #829888; padding: 16px; border-radius: 8px; min-width: 0; }
+    #detail-view button { margin: 4px; }
     [hidden] { display: none !important; }
     @media (max-width: 560px) { body { padding: 12px; } .grid { grid-template-columns: 1fr; } .card { padding: 16px; } }
     @media (prefers-color-scheme: dark) { body { color: var(--color-text-primary, #e7eee9); background: var(--color-background-primary, #18231d); } .muted, dt, .eyebrow, .evidence { color: var(--color-text-secondary, #a7b9ad); } }
@@ -34,15 +38,30 @@
     <header><div><p class="eyebrow">SOLO LEVELING PAPER · LEARNING</p><h1>학습 대시보드</h1></div><button id="refresh" disabled>현황 새로고침</button></header>
     <p id="message" role="status" aria-live="polite">호스트 연결을 기다리고 있습니다.</p>
     <div id="details" hidden>
-      <section class="card" aria-labelledby="paper-title"><h2 id="paper-title"></h2><dl><dt>학습 목적</dt><dd id="goal"></dd><dt>학습 맥락 · 논문 버전</dt><dd id="identity"></dd></dl></section>
+      <section class="card" aria-labelledby="paper-title"><h2 id="paper-title"></h2><button id="open-detail" disabled>논문 상세 보기</button><dl><dt>학습 목적</dt><dd id="goal"></dd><dt>학습 맥락 · 논문 버전</dt><dd id="identity"></dd></dl></section>
       <div class="grid">
         <section class="card"><h2>논문 처리 상태</h2><p id="processing"></p><p class="muted" id="job"></p><ul id="limitations"></ul><p class="muted">이 학습 맥락의 색인을 게시한 작업 기준입니다. 최신 재처리 작업과 다를 수 있으며, 검색 준비 완료가 전체 번역 완료를 뜻하지는 않습니다.</p></section>
         <section class="card"><h2>학습 진행</h2><p id="progress-label"></p><progress id="progress" max="1" value="0" aria-label="완료한 학습 단계 비율"></progress><ol id="steps"></ol><p class="muted" id="last-studied"></p><p class="muted">완료한 단계 수 기준이며 이해도 평가가 아닙니다. 이 화면에서는 단계를 변경하지 않습니다.</p></section>
       </div>
       <section class="card"><h2>저장된 전체 요약</h2><p id="summary-empty">전체 요약이 아직 생성되지 않았습니다.</p><ul id="summary-list"></ul><p class="muted">저장된 요약을 표시합니다. 새로고침은 요약을 생성하거나 다시 검증하지 않습니다.</p></section>
       <section class="card"><h2>퀴즈 결과</h2><div class="table-wrap"><table><caption class="muted">저장된 시도 기록 기준 · 점수는 정답 비율</caption><thead><tr><th scope="col">학습 단계</th><th scope="col">시도</th><th scope="col">최근 결과</th><th scope="col">최고 점수</th></tr></thead><tbody id="quiz"></tbody></table></div></section>
-      <section class="card"><h2>다음 기능</h2><p>메모·하이라이트와 논문 상세·퀴즈 풀이 화면은 준비 중입니다.</p><p class="muted">요약의 근거 확인은 채팅에서 이 학습 맥락과 근거 ID로 요청할 수 있습니다.</p></section>
+      <section class="card"><h2>다음 기능</h2><p>메모·하이라이트와 퀴즈 풀이 화면 연결은 준비 중입니다.</p><p class="muted">요약의 근거 확인은 채팅에서 이 학습 맥락과 근거 ID로 요청할 수 있습니다.</p></section>
     </div>
+    <section id="detail-view" hidden aria-label="논문 상세"><button id="back-dashboard">대시보드로 돌아가기</button>
+<p id="paper-detail-message" role="status" aria-live="polite">호스트 결과를 기다리고 있습니다.</p>
+<div id="paper-detail-content" hidden>
+<p id="paper-detail-metadata"></p><p id="paper-detail-availability" class="note"></p>
+<section id="paper-detail-answer-section" hidden><h2 id="paper-detail-answer-heading">반환된 답변</h2><p id="paper-detail-verification" class="note"></p><p id="paper-detail-answer"></p><div id="paper-detail-claims-section" hidden><h2 id="paper-detail-claims-heading">주장별 근거로 이동</h2><ol id="paper-detail-claims"></ol></div></section>
+<p id="paper-detail-pagination" class="note"></p>
+<nav id="paper-detail-evidence-list" aria-label="인용 근거 선택"></nav>
+<section id="paper-detail-detail" tabindex="-1"><h2 id="paper-detail-location"></h2><p id="paper-detail-file"></p>
+<p class="note">저장된 인용 구간입니다. 논문 전체·문장별 번역 정렬·PDF 좌표가 아닙니다. 섹션 ID가 있는 경우 페이지 옆에 표시합니다.</p>
+<div class="columns"><section class="panel"><h3>원문</h3><pre id="paper-detail-original"></pre></section><section class="panel"><h3>한국어 번역</h3><pre id="paper-detail-translation"></pre></section></div>
+<details><summary>출처 연결 정보</summary><dl id="paper-detail-provenance"></dl></details></section>
+</div>
+<p class="note">메모·하이라이트 작성은 아직 지원하지 않습니다. 화면을 사용할 수 없으면 채팅의 도구 응답을 확인하세요. 이 화면은 재검색·재번역·자동 호출을 하지 않습니다.</p>
+
+</section>
     <p class="muted">조회 시점의 저장 정보입니다. 화면을 사용할 수 없으면 채팅의 도구 응답으로 같은 정보를 확인하세요.</p>
   </main>
   <!-- APP_SCRIPT -->
