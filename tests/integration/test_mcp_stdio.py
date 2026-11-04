@@ -34,7 +34,7 @@ def test_stdio_server_lists_tools(tmp_path):
                         'ask_paper', 'get_evidence',
                         'list_paper_jobs', 'get_paper_detail',
                         'get_learning_dashboard',
-                        'get_reading_questions', 'save_reading_answer',
+                        'get_reading_questions', 'save_reading_answer', 'get_reading_comparison',
                         'get_quiz', 'submit_quiz', 'get_quiz_attempt', 'list_quiz_attempts',
                         'get_quiz_scores', 'review_quiz_attempt',
                     }

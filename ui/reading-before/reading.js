@@ -1,18 +1,18 @@
 const states = { draft: '초안', completed: '작성 완료' };
 
-function validSession(s, context) {
-  if (!context || s?.context_id !== context || s.phase !== 'before' ||
+export function validSession(s, context, phase = 'before') {
+  if (!context || s?.context_id !== context || s.phase !== phase ||
       !Array.isArray(s.items) || s.total !== s.items.length) return false;
   const ids = new Set();
   let written = 0, completed = 0;
   for (const item of s.items) {
     if (!item) return false;
     const { template: t, answer: a } = item;
-    if (!t || t.phase !== 'before' || typeof t.template_id !== 'string' || !t.template_id ||
+    if (!t || t.phase !== phase || typeof t.template_id !== 'string' || !t.template_id ||
         ids.has(t.template_id) || typeof t.prompt !== 'string') return false;
     ids.add(t.template_id);
     if (a === null) continue;
-    if (!a || a.context_id !== context || a.phase !== 'before' || a.template_id !== t.template_id ||
+    if (!a || a.context_id !== context || a.phase !== phase || a.template_id !== t.template_id ||
         !Object.hasOwn(states, a.status) || typeof a.text !== 'string') return false;
     written++;
     if (a.status === 'completed') completed++;
@@ -24,7 +24,7 @@ export function mountReading(app, doc, timeoutMs = 15000) {
   const el = id => doc.getElementById(id);
   const notice = text => { el('notice').textContent = text; };
   const edits = new Map();
-  let context = null, step, session = null, generation = 0;
+  let context = null, phase = 'before', step, session = null, generation = 0;
   let connected = false, busy = false, needsRead = false;
 
   function render() {
@@ -80,12 +80,12 @@ export function mountReading(app, doc, timeoutMs = 15000) {
     try {
       const result = await Promise.race([
         app.callServerTool({name: save ? 'save_reading_answer' : 'get_reading_questions',
-          arguments: {context_id: context, phase: 'before', ...(save ?? (step ? {step} : {}))}}),
+          arguments: {context_id: context, phase, ...(save ?? (step ? {step} : {}))}}),
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error()), timeoutMs); }),
       ]);
       if (ticket !== generation) return;
       const next = result.structuredContent;
-      if (result.isError || !validSession(next, context)) throw new Error();
+      if (result.isError || !validSession(next, context, phase)) throw new Error();
       if (save) {
         const answer = next.items.find(x => x.template.template_id === save.template_id)?.answer;
         if (answer?.text !== save.text || answer?.status !== save.status) throw new Error();
@@ -114,6 +114,12 @@ export function mountReading(app, doc, timeoutMs = 15000) {
     generation++;
     edits.clear();
     context = typeof args?.context_id === 'string' ? args.context_id : null;
+    phase = args?.phase ?? 'before';
+    if (!['before', 'after'].includes(phase)) context = null;
+    doc.querySelector('h1').textContent = phase === 'after' ? '읽기 후 질문' : '읽기 전 질문';
+    el('intro').textContent = phase === 'after'
+      ? '논문을 읽고 확인한 주장과 근거, 한계와 적용할 점을 직접 적어 보세요.'
+      : '지금 알고 있는 내용과 읽으며 확인하고 싶은 점을 적어 보세요.';
     step = args?.step;
     session = null; busy = false; needsRead = false;
     notice('질문을 불러오는 중입니다.'); render();
@@ -121,9 +127,9 @@ export function mountReading(app, doc, timeoutMs = 15000) {
   app.ontoolresult = result => {
     if (busy || session) return;
     const next = result.structuredContent;
-    if (!result.isError && validSession(next, context)) {
+    if (!result.isError && validSession(next, context, phase)) {
       session = next;
-      notice(next.total ? '질문별로 답변을 저장할 수 있습니다.' : '이 단계에는 읽기 전 질문이 없습니다.');
+      notice(next.total ? '질문별로 답변을 저장할 수 있습니다.' : '이 단계에는 해당 시점의 질문이 없습니다.');
     } else notice('응답을 확인할 수 없습니다. 저장 상태를 다시 조회하세요.');
     render();
   };

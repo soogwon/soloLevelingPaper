@@ -57,7 +57,7 @@ async def run():
             assert {t.name for t in tools.tools} == {
                 'add_paper', 'get_paper_status', 'list_paper_jobs',
                 'start_learning', 'ask_paper', 'get_evidence', 'get_learning_dashboard',
-                'get_paper_detail', 'get_reading_questions', 'save_reading_answer',
+                'get_paper_detail', 'get_reading_questions', 'save_reading_answer', 'get_reading_comparison',
                 'get_quiz', 'submit_quiz', 'get_quiz_attempt', 'list_quiz_attempts',
                 'get_quiz_scores', 'review_quiz_attempt'}
             # 설치본에서도 목록 조회 계약과 빈 DB·오류 응답을 실제 stdio로 확인한다.
@@ -88,6 +88,10 @@ async def run():
             reading_resource = await session.read_resource(reading.meta['ui']['resourceUri'])
             assert reading_resource.contents[0].mimeType == 'text/html;profile=mcp-app'
             assert '<title>읽기 전 질문</title>' in reading_resource.contents[0].text
+            comparison = next(t for t in tools.tools if t.name == 'get_reading_comparison')
+            comparison_resource = await session.read_resource(comparison.meta['ui']['resourceUri'])
+            assert '<title>읽기 전후 비교</title>' in comparison_resource.contents[0].text
+            assert files('solo_leveling.interfaces.mcp').joinpath('assets/reading-comparison.LICENSE.txt').is_file()
             missing = await session.call_tool('get_learning_dashboard', {'context_id': 'missing'})
             assert missing.isError and 'NOT_FOUND' in missing.content[0].text
             resource = await session.read_resource('ui://solo-leveling/paper-status.html')

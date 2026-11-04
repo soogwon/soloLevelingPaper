@@ -73,3 +73,44 @@ test('context 변경 후 늦게 도착한 이전 저장 결과를 무시한다',
   finish(snapshot({text:'이전 답변',status:'draft'})); await tick();
   assert.equal(inputs()[0].value,'');
 });
+
+test('읽기 후 화면은 after로 저장·재조회하고 before 응답은 거부한다', async () => {
+  const calls=[];
+  const after = () => ({structuredContent:{context_id:'ctx',phase:'after',total:4,written:0,completed:0,
+    items:['claim','evidence','limitation','application'].map(id => ({template:{template_id:'after.'+id,
+      phase:'after',prompt:id},answer:null}))}});
+  const {app,doc,inputs,buttons}=await setup(async request => {calls.push(request); return snapshot();});
+  app.ontoolinput({arguments:{context_id:'ctx',phase:'after',step:'review'}});
+  app.ontoolresult(snapshot());
+  assert.equal(inputs().length,0);
+  app.ontoolresult(after());
+  assert.equal(inputs().length,4);
+  assert.equal(doc.querySelector('h1').textContent,'읽기 후 질문');
+  edit(inputs()[0],'주장'); buttons()[0].click(); await tick();
+  assert.equal(calls[0].arguments.phase,'after');
+  assert.equal(calls[0].arguments.template_id,'after.claim');
+  assert.equal(inputs()[0].value,'주장');
+  assert.ok(buttons()[0].disabled);
+  doc.querySelector('#refresh').click(); await tick();
+  assert.deepEqual(calls[1],{name:'get_reading_questions',arguments:{context_id:'ctx',phase:'after',step:'review'}});
+  app.ontoolinput({arguments:{context_id:'ctx',phase:'unknown'}}); app.ontoolresult(snapshot());
+  assert.equal(inputs().length,0);
+});
+
+test('읽기 후 답변의 저장 성공과 재조회가 화면 집계에 반영된다', async () => {
+  let answer=null;
+  const result = () => ({structuredContent:{context_id:'ctx',phase:'after',total:1,
+    written:answer ? 1 : 0, completed:answer?.status === 'completed' ? 1 : 0,
+    items:[{template:{template_id:'after.claim',phase:'after',prompt:'주장'},answer}]}});
+  const {app,doc,inputs,buttons}=await setup(async request => {
+    if(request.name === 'save_reading_answer') answer={...request.arguments};
+    return result();
+  });
+  app.ontoolinput({arguments:{context_id:'ctx',phase:'after'}}); app.ontoolresult(result());
+  edit(inputs()[0],'확인한 주장'); buttons()[1].click(); await tick();
+  assert.match(doc.querySelector('#notice').textContent,/저장했습니다/);
+  assert.match(doc.querySelector('#counts').textContent,/완료 1개/);
+  doc.querySelector('#refresh').click(); await tick();
+  assert.equal(inputs()[0].value,'확인한 주장');
+  assert.equal(buttons()[0].disabled,false);
+});
