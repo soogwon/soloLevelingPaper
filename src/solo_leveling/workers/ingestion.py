@@ -15,6 +15,7 @@ from typing import Callable, Optional
 
 from solo_leveling.application.translation.service import TranslationService
 from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
+from solo_leveling.domain.ingestion_failure import describe_outcome
 from solo_leveling.domain.translation import TranslationSettings
 from solo_leveling.domain.models import (
     EmbeddingSet, JobStage, JobStatus, Paper, ParseRevision, PaperVersion, ProcessingJob,
@@ -133,6 +134,7 @@ def run_prepared_local_ingestion(
 
 
 def _published_result(index: dict, reused: bool, db_path: str) -> dict:
+    limitations = repo.get_job(db_path, index['job_id']).limitations
     return {
         'job_id': index['job_id'], 'status': 'ready', 'version_id': index['version_id'],
         'parse_revision_id': index['parse_revision_id'],
@@ -140,7 +142,8 @@ def _published_result(index: dict, reused: bool, db_path: str) -> dict:
         'embedding_set_id': index['embedding_set_id'], 'chunk_count': index['chunk_count'],
         'reused_existing': reused,
         'result_available': True,
-        'limitations': repo.get_job(db_path, index['job_id']).limitations,
+        'limitations': limitations,
+        **describe_outcome('ready', None, limitations),
     }
 
 
@@ -153,6 +156,7 @@ def get_ingestion_status(db_path: str, job_id: str) -> dict:
         'job_id': job.job_id, 'version_id': job.version_id,
         'status': job.status.value, 'stage': job.stage.value if job.stage else None,
         'limitations': job.limitations, 'result_available': False,
+        **describe_outcome(job.status.value, job.stage.value if job.stage else None, job.limitations),
     }
     if job.status == JobStatus.READY:
         index = repo.get_search_index_for_job(db_path, job.job_id)
@@ -274,6 +278,7 @@ def _ingest_pages(
             'parse_revision_id': parse_revision.parse_revision_id,
             'translation_revision_id': translation_id, 'embedding_set_id': None,
             'chunk_count': 0, 'reused_existing': reused, 'limitations': limitations,
+            **describe_outcome('failed', JobStage.TRANSLATE.value, limitations),
         }
     except Exception as error:
         if not published:
