@@ -134,3 +134,31 @@ def _cleanup_identifier(shared, identifier):
     getattr(shared, '_identifier_to_refcount', {}).pop(identifier, None)
     if system is not None:
         system.stop()
+
+
+class _Slotted:
+    """속성을 붙일 수 없는 객체(__slots__). 종료 표시도 객체별 잠금도 붙지 않는다."""
+    __slots__ = ('gate',)
+
+    def __init__(self, gate):
+        self.gate = gate
+
+    def close(self):
+        self.gate.close()
+
+
+def test_objects_that_cannot_take_attributes_are_serialized_by_the_shared_lock():
+    """문서화한 예외(B 리뷰): 속성을 붙일 수 없는 서로 다른 두 객체는 공통 잠금 때문에 종료가 직렬화된다."""
+    first_gate, second_gate = Gate(), Gate()
+    results = {}
+    t1 = _run(results, 'first', _Slotted(first_gate))
+    assert first_gate.entered.wait(WAIT)
+    t2 = _run(results, 'second', _Slotted(second_gate))
+    assert _second_is_waiting(t2)
+    assert not second_gate.entered.is_set()          # 첫 객체의 close()가 끝나기 전에는 진입하지 못한다
+    first_gate.release.set()
+    t1.join(WAIT)
+    assert second_gate.entered.wait(WAIT)
+    second_gate.release.set()
+    t2.join(WAIT)
+    assert results == {'first': ChromaCloseResult.CLOSED, 'second': ChromaCloseResult.CLOSED}
