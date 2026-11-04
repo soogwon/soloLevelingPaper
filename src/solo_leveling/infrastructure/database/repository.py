@@ -1106,6 +1106,28 @@ def list_quiz_attempts(db_path: str, context_id: str, step: Optional[str] = None
         return [_attempt_from_row(conn, row) for row in rows]
 
 
+def _attempt_scope(context_id: str, step: Optional[str]) -> tuple[str, list]:
+    where, params = 'context_id=?', [context_id]
+    if step is not None:
+        where, params = where + ' AND step=?', params + [step]
+    return where, params
+
+
+def quiz_attempt_page_query(context_id: str, step: Optional[str], limit: int, anchor=None) -> tuple[str, list]:
+    """시도 요약 한 페이지의 SQL과 매개변수를 만든다. 커서가 있으면 인덱스 탐색 범위가 커서 위치에서 시작한다(#145).
+
+    `submitted_at <= 기준시각`은 인덱스의 범위 조건이 되어 앞쪽 행을 훑지 않는다. 같은 시각의 행은 뒤따르는
+    `(submitted_at < ? OR rowid < ?)`로 걸러 기준 시도보다 먼저 저장한 것만 남긴다. OR 조건만 쓰면 범위로 쓰이지 못한다.
+    """
+    where, params = _attempt_scope(context_id, step)
+    if anchor is not None:
+        where += ' AND submitted_at <= ? AND (submitted_at < ? OR rowid < ?)'
+        params += [anchor['submitted_at'], anchor['submitted_at'], anchor['pos']]
+    sql = ('SELECT attempt_id, context_id, quiz_id, step, correct_count, total_count, submitted_at '
+           f'FROM quiz_attempts WHERE {where} ORDER BY submitted_at DESC, rowid DESC LIMIT ?')
+    return sql, params + [limit + 1]
+
+
 def list_quiz_attempt_page(db_path: str, context_id: str, step: Optional[str] = None,
                            limit: int = DEFAULT_HISTORY_PAGE, cursor: Optional[str] = None) -> QuizAttemptPage:
     """시도 요약을 최신순 한 페이지로 돌려준다(#145). 답안·정답·근거 본문은 읽지 않는다.
@@ -1121,22 +1143,17 @@ def list_quiz_attempt_page(db_path: str, context_id: str, step: Optional[str] = 
         raise AttemptValidationError(f'지원하지 않는 학습 단계: {step!r}')
     if cursor is not None and (not isinstance(cursor, str) or not cursor):
         raise AttemptValidationError('커서가 올바르지 않습니다.')
-    where, params = 'context_id=?', [context_id]
-    if step is not None:
-        where, params = where + ' AND step=?', params + [step]
     with closing(get_connection(db_path)) as conn:
         conn.execute('BEGIN')
+        anchor = None
         if cursor is not None:
+            where, params = _attempt_scope(context_id, step)
             anchor = conn.execute(f'SELECT submitted_at, rowid AS pos FROM quiz_attempts WHERE {where} AND attempt_id=?',
                                   params + [cursor]).fetchone()
             if anchor is None:
                 raise AttemptValidationError('커서가 올바르지 않습니다.')
-            where += ' AND (submitted_at < ? OR (submitted_at = ? AND rowid < ?))'
-            params += [anchor['submitted_at'], anchor['submitted_at'], anchor['pos']]
-        rows = conn.execute(
-            'SELECT attempt_id, context_id, quiz_id, step, correct_count, total_count, submitted_at '
-            f'FROM quiz_attempts WHERE {where} ORDER BY submitted_at DESC, rowid DESC LIMIT ?',
-            params + [limit + 1]).fetchall()
+        sql, params = quiz_attempt_page_query(context_id, step, limit, anchor)
+        rows = conn.execute(sql, params).fetchall()
     items = tuple(QuizAttemptSummary(**dict(r)) for r in rows[:limit])
     return QuizAttemptPage(items, items[-1].attempt_id if len(rows) > limit else None)
 

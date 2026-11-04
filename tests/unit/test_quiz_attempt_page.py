@@ -147,3 +147,67 @@ def test_large_history_reads_only_one_page_using_an_index(env):
                 + ' ORDER BY submitted_at DESC, rowid DESC LIMIT 21', params))
             assert 'idx_quiz_attempts_context' in plan and 'TEMP B-TREE' not in plan
     assert walk(env, limit=100) == [f'a{i:03d}' for i in reversed(range(300))]
+
+
+# ── C 리뷰 반영: 커서가 있는 깊은 페이지도 인덱스 범위로 시작해야 한다 ─────────────────────────────
+def bulk_insert(db, total, per_second=1, steps=('preview', 'review')):
+    """요약 행만 대량으로 넣는다(답안은 쓰지 않는 조회이므로 외래 키를 끄고 빠르게 만든다)."""
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute('PRAGMA foreign_keys = OFF')
+        conn.executemany(
+            'INSERT INTO quiz_attempts VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [(f'b{i:05d}', 'ctx', 'quiz1', steps[i % len(steps)], 1, 2,
+              f'2026-11-01T{(i // per_second) // 3600:02d}:{((i // per_second) % 3600) // 60:02d}:{(i // per_second) % 60:02d}+00:00')
+             for i in range(total)])
+
+
+def page_work(db, step, cursor, limit=20):
+    """실제 조회 SQL(quiz_attempt_page_query)의 실행 계획과 SQLite 실행 명령 수를 잰다."""
+    with closing(get_connection(db)) as conn:
+        anchor = None
+        if cursor is not None:
+            anchor = conn.execute('SELECT submitted_at, rowid AS pos FROM quiz_attempts WHERE attempt_id=?',
+                                  (cursor,)).fetchone()
+        sql, params = repo.quiz_attempt_page_query('ctx', step, limit, anchor)
+        plan = ' | '.join(r[3] for r in conn.execute('EXPLAIN QUERY PLAN ' + sql, params))
+        count = [0]
+        conn.set_progress_handler(lambda: count.__setitem__(0, count[0] + 1), 1)
+        rows = conn.execute(sql, params).fetchall()
+        conn.set_progress_handler(None, 0)
+    return plan, count[0], len(rows)
+
+
+@pytest.mark.parametrize('step', [None, 'review'])
+def test_cursor_page_starts_at_the_cursor_in_the_index(env, step):
+    bulk_insert(env, 5000)
+    early, deep = 'b04990', 'b00010'        # 최신순이므로 b04990이 앞쪽, b00010이 뒤쪽 커서
+    plan_early, work_early, n_early = page_work(env, step, early)
+    plan_deep, work_deep, n_deep = page_work(env, step, deep)
+    for plan in (plan_early, plan_deep):
+        assert 'submitted_at<' in plan and 'TEMP B-TREE' not in plan, plan   # 커서 위치가 탐색 범위에 들어간다
+    assert n_early == 21 and n_deep >= 1
+    # 뒤쪽 커서라고 앞쪽 행을 훑지 않는다: 작업량은 위치와 거의 무관하다(수정 전에는 수백 배였다).
+    assert work_deep < work_early * 3 and work_deep < 2000, (work_early, work_deep)
+
+
+def test_deep_pages_have_no_gap_or_duplicate_against_a_full_listing(env):
+    bulk_insert(env, 1200, per_second=1)
+    expected = [f'b{i:05d}' for i in reversed(range(1200))]
+    assert walk(env, limit=100) == expected
+    assert walk(env, step='review', limit=37) == [a for a in expected if int(a[1:]) % 2 == 1]
+    assert walk(env, step='preview', limit=1)[:5] == [a for a in expected if int(a[1:]) % 2 == 0][:5]
+
+
+@pytest.mark.parametrize('limit', [1, 2, 3, 5, 7])
+def test_same_timestamp_boundary_keeps_saved_order_without_gap_or_duplicate(env, limit):
+    # 한 시각에 여러 건(per_second=6)이 몰리고, 페이지 경계가 그 한가운데를 지나도 누락·중복이 없어야 한다.
+    bulk_insert(env, 60, per_second=6)
+    assert walk(env, limit=limit) == [f'b{i:05d}' for i in reversed(range(60))]
+
+
+def test_cursor_contract_is_unchanged_for_missing_or_out_of_scope_cursor(env):
+    bulk_insert(env, 30)
+    with pytest.raises(AttemptValidationError):
+        repo.list_quiz_attempt_page(env, 'ctx', None, 5, 'no-such-attempt')
+    with pytest.raises(AttemptValidationError):
+        repo.list_quiz_attempt_page(env, 'ctx', 'review', 5, 'b00000')       # b00000은 preview 단계
