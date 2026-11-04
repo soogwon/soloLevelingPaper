@@ -9,6 +9,9 @@
 - 단건 조회·수정·삭제·구간 원문 조회는 호출자의 context_id를 받아 DB 조건에서 소속을 확인한다. 다른 맥락의 기록은
   없는 것(NOT_FOUND / None / ResourceNotFoundError)과 똑같이 처리하고, 수정·삭제는 이 확인을 revision 판정보다 먼저 한다.
 - 목록은 한 번의 읽기 트랜잭션(스냅샷)에서 목록과 구간을 함께 읽어, 동시에 삭제돼도 응답 항목이 온전하다.
+- 공개 목록은 list_annotation_page(키셋 페이지네이션): (created_at, annotation_id) 순, 기본 20건·최대 50건, LIMIT+1로
+  다음 페이지 유무를 알고, 커서는 발급한 맥락·필터에 묶인 불투명 문자열이다. 위치 값으로 이어 읽으므로 기준 기록이
+  지워져도 이어진다. 입력 제한(인용문 합계·중복 구간)은 create_annotation이 저장 전에 검사한다.
 - 본문·인용문은 로그에 남기지 않는다. 이유는 고정 코드로만 알린다.
 """
 from contextlib import closing
@@ -19,7 +22,8 @@ from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
 from solo_leveling.domain.annotation import (
     CHUNK_NOT_IN_CONTEXT, CONTEXT_NOT_FOUND, OFFSET_OUT_OF_RANGE, QUOTE_MISMATCH, TARGET_ORIGINAL,
     TRANSLATION_REVISION_MISMATCH, Annotation, AnnotationOutcome, AnnotationResult, AnnotationSegment,
-    AnnotationValidationError, SegmentInput, validate_annotation_fields)
+    AnnotationPage, AnnotationValidationError, SegmentInput, decode_cursor, encode_cursor,
+    validate_annotation_fields, validate_page_limit, validate_segments)
 from solo_leveling.domain.models import now_iso
 from solo_leveling.infrastructure.database.schema import get_connection
 
@@ -74,6 +78,7 @@ def create_annotation(db_path: str, context_id: str, kind: str, body: str,
     validate_annotation_fields(kind, body, step, len(segments))
     if not all(isinstance(s, SegmentInput) for s in segments):
         raise AnnotationValidationError('구간은 SegmentInput이어야 함')
+    validate_segments(segments)
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
         context = conn.execute('SELECT parse_revision_id, translation_revision_id FROM learning_contexts '
@@ -165,6 +170,43 @@ def list_annotations(db_path: str, context_id: str, step: Optional[str] = None,
         finally:
             conn.rollback()
         return [a for a in loaded if a is not None]  # 스냅샷 안이라 None은 생기지 않지만 방어한다.
+
+
+def list_annotation_page(db_path: str, context_id: str, step: Optional[str] = None, kind: Optional[str] = None,
+                         limit: Optional[int] = None, cursor: Optional[str] = None) -> AnnotationPage:
+    """한 맥락의 기록을 (created_at, annotation_id) 순으로 한 페이지 돌려준다.
+
+    limit은 기본 20·최대 50(범위 밖이면 INVALID_LIMIT). cursor는 이전 페이지의 next_cursor이며, 형식 오류이거나
+    다른 맥락·필터에서 발급된 것이면 INVALID_CURSOR(AnnotationValidationError.code). 맥락이 없으면 ResourceNotFoundError.
+    한 페이지의 기록과 구간은 같은 읽기 스냅샷에서 읽는다. 이미 지나간 위치에 새로 생긴 기록은 다음 새로고침에서 보인다.
+    """
+    size = validate_page_limit(limit)
+    after = decode_cursor(cursor, context_id, step, kind) if cursor is not None else None
+    query, params = 'SELECT annotation_id, created_at FROM annotations WHERE context_id=?', [context_id]
+    if step is not None:
+        query, params = query + ' AND step=?', params + [step]
+    if kind is not None:
+        query, params = query + ' AND kind=?', params + [kind]
+    if after is not None:
+        query, params = (query + ' AND (created_at > ? OR (created_at = ? AND annotation_id > ?))',
+                         params + [after[0], after[0], after[1]])
+    with closing(get_connection(db_path)) as conn:
+        conn.execute('BEGIN')  # 읽기 스냅샷
+        try:
+            if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
+                raise ResourceNotFoundError('context not found')
+            rows = conn.execute(query + ' ORDER BY created_at, annotation_id LIMIT ?', params + [size + 1]).fetchall()
+            more = len(rows) > size
+            rows = rows[:size]
+            loaded = [_load(conn, r['annotation_id'], context_id) for r in rows]
+        finally:
+            conn.rollback()
+    items = tuple(a for a in loaded if a is not None)
+    next_cursor = None
+    if more and items:
+        last = items[-1]
+        next_cursor = encode_cursor(context_id, step, kind, last.created_at, last.annotation_id)
+    return AnnotationPage(items, next_cursor)
 
 
 def get_segment_texts(db_path: str, context_id: str, annotation_id: str) -> Dict[int, Optional[str]]:

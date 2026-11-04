@@ -235,6 +235,7 @@ CREATE TABLE IF NOT EXISTS annotations (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_annotations_context ON annotations(context_id, step, created_at);
+CREATE INDEX IF NOT EXISTS idx_annotations_page ON annotations(context_id, created_at, annotation_id);
 CREATE TABLE IF NOT EXISTS annotation_segments (
     annotation_id TEXT NOT NULL REFERENCES annotations(annotation_id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
