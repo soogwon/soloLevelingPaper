@@ -27,6 +27,7 @@ from .quiz_tools import QuizContractAdapter, register_quiz
 
 HOST_INSTRUCTIONS = '''등록된 논문에서 한국어 근거 답변과 원문 근거를 조회합니다.
 add_paper → get_paper_status → start_learning → ask_paper → get_evidence 순서로 사용합니다.
+등록·질문을 시작하기 전에 각 도구 설명에 있는 OpenAI 전송 데이터와 시점을 사용자에게 안내하세요.
 반환된 version_id, job_id, context_id, evidence_id를 다음 호출에 그대로 전달합니다.
 저장 요약과 논문 상세는 get_paper_detail로 조회합니다. summary가 없다고 자동 생성하지 마세요.
 section_ids는 저장된 식별자이며 원문 절 제목으로 추측해 바꾸지 마세요.
@@ -321,7 +322,10 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                         idempotentHint=True, openWorldHint=True))
         async def add_paper(source: PaperSource, request_key: str) -> AddPaperOutput:
-            """import 루트의 PDF를 관리 저장소로 복사하고 등록 작업을 시작합니다."""
+            """import 루트의 PDF를 관리 저장소로 복사하고 등록 작업을 시작합니다.
+            외부 API 호출을 허용한 경우, 등록 후 백그라운드 번역 단계에서 원문 청크와 대상 언어를 OpenAI에 보냅니다.
+            여러 청크를 합하면 논문 전체 원문이 전송될 수 있습니다.
+            """
             try:
                 result = await anyio.to_thread.run_sync(
                     lambda: services.ingestion.add_local_pdf(source.relative_path, request_key))
@@ -409,6 +413,8 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                         top_k: Annotated[int, Field(strict=True, ge=1, le=20)] = 5) -> AskPaperOutput:
         """기존 context로 질문하고 주장별 한국어·원문 근거를 반환합니다.
 
+        외부 API 호출을 허용한 경우, 검색 후 질문과 선택한 근거의 원문·번역을 OpenAI에 보냅니다.
+        답변 보완·의미 검증이 실행되면 초안이나 주장·인용 원문이 추가 전송될 수 있습니다.
         verification_level의 structural_only는 구조 검사 수준이며 의미 검증 완료를 뜻하지 않습니다.
         model_checked는 실제 인용 원문을 대상으로 모델 기반 의미 검증을 완료했다는 뜻입니다.
         반환된 주장은 의미 검증을 통과했지만, 모델의 오판 가능성이 있으므로 사실성 보증은 아닙니다.
