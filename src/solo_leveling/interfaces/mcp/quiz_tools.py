@@ -1,5 +1,7 @@
 """저장된 퀴즈 조회와 요청 키 기반 제출을 MCP로 연결한다."""
 
+from importlib.resources import files
+
 import anyio
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
@@ -71,6 +73,15 @@ class StoredQuizService:
 
 
 def register_quiz(server: FastMCP, adapter: QuizContractAdapter):
+    uri = 'ui://solo-leveling/quiz.html'
+    card = {'ui': {'resourceUri': uri}}
+
+    @server.resource(uri, name='quiz', title='논문 학습 퀴즈',
+                     mime_type='text/html;profile=mcp-app',
+                     meta={'ui': {'csp': {'connectDomains': [], 'resourceDomains': []}}})
+    def quiz_html() -> str:
+        return files('solo_leveling.interfaces.mcp').joinpath('assets/quiz.html').read_text(encoding='utf-8')
+
     async def invoke(method, payload):
         try:
             return await anyio.to_thread.run_sync(method, payload)
@@ -91,7 +102,7 @@ def register_quiz(server: FastMCP, adapter: QuizContractAdapter):
         """같은 학습 맥락에서 해당 시도의 오답·정답과 연결된 원문 근거를 조회합니다."""
         return await invoke(adapter.review, dict(context_id=context_id, attempt_id=attempt_id))
 
-    @server.tool(structured_output=True, annotations=ToolAnnotations(
+    @server.tool(structured_output=True, meta=card, annotations=ToolAnnotations(
         readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     async def get_quiz_attempt(context_id: Text, attempt_id: Text) -> AttemptOutput:
         """같은 학습 맥락에서 제출 당시 문항·답안·채점 결과와 근거 ID를 조회합니다."""
@@ -105,13 +116,13 @@ def register_quiz(server: FastMCP, adapter: QuizContractAdapter):
         return await invoke(adapter.list_attempts, dict(context_id=context_id, step=step,
                                                        limit=limit, cursor=cursor))
 
-    @server.tool(structured_output=True, annotations=ToolAnnotations(
+    @server.tool(structured_output=True, meta=card, annotations=ToolAnnotations(
         readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     async def get_quiz(context_id: Text, step: Step) -> PublicQuiz:
         """저장된 단계별 공개 퀴즈를 조회합니다. QUIZ_NOT_READY이면 아직 퀴즈가 없습니다."""
         return await invoke(adapter.get_quiz, dict(context_id=context_id, step=step))
 
-    @server.tool(structured_output=True, annotations=ToolAnnotations(
+    @server.tool(structured_output=True, meta=card, annotations=ToolAnnotations(
         readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     async def submit_quiz(context_id: Text, step: Step, quiz_id: Text, request_key: Text,
                           answers: list[ChoiceAnswer | TextAnswer]) -> SubmitOutput:

@@ -61,6 +61,13 @@ def test_quiz_protocol_with_persisted_replay(ctx):
 
     async def scenario():
         async with create_connected_server_and_client_session(server()) as client:
+            tools = (await client.list_tools()).tools
+            for name in ('get_quiz', 'submit_quiz', 'get_quiz_attempt'):
+                tool = next(tool for tool in tools if tool.name == name)
+                assert tool.meta['ui']['resourceUri'] == 'ui://solo-leveling/quiz.html'
+            resource = await client.read_resource('ui://solo-leveling/quiz.html')
+            assert resource.contents[0].mimeType == 'text/html;profile=mcp-app'
+            assert '논문 학습 퀴즈' in resource.contents[0].text
             quiz = await client.call_tool('get_quiz', {'context_id': cid, 'step': 'preview'})
             assert not quiz.isError and quiz.structuredContent['quiz_id'] == qid
             assert json.loads(quiz.content[0].text) == quiz.structuredContent
