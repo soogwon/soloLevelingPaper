@@ -4,6 +4,8 @@ import asyncio
 import json
 from unittest.mock import Mock
 
+import pytest
+
 from solo_leveling.interfaces.mcp.server import MCPServices, create_server
 from solo_leveling.interfaces.mcp.status_app import STATUS_APP_MIME, STATUS_APP_URI
 
@@ -35,16 +37,31 @@ def test_status_app_resource_and_tool_link():
     asyncio.run(scenario())
 
 
-def test_status_text_fallback_is_unchanged_without_ui_negotiation():
+@pytest.mark.parametrize('fields', [
+    {},
+    dict(failed_stage='translate', failure_code='provider_unavailable', retryable=None,
+         next_action=None, outcome='partial'),
+    dict(failed_stage='parse', failure_code='pdf_encrypted', retryable=False,
+         next_action='replace_file', outcome='failed'),
+    dict(failed_stage='translate', failure_code='translation_failed', retryable=True,
+         next_action='register_again', outcome='failed'),
+])
+def test_status_text_and_structured_response_preserve_service_fields(fields):
     ingestion = Mock()
     ingestion.get_status.return_value = {
         'job_id': 'job', 'version_id': 'version', 'status': 'ready', 'stage': 'index',
         'limitations': ['translation_failed:chunk:provider_unavailable'],
-        'result_available': True,
+        'result_available': True, **fields,
     }
+    ready = fields.get('outcome') != 'failed'
+    if not ready:
+        ingestion.get_status.return_value.update(status='failed', stage=fields['failed_stage'],
+                                                 limitations=[fields['failure_code']], result_available=False)
     server = create_server(MCPServices(Mock(), Mock(), ingestion))
     content, structured = asyncio.run(server.call_tool('get_paper_status', {'job_id': 'job'}))
-    assert structured == {**ingestion.get_status.return_value, 'capabilities': ['start_learning']}
+    empty = dict.fromkeys(('failed_stage', 'failure_code', 'retryable', 'next_action', 'outcome'))
+    assert structured == {**empty, **ingestion.get_status.return_value,
+                          'capabilities': ['start_learning'] if ready else []}
     assert json.loads(content[0].text) == structured
     ingestion.get_status.assert_called_once_with('job')
 

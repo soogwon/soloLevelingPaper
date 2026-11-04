@@ -144,3 +144,24 @@ for (const outcome of ['result', 'cancel', 'error']) {
     assert.doesNotMatch(message(), /지연/);
   });
 }
+
+test('실패 단계와 복구 안내를 표시하고 다음 결과의 상태로 교체한다', async () => {
+  const { app, doc, calls, message } = await setup();
+  const show = changes => app.ontoolresult(result(changes));
+  const next = () => doc.getElementById('next').textContent;
+  const reason = doc.getElementById('failure');
+  show({status:'failed', failed_stage:'parse', failure_code:'pdf_encrypted', retryable:false, next_action:'replace_file'});
+  assert.match(reason.textContent, /원문 추출.*암호화/);
+  assert.match(next(), /파일을 교체/);
+  show({status:'failed', failed_stage:'translate', failure_code:'translation_failed', retryable:true, next_action:'register_again'});
+  assert.match(next(), /새 요청 키/);
+  show({status:'failed', failure_code:'unknown', retryable:false, next_action:null});
+  assert.match(next(), /다시 시도할 수 없습니다/);
+  assert.match(reason.textContent, /상세 원인을 확인할 수 없습니다/);
+  show({outcome:'partial', failed_stage:'translate', failure_code:'empty_translation', retryable:null, next_action:null});
+  assert.match(message(), /검색할 수 있지만 일부 구간/);
+  assert.match(next(), /학습을 시작/);
+  show({});
+  assert.equal(reason.hidden, true);
+  assert.deepEqual(calls, []);
+});
