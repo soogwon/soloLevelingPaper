@@ -30,7 +30,7 @@ solo-leveling-verification-retention run     --db <DB경로> --older-than-days N
 solo-leveling-verification-retention reclaim --db <DB경로> --yes [--backup-to <백업경로>]
 ```
 
-`--backup-to`는 SQLite 백업 API로 변경 전에 일관된 사본을 만들고, 이미 있는 파일이면 아무것도 바꾸지 않고 중단한다.
+`--backup-to`는 SQLite 백업 API로 변경 전에 일관된 사본을 만들고, 백업 경로는 배타적으로 확보한다. 이미 있거나 다른 실행이 먼저 만들었으면 아무것도 바꾸지 않고 `backup_exists`로 중단하며 먼저 만든 사본은 보존된다. 백업이 실패하면 이 실행이 만든 파일만 지운다.
 
 ## 실행 순서(수동)
 
@@ -46,14 +46,14 @@ solo-leveling-verification-retention reclaim --db <DB경로> --yes [--backup-to 
 |---|---|---|
 | completed | 기한이 지난 이력이 더 남지 않음 | 없음 |
 | stopped | 배치 한도에서 멈춤(코드에서만 사용) | 다시 실행 |
-| locked | 다른 쓰기와 겹침 | 잠시 뒤 다시 실행 |
-| failed | 저장소 오류, 진행 중 배치는 되돌림 | 백업에서 상태 확인 후 문의 |
+| locked | 실제 잠금(SQLITE_BUSY·SQLITE_LOCKED)과 겹침. 세 명령 모두 종료 코드 1 | 잠시 뒤 다시 실행 |
+| failed | 잠금이 아닌 DB 오류(테이블 누락, DB 파일 아님 등). 세 명령 모두 종료 코드 1이고 원본 예외 문구·경로는 출력하지 않음. 진행 중 배치는 되돌림 | 재시도하지 말고 백업에서 상태 확인 후 문의 |
 | insufficient_disk | 공간 회수에 필요한 여유 공간 부족 | 공간 확보 후 재실행 |
 
 ## 파일 공간
 
 - 행을 지워도 SQLite 파일 크기는 줄지 않는다. 비워진 공간은 파일 안에서 재사용된다(`reclaimable_bytes`).
-- `reclaim`(VACUUM)은 전체 쓰기 잠금이 걸리고, 임시로 DB 크기만큼 더 필요하다. 여유 공간이 DB의 2배 미만이면 하지 않는다.
+- `reclaim`(VACUUM)은 전체 쓰기 잠금이 걸리고, 임시로 DB 크기만큼 더 필요하다. 여유 공간은 본체 파일이 아니라 WAL에 커밋된 페이지까지 포함한 논리 크기(`page_count × page_size`)의 2배로 판단하며, 2배 미만이면 VACUUM을 실행하지 않고 `insufficient_disk`로 멈춘다.
 - VACUUM은 `INTEGER PRIMARY KEY`가 없는 테이블의 rowid를 다시 매길 수 있다. 실제로는 기존 순서대로 다시 넣지만
   SQLite가 보장하는 동작은 아니므로, rowid를 동률 정렬 보조키로 쓰는 조회(#145 퀴즈 이력 등)는 같은 시각의 기록 순서가
   바뀔 수 있다. 그래서 공간 회수는 정리와 분리해 수동으로만 한다.

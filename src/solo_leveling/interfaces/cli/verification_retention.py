@@ -7,6 +7,7 @@
 보존 기간(--older-than-days)은 기본값이 없다. 출력에는 건수·기간·결과 코드만 쓴다.
 """
 import argparse
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -66,6 +67,13 @@ def main(argv=None) -> int:
     except FileExistsError:
         _out(result='backup_exists')
         return 2
+    except sqlite3.Error as error:
+        # 원본 예외 문구·경로는 출력하지 않는다. 실제 잠금만 재시도할 수 있는 상황(locked)이고 나머지는 failed다.
+        _out(result='locked' if store.is_lock_error(error) else 'failed')
+        return 1
+    except OSError:
+        _out(result='failed')
+        return 1
 
 
 if __name__ == '__main__':

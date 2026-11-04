@@ -21,6 +21,15 @@ from solo_leveling.domain.verification_retention import (
 from solo_leveling.infrastructure.database.schema import get_connection
 
 
+_LOCK_CODES = (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+
+
+def is_lock_error(error: sqlite3.Error) -> bool:
+    """실제 잠금(SQLITE_BUSY·SQLITE_LOCKED 계열)만 True다. 테이블 누락 같은 일반 DB 오류는 재시도할 상황이 아니다(#82)."""
+    code = getattr(error, 'sqlite_errorcode', None)
+    return isinstance(code, int) and (code & 0xFF) in _LOCK_CODES
+
+
 def _cutoff(policy: RetentionPolicy, now: Optional[datetime]) -> str:
     # created_at은 now_iso()가 쓰는 UTC isoformat 문자열이라 같은 형식으로 비교한다.
     base = datetime.now(timezone.utc) if now is None else now
@@ -67,10 +76,9 @@ def run_verification_cleanup(db_path: str, policy: RetentionPolicy, now: Optiona
                 batch_claims = conn.execute(
                     f'DELETE FROM verification_claims WHERE run_id IN ({marks})', ids).rowcount
                 conn.execute(f'DELETE FROM verification_runs WHERE run_id IN ({marks})', ids)
-        except sqlite3.OperationalError:
-            return CleanupResult(CleanupOutcome.LOCKED, runs, claims, refs, batches)
-        except sqlite3.Error:
-            return CleanupResult(CleanupOutcome.FAILED, runs, claims, refs, batches)
+        except sqlite3.Error as error:
+            outcome = CleanupOutcome.LOCKED if is_lock_error(error) else CleanupOutcome.FAILED
+            return CleanupResult(outcome, runs, claims, refs, batches)
         runs += len(ids)
         claims += batch_claims
         refs += batch_refs
@@ -91,16 +99,41 @@ def space_report(db_path: str) -> SpaceReport:
 
 
 def backup_database(db_path: str, backup_path: str) -> None:
-    """SQLite 백업 API로 일관된 사본을 만든다. 이미 있는 파일은 덮어쓰지 않는다."""
-    if os.path.exists(backup_path):
-        raise FileExistsError('backup_path')
-    with closing(sqlite3.connect(db_path)) as src, closing(sqlite3.connect(backup_path)) as dst:
-        src.backup(dst)
+    """SQLite 백업 API로 일관된 사본을 만든다. 이미 있는 파일은 덮어쓰지 않는다.
+
+    목적지는 O_EXCL로 먼저 배타적으로 확보한다. 존재 확인과 연결 사이에 다른 실행이 같은 경로를 만들어도
+    한쪽만 확보하고 나머지는 FileExistsError로 멈추며, 먼저 만든 사본은 그대로 남는다. 백업이 실패하면 이 호출이
+    만든 파일만 지워 재시도할 수 있게 한다.
+    """
+    fd = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(fd)
+    try:
+        with closing(sqlite3.connect(db_path)) as src, closing(sqlite3.connect(backup_path)) as dst:
+            src.backup(dst)
+    except BaseException:
+        try:
+            os.unlink(backup_path)
+        except OSError:
+            pass
+        raise
+
+
+def logical_size(db_path: str) -> int:
+    """WAL에 커밋된 페이지까지 포함한 데이터베이스 크기(page_count × page_size). 본체 파일 크기보다 클 수 있다."""
+    with closing(sqlite3.connect(db_path)) as conn:
+        return conn.execute('PRAGMA page_count').fetchone()[0] * conn.execute('PRAGMA page_size').fetchone()[0]
 
 
 def reclaim_space(db_path: str, free_bytes: Optional[Callable[[str], int]] = None) -> SpaceResult:
-    """VACUUM으로 파일 공간을 회수한다. 전체 쓰기 잠금이 걸리고 임시 공간으로 DB 크기만큼 더 필요하다."""
-    before = os.path.getsize(db_path)
+    """VACUUM으로 파일 공간을 회수한다. 전체 쓰기 잠금이 걸리고 임시 공간으로 DB 크기만큼 더 필요하다.
+
+    여유 공간은 본체 파일이 아니라 WAL의 커밋된 페이지를 포함한 논리 크기의 2배로 판단한다(#82).
+    """
+    try:
+        before = logical_size(db_path)
+    except sqlite3.Error as error:
+        size = os.path.getsize(db_path)
+        return SpaceResult(SpaceOutcome.LOCKED if is_lock_error(error) else SpaceOutcome.FAILED, size, size)
     available = (free_bytes or (lambda path: shutil.disk_usage(path).free))(os.path.dirname(os.path.abspath(db_path)))
     if available < before * 2:
         return SpaceResult(SpaceOutcome.INSUFFICIENT_DISK, before, before)
@@ -108,8 +141,7 @@ def reclaim_space(db_path: str, free_bytes: Optional[Callable[[str], int]] = Non
         with closing(sqlite3.connect(db_path, isolation_level=None)) as conn:
             conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
             conn.execute('VACUUM')
-    except sqlite3.OperationalError:
-        return SpaceResult(SpaceOutcome.LOCKED, before, os.path.getsize(db_path))
-    except sqlite3.Error:
-        return SpaceResult(SpaceOutcome.FAILED, before, os.path.getsize(db_path))
+    except sqlite3.Error as error:
+        outcome = SpaceOutcome.LOCKED if is_lock_error(error) else SpaceOutcome.FAILED
+        return SpaceResult(outcome, before, os.path.getsize(db_path))
     return SpaceResult(SpaceOutcome.COMPLETED, before, os.path.getsize(db_path))

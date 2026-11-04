@@ -262,3 +262,130 @@ def test_cli_rejects_missing_db_and_bad_setting(tmp_path, env, capsys):
         == 'result=db_not_found'
     code, out = run_cli(capsys, 'plan', '--db', env, '--older-than-days', '0')
     assert code == 2 and 'invalid_setting' in out and 'older_than_days' in out
+
+
+# ── B 리뷰 반영: WAL 포함 용량·잠금/일반 오류 구분·배타적 백업 ──────────────────────────────
+import threading  # noqa: E402
+from contextlib import contextmanager  # noqa: E402
+
+
+@contextmanager
+def short_lock_timeout():
+    original = sqlite3.connect
+    sqlite3.connect = lambda path, **kw: original(path, **{**kw, 'timeout': 0.05})
+    try:
+        yield
+    finally:
+        sqlite3.connect = original
+
+
+def test_reclaim_checks_logical_size_including_wal_and_does_not_vacuum(tmp_path):
+    db = str(tmp_path / 'wal.db')
+    holder = sqlite3.connect(db, isolation_level=None)          # 열어 두어야 WAL이 닫힐 때 합쳐지지 않는다
+    try:
+        holder.execute('PRAGMA journal_mode=WAL')
+        holder.execute('PRAGMA wal_autocheckpoint=0')
+        holder.execute('CREATE TABLE t (x TEXT)')
+        holder.execute('BEGIN')
+        holder.executemany('INSERT INTO t VALUES (?)', [('x' * 1000,)] * 2000)
+        holder.execute('COMMIT')
+        main_size, wal_size = os.path.getsize(db), os.path.getsize(db + '-wal')
+        assert wal_size > 1_000_000 and main_size < wal_size       # 본체만 보면 작고 WAL이 크다
+        result = vr.reclaim_space(db, free_bytes=lambda path: 10_000)
+        assert result.outcome is SpaceOutcome.INSUFFICIENT_DISK
+        assert result.before_bytes > 1_000_000 and result.before_bytes > 100 * main_size   # 본체가 아니라 논리 크기를 보고했다
+        assert (os.path.getsize(db), os.path.getsize(db + '-wal')) == (main_size, wal_size)   # VACUUM·체크포인트 안 함
+        assert holder.execute('SELECT COUNT(*) FROM t').fetchone()[0] == 2000
+    finally:
+        holder.close()
+
+
+def test_lock_and_general_database_errors_are_told_apart(env, tmp_path):
+    blocker = sqlite3.connect(env, isolation_level=None)
+    blocker.execute('BEGIN EXCLUSIVE')
+    try:
+        with short_lock_timeout():
+            assert vr.run_verification_cleanup(env, policy(30), NOW).outcome is CleanupOutcome.LOCKED
+            assert vr.reclaim_space(env).outcome is SpaceOutcome.LOCKED
+    finally:
+        blocker.execute('ROLLBACK')
+        blocker.close()
+    missing = str(tmp_path / 'no_tables.db')
+    with closing(sqlite3.connect(missing)) as conn, conn:
+        conn.execute('CREATE TABLE other (x)')
+    assert vr.run_verification_cleanup(missing, policy(30), NOW).outcome is CleanupOutcome.FAILED   # 잠금이 아니다
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        vr.plan_verification_cleanup(missing, policy(30), NOW)
+    assert not vr.is_lock_error(caught.value)
+
+
+def test_cli_locked_versus_failed_for_all_three_commands(env, tmp_path, capsys):
+    missing = str(tmp_path / 'no_tables.db')
+    with closing(sqlite3.connect(missing)) as conn, conn:
+        conn.execute('CREATE TABLE other (x)')
+    garbage = tmp_path / 'garbage.db'
+    garbage.write_bytes(b'this is not a sqlite database' * 200)
+    for target in (missing, str(garbage)):
+        for args in (('plan', '--older-than-days', '30'), ('run', '--older-than-days', '30', '--yes')):
+            code, out = run_cli(capsys, args[0], '--db', target, *args[1:])
+            assert code == 1 and out.startswith('result=failed'), (args, out)
+            assert str(tmp_path) not in out and 'no such table' not in out and 'not a database' not in out
+    code, out = run_cli(capsys, 'reclaim', '--db', str(garbage), '--yes')
+    assert (code, out.strip().split()[0]) == (1, 'result=failed')
+    assert str(tmp_path) not in out and 'no such table' not in out
+
+    blocker = sqlite3.connect(env, isolation_level=None)
+    blocker.execute('BEGIN EXCLUSIVE')
+    try:
+        with short_lock_timeout():
+            code, out = run_cli(capsys, 'plan', '--db', env, '--older-than-days', '30')
+            assert (code, out.strip()) == (1, 'result=locked')
+            code, out = run_cli(capsys, 'run', '--db', env, '--older-than-days', '30', '--yes')
+            assert code == 1 and out.startswith('result=locked')
+            code, out = run_cli(capsys, 'reclaim', '--db', env, '--yes')
+            assert code == 1 and out.startswith('result=locked')
+    finally:
+        blocker.execute('ROLLBACK')
+        blocker.close()
+
+
+def test_backup_destination_is_reserved_exclusively_even_if_existence_check_is_stale(env, tmp_path, monkeypatch):
+    target = tmp_path / 'backup.db'
+    target.write_bytes(b'FIRST-BACKUP')                              # 먼저 만든 사본
+    monkeypatch.setattr(os.path, 'exists', lambda path: False)       # 확인과 연결 사이에 만들어진 상황을 흉내
+    with pytest.raises(FileExistsError):
+        vr.backup_database(env, str(target))
+    assert target.read_bytes() == b'FIRST-BACKUP'                    # 덮어쓰지 않았다
+
+
+def test_concurrent_backups_to_the_same_destination_only_one_wins(env, tmp_path):
+    seed(env, [('old', 90)])
+    for round_number in range(15):
+        target = str(tmp_path / f'backup{round_number}.db')
+        barrier, outcomes = threading.Barrier(2), []
+
+        def attempt():
+            barrier.wait()
+            try:
+                vr.backup_database(env, target)
+                outcomes.append('created')
+            except FileExistsError:
+                outcomes.append('exists')
+
+        threads = [threading.Thread(target=attempt) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(30)
+        assert sorted(outcomes) == ['created', 'exists'], outcomes
+        assert table_counts(target, 'verification_runs') == (1,)     # 먼저 만든 사본이 온전하다
+
+
+def test_failed_backup_removes_only_its_own_reservation(env, tmp_path):
+    missing_source = str(tmp_path / 'nope' / 'src.db')
+    target = tmp_path / 'backup.db'
+    with pytest.raises(sqlite3.Error):
+        vr.backup_database(missing_source, str(target))
+    assert not target.exists()                                        # 재시도할 수 있다
+    vr.backup_database(env, str(target))
+    assert target.exists()
