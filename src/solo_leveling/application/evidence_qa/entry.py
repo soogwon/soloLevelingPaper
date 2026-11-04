@@ -8,6 +8,19 @@ from .search import ContextSearchService
 from .errors import InvalidArgumentError, ResourceNotFoundError
 
 
+def validate_search_input(question, top_k, pdf_pages, section_ids):
+    require_text(question, 'question')
+    positive_int(top_k, 'top_k')
+    require_tuple(pdf_pages, int, 'pdf_pages')
+    require_tuple(section_ids, str, 'section_ids')
+    for page in pdf_pages:
+        positive_int(page, 'pdf_page')
+    for section in section_ids:
+        require_text(section, 'section_id')
+    if len(set(pdf_pages)) != len(pdf_pages) or len(set(section_ids)) != len(section_ids):
+        raise ValueError('검색 범위 조건에 중복 값이 있습니다.')
+
+
 @dataclass(frozen=True)
 class ContextSearchResponse:
     """후속 질문·근거 저장에 사용할 맥락 ID와 검색 결과."""
@@ -26,16 +39,7 @@ class SearchEntryService:
         """맥락 ID가 생략된 경우에만 기본 맥락을 생성한다. 잘못된 ID는 대체하지 않는다."""
         # 잘못된 요청 때문에 DB에 기본 맥락이 생성되지 않도록 먼저 검증한다.
         try:
-            require_text(question, 'question')
-            positive_int(top_k, 'top_k')
-            require_tuple(pdf_pages, int, 'pdf_pages')
-            require_tuple(section_ids, str, 'section_ids')
-            for page in pdf_pages:
-                positive_int(page, 'pdf_page')
-            for section in section_ids:
-                require_text(section, 'section_id')
-            if len(set(pdf_pages)) != len(pdf_pages) or len(set(section_ids)) != len(section_ids):
-                raise ValueError('검색 범위 조건에 중복 값이 있습니다.')
+            validate_search_input(question, top_k, pdf_pages, section_ids)
             if version_id is not None or context_id is None:
                 require_text(version_id, 'version_id')
             if context_id is not None:

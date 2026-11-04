@@ -89,6 +89,10 @@ class AnswerService:
         self.id_factory = id_factory or (lambda: str(uuid4()))
         self.max_expanded_top_k = max_expanded_top_k
 
+    @staticmethod
+    def checkpoint():
+        """키가 있는 실행은 단계 사이에서 실행권 상실을 확인한다."""
+
     @traced('answer', request=True)
     def answer(self, question: str, *, context_id: str | None = None,
                version_id: str | None = None, top_k: int = 5,
@@ -97,6 +101,7 @@ class AnswerService:
             positive_int(top_k, 'top_k')
         except ValueError as exc:
             raise InvalidArgumentError(str(exc)) from None
+        self.checkpoint()
         found = self.search.search(question, context_id=context_id, version_id=version_id,
                                    top_k=top_k, pdf_pages=pdf_pages, section_ids=section_ids)
         search = self._snapshot(found.result)
@@ -109,6 +114,7 @@ class AnswerService:
                 or not search.items or len(search.items) < top_k or expanded_k <= top_k):
             return response
 
+        self.checkpoint()
         expanded = self.search.search(question, context_id=found.context_id,
             version_id=search.scope.version_id, top_k=expanded_k,
             pdf_pages=search.scope.pdf_pages, section_ids=search.scope.section_ids)
@@ -200,6 +206,7 @@ class AnswerService:
                 supplemental=item.chunk_id in supplemental_ids)
         try:
             with stage('generation'):
+                self.checkpoint()
                 draft = self.generator.generate_claims(search.query, tuple(inputs))
         except GenerationFormatError as error:
             log_verification_failure(error, 0)
@@ -261,6 +268,7 @@ class AnswerService:
                     next_evidence_id=target.next_evidence_id, reason_code=target.reason_code)
             try:
                 with stage('generation_repair'):
+                    self.checkpoint()
                     repaired = repair(search.query, tuple(inputs), target_draft, local_targets)
                     repaired = _validate_draft(repaired, evidence_by_id)
                     sources = repaired.repair_sources
@@ -363,6 +371,7 @@ class AnswerService:
 
         if self.semantic_verification is not None:
             used_for_check = {eid for claim in claims for eid in claim.evidence_ids}
+            self.checkpoint()
             report = self.semantic_verification.check(claims, tuple(
                 item for item in inputs if item.evidence_id in used_for_check),
                 question=search.query, repair_groups=repair_groups)
@@ -411,6 +420,7 @@ class AnswerService:
             validate_answer_against_search(result, search)
         # 저장 성공 전에는 성공 응답을 반환하지 않는다. DB 오류는 숨기지 않는다.
         with stage('evidence_save'):
+            self.checkpoint()
             self.evidence_writer.save(context_id, used)
         return self._finish(context_id, search, result, report, checked_claims, evidence_by_id)
 
