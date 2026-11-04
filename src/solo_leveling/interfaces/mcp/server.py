@@ -52,7 +52,7 @@ status=ok는 질문 전체의 완전한 답변을 보장하지 않습니다. mod
 주장과 근거의 의미 일치나 수식의 정확성을 검증했다는 뜻이 아닙니다.
 근거가 문장 중간에서 끊기면 get_evidence로 저장 근거를 확인하세요. 이 도구는 재검색하거나
 누락 문장을 복구하지 않습니다. 검색된 근거에 없다고 논문 전체에 없다고 단정하지 마세요.
-사용자가 지정한 페이지·섹션 범위를 유지하고, 범위 밖 문맥이 필요하면 범위 확장을 안내하세요.
+지정 범위 밖에서는 같은 섹션의 다음 페이지에서 끊긴 문장의 끝만 보충할 수 있습니다. 사용자가 페이지를 엄격히 제한하면 focus.strict_pages=true로 호출하세요.
 논문 근거 상세 화면은 반환된 인용문만 보여주며 PDF 전체나 정밀 좌표를 표시하지 않습니다.
 화면이 표시되지 않아도 동일한 JSON 응답을 사용하세요.
 printed_page_label이 없으면 pdf_page를 'PDF 기준 N페이지'로 표시하세요.
@@ -65,7 +65,7 @@ MCP 호출 또는 호스트 권한 검사가 실패하면 실패 사실을 안�
 
 class AnswerService(Protocol):
     def answer(self, question: str, *, context_id: str, top_k: int,
-               pdf_pages: tuple[int, ...], section_ids: tuple[str, ...]): ...
+               pdf_pages: tuple[int, ...], section_ids: tuple[str, ...], strict_pages: bool = False): ...
 
 
 class EvidenceService(Protocol):
@@ -98,6 +98,8 @@ class Focus(BaseModel):
 
     pdf_pages: list[int] = Field(default_factory=list)
     section_ids: list[str] = Field(default_factory=list)
+    strict_pages: bool = Field(default=False, strict=True,
+        description='true이면 다음 페이지의 잘린 문장 보충도 금지합니다.')
 
 
 class PaperSource(BaseModel):
@@ -422,7 +424,7 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         의미 검증에서 일부 주장이 제외되면 partial/semantic_limited로 반환합니다.
         검증 전에 모든 주장이 제외되면 structural_only일 수 있으며, 이것만으로 설정 비활성화를 단정하지 마세요.
         ok도 질문 전체에 대한 답변 완전성 보증은 아닙니다. 제외된 내용을 배경지식으로 보충하지 마세요.
-        focus는 사용자 지정 범위를 유지하세요. pdf_pages는 인쇄 번호가 아닌 물리 PDF 페이지입니다.
+        focus는 사용자 지정 범위를 유지하세요. pdf_pages는 물리 PDF 페이지입니다. 다음 페이지에서 문장 끝을 보충하지 않으려면 strict_pages=true를 지정하세요.
         호스트의 시간 초과나 대기 취소만으로 서버 작업이 중단됐다고 판단하지 마세요.
         서버에서 API 호출과 근거 저장이 계속될 수 있으므로 자동 재호출하지 마세요.
         실행 상태를 확인할 수 없으면 그 한계를 알리고 추가 호출 여부를 사용자에게 확인하세요.
@@ -437,9 +439,10 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             effective_question = standalone_question if standalone_question is not None else question
             pages = tuple(focus.pdf_pages) if focus is not None else ()
             sections = tuple(focus.section_ids) if focus is not None else ()
+            strict = {"strict_pages": True} if focus and focus.strict_pages else {}
             response = await anyio.to_thread.run_sync(lambda: services.answer.answer(
                 effective_question, context_id=context_id, top_k=top_k,
-                pdf_pages=pages, section_ids=sections))
+                pdf_pages=pages, section_ids=sections, **strict))
             # 동기 작업 대기 중 도착한 MCP 취소를 반영해 이미 취소 응답한 요청에 재응답하지 않는다.
             # 실행 중인 스레드의 API 호출·저장을 취소하는 것은 아니다.
             await anyio.lowlevel.checkpoint()

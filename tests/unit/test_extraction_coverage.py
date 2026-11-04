@@ -109,3 +109,13 @@ def test_tail_failure_details_do_not_change_risk_policy(case, expected):
     result = assess_extraction_risk(claim, (left,) if case == 'absent' else (left, right))
     assert result.detail_code == expected
     assert result.reason == (ExtractionReason.NONE if expected is None else ExtractionReason.UNFINISHED_TAIL)
+
+
+@pytest.mark.parametrize('original,quote,expected', [
+    ('obtained via example.org during training.', 'org during training.', ExtractionReason.UNRESOLVED_PREFIX),
+    ('The threshold is .5 when using', 'The threshold is .', ExtractionReason.UNFINISHED_TAIL),
+])
+def test_internal_period_does_not_resolve_extraction_risk(original, quote, expected):
+    item = EvidenceInput('e', 'chunk', '번역', original, None, 6)
+    claim = GeneratedClaim('주장', ('e',), (ClaimSupport('e', quote),))
+    assert assess_extraction_risk(claim, (item,)).reason == expected

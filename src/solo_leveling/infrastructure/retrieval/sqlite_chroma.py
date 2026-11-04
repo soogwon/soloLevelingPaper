@@ -5,6 +5,7 @@ import math
 from solo_leveling.diagnostics import traced, stage
 
 from solo_leveling.application.evidence_qa.validators import validate_chunk, validate_search_result
+from solo_leveling.application.evidence_qa.page_completion import completion_excerpt
 from solo_leveling.domain.evidence_qa import (
     RetrievedChunk, RetrievalMethod, SearchResult, SearchScope, positive_int, require_text,
 )
@@ -64,7 +65,8 @@ class SQLiteChromaRetriever:
         self._verify_vectors(collection, chunks, index)
         scope = search.scope
         return tuple(c for c in chunks.values() if c.chunk_index in indices
-                     and (not scope.pdf_pages or c.pdf_page in scope.pdf_pages)
+                     and (not scope.pdf_pages or c.pdf_page in scope.pdf_pages
+                          or completion_excerpt(search, c) is not None)
                      and (not scope.section_ids or c.section_id in scope.section_ids))
 
     @traced('index_lookup')

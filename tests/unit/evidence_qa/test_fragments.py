@@ -2,7 +2,7 @@
 
 import pytest
 
-from solo_leveling.application.evidence_qa.fragments import fragment_flags
+from solo_leveling.application.evidence_qa.fragments import fragment_flags, sentence_ends
 from solo_leveling.domain.evidence_qa import EvidenceInput
 
 
@@ -35,3 +35,20 @@ def test_fragment_flags(text, expected):
 def test_evidence_input_rejects_non_bool_flags():
     with pytest.raises(ValueError):
         EvidenceInput('e1', 'c1', '본문', 'Original.', None, 1, 1, False)
+
+
+@pytest.mark.parametrize('text,first', [
+    ('x is 1.5 times y.Other sentence.', 'x is 1.5 times y.'),
+    ('x is below Eq. 3. Other sentence.', 'x is below Eq. 3.'),
+    ('x is small。Other sentence.', 'x is small。'),
+    ('x is small！Other sentence.', 'x is small！'),
+    ('x is small？Other sentence.', 'x is small？'),
+    ('x follows e.g. this rule. Other sentence.', 'x follows e.g. this rule.'),
+])
+def test_sentence_boundary_preserves_only_first_sentence(text, first):
+    assert text[:sentence_ends(text)[0]] == first
+
+
+def test_abbreviation_is_not_complete_evidence():
+    assert sentence_ends('length n is below Eq.') == ()
+    assert fragment_flags('length n is below Eq.')[1] is True

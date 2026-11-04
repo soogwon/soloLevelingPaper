@@ -13,6 +13,7 @@ from solo_leveling.domain.evidence_qa import (
 from solo_leveling.domain.models import Evidence
 from .entry import SearchEntryService
 from .ports import ClaimGenerator, ContinuationReader, ContinuationRepairTarget, EvidenceWriter, GenerationUnavailable
+from .page_completion import completion_excerpt
 from .continuation import supplement_continuations
 from .response_parser import GenerationFormatError
 from .errors import InvalidArgumentError
@@ -92,9 +93,12 @@ class AnswerService:
     @traced('answer', request=True)
     def answer(self, question: str, *, context_id: str | None = None,
                version_id: str | None = None, top_k: int = 5,
-               pdf_pages: tuple[int, ...] = (), section_ids: tuple[str, ...] = ()) -> AnswerResponse:
+               pdf_pages: tuple[int, ...] = (), section_ids: tuple[str, ...] = (),
+               strict_pages: bool = False) -> AnswerResponse:
         try:
             positive_int(top_k, 'top_k')
+            if type(strict_pages) is not bool:
+                raise ValueError('strict_pages는 불리언이어야 합니다.')
         except ValueError as exc:
             raise InvalidArgumentError(str(exc)) from None
         found = self.search.search(question, context_id=context_id, version_id=version_id,
@@ -102,7 +106,7 @@ class AnswerService:
         search = self._snapshot(found.result)
         allocated = set()
         repair_budget = _RepairBudget()
-        response = self._answer_from_search(found.context_id, search, allocated, repair_budget)
+        response = self._answer_from_search(found.context_id, search, allocated, repair_budget, strict_pages)
         expanded_k = min(top_k * 2, self.max_expanded_top_k)
         # 정상적인 빈 초안만 추가 검색한다. 오류·형식 실패·이미 소진한 범위는 재시도하지 않는다.
         if (repair_budget.used or response.result.reason_code != ReasonCode.EVIDENCE_NOT_FOUND
@@ -125,7 +129,7 @@ class AnswerService:
         if not current.keys() - previous.keys():
             return response
         # 새 청크가 추가된 경우에만 전체 확장 근거로 한 번 더 생성한다. 저장은 성공한 최종 근거만 한다.
-        return self._answer_from_search(found.context_id, expanded_search, allocated, repair_budget)
+        return self._answer_from_search(found.context_id, expanded_search, allocated, repair_budget, strict_pages)
 
     @staticmethod
     def _snapshot(result: SearchResult) -> SearchResult:
@@ -137,7 +141,8 @@ class AnswerService:
         return search
 
     def _answer_from_search(self, context_id: str, search: SearchResult,
-                            allocated: set[str], repair_budget: _RepairBudget) -> AnswerResponse:
+                            allocated: set[str], repair_budget: _RepairBudget,
+                            strict_pages: bool = False) -> AnswerResponse:
         # 추가 검색 후 재생성하더라도 후보와 판정이 섞이지 않도록 시도를 구분한다.
         attempt_id = uuid4().hex
 
@@ -153,7 +158,8 @@ class AnswerService:
         if self.continuation_reader is not None and search.items:
             search = supplement_continuations(search, self.continuation_reader,
                                               self.max_supplemental_chunks,
-                                              include_overlapping_neighbors=True)
+                                              include_overlapping_neighbors=True,
+                                              allow_page_completion=not strict_pages)
 
         def insufficient(reason, message):
             result = AnswerResult(AnswerStatus.INSUFFICIENT_EVIDENCE, message, (), (), reason)
@@ -180,12 +186,16 @@ class AnswerService:
             chunk_ids.add(chunk.chunk_id)
             require_text(chunk.text, 'text_ko')
             evidence_id = new_id()
-            starts_mid, ends_mid = fragment_flags(chunk.original_text)
-            inputs.append(EvidenceInput(evidence_id, chunk.chunk_id, chunk.text,
-                                        chunk.original_text, chunk.printed_page_label, chunk.pdf_page,
+            excerpt = completion_excerpt(search, chunk)
+            original = excerpt if excerpt is not None else chunk.original_text
+            # 번역문과 원문의 구절 정렬이 없으므로 페이지 밖 발췌에는 번역을 붙이지 않는다.
+            translated = None if excerpt is not None else chunk.text
+            starts_mid, ends_mid = fragment_flags(original)
+            inputs.append(EvidenceInput(evidence_id, chunk.chunk_id, translated,
+                                        original, chunk.printed_page_label, chunk.pdf_page,
                                         starts_mid, ends_mid))
-            # 현재는 청크 전체를 인용한다. 문장 단위 발췌와 내용 검증은 후속 작업이다.
-            evidence_by_id[evidence_id] = Evidence(evidence_id, chunk.chunk_id, chunk.text, chunk.original_text)
+            # 일반 후보는 전체 청크, 페이지 밖 연결 후보는 허용한 원문 발췌만 저장한다.
+            evidence_by_id[evidence_id] = Evidence(evidence_id, chunk.chunk_id, translated, original)
         # 검색 순서와 문서 순서는 다르므로, 이어지는 근거 관계를 명시적으로 전달한다.
         by_index = {chunk.chunk_index: item for chunk, item in zip(search.candidate_chunks, inputs)}
         inputs = [replace(item, follows_evidence_id=previous.evidence_id)
@@ -422,11 +432,12 @@ class AnswerService:
             try:
                 retained_ids = {c.claim_id for c in result.claims}
                 judgments = {j.claim_id: j for j in report.judgments}
+                originals = {c.chunk_id: c.original_text for c in search.candidate_chunks}
                 rows = []
                 for claim in (() if report.failure else checked_claims):
                     judgment = judgments[claim.claim_id]
                     refs = tuple(HistoryReference(evidence_by_id[eid].chunk_id,
-                        chunk_content_hash(evidence_by_id[eid].quote_original))
+                        chunk_content_hash(originals[evidence_by_id[eid].chunk_id]))
                         for eid in claim.evidence_ids)
                     rows.append(HistoryClaim(claim.claim_id, claim.text, judgment.verdict.value,
                         judgment.reason.value, claim.claim_id in retained_ids, refs))

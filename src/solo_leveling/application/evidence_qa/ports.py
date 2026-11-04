@@ -42,7 +42,7 @@ class EvidenceWriter(Protocol):
 
 class ContinuationReader(Protocol):
     def following_chunks(self, search: SearchResult, indices: tuple[int, ...]) -> tuple[Chunk, ...]:
-        """고정된 게시 색인과 사용자 범위 안의 지정 청크 번호를 조회한다."""
+        """게시 색인의 지정 번호를 조회한다. 허용된 페이지 밖 문장 완성 후보도 포함한다."""
         ...
 
 

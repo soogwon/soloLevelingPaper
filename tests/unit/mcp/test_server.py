@@ -167,6 +167,22 @@ def test_history_schema_is_optional_and_host_guidance_is_explicit():
     assert '이력 저장 실패를 이유로 질문을 자동 재호출하지 마세요' in tool.description
 
 
+def test_focus_strict_pages_is_forwarded():
+    server, answer, _ = make_server()
+    answer.answer.return_value = answer_response()
+    run(server.call_tool('ask_paper', {'context_id': 'context', 'question': '질문',
+                                     'focus': {'pdf_pages': [6], 'strict_pages': True}}))
+    answer.answer.assert_called_once_with('질문', context_id='context', top_k=5,
+        pdf_pages=(6,), section_ids=(), strict_pages=True)
+
+
+def test_focus_strict_pages_rejects_string_boolean():
+    from solo_leveling.interfaces.mcp.server import Focus
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        Focus(strict_pages='false')
+
+
 def test_get_evidence_returns_stored_details():
     detail = EvidenceDetail('evidence', 'chunk', 'version', 'parse', 'translation', None, 1,
                             '번역.', 'Original.', 'paper.pdf')
