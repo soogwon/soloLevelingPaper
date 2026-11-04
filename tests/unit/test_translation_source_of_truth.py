@@ -115,3 +115,120 @@ def test_migration_does_not_touch_existing_rows_or_failures(db):
     before = sql(db, 'SELECT * FROM translation_results ORDER BY chunk_id')
     init_db(db)
     assert sql(db, 'SELECT * FROM translation_results ORDER BY chunk_id') == before
+
+
+# ── B 리뷰 반영(#171): 게시된 색인 스냅샷 복원과 다른 파싱 리비전 사본 ──────────────────────────
+from solo_leveling.domain.models import Chunk as _Chunk  # noqa: E402
+from solo_leveling.domain.verification_history import (  # noqa: E402
+    HistoryClaim, HistoryOutcome, HistoryReference, VerificationHistoryRecord, chunk_content_hash)
+from solo_leveling.infrastructure.database import verification_history as vh  # noqa: E402
+
+
+@pytest.fixture
+def published(db):
+    """c0, c1 성공 / c2, c3 실패로 게시된 색인(chunk_count=2)과 학습 맥락."""
+    from solo_leveling.domain.models import LearningContext
+    repo.save_translation_batch(db, batch([ok(0), ok(1), fail(2), fail(3)]))
+    repo.publish_search_index(db, 'v1', 'p1', EmbeddingSet('idx', 't1', 'fake', 2), 'j1', 2, ['partial'])
+    repo.create_learning_context(db, LearningContext('ctx', 'v1', 'p1', 't1', known_concepts=[], embedding_set_id='idx'))
+    return db
+
+
+def members(db, embedding_set='idx'):
+    return sorted(r['chunk_id'] for r in sql(db, 'SELECT chunk_id FROM search_index_chunks WHERE embedding_set_id=?',
+                                              embedding_set))
+
+
+def legacy_state(db, keep):
+    """이전 DB를 모사한다: 스냅샷을 keep만 남기고, c1의 번역은 chunks.text에만 남긴다(결과 행 없음)."""
+    sql(db, 'DROP TRIGGER IF EXISTS trg_embedding_set_chunks')
+    sql(db, 'DELETE FROM search_index_chunks')
+    for chunk_id in keep:
+        sql(db, 'INSERT INTO search_index_chunks VALUES (?, ?)', 'idx', chunk_id)
+    sql(db, "DELETE FROM translation_results WHERE chunk_id='c1'")
+
+
+def history(*chunk_ids, run='r1'):
+    texts = {'c0': 'original 0', 'c1': 'original 1', 'c2': 'original 2', 'c3': 'original 3'}
+    refs = tuple(HistoryReference(c, chunk_content_hash(texts[c])) for c in chunk_ids)
+    return VerificationHistoryRecord(
+        run_id=run, context_id='ctx', version_id='v1', parse_revision_id='p1', translation_revision_id='t1',
+        embedding_set_id='idx', model='fake', instruction_version='i1', elapsed_ms=1, level='model_checked',
+        failure=None, claims=(HistoryClaim('k1', '주장', 'supported', 'full_support', True, refs),))
+
+
+@pytest.mark.parametrize('keep', [[], ['c0']])
+def test_published_snapshot_is_restored_to_exactly_the_success_chunks(published, keep):
+    legacy_state(published, keep)
+    for _ in range(2):                                   # 첫 번째·두 번째 초기화 모두
+        init_db(published)
+        assert members(published) == ['c0', 'c1']
+    assert vh.save_verification_history(published, history('c0', 'c1')).outcome is HistoryOutcome.SAVED
+    assert vh.save_verification_history(published, history('c2', run='r2')).outcome is HistoryOutcome.REFERENCE_MISMATCH
+    assert vh.save_verification_history(published, history('c0', 'c3', run='r3')).outcome is HistoryOutcome.REFERENCE_MISMATCH
+
+
+def test_snapshot_is_not_filled_when_the_restoration_basis_does_not_match(published):
+    # 기록된 멤버 중 성공 후보가 아닌 것이 있으면 아무것도 추가하지 않는다.
+    legacy_state(published, ['c0', 'c2'])
+    init_db(published)
+    init_db(published)
+    assert members(published) == ['c0', 'c2']
+    # 게시 당시 개수와 후보 수가 다르면 추가하지 않는다.
+    legacy_state(published, [])
+    sql(published, 'UPDATE search_indexes SET chunk_count=3')
+    init_db(published)
+    assert members(published) == []
+    # 게시 기록의 번역 리비전이 임베딩 세트와 다르면 추가하지 않는다.
+    sql(published, 'UPDATE search_indexes SET chunk_count=2')
+    sql(published, "INSERT INTO translation_revisions (translation_revision_id, parse_revision_id, provider, model, "
+                   "prompt_version, target_language, created_at) VALUES ('t9', 'p1', 'p', 'm', 'v1', NULL, 'x')")
+    sql(published, "UPDATE search_indexes SET translation_revision_id='t9'")
+    init_db(published)
+    assert members(published) == []
+
+
+def test_other_published_indexes_are_not_touched(published):
+    members_before = members(published)
+    init_db(published)
+    assert members(published) == members_before == ['c0', 'c1']
+
+
+def other_parse_revision_copy(db):
+    """p2 소속 청크에 p1의 번역 리비전 t1과 번역 사본을 넣는다. 각 ID는 존재하므로 외래 키 검사는 통과한다."""
+    repo.insert_parse_revision(db, ParseRevision('p2', 'v1', 1))
+    repo.insert_chunks(db, [_Chunk('x0', 'p2', 0, 'other original')])
+    sql(db, "UPDATE chunks SET text='다른 리비전 사본', translation_revision_id='t1' WHERE chunk_id='x0'")
+
+
+def test_copy_pointing_to_another_parse_revision_is_not_migrated_but_normal_copy_is(db):
+    repo.save_translation_batch(db, batch([ok(0), fail(1)]))
+    sql(db, "DELETE FROM translation_results WHERE chunk_id='c0'")      # 정상 사본: c0의 번역은 chunks.text에만 있다
+    other_parse_revision_copy(db)
+    before_failure = sql(db, "SELECT * FROM translation_results WHERE chunk_id='c1'")
+    for _ in range(2):
+        init_db(db)
+        rows = sql(db, 'SELECT chunk_id, failure_code, translated_text FROM translation_results '
+                       'WHERE translation_revision_id=? ORDER BY chunk_id', 't1')
+        assert [(r['chunk_id'], r['failure_code']) for r in rows] == [('c0', None), ('c1', 'provider_unavailable')]
+        assert rows[0]['translated_text'] == '번역 0'
+    assert sql(db, "SELECT * FROM translation_results WHERE chunk_id='c1'") == before_failure   # 기존 결과 보존
+    assert sql(db, "SELECT COUNT(*) AS n FROM translation_results WHERE chunk_id='x0'")[0]['n'] == 0
+
+
+def test_existing_result_row_pointing_to_another_parse_revision_gets_no_text_filled(db):
+    repo.save_translation_batch(db, batch([ok(0)]))
+    other_parse_revision_copy(db)
+    sql(db, "INSERT INTO translation_results (translation_revision_id, chunk_id, failure_code, translated_text) "
+            "VALUES ('t1', 'x0', NULL, NULL)")
+    init_db(db)
+    assert sql(db, "SELECT translated_text FROM translation_results WHERE chunk_id='x0'")[0]['translated_text'] is None
+
+
+def test_mismatched_copy_never_becomes_a_published_snapshot_member(published):
+    other_parse_revision_copy(published)
+    legacy_state(published, [])
+    for _ in range(2):
+        init_db(published)
+        assert members(published) == ['c0', 'c1']
+    assert 'x0' not in members(published)
