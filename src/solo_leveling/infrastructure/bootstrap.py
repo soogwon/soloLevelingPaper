@@ -35,8 +35,9 @@ def build_services(db_path: str, chroma_client, *, generation: OpenAIGenerationS
     if verification is not None and verification.enabled:
         semantic = SemanticVerificationService(OpenAISemanticVerifier(generation, verification),
             max_claims=verification.max_claims, max_input_chars=verification.max_input_chars)
+    writer = SQLiteEvidenceWriter(db_path)
     return EvidenceQAServices(search,
-        AnswerService(search, OpenAIClaimGenerator(generation), SQLiteEvidenceWriter(db_path),
+        AnswerService(search, OpenAIClaimGenerator(generation), writer, save_history=writer.save_history,
                       continuation_reader=retriever, semantic_verification=semantic),
         EvidenceService(SQLiteEvidenceReader(db_path)),
         TranslationService(OpenAITranslationProvider(translation)), translation.translation_settings)

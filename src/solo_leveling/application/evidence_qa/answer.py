@@ -1,6 +1,6 @@
 """검색·구조 검증·선택적 모델 의미 검증·답변과 근거 저장을 연결한다."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import json
 from typing import Callable
 from uuid import uuid4
@@ -20,6 +20,9 @@ from .fragments import fragment_flags
 from solo_leveling.domain.semantic_verification import VerificationLevel, SemanticVerdict
 from .evidence_quality import assess_extraction_risk, assess_answer_overlaps, ExtractionReason
 from .validators import citation_from_evidence, validate_answer_against_search, validate_search_result
+from solo_leveling.domain.verification_history import (
+    HistoryClaim, HistoryReference, VerificationHistoryRecord, chunk_content_hash,
+)
 from .answer_audit import audit_effects
 
 
@@ -34,6 +37,7 @@ class AnswerResponse:
     search: SearchResult
     result: AnswerResult
     verification_level: VerificationLevel = VerificationLevel.STRUCTURAL_ONLY
+    verification_history: dict[str, str] = field(default_factory=lambda: {'status': 'not_used'})
 
 
 @dataclass
@@ -71,10 +75,12 @@ class AnswerService:
     def __init__(self, search: SearchEntryService, generator: ClaimGenerator,
                  evidence_writer: EvidenceWriter, *, id_factory: Callable[[], str] | None = None,
                  max_expanded_top_k: int = 20, continuation_reader: ContinuationReader | None = None,
-                 max_supplemental_chunks: int = 20, semantic_verification=None):
+                 max_supplemental_chunks: int = 20, semantic_verification=None,
+                 save_history: Callable[[VerificationHistoryRecord], bool] | None = None):
         positive_int(max_expanded_top_k, 'max_expanded_top_k')
         positive_int(max_supplemental_chunks, 'max_supplemental_chunks')
         self.continuation_reader = continuation_reader
+        self.save_history = save_history
         self.semantic_verification = semantic_verification
         self.max_supplemental_chunks = max_supplemental_chunks
         self.search = search
@@ -353,6 +359,8 @@ class AnswerService:
             for source, text in repair_origins.items())
         report, semantic_excluded = None, False
         repair_limited, missing_questions = False, ()
+        checked_claims = claims
+
         if self.semantic_verification is not None:
             used_for_check = {eid for claim in claims for eid in claim.evidence_ids}
             report = self.semantic_verification.check(claims, tuple(
@@ -373,7 +381,7 @@ class AnswerService:
                     ('의미 검증을 완료하지 못해 답변을 제공하지 않습니다. 근거 부재를 뜻하지 않습니다.'
                      if report.failure else '인용 원문이 주장 전체를 뒷받침하는지 확인하지 못해 답변을 제공하지 않습니다.'),
                     (), (), ReasonCode.VERIFICATION_FAILED if report.failure else ReasonCode.SEMANTIC_LIMITED)
-                return AnswerResponse(context_id, search, result, report.level)
+                return self._finish(context_id, search, result, report, checked_claims, evidence_by_id)
         used_ids = dict.fromkeys(eid for claim in claims for eid in claim.evidence_ids)
         used = tuple(evidence_by_id[eid] for eid in used_ids)
         with stage('evidence_validation'):
@@ -404,5 +412,31 @@ class AnswerService:
         # 저장 성공 전에는 성공 응답을 반환하지 않는다. DB 오류는 숨기지 않는다.
         with stage('evidence_save'):
             self.evidence_writer.save(context_id, used)
-        return AnswerResponse(context_id, search, result,
-                              report.level if report else VerificationLevel.STRUCTURAL_ONLY)
+        return self._finish(context_id, search, result, report, checked_claims, evidence_by_id)
+
+    def _finish(self, context_id, search, result, report, checked_claims, evidence_by_id):
+        if report is None:
+            return AnswerResponse(context_id, search, result)
+        status = 'failed'
+        if self.save_history is not None:
+            try:
+                retained_ids = {c.claim_id for c in result.claims}
+                judgments = {j.claim_id: j for j in report.judgments}
+                rows = []
+                for claim in (() if report.failure else checked_claims):
+                    judgment = judgments[claim.claim_id]
+                    refs = tuple(HistoryReference(evidence_by_id[eid].chunk_id,
+                        chunk_content_hash(evidence_by_id[eid].quote_original))
+                        for eid in claim.evidence_ids)
+                    rows.append(HistoryClaim(claim.claim_id, claim.text, judgment.verdict.value,
+                        judgment.reason.value, claim.claim_id in retained_ids, refs))
+                record = VerificationHistoryRecord(report.run_id, context_id, search.scope.version_id,
+                    search.scope.parse_revision_id, search.scope.translation_revision_id,
+                    search.embedding_set_id, report.model, report.prompt_version, report.elapsed_ms,
+                    report.level.value, report.failure.value if report.failure else None, tuple(rows))
+                if self.save_history(record):
+                    status = 'saved'
+            except Exception:
+                # 이력 저장은 별도 작업이다. 확정한 답변을 보존하고 오류 본문은 노출하지 않는다.
+                status = 'failed'
+        return AnswerResponse(context_id, search, result, report.level, {'status': status})
