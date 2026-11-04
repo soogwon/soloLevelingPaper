@@ -226,7 +226,8 @@ def _ingest_pages(
             page_limitations = _empty_page_limitations(parse_revision.page_count, chunks)
             repo.update_job_status(db_path, job.job_id, JobStatus.PROCESSING, JobStage.TRANSLATE)
             metadata = repo.get_translation_metadata(db_path, parse_revision.parse_revision_id)
-            pending = [c for c in chunks if c.text is None]
+            pending = repo.get_pending_translation_chunks(
+                db_path, parse_revision.parse_revision_id, metadata['translation_revision_id'] if metadata else None)
             if metadata:
                 translation_id = metadata['translation_revision_id']
                 stored_settings = TranslationSettings(*(metadata[k] for k in

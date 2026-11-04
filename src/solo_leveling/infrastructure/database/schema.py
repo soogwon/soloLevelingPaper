@@ -281,14 +281,7 @@ BEGIN
     JOIN chunks c ON c.chunk_id = r.chunk_id AND c.parse_revision_id = t.parse_revision_id
     WHERE r.translation_revision_id = NEW.translation_revision_id AND r.failure_code IS NULL;
 END;
--- 이 기능 이전에 만든 임베딩 세트는 현재의 성공 청크 집합으로 한 번 채운다(이미 기록된 세트는 건드리지 않는다).
-INSERT OR IGNORE INTO search_index_chunks (embedding_set_id, chunk_id)
-SELECT e.embedding_set_id, r.chunk_id
-FROM embedding_sets e
-JOIN translation_revisions t ON t.translation_revision_id = e.translation_revision_id
-JOIN translation_results r ON r.translation_revision_id = e.translation_revision_id AND r.failure_code IS NULL
-JOIN chunks c ON c.chunk_id = r.chunk_id AND c.parse_revision_id = t.parse_revision_id
-WHERE NOT EXISTS (SELECT 1 FROM search_index_chunks x WHERE x.embedding_set_id = e.embedding_set_id);
+-- 이 기능 이전에 만든 임베딩 세트의 집합은 init_db가 번역 결과 이관 뒤에 게시 기록과 맞는지 확인하고 채운다(_migrate_search_index_chunks).
 CREATE TABLE IF NOT EXISTS verification_runs (
     run_id TEXT PRIMARY KEY,
     context_id TEXT NOT NULL REFERENCES learning_contexts(context_id) ON DELETE CASCADE,
@@ -386,6 +379,7 @@ def init_db(db_path: str) -> None:
         conn.executescript(SCHEMA_SQL)
         _migrate_translation_results(conn)
         _migrate_search_indexes(conn)
+        _migrate_search_index_chunks(conn)
         # 기존 생성된 DB에 컬럼을 추가하는 형식.
         # 초기값은 NULL로 번역 설정을 임의로 채우지 않는다.
         with conn:
@@ -407,11 +401,53 @@ def _migrate_translation_results(conn: sqlite3.Connection) -> None:
         columns = {row['name'] for row in conn.execute('PRAGMA table_info(translation_results)')}
         if 'translated_text' not in columns:
             conn.execute('ALTER TABLE translation_results ADD COLUMN translated_text TEXT')
+        # 옛 사본은 그 번역 리비전이 가리키는 파싱 리비전의 청크일 때만 쓴다(다른 파싱 리비전의 사본은 이관하지 않는다).
         conn.execute(
             'UPDATE translation_results SET translated_text=(SELECT c.text FROM chunks c '
+            'JOIN translation_revisions t ON t.translation_revision_id=c.translation_revision_id '
+            'AND t.parse_revision_id=c.parse_revision_id '
             'WHERE c.chunk_id=translation_results.chunk_id '
             'AND c.translation_revision_id=translation_results.translation_revision_id) '
             'WHERE failure_code IS NULL AND translated_text IS NULL')
+        # 결과 행이 없는 옛 성공 청크(chunks.text만 있던 DB)를 결과 표로 옮긴다. 이미 있는 행은 건드리지 않는다.
+        conn.execute(
+            'INSERT OR IGNORE INTO translation_results (translation_revision_id, chunk_id, failure_code, translated_text) '
+            'SELECT c.translation_revision_id, c.chunk_id, NULL, c.text FROM chunks c '
+            'JOIN translation_revisions t ON t.translation_revision_id=c.translation_revision_id '
+            'AND t.parse_revision_id=c.parse_revision_id '
+            'WHERE c.text IS NOT NULL AND c.translation_revision_id IS NOT NULL')
+
+
+def _migrate_search_index_chunks(conn: sqlite3.Connection) -> None:
+    """게시된 색인의 성공 청크 집합(search_index_chunks)을 채운다. 반복 실행해도 같은 결과다.
+
+    번역 결과 이관이 끝난 뒤에 실행한다. 일부만 기록된 집합도 처리하되, 복원 근거가 게시 기록에 맞을 때만 채운다:
+    - 임베딩 세트의 번역 리비전·파싱 리비전이 게시 기록(search_indexes)과 같고,
+    - 그 번역 리비전의 성공 청크(같은 파싱 리비전 소속) 수가 게시 당시 chunk_count와 같고,
+    - 이미 기록된 멤버가 모두 그 후보 안에 있다.
+    하나라도 맞지 않으면 임의로 멤버를 추가하지 않고 그대로 둔다.
+    """
+    with conn:
+        published = conn.execute(
+            'SELECT e.embedding_set_id, e.translation_revision_id AS embedding_translation, '
+            's.translation_revision_id AS index_translation, s.parse_revision_id AS index_parse, s.chunk_count, '
+            't.parse_revision_id AS revision_parse '
+            'FROM embedding_sets e JOIN search_indexes s ON s.embedding_set_id=e.embedding_set_id '
+            'JOIN translation_revisions t ON t.translation_revision_id=e.translation_revision_id').fetchall()
+        for row in published:
+            if (row['embedding_translation'] != row['index_translation']
+                    or row['revision_parse'] != row['index_parse']):
+                continue
+            candidates = {r[0] for r in conn.execute(
+                'SELECT r.chunk_id FROM translation_results r JOIN chunks c ON c.chunk_id=r.chunk_id '
+                'AND c.parse_revision_id=? WHERE r.translation_revision_id=? AND r.failure_code IS NULL '
+                'AND r.translated_text IS NOT NULL', (row['index_parse'], row['index_translation']))}
+            members = {r[0] for r in conn.execute(
+                'SELECT chunk_id FROM search_index_chunks WHERE embedding_set_id=?', (row['embedding_set_id'],))}
+            if len(candidates) != row['chunk_count'] or not members <= candidates:
+                continue
+            conn.executemany('INSERT OR IGNORE INTO search_index_chunks (embedding_set_id, chunk_id) VALUES (?, ?)',
+                             [(row['embedding_set_id'], chunk_id) for chunk_id in sorted(candidates - members)])
 
 
 def _migrate_search_indexes(conn: sqlite3.Connection) -> None:
