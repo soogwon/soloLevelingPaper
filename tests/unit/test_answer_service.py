@@ -884,7 +884,11 @@ def test_condition_repair_respects_page_scope(repair_parts, pages):
         service.generator.repair_claims.assert_called_once()
     lookup.assert_called_once()
 
-@pytest.mark.parametrize('mode', ['joined', 'mixed', 'split', 'two_supported'])
+
+@pytest.mark.parametrize('mode', [
+    'joined', 'mixed', 'split', 'two_supported', 'unrelated_third', 'supporting_third',
+    'wider_left', 'wider_right', 'unrelated_comparison',
+])
 def test_joined_comparison_does_not_import_a_second_relation(parts, mode):
     from dataclasses import replace
 
@@ -899,6 +903,15 @@ def test_joined_comparison_does_not_import_a_second_relation(parts, mode):
     if mode == 'two_supported':
         rows[0] = ('The shorter these paths and the greater the relative position', good)
         rows[1] = ('relative position, the easier it is to learn.', extra)
+    if mode == 'wider_left':
+        rows[0] = ('Training is stable. ' + rows[0][0], good)
+    if mode == 'wider_right':
+        rows[1] = (rows[1][0] + ' Training is stable.', extra)
+    if mode == 'supporting_third':
+        rows[2] = ('The greater the relative position, the easier it is to learn.', extra)
+    if mode == 'unrelated_comparison':
+        rows[2] = ('The greater the batch size, the easier it is to train.',
+                   '배치가 클수록 훈련하기 쉽다.')
     items = tuple(RetrievedChunk(replace(search.items[0].chunk, chunk_id=f'c{i}', chunk_index=i,
         original_text=original, text=translation, pdf_page=6), 1., i + 1)
         for i, (original, translation) in enumerate(rows))
@@ -911,13 +924,14 @@ def test_joined_comparison_does_not_import_a_second_relation(parts, mode):
             return GeneratedClaim(text, tuple(e.evidence_id for e in used),
                 tuple(ClaimSupport(e.evidence_id, e.original_text) for e in used))
 
+        indices = (0, 1, 2) if mode in ('unrelated_third', 'supporting_third', 'unrelated_comparison') else (0, 1)
         claims = ([claim(good, 0), claim(extra, 1)] if mode == 'split' else
-                  [claim(good if mode == 'joined' else good + ' ' + extra, 0, 1)])
+                  [claim(good if mode == 'joined' else good + ' ' + extra, *indices)])
         return GeneratedAnswerDraft(tuple(claims + [claim(rows[2][1], 2)]))
 
     service.generator = SimpleNamespace(generate_claims=generate)
     result = service.answer('장거리 의존성에 어떤 영향을 주는가?', context_id='ctx', top_k=3).result
-    supported = mode in ('joined', 'two_supported')
+    supported = mode in ('joined', 'two_supported', 'supporting_third')
     expected = ['c0', 'c1', 'c2'] if supported else ['c2']
     expected_texts = [rows[2][1]]
     if supported:

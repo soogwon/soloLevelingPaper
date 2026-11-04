@@ -105,6 +105,22 @@ def _select_claim(claim: GeneratedClaim, evidence: Sequence[EvidenceInput]):
     return covered
 
 
+_COMPARATIVE = re.compile(r'\bthe\s+(?:shorter|longer|smaller|larger|greater|'
+                          r'easier|harder|fewer|more|less|better|worse)\b', re.I)
+
+
+def _has_independent_comparison(selected: _Selection, claim_text: str, conditions: set[str]) -> bool:
+    # 문장별 번역 정렬이 없으므로 온전히 인용한 단일 원문·번역 문장만 독립 근거로 인정한다.
+    ko = ' '.join((selected.evidence.text_ko or '').split())
+    return (selected.start == 0 and selected.end == len(selected.body)
+            and not selected.evidence.starts_mid_sentence
+            and sentence_ends(selected.body) == (len(selected.body),)
+            and len(_COMPARATIVE.findall(selected.body)) == 2
+            and sentence_ends(ko) == (len(ko),)
+            and ko.rstrip('.!?') in claim_text
+            and conditions <= set(re.findall(r'[가-힣]+수록', ko)))
+
+
 def _conflicting_joined_comparisons(claim: GeneratedClaim, left: _Selection, right: _Selection,
                                     selections: Sequence[_Selection]) -> bool:
     """겹친 두 번역의 서로 다른 비교 조건을 한 원문 조건에서 가져온 경우를 감지한다."""
@@ -116,23 +132,20 @@ def _conflicting_joined_comparisons(claim: GeneratedClaim, left: _Selection, rig
     second = conditions(right.evidence.text_ko) & asserted
     if not (first - second and second - first):
         return False
-    # 하나의 영어 상관 비교에 근거한 경우만 판정한다. 추가 원문을 인용했거나
-    # 하나 이상의 조건이 명시된 경우에는 구조만으로 추가 비교를 배제하지 않는다.
-    if len(selections) != 2:
-        return False
+    # joined()가 보장한 연결 문장만 검사한다. 앞뒤로 더 인용해도 연결 구간은 같다.
     tail = incomplete_tail_start(left.body)
     end = sentence_ends(right.body)[0]
-    if left.start != tail or right.end != end:
-        return False
     start, continuation = left.body[tail:], right.body[:end]
     # 단어 중간에서 시작하는 중복 구간도 한 번만 센다.
     overlap = next((len(start) - i for i in range(len(start))
                     if start[i] == continuation[0] and continuation.startswith(start[i:])), 0)
     source = start + (' ' if not overlap else '') + continuation[overlap:]
-    comparisons = re.findall(r'\bthe\s+(?:shorter|longer|smaller|larger|greater|'
-                             r'easier|harder|fewer|more|less|better|worse)\b', source, re.I)
-    return len(comparisons) == 2 and not re.search(r'\b(?:and|or)\s+(?:shorter|longer|'
-        r'smaller|larger|greater|more|less|fewer)\b', source, re.I)
+    if len(_COMPARATIVE.findall(source)) != 2 or re.search(
+            r'\b(?:and|or)\s+(?:shorter|longer|smaller|larger|greater|more|less|fewer)\b', source, re.I):
+        return False
+    pair_ids = {left.evidence.chunk_id, right.evidence.chunk_id}
+    return not any(_has_independent_comparison(item, ' '.join(claim.text.split()), second - first)
+                   for item in selections if item.evidence.chunk_id not in pair_ids)
 
 
 def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInput]) -> ExtractionAssessment:
