@@ -9,6 +9,7 @@
 import base64
 import binascii
 import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Sequence, Tuple
@@ -180,6 +181,7 @@ def validate_page_limit(limit) -> int:
 
 
 _CURSOR_FIELDS = ('c', 's', 'k', 't', 'i')
+_CURSOR_ALPHABET = re.compile(r'[A-Za-z0-9_-]+')
 _MAX_CURSOR_LENGTH = 512
 
 
@@ -198,8 +200,15 @@ def decode_cursor(cursor, context_id: str, step: Optional[str], kind: Optional[s
 
     if not isinstance(cursor, str) or not cursor or len(cursor) > _MAX_CURSOR_LENGTH:
         raise invalid()
+    # 서버가 발급한 형식(패딩 없는 Base64 URL)만 받는다. 알파벳 밖 문자가 섞인 입력은 디코더가 조용히 무시하므로
+    # 먼저 걸러내고, 다시 인코딩한 결과가 원래 입력과 같은지도 확인한다(끝 비트가 다른 변형도 거부).
+    if not _CURSOR_ALPHABET.fullmatch(cursor):
+        raise invalid()
     try:
-        data = json.loads(base64.urlsafe_b64decode(cursor + '=' * (-len(cursor) % 4)).decode('utf-8'))
+        decoded = base64.urlsafe_b64decode(cursor + '=' * (-len(cursor) % 4))
+        if base64.urlsafe_b64encode(decoded).decode('ascii').rstrip('=') != cursor:
+            raise invalid()
+        data = json.loads(decoded.decode('utf-8'))
     except (binascii.Error, UnicodeDecodeError, ValueError):
         raise invalid() from None
     if not isinstance(data, dict) or set(data) != set(_CURSOR_FIELDS):
@@ -209,4 +218,8 @@ def decode_cursor(cursor, context_id: str, step: Optional[str], kind: Optional[s
     created_at, annotation_id = data['t'], data['i']
     if not all(isinstance(v, str) and v for v in (created_at, annotation_id)):
         raise invalid()
+    try:  # 단독 서로게이트 등 UTF-8로 쓸 수 없는 위치 문자열은 DB 바인딩 단계에서 예외가 나므로 여기서 거부한다.
+        created_at.encode('utf-8'), annotation_id.encode('utf-8')
+    except UnicodeEncodeError:
+        raise invalid() from None
     return created_at, annotation_id

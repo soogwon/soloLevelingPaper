@@ -15,7 +15,7 @@
 - 본문·인용문은 로그에 남기지 않는다. 이유는 고정 코드로만 알린다.
 """
 from contextlib import closing
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
 from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
@@ -172,6 +172,25 @@ def list_annotations(db_path: str, context_id: str, step: Optional[str] = None,
         return [a for a in loaded if a is not None]  # 스냅샷 안이라 None은 생기지 않지만 방어한다.
 
 
+def annotation_page_query(context_id: str, step: Optional[str], kind: Optional[str], size: int,
+                          after: Optional[Tuple[str, str]] = None) -> Tuple[str, list]:
+    """한 페이지의 SQL과 매개변수를 만든다. 커서가 있으면 인덱스 탐색이 커서 위치에서 시작한다(#56).
+
+    `created_at >= 기준시각`이 인덱스(context_id, created_at, annotation_id)의 범위 조건이 되어 앞쪽 행을 훑지 않는다.
+    같은 시각의 행은 뒤따르는 `(created_at > ? OR annotation_id > ?)`로 걸러 기준 기록 뒤의 것만 남긴다.
+    OR 한 덩어리만 쓰면 범위로 쓰이지 못해 뒤쪽 페이지일수록 비용이 늘어난다.
+    """
+    query, params = 'SELECT annotation_id, created_at FROM annotations WHERE context_id=?', [context_id]
+    if step is not None:
+        query, params = query + ' AND step=?', params + [step]
+    if kind is not None:
+        query, params = query + ' AND kind=?', params + [kind]
+    if after is not None:
+        query, params = (query + ' AND created_at >= ? AND (created_at > ? OR annotation_id > ?)',
+                         params + [after[0], after[0], after[1]])
+    return query + ' ORDER BY created_at, annotation_id LIMIT ?', params + [size + 1]
+
+
 def list_annotation_page(db_path: str, context_id: str, step: Optional[str] = None, kind: Optional[str] = None,
                          limit: Optional[int] = None, cursor: Optional[str] = None) -> AnnotationPage:
     """한 맥락의 기록을 (created_at, annotation_id) 순으로 한 페이지 돌려준다.
@@ -182,20 +201,13 @@ def list_annotation_page(db_path: str, context_id: str, step: Optional[str] = No
     """
     size = validate_page_limit(limit)
     after = decode_cursor(cursor, context_id, step, kind) if cursor is not None else None
-    query, params = 'SELECT annotation_id, created_at FROM annotations WHERE context_id=?', [context_id]
-    if step is not None:
-        query, params = query + ' AND step=?', params + [step]
-    if kind is not None:
-        query, params = query + ' AND kind=?', params + [kind]
-    if after is not None:
-        query, params = (query + ' AND (created_at > ? OR (created_at = ? AND annotation_id > ?))',
-                         params + [after[0], after[0], after[1]])
+    query, params = annotation_page_query(context_id, step, kind, size, after)
     with closing(get_connection(db_path)) as conn:
         conn.execute('BEGIN')  # 읽기 스냅샷
         try:
             if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
                 raise ResourceNotFoundError('context not found')
-            rows = conn.execute(query + ' ORDER BY created_at, annotation_id LIMIT ?', params + [size + 1]).fetchall()
+            rows = conn.execute(query, params).fetchall()
             more = len(rows) > size
             rows = rows[:size]
             loaded = [_load(conn, r['annotation_id'], context_id) for r in rows]

@@ -214,3 +214,139 @@ def test_existing_limits_still_apply(env):
     assert code_of(lambda: ann.create_annotation(db, ctx, 'note', 'x' * 5001)) is None  # 본문 5,000자
     with pytest.raises(AnnotationValidationError):
         ann.create_annotation(db, ctx, 'highlight', '', [seg(start=i, end=i + 1, quote='F') for i in range(21)])
+
+
+# ── B 리뷰 반영: 커서 엄격 검사 + 뒤쪽 페이지 조회 비용 ─────────────────────────────────────────
+def _b64(text_or_bytes):
+    raw = text_or_bytes if isinstance(text_or_bytes, bytes) else text_or_bytes.encode('utf-8')
+    return base64.urlsafe_b64encode(raw).decode('ascii').rstrip('=')
+
+
+def _crafted(created_at, annotation_id, ensure_ascii=True):
+    return _b64(json.dumps({'c': 'ctx', 's': None, 'k': None, 't': created_at, 'i': annotation_id},
+                           separators=(',', ':'), sort_keys=True, ensure_ascii=ensure_ascii))
+
+
+def test_valid_cursor_with_trailing_junk_is_rejected_not_ignored(env):
+    db, ctx = env
+    add_notes(db, ctx, 6)
+    page = ann.list_annotation_page(db, ctx, limit=3)
+    good = page.next_cursor
+    assert ann.list_annotation_page(db, ctx, limit=3, cursor=good).items            # 정상 커서는 통과
+    for junk in ('!!!!', '====', ' ', '\n', '%41', '+', '/', '.', '*'):
+        for bad in (good + junk, junk + good, good[:5] + junk + good[5:]):
+            error = None
+            try:
+                ann.list_annotation_page(db, ctx, limit=3, cursor=bad)
+            except AnnotationValidationError as caught:
+                error = caught
+            assert error is not None and error.code == INVALID_CURSOR, repr(bad)
+            assert bad not in str(error) and 'ctx' not in str(error)               # 입력을 노출하지 않는다
+
+
+def test_padded_or_noncanonical_base64_cursor_is_rejected(env):
+    db, ctx = env
+    add_notes(db, ctx, 4)
+    good = ann.list_annotation_page(db, ctx, limit=2).next_cursor
+    padded = good + '=' * (-len(good) % 4)
+    if padded != good:
+        assert code_of(lambda: ann.list_annotation_page(db, ctx, cursor=padded)) == INVALID_CURSOR
+    # 끝 문자의 남는 비트만 바꾼 변형은 같은 값으로 디코딩되지만 서버가 발급한 형식이 아니다.
+    alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+    if len(good) % 4 in (2, 3):
+        index = alphabet.index(good[-1])
+        for other in (alphabet[(index + 1) % 64], alphabet[(index + 2) % 64], alphabet[(index + 3) % 64]):
+            variant = good[:-1] + other
+            if variant != good and base64.urlsafe_b64decode(variant + '=' * (-len(variant) % 4)) == \
+                    base64.urlsafe_b64decode(good + '=' * (-len(good) % 4)):
+                assert code_of(lambda: ann.list_annotation_page(db, ctx, cursor=variant)) == INVALID_CURSOR
+
+
+@pytest.mark.parametrize('created_at, annotation_id', [
+    ('\ud800', 'a1'), ('2026-01-01T00:00:00+00:00', '\ud800'), ('\udfff', '\ud800'), ('2026\udc00', 'a\ud800b')])
+def test_lone_surrogate_position_is_invalid_cursor_not_unicode_error(env, created_at, annotation_id):
+    db, ctx = env
+    add_notes(db, ctx, 2)
+    cursor = _crafted(created_at, annotation_id)
+    try:
+        ann.list_annotation_page(db, ctx, cursor=cursor)
+    except AnnotationValidationError as error:
+        assert error.code == INVALID_CURSOR and cursor not in str(error) and '\ud800' not in str(error)
+    else:
+        pytest.fail('INVALID_CURSOR가 아니라 통과했다')
+
+
+def test_normal_non_ascii_position_still_works(env):
+    db, ctx = env
+    cursor = _crafted('2026-01-01T00:00:00+00:00', '메모-가', ensure_ascii=False)
+    assert decode_cursor(cursor, 'ctx', None, None) == ('2026-01-01T00:00:00+00:00', '메모-가')
+
+
+def bulk_annotations(db, ctx, total, per_second=1):
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute('PRAGMA foreign_keys = OFF')
+        conn.executemany(
+            'INSERT INTO annotations(annotation_id, context_id, kind, body, step, revision, created_at, updated_at) '
+            "VALUES (?, ?, ?, '', ?, 1, ?, ?)",
+            [(f'b{i:05d}', ctx, ('note', 'highlight')[i % 2], ('preview', 'review', None)[i % 3],
+              f'2026-01-01T{(i // per_second) // 3600:02d}:{((i // per_second) % 3600) // 60:02d}:{(i // per_second) % 60:02d}+00:00',
+              '2026-01-01T00:00:00+00:00') for i in range(total)])
+
+
+def page_work(db, ctx, step, kind, after_id, size=20):
+    """실제 조회 SQL(annotation_page_query)의 실행 계획과 SQLite 실행 명령 수를 잰다."""
+    with closing(get_connection(db)) as conn:
+        row = conn.execute('SELECT created_at, annotation_id FROM annotations WHERE annotation_id=?',
+                           (after_id,)).fetchone()
+        sql, params = ann.annotation_page_query(ctx, step, kind, size, (row['created_at'], row['annotation_id']))
+        plan = ' | '.join(r[3] for r in conn.execute('EXPLAIN QUERY PLAN ' + sql, params))
+        count = [0]
+        conn.set_progress_handler(lambda: count.__setitem__(0, count[0] + 1), 1)
+        rows = conn.execute(sql, params).fetchall()
+        conn.set_progress_handler(None, 0)
+    return plan, count[0], len(rows)
+
+
+@pytest.mark.parametrize('step, kind', [(None, None), ('review', None), (None, 'note'), ('review', 'note')])
+def test_deep_page_starts_at_the_cursor_in_the_index(env, step, kind):
+    db, ctx = env
+    bulk_annotations(db, ctx, 6000)
+    plan_early, work_early, n_early = page_work(db, ctx, step, kind, 'b00010')
+    plan_deep, work_deep, n_deep = page_work(db, ctx, step, kind, 'b05400')
+    for plan in (plan_early, plan_deep):
+        assert 'created_at>' in plan and 'idx_annotations_page' in plan and 'TEMP B-TREE' not in plan, plan
+    assert n_early == 21 and n_deep >= 1
+    assert work_deep < work_early * 3 and work_deep < 3000, (work_early, work_deep)   # 위치와 거의 무관하다
+
+
+def test_same_timestamp_boundaries_have_no_gap_or_duplicate(env):
+    db, ctx = env
+    bulk_annotations(db, ctx, 80, per_second=8)           # 한 시각에 8건씩 몰린다
+    expected = [f'b{i:05d}' for i in range(80)]
+    for limit in (1, 3, 8, 9, 50):
+        seen = [a.annotation_id for page in walk(db, ctx, limit=limit) for a in page.items]
+        assert seen == expected, limit
+    seen = [a.annotation_id for page in walk(db, ctx, limit=5, step='review', kind='note') for a in page.items]
+    assert seen == [f'b{i:05d}' for i in range(80) if i % 3 == 1 and i % 2 == 0]
+
+
+def test_deep_pages_match_a_full_listing_and_survive_anchor_deletion(env):
+    db, ctx = env
+    bulk_annotations(db, ctx, 400, per_second=3)
+    expected = [f'b{i:05d}' for i in range(400)]
+    assert [a.annotation_id for page in walk(db, ctx, limit=50) for a in page.items] == expected
+    first = ann.list_annotation_page(db, ctx, limit=50)
+    anchor = first.items[-1]
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute('DELETE FROM annotations WHERE annotation_id=?', (anchor.annotation_id,))   # 기준 기록 삭제
+    rest = [a.annotation_id for page in walk_from(db, ctx, first.next_cursor, 50) for a in page.items]
+    assert rest == expected[50:]                                  # 삭제된 기준 뒤에서 그대로 이어진다
+
+
+def walk_from(db, ctx, cursor, limit):
+    pages = []
+    while cursor is not None:
+        page = ann.list_annotation_page(db, ctx, limit=limit, cursor=cursor)
+        pages.append(page)
+        cursor = page.next_cursor
+    return pages
