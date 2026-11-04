@@ -108,3 +108,16 @@ def test_apply_option_is_not_available(tmp_path):
     with pytest.raises(SystemExit) as error:
         main(['--log-dir', str(tmp_path), '--apply'])
     assert error.value.code == 2
+
+
+@pytest.mark.parametrize('invalid', [
+    ['--review-days', 'D:/private/sample.pdf'],
+    ['--private-option', 'private-value'],
+])
+def test_cli_parse_error_does_not_echo_input(tmp_path, capsys, invalid):
+    with pytest.raises(SystemExit) as error:
+        main(['--log-dir', str(tmp_path), *invalid])
+    captured = capsys.readouterr()
+    assert error.value.code == 2
+    assert captured.out == ''
+    assert json.loads(captured.err) == {'error_code': 'LOG_INVENTORY_UNAVAILABLE'}

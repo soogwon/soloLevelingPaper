@@ -74,8 +74,14 @@ def inventory(directory: Path, *, review_days=30, max_bytes=104857600,
             'complete': unreadable == 0}
 
 
+class _InventoryParser(argparse.ArgumentParser):
+    def error(self, message):
+        # argparse의 오류 설명에는 사용자가 입력한 경로나 옵션 값이 포함될 수 있다.
+        self.exit(2, '{"error_code": "LOG_INVENTORY_UNAVAILABLE"}\n')
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='진단 로그 보관 검토 미리보기')
+    parser = _InventoryParser(description='진단 로그 보관 검토 미리보기')
     parser.add_argument('--log-dir', required=True, type=Path)
     parser.add_argument('--review-days', type=float, default=30)
     parser.add_argument('--max-bytes', type=int, default=104857600)
