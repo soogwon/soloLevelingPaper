@@ -6,9 +6,13 @@
 - 위치(맥락·청크·구간)는 바꾸지 않는다. 바꾸려면 새 기록을 만든다. 본문과 학습 단계만 수정할 수 있다.
 - 메모 본문과 인용문은 사용자 데이터라 로그에 남기지 않는다. 오류에는 고정 코드만 쓴다.
 """
+import base64
+import binascii
+import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 from solo_leveling.domain.learning_progress import LEARNING_STEPS
 
@@ -23,10 +27,26 @@ TARGETS: tuple = (TARGET_ORIGINAL, TARGET_TRANSLATION)
 MAX_BODY_LENGTH = 5000
 MAX_QUOTE_LENGTH = 2000
 MAX_SEGMENTS = 20
+MAX_QUOTE_TOTAL_LENGTH = 8000  # 기록 하나의 구간 인용문 길이 합계(#56)
+DEFAULT_PAGE_SIZE = 20
+MAX_PAGE_SIZE = 50
+
+# 공개 인터페이스가 구분할 수 있는 고정 오류 코드(AnnotationValidationError.code)
+DUPLICATE_SEGMENT = 'DUPLICATE_SEGMENT'
+QUOTE_TOTAL_TOO_LONG = 'QUOTE_TOTAL_TOO_LONG'
+INVALID_LIMIT = 'INVALID_LIMIT'
+INVALID_CURSOR = 'INVALID_CURSOR'
 
 
 class AnnotationValidationError(ValueError):
-    """기록·구간의 형식이 맞지 않는다. 본문·인용문은 메시지에 넣지 않는다."""
+    """기록·구간의 형식이 맞지 않는다. 본문·인용문은 메시지에 넣지 않는다.
+
+    code는 호출자가 구분해야 하는 오류에만 있는 고정 문자열이고, 나머지는 None이다.
+    """
+
+    def __init__(self, message: str, code: Optional[str] = None):
+        super().__init__(message)
+        self.code = code
 
 
 class AnnotationOutcome(str, Enum):
@@ -126,3 +146,80 @@ def validate_annotation_fields(kind: str, body: str, step: Optional[str], segmen
         raise AnnotationValidationError('구간이 너무 많음')
     if step is not None and step not in LEARNING_STEPS:
         raise AnnotationValidationError('지원하지 않는 학습 단계')
+
+
+def validate_segments(segments: Sequence[SegmentInput]) -> None:
+    """구간 묶음의 규칙: 인용문 길이 합계 제한, 같은 구간 중복 금지. 일부만 겹치는 구간은 허용한다.
+
+    중복 기준은 (chunk_id, target, translation_revision_id, start, end)가 모두 같을 때다.
+    원문 구간의 번역 리비전은 None으로 비교한다. 한 기록 안에서만 비교한다.
+    """
+    if sum(len(s.quote_snapshot) for s in segments) > MAX_QUOTE_TOTAL_LENGTH:
+        raise AnnotationValidationError('인용문 길이 합계가 너무 김', QUOTE_TOTAL_TOO_LONG)
+    seen = set()
+    for s in segments:
+        key = (s.chunk_id, s.target, s.translation_revision_id, s.start_offset, s.end_offset)
+        if key in seen:
+            raise AnnotationValidationError('같은 구간이 중복됨', DUPLICATE_SEGMENT)
+        seen.add(key)
+
+
+@dataclass(frozen=True)
+class AnnotationPage:
+    """목록 한 페이지. next_cursor가 None이면 마지막 페이지다."""
+    items: Tuple[Annotation, ...]
+    next_cursor: Optional[str] = None
+
+
+def validate_page_limit(limit) -> int:
+    """None이면 기본값. 정수 1..MAX_PAGE_SIZE만 허용한다(bool 제외)."""
+    if limit is None:
+        return DEFAULT_PAGE_SIZE
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_PAGE_SIZE:
+        raise AnnotationValidationError('limit 범위가 올바르지 않음', INVALID_LIMIT)
+    return limit
+
+
+_CURSOR_FIELDS = ('c', 's', 'k', 't', 'i')
+_CURSOR_ALPHABET = re.compile(r'[A-Za-z0-9_-]+')
+_MAX_CURSOR_LENGTH = 512
+
+
+def encode_cursor(context_id: str, step: Optional[str], kind: Optional[str], created_at: str,
+                  annotation_id: str) -> str:
+    """다음 페이지의 시작 위치를 불투명 문자열로 만든다. 발급한 맥락·필터가 함께 들어간다."""
+    raw = json.dumps({'c': context_id, 's': step, 'k': kind, 't': created_at, 'i': annotation_id},
+                     separators=(',', ':'), sort_keys=True)
+    return base64.urlsafe_b64encode(raw.encode('utf-8')).decode('ascii').rstrip('=')
+
+
+def decode_cursor(cursor, context_id: str, step: Optional[str], kind: Optional[str]) -> Tuple[str, str]:
+    """커서를 (created_at, annotation_id)로 푼다. 형식 오류이거나 다른 맥락·필터의 커서면 INVALID_CURSOR."""
+    def invalid():
+        return AnnotationValidationError('커서가 올바르지 않음', INVALID_CURSOR)
+
+    if not isinstance(cursor, str) or not cursor or len(cursor) > _MAX_CURSOR_LENGTH:
+        raise invalid()
+    # 서버가 발급한 형식(패딩 없는 Base64 URL)만 받는다. 알파벳 밖 문자가 섞인 입력은 디코더가 조용히 무시하므로
+    # 먼저 걸러내고, 다시 인코딩한 결과가 원래 입력과 같은지도 확인한다(끝 비트가 다른 변형도 거부).
+    if not _CURSOR_ALPHABET.fullmatch(cursor):
+        raise invalid()
+    try:
+        decoded = base64.urlsafe_b64decode(cursor + '=' * (-len(cursor) % 4))
+        if base64.urlsafe_b64encode(decoded).decode('ascii').rstrip('=') != cursor:
+            raise invalid()
+        data = json.loads(decoded.decode('utf-8'))
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        raise invalid() from None
+    if not isinstance(data, dict) or set(data) != set(_CURSOR_FIELDS):
+        raise invalid()
+    if (data['c'], data['s'], data['k']) != (context_id, step, kind):
+        raise invalid()
+    created_at, annotation_id = data['t'], data['i']
+    if not all(isinstance(v, str) and v for v in (created_at, annotation_id)):
+        raise invalid()
+    try:  # 단독 서로게이트 등 UTF-8로 쓸 수 없는 위치 문자열은 DB 바인딩 단계에서 예외가 나므로 여기서 거부한다.
+        created_at.encode('utf-8'), annotation_id.encode('utf-8')
+    except UnicodeEncodeError:
+        raise invalid() from None
+    return created_at, annotation_id
