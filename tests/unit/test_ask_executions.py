@@ -312,3 +312,134 @@ def test_invalid_inputs_are_rejected_without_echoing_values(env, call):
         call(db, ctx)
     assert '비밀' not in str(info.value)
     assert snapshot(db) == []
+
+
+# ── B 리뷰 반영: 잠금 대기 중 임대 만료 · 다른 context · 소유자 토큰 형식 ─────────────────────
+import sqlite3  # noqa: E402
+import time  # noqa: E402
+
+
+class _AdvanceOnLock:
+    """BEGIN IMMEDIATE를 실행하기 직전에 시계를 앞으로 보내, 쓰기 잠금을 기다리는 동안 시간이 흐른 상황을 흉내 낸다."""
+
+    def __init__(self, conn, advance):
+        self._conn, self._advance = conn, advance
+
+    def execute(self, sql, *args, **kwargs):
+        if isinstance(sql, str) and sql.strip().upper().startswith('BEGIN IMMEDIATE'):
+            self._advance()
+        return self._conn.execute(sql, *args, **kwargs)
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._conn.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+@pytest.fixture
+def lock_wait(monkeypatch):
+    """ax._utcnow()가 돌려주는 시각을 제어한다. wait(seconds)를 부르면 다음 BEGIN IMMEDIATE에서 그만큼 흐른다."""
+    state = {'now': T0, 'pending': timedelta(0)}
+    monkeypatch.setattr(ax, '_utcnow', lambda: state['now'])
+    real = ax.get_connection
+
+    def advance():
+        state['now'] += state['pending']
+        state['pending'] = timedelta(0)
+
+    monkeypatch.setattr(ax, 'get_connection', lambda path: _AdvanceOnLock(real(path), advance))
+
+    def wait(seconds):
+        state['pending'] = timedelta(seconds=seconds)
+
+    return wait
+
+
+@pytest.mark.parametrize('action', ['heartbeat', 'complete', 'fail'])
+def test_lease_that_ends_while_waiting_for_the_write_lock_is_lost(env, lock_wait, action):
+    db, ctx = env
+    token = start(db, ctx, now=T0 - timedelta(seconds=58))      # 임대는 T0 + 2초에 끝난다
+    before = snapshot(db)
+    lock_wait(2.5)                                               # 잠금을 기다리는 사이 2.5초가 흐른다
+    calls = {
+        'heartbeat': lambda: ax.heartbeat_execution(db, 'k1', token),
+        'complete': lambda: ax.complete_execution(db, 'k1', token, RESULT),
+        'fail': lambda: ax.fail_execution(db, 'k1', token, 'GENERATION_FAILED'),
+    }
+    assert calls[action]().outcome is O.LEASE_LOST
+    assert snapshot(db) == before                                # 기존 행은 그대로다
+
+
+@pytest.mark.parametrize('action', ['heartbeat', 'complete', 'fail'])
+def test_lease_still_valid_after_the_write_lock_is_saved(env, lock_wait, action):
+    db, ctx = env
+    token = start(db, ctx, now=T0 - timedelta(seconds=58))
+    lock_wait(1.0)                                               # 임대 안에서 얻은 잠금은 정상 처리
+    calls = {
+        'heartbeat': lambda: ax.heartbeat_execution(db, 'k1', token).outcome is O.RENEWED,
+        'complete': lambda: ax.complete_execution(db, 'k1', token, RESULT).outcome is O.SAVED,
+        'fail': lambda: ax.fail_execution(db, 'k1', token, 'GENERATION_FAILED').outcome is O.SAVED,
+    }
+    assert calls[action]()
+
+
+def test_real_write_lock_held_past_the_lease_boundary(env):
+    """B 재현: 임대가 약 2초 남았을 때 다른 연결이 쓰기 잠금을 잡고 2.5초 뒤 푼다. 실제 시계로 확인한다."""
+    db, ctx = env
+    real_now = datetime.now(timezone.utc)
+    token = start(db, ctx, now=real_now - timedelta(seconds=58))
+    before = snapshot(db)
+    blocker = sqlite3.connect(db, isolation_level=None, check_same_thread=False)
+    blocker.execute('BEGIN IMMEDIATE')
+    released = threading.Timer(2.5, lambda: blocker.execute('ROLLBACK'))
+    released.start()
+    try:
+        started = time.monotonic()
+        result = ax.complete_execution(db, 'k1', token, RESULT)    # now를 주지 않는다: 실제 시각을 쓴다
+        assert time.monotonic() - started >= 2.0
+    finally:
+        released.join()
+        blocker.close()
+    assert result.outcome is O.LEASE_LOST
+    assert snapshot(db) == before
+
+
+def test_existing_key_and_hash_with_another_context_is_a_conflict_before_any_state(env):
+    db, ctx = env
+    token = start(db, ctx)
+    assert ax.complete_execution(db, 'k1', token, RESULT, at(seconds=1)).outcome is O.SAVED
+    token_row = snapshot(db)
+    for other in ('no-such-context', 'ctx2'):
+        with pytest.raises(RequestConflictError) as info:
+            ax.begin_execution(db, 'k1', 'h1', other, at(seconds=2))
+        assert '비밀' not in str(info.value) and 'k1' not in str(info.value)    # 상태·본문·키를 노출하지 않는다
+    assert snapshot(db) == token_row                                         # 행도 바뀌지 않았다
+
+
+def test_same_key_hash_and_context_still_returns_the_stored_result(env):
+    db, ctx = env
+    token = start(db, ctx)
+    assert ax.complete_execution(db, 'k1', token, RESULT, at(seconds=1)).outcome is O.SAVED
+    again = ax.begin_execution(db, 'k1', 'h1', ctx, at(seconds=2))
+    assert again.outcome is O.COMPLETED and again.view.result_json == RESULT and again.owner_token is None
+    with pytest.raises(RequestConflictError):
+        ax.begin_execution(db, 'k1', 'other-hash', ctx, at(seconds=2))         # 해시가 달라도 거부(기존 계약)
+
+
+@pytest.mark.parametrize('bad', ['가', '한글토큰', '\ud800', 'ａｂｃ', 'A' * 32, 'g' * 32, 'x' * 31, '0' * 33,
+                                 '0123456789abcdef0123456789abcde가'])
+def test_malformed_owner_token_is_lease_lost_without_exception_and_changes_nothing(env, bad):
+    db, ctx = env
+    token = start(db, ctx)
+    assert bad != token
+    before = snapshot(db)
+    assert ax.heartbeat_execution(db, 'k1', bad, at(seconds=1)).outcome is O.LEASE_LOST
+    assert ax.complete_execution(db, 'k1', bad, RESULT, at(seconds=1)).outcome is O.LEASE_LOST
+    assert ax.fail_execution(db, 'k1', bad, 'SOME_FAILURE', at(seconds=1)).outcome is O.LEASE_LOST
+    assert snapshot(db) == before
+    assert ax.heartbeat_execution(db, 'k1', token, at(seconds=1)).outcome is O.RENEWED     # 진짜 토큰은 그대로 동작

@@ -3,7 +3,8 @@
 - 모든 쓰기는 짧은 트랜잭션 하나(BEGIN IMMEDIATE)다. 시작·갱신·결과 저장이 서로 끼어들 수 없다.
 - 단일 실행권: 같은 키의 begin_execution은 처음 한 번만 STARTED와 소유자 토큰을 준다. 이후 호출은 토큰 없이 현재 상태를 알려 준다.
   임대가 지난 실행도 새 소유자에게 넘기지 않는다(자동 재시작 금지). 새 실행은 새 키로만 시작한다.
-- 같은 키에 다른 입력 해시가 오면 RequestConflictError. 상태를 보기 전에 먼저 확인한다.
+- 같은 키라도 저장된 context나 입력 해시가 다르면 RequestConflictError. 상태·본문을 읽기 전에 먼저 확인한다.
+- 임대 만료 판단 시각은 쓰기 잠금을 얻은 직후에 정한다(잠금 대기 중에 임대가 지났으면 LEASE_LOST). 시각을 주입한 경우는 그 값을 쓴다.
 - 만료된 실행의 하트비트·결과·실패 기록은 LEASE_LOST로 거부하고 아무것도 바꾸지 않는다. 임대 판정은 now < lease_expires_at이다.
 - lookup_execution은 읽기 전용이다. 상태는 저장된 시각과 now로 계산하며 조회가 행을 바꾸지 않는다.
 - 결과 보존이 지나면 EXPIRED로 보이고 본문은 돌려주지 않는다. 실제 정리(purge)는 plan으로 건수를 본 뒤 명시적으로 호출한다.
@@ -13,6 +14,7 @@
 """
 import hmac
 import json
+import re
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -26,9 +28,16 @@ from solo_leveling.domain.models import RequestConflictError
 from solo_leveling.infrastructure.database.schema import get_connection
 
 
+_TOKEN = re.compile(r'[0-9a-f]{32}')   # 서버가 발급하는 소유자 토큰의 형식(uuid4().hex)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _ts(value: Optional[datetime]) -> str:
     """고정 폭 UTC 문자열. 문자열 비교가 시각 비교와 같다."""
-    moment = datetime.now(timezone.utc) if value is None else value
+    moment = _utcnow() if value is None else value
     if moment.tzinfo is None:
         raise ExecutionValidationError('now')
     return moment.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
@@ -55,19 +64,29 @@ _OUTCOME = {ExecutionState.RUNNING: ExecutionOutcome.IN_PROGRESS, ExecutionState
             ExecutionState.FAILED: ExecutionOutcome.FAILED, ExecutionState.EXPIRED: ExecutionOutcome.EXPIRED}
 
 
+def _at_lock(fixed: Optional[str]) -> tuple[str, datetime]:
+    """쓰기 잠금을 얻은 직후의 시각. 시각을 주입했으면 그 값을 쓴다(테스트·정리 기준).
+
+    잠금을 기다리는 동안 시간이 흐르므로, 임대 검사에 잠금 전에 얻은 시각을 쓰면 만료된 실행이 저장될 수 있다.
+    """
+    stamp = fixed if fixed is not None else _ts(None)
+    return stamp, datetime.strptime(stamp, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+
+
 def begin_execution(db_path: str, request_key: str, input_hash: str, context_id: str,
                     now: Optional[datetime] = None) -> ExecutionResult:
     """새 키면 실행을 시작하고 소유자 토큰을 돌려준다. 기존 키면 상태만 알려 주고 실행하지 않는다."""
     check_text(request_key, 'request_key')
     check_text(input_hash, 'input_hash')
     check_text(context_id, 'context_id')
-    stamp = _ts(now)
-    moment = datetime.strptime(stamp, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+    fixed = _ts(now) if now is not None else None   # 주입한 시각은 형식을 먼저 검사한다
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
+        stamp, moment = _at_lock(fixed)
         row = conn.execute('SELECT * FROM ask_executions WHERE request_key=?', (request_key,)).fetchone()
         if row is not None:
-            if row['input_hash'] != input_hash:
+            # 기존 행은 저장된 context와 입력 해시가 모두 같을 때만 재사용한다. 상태·본문은 그 뒤에 읽는다.
+            if row['input_hash'] != input_hash or row['context_id'] != context_id:
                 raise RequestConflictError('같은 request_key가 다른 입력에 사용되었습니다.')
             view = _view(row, stamp)
             return ExecutionResult(_OUTCOME[view.state], view=view)
@@ -84,12 +103,22 @@ def begin_execution(db_path: str, request_key: str, input_hash: str, context_id:
         return ExecutionResult(ExecutionOutcome.STARTED, token, _view(row, stamp))
 
 
+def _is_owner(stored: str, given) -> bool:
+    """형식이 서버가 발급한 토큰(소문자 16진수 32자)인 입력만 상수 시간 비교한다. 그 밖의 값은 소유자가 아니다.
+
+    hmac.compare_digest는 ASCII가 아닌 문자열에서 TypeError를 내므로 비교 전에 형식을 확인한다.
+    """
+    if not isinstance(given, str) or not _TOKEN.fullmatch(given) or not _TOKEN.fullmatch(stored):
+        return False
+    return hmac.compare_digest(stored.encode('ascii'), given.encode('ascii'))
+
+
 def _owned_running(conn, request_key: str, owner_token: str, stamp: str):
     """소유자 토큰이 맞고, 실행 중이며, 임대가 남아 있는 행. 아니면 (None, 결과 코드)."""
     row = conn.execute('SELECT * FROM ask_executions WHERE request_key=?', (request_key,)).fetchone()
     if row is None:
         return None, ExecutionOutcome.NOT_FOUND
-    if (not hmac.compare_digest(row['owner_token'], owner_token) or row['status'] != 'running'
+    if (not _is_owner(row['owner_token'], owner_token) or row['status'] != 'running'
             or stamp >= row['lease_expires_at'] or stamp >= row['key_expires_at']):
         return None, ExecutionOutcome.LEASE_LOST
     return row, None
@@ -100,10 +129,10 @@ def heartbeat_execution(db_path: str, request_key: str, owner_token: str,
     """임대를 갱신한다. 만료됐거나 토큰이 다르면 LEASE_LOST이고 아무것도 바꾸지 않는다."""
     check_text(request_key, 'request_key')
     check_text(owner_token, 'owner_token')
-    stamp = _ts(now)
-    moment = datetime.strptime(stamp, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+    fixed = _ts(now) if now is not None else None
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
+        stamp, moment = _at_lock(fixed)
         row, code = _owned_running(conn, request_key, owner_token, stamp)
         if row is None:
             return ExecutionResult(code)
@@ -125,10 +154,10 @@ def complete_execution(db_path: str, request_key: str, owner_token: str, result_
         json.loads(result_json)
     except ValueError:
         raise ExecutionValidationError('result_json') from None
-    stamp = _ts(now)
-    moment = datetime.strptime(stamp, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+    fixed = _ts(now) if now is not None else None
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
+        stamp, moment = _at_lock(fixed)
         row, code = _owned_running(conn, request_key, owner_token, stamp)
         if row is None:
             return ExecutionResult(code)
@@ -145,9 +174,10 @@ def fail_execution(db_path: str, request_key: str, owner_token: str, failure_cod
     check_text(request_key, 'request_key')
     check_text(owner_token, 'owner_token')
     check_failure_code(failure_code)
-    stamp = _ts(now)
+    fixed = _ts(now) if now is not None else None
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
+        stamp, _ = _at_lock(fixed)
         row, code = _owned_running(conn, request_key, owner_token, stamp)
         if row is None:
             return ExecutionResult(code)
