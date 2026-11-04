@@ -104,7 +104,7 @@ def test_cleanup_failure_is_safe_and_not_reported_as_success(failure, capsys):
 def prepare_runtime(monkeypatch):
     embedder = Mock()
     client = SimpleNamespace(close=Mock())
-    services = SimpleNamespace(answer=SimpleNamespace(semantic_verification=None), evidence=object(),
+    services = SimpleNamespace(executions=object(), answer=SimpleNamespace(semantic_verification=None), evidence=object(),
         search=SimpleNamespace(contexts=object()), translation=object(), translation_settings=object())
     monkeypatch.setattr(runtime, 'ProcessEmbedder', Mock(return_value=embedder))
     monkeypatch.setattr(runtime, 'get_client', Mock(return_value=client))

@@ -15,6 +15,8 @@ from solo_leveling.application.evidence_qa.serialization import (
 )
 from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
 from solo_leveling.application.evidence_qa.ports import DefaultContextStore
+from solo_leveling.domain.ask_execution import ExecutionOutcome, ExecutionValidationError, ExecutionView
+from solo_leveling.infrastructure.generation.ask_execution_service import AskExecutionService
 from solo_leveling.domain.evidence_qa import require_text
 from solo_leveling.application.paper_detail.service import PaperDetailService
 from .errors import to_tool_error
@@ -91,6 +93,7 @@ class MCPServices:
     detail: PaperDetailService | None = None
     reflection: ReflectionService | None = None
     quiz: QuizContractAdapter | None = None
+    executions: AskExecutionService | None = None
 
 
 class Focus(BaseModel):
@@ -150,6 +153,17 @@ class AskPaperOutput(BaseModel):
         if self.verification_history is None:
             payload.pop('verification_history', None)
         return payload
+
+
+class ExecutionOutput(TypedDict):
+    state: str
+    failure_code: str | None
+    answer: AskPaperOutput | None
+
+
+def _execution_output(view: ExecutionView) -> ExecutionOutput:
+    return {'state': view.state.value, 'failure_code': view.failure_code,
+            'answer': AskPaperOutput.model_validate_json(view.result_json) if view.result_json else None}
 
 
 class EvidenceOutput(CitationOutput):
@@ -383,10 +397,60 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                     'goal': context.goal,
                     'known_concepts': list(context.known_concepts),
                     'status': 'ready',
-                    'capabilities': ['ask_paper', 'get_evidence'],
+                    'capabilities': ['ask_paper', 'get_evidence'] + (
+                        ['submit_paper_question', 'get_paper_question_status'] if services.executions else []),
                 }
             except Exception as error:
                 raise to_tool_error(error) from None
+
+    if services.executions is not None:
+        @server.tool(structured_output=True, annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+        async def submit_paper_question(context_id: str, request_key: str, question: str,
+                standalone_question: str | None = None, focus: Focus | None = None,
+                top_k: Annotated[int, Field(strict=True, ge=1, le=20)] = 5) -> ExecutionOutput:
+            """호출 전에 보관한 요청 키로 질문합니다. 외부 호출 허용 시 질문과 번역·원문 근거를 OpenAI로 보냅니다.
+            최초 호출은 답변을 기다립니다. 응답을 놓치면 같은 context_id와 키로 get_paper_question_status를 조회하세요.
+            상태를 확인할 수 없을 때 새 키로 자동 제출하지 마세요."""
+            try:
+                require_text(question, 'question')
+                if standalone_question is not None:
+                    require_text(standalone_question, 'standalone_question')
+            except ValueError:
+                raise to_tool_error(InvalidArgumentError('question')) from None
+            try:
+                result = await anyio.to_thread.run_sync(lambda: services.executions.run(
+                    request_key, standalone_question if standalone_question is not None else question,
+                    context_id=context_id, top_k=top_k, pdf_pages=tuple(focus.pdf_pages) if focus else (),
+                    section_ids=tuple(focus.section_ids) if focus else ()))
+                if result.view is not None:
+                    return _execution_output(result.view)
+                state = ('not_found' if result.outcome == ExecutionOutcome.CONTEXT_NOT_FOUND
+                         else result.outcome.value)
+                return {'state': state, 'failure_code': None, 'answer': None}
+            except ExecutionValidationError:
+                raise to_tool_error(InvalidArgumentError('request')) from None
+            except Exception as error:
+                raise to_tool_error(error) from None
+            finally:
+                # 작업을 기다리는 동안 취소된 요청에는 두 번째 응답을 보내지 않는다.
+                await anyio.lowlevel.checkpoint()
+
+        @server.tool(structured_output=True, annotations=ToolAnnotations(
+            readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+        async def get_paper_question_status(context_id: str, request_key: str) -> ExecutionOutput:
+            """원래 학습 맥락과 요청 키로 실행 상태와 저장된 답변을 조회합니다. 질문을 다시 실행하지 않습니다."""
+            try:
+                view = await anyio.to_thread.run_sync(
+                    lambda: services.executions.lookup(request_key, context_id=context_id))
+                return _execution_output(view)
+            except ExecutionValidationError:
+                raise to_tool_error(InvalidArgumentError('request')) from None
+            except Exception as error:
+                raise to_tool_error(error) from None
+            finally:
+                # 작업을 기다리는 동안 취소된 요청에는 두 번째 응답을 보내지 않는다.
+                await anyio.lowlevel.checkpoint()
 
     @server.tool(name='ask_paper', structured_output=True,
         meta={'ui': {'resourceUri': DETAIL_APP_URI}},
