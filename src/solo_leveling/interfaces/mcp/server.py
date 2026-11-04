@@ -209,6 +209,11 @@ class PaperStatusOutput(TypedDict):
     capabilities: list[str]
     limitations: list[str]
     result_available: bool
+    failed_stage: str | None
+    failure_code: str | None
+    retryable: bool | None
+    next_action: str | None
+    outcome: str | None
 
 
 class PaperJobOutput(TypedDict):
@@ -329,7 +334,11 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                         idempotentHint=True, openWorldHint=False))
         async def get_paper_status(job_id: str) -> PaperStatusOutput:
-            """등록 작업 상태와 limitations를 조회합니다. ready도 일부 번역이 누락될 수 있습니다."""
+            """등록 작업의 상태와 실패 원인, 다음 행동을 조회합니다.
+            ready/partial은 검색 가능하지만 번역이 일부 누락된 상태입니다.
+            retryable이 null이면 같은 입력의 재시도 가능 여부를 단정하지 마세요.
+            next_action에 따라 파일 교체 또는 새 요청 키를 사용한 재등록을 안내하세요.
+            조회만으로는 작업을 재실행하지 않습니다."""
             try:
                 result = await anyio.to_thread.run_sync(
                     lambda: services.ingestion.get_status(job_id))
@@ -340,6 +349,11 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                     'status': result['status'], 'stage': result['stage'],
                     'capabilities': capabilities, 'limitations': result['limitations'],
                     'result_available': result['result_available'],
+                    'failed_stage': result.get('failed_stage'),
+                    'failure_code': result.get('failure_code'),
+                    'retryable': result.get('retryable'),
+                    'next_action': result.get('next_action'),
+                    'outcome': result.get('outcome'),
                 }
             except Exception as error:
                 raise to_tool_error(error) from None

@@ -326,7 +326,7 @@ def test_sdk_rejects_out_of_range_top_k(top_k):
      {'paper_id', 'version_id', 'job_id', 'status'}, (False, True, True)),
     ('get_paper_status', {'job_id'}, set(),
      {'job_id', 'version_id', 'status', 'stage', 'capabilities', 'limitations',
-      'result_available'}, (True, True, False)),
+      'result_available', 'failed_stage', 'failure_code', 'retryable', 'next_action', 'outcome'}, (True, True, False)),
     ('start_learning', {'version_id'}, {'goal', 'known_concepts'},
      {'context_id', 'version_id', 'goal', 'known_concepts', 'status', 'capabilities'},
      (False, True, False)),
