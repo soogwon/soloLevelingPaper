@@ -347,6 +347,26 @@ CREATE TABLE IF NOT EXISTS learning_progress (
     last_studied_at TEXT,
     updated_at TEXT NOT NULL
 );
+
+-- ask 실행 기록(#119). 요청 키마다 한 행이고, 소유자 토큰을 가진 하나의 실행만 진행한다.
+-- 임대(lease_expires_at)가 지나면 그 실행은 더 이상 갱신·결과 저장을 할 수 없고, 같은 키로 자동 재시작하지 않는다.
+-- 시각은 모두 고정 폭 UTC 문자열(YYYY-MM-DDTHH:MM:SS.ffffffZ)이라 문자열 비교가 시각 비교와 같다.
+CREATE TABLE IF NOT EXISTS ask_executions (
+    request_key TEXT PRIMARY KEY,
+    input_hash TEXT NOT NULL,
+    context_id TEXT NOT NULL REFERENCES learning_contexts(context_id) ON DELETE CASCADE,
+    owner_token TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+    failure_code TEXT,
+    result_json TEXT,
+    created_at TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL,
+    lease_expires_at TEXT NOT NULL,
+    finished_at TEXT,
+    result_expires_at TEXT,
+    key_expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ask_executions_key_expiry ON ask_executions(key_expires_at);
 """
 
 
