@@ -8,9 +8,11 @@
 - outcome: complete | partial | failed. queued·processing은 null.
 - 알 수 없는 limitations 문자열은 failure_code로 쓰지 않고 fallback(ingestion_failed / interrupted)으로 처리한다.
   예외 메시지·경로·원문은 담지 않는다.
-- failure_code는 아래 고정 코드와 번역 실패 코드뿐이다. empty_pages 같은 품질 경고는 failure_code도 outcome도 바꾸지 않는다.
+- failure_code는 아래 고정 코드와 TranslationFailureCode에 정의된 번역 실패 코드뿐이다(미등록·깨진 항목은 translation_failed). empty_pages 같은 품질 경고는 failure_code도 outcome도 바꾸지 않는다.
 """
 from typing import Optional
+
+from solo_leveling.domain.translation import TranslationFailureCode
 
 KEYS = ('failed_stage', 'failure_code', 'retryable', 'next_action', 'outcome')
 
@@ -37,13 +39,20 @@ def _empty(outcome: Optional[str] = None) -> dict:
     return {'failed_stage': None, 'failure_code': None, 'retryable': None, 'next_action': None, 'outcome': outcome}
 
 
+_TRANSLATION_CODES = frozenset(code.value for code in TranslationFailureCode)
+
+
 def _first_partial_code(limitations) -> Optional[str]:
-    """'translation_failed:<chunk_id>:<code>' 항목 중 첫 번째의 코드. 형식이 다르면 None."""
+    """첫 번째 'translation_failed:<chunk_id>:<code>' 항목의 코드. 항목이 없으면 None.
+
+    TranslationFailureCode에 정의된 값만 그대로 돌려준다. 미등록 값이나 형식이 깨진 항목은 고정 코드
+    'translation_failed'로 대체한다(공개해도 되는 코드인지는 값을 만드는 이 단계에서 판단한다, #60).
+    """
     for item in limitations:
         if isinstance(item, str) and item.startswith(_PARTIAL_PREFIX):
-            code = item.rsplit(':', 1)[-1]
-            if item.count(':') >= 2 and code.replace('_', '').isalnum():
-                return code
+            parts = item.split(':')
+            code = parts[-1] if len(parts) >= 3 else None
+            return code if code in _TRANSLATION_CODES else 'translation_failed'
     return None
 
 
@@ -52,8 +61,6 @@ def describe_outcome(status: str, stage: Optional[str], limitations) -> dict:
     limitations = list(limitations or [])
     if status == 'ready':
         code = _first_partial_code(limitations)
-        if code is None and any(isinstance(i, str) and i.startswith(_PARTIAL_PREFIX) for i in limitations):
-            code = 'translation_failed'  # 형식을 알 수 없는 번역 실패 항목: 고정 코드로 대체
         if code is None:
             return _empty('complete')
         return {'failed_stage': 'translate', 'failure_code': code, 'retryable': None,

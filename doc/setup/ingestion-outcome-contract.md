@@ -7,7 +7,7 @@
 | 키 | 값 |
 |---|---|
 | failed_stage | download / parse / translate / index / null |
-| failure_code | 아래 고정 코드 또는 번역 실패 코드 / null |
+| failure_code | 아래 고정 코드 또는 `TranslationFailureCode`에 정의된 번역 실패 코드(`provider_unavailable`, `empty_translation`) / null |
 | retryable | true / false / null |
 | next_action | register_again / replace_file / null |
 | outcome | complete / partial / failed / null(처리 중) |
@@ -19,7 +19,7 @@
 | 상태 | failed_stage | failure_code | retryable | next_action | outcome |
 |---|---|---|---|---|---|
 | ready, 번역 실패 없음 | null | null | null | null | complete |
-| ready, 일부 청크 번역 실패 | translate | 첫 번역 실패 코드 | null | null | partial |
+| ready, 일부 청크 번역 실패 | translate | 첫 번역 실패 코드. 미등록 값이나 형식이 깨진 항목은 고정 코드 `translation_failed` | null | null | partial |
 | failed: pdf_encrypted / pdf_unreadable / extraction_empty | parse | 해당 코드 | false | replace_file | failed |
 | failed: translation_failed(전체 번역 실패) | translate | translation_failed | true | register_again | failed |
 | failed: EMBEDDING_TIMEOUT / EMBEDDING_UNAVAILABLE | index | 해당 코드 | true | register_again | failed |

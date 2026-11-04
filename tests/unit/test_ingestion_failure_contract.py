@@ -10,10 +10,15 @@ CHUNK = '5f0c4a52-1111-4222-8333-444455556666'
     # ready
     ('ready', 'index', [], (None, None, None, None, 'complete')),
     ('ready', 'index', ['empty_pages:2,5'], (None, None, None, None, 'complete')),  # 품질 경고는 outcome을 바꾸지 않는다
-    ('ready', 'index', [f'translation_failed:{CHUNK}:translation_timeout'],
-     ('translate', 'translation_timeout', None, None, 'partial')),
-    ('ready', 'index', ['empty_pages:3', f'translation_failed:{CHUNK}:a_code', f'translation_failed:{CHUNK}2:b_code'],
-     ('translate', 'a_code', None, None, 'partial')),  # 첫 번째 코드가 대표
+    ('ready', 'index', [f'translation_failed:{CHUNK}:provider_unavailable'],
+     ('translate', 'provider_unavailable', None, None, 'partial')),
+    ('ready', 'index', ['empty_pages:3', f'translation_failed:{CHUNK}:empty_translation', f'translation_failed:{CHUNK}2:provider_unavailable'],
+     ('translate', 'empty_translation', None, None, 'partial')),  # 첫 번째 코드가 대표
+    # 미등록 값은 그대로 내보내지 않고 고정 코드로 대체한다(#60 B 리뷰). 첫 항목이 대표이며 뒤의 유효한 항목으로 건너뛰지 않는다.
+    ('ready', 'index', ['translation_failed:abc:privateMarker123'],
+     ('translate', 'translation_failed', None, None, 'partial')),
+    ('ready', 'index', [f'translation_failed:{CHUNK}:privateMarker123', f'translation_failed:{CHUNK}2:empty_translation'],
+     ('translate', 'translation_failed', None, None, 'partial')),
     ('ready', 'index', ['translation_failed:broken'], ('translate', 'translation_failed', None, None, 'partial')),
     # failed: 파싱
     ('failed', 'parse', ['pdf_encrypted'], ('parse', 'pdf_encrypted', False, 'replace_file', 'failed')),
@@ -46,7 +51,7 @@ def test_contract_table(status, stage, limitations, expected):
 
 
 def test_retryable_null_is_distinct_from_false():
-    partial = describe_outcome('ready', 'index', [f'translation_failed:{CHUNK}:c'])
+    partial = describe_outcome('ready', 'index', [f'translation_failed:{CHUNK}:empty_translation'])
     replace = describe_outcome('failed', 'parse', ['pdf_encrypted'])
     assert partial['retryable'] is None and replace['retryable'] is False
 
@@ -66,3 +71,21 @@ def test_partial_with_non_identifier_code_does_not_leak_text():
 def test_none_and_tuple_limitations_are_accepted():
     assert describe_outcome('ready', None, None)['outcome'] == 'complete'
     assert describe_outcome('failed', 'parse', ('pdf_encrypted',))['next_action'] == 'replace_file'
+
+
+def test_unregistered_translation_code_is_never_exposed():
+    """B 리뷰 재현 입력: 문자 구성만 맞는 미등록 값이 failure_code로 그대로 나가면 안 된다."""
+    result = describe_outcome('ready', 'index', ['translation_failed:c1:privateMarker123'])
+    assert result == {'failed_stage': 'translate', 'failure_code': 'translation_failed', 'retryable': None,
+                      'next_action': None, 'outcome': 'partial'}
+    assert 'privateMarker123' not in str(result)
+
+
+def test_only_defined_translation_failure_codes_pass_through():
+    from solo_leveling.domain.translation import TranslationFailureCode
+
+    for code in TranslationFailureCode:
+        result = describe_outcome('ready', 'index', [f'translation_failed:c1:{code.value}'])
+        assert result['failure_code'] == code.value and result['outcome'] == 'partial'
+    for bad in ('PROVIDER_UNAVAILABLE', 'provider-unavailable', 'provider_unavailable ', '', 'a:b'):
+        assert describe_outcome('ready', 'index', [f'translation_failed:c1:{bad}'])['failure_code'] == 'translation_failed'
