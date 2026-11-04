@@ -105,6 +105,49 @@ def _select_claim(claim: GeneratedClaim, evidence: Sequence[EvidenceInput]):
     return covered
 
 
+_COMPARATIVE = re.compile(r'\bthe\s+(?:shorter|longer|smaller|larger|greater|'
+                          r'easier|harder|fewer|more|less|better|worse)\b', re.I)
+
+
+def _has_independent_comparison(selected: _Selection, claim_text: str, conditions: set[str]) -> bool:
+    # 문장별 번역 정렬이 없으므로 온전히 인용한 단일 원문·번역 문장만 독립 근거로 인정한다.
+    ko = ' '.join((selected.evidence.text_ko or '').split())
+    return (selected.start == 0 and selected.end == len(selected.body)
+            and not selected.evidence.starts_mid_sentence
+            and sentence_ends(selected.body) == (len(selected.body),)
+            and len(_COMPARATIVE.findall(selected.body)) == 2
+            and sentence_ends(ko) == (len(ko),)
+            and ko.rstrip('.!?') in claim_text
+            and conditions <= set(re.findall(r'[가-힣]+수록', ko)))
+
+
+def _conflicting_joined_comparisons(claim: GeneratedClaim, left: _Selection, right: _Selection,
+                                    selections: Sequence[_Selection]) -> bool:
+    """겹친 두 번역의 서로 다른 비교 조건을 한 원문 조건에서 가져온 경우를 감지한다."""
+    def conditions(text):
+        return set(re.findall(r'[가-힣]+수록', text or ''))
+
+    asserted = conditions(claim.text)
+    first = conditions(left.evidence.text_ko) & asserted
+    second = conditions(right.evidence.text_ko) & asserted
+    if not (first - second and second - first):
+        return False
+    # joined()가 보장한 연결 문장만 검사한다. 앞뒤로 더 인용해도 연결 구간은 같다.
+    tail = incomplete_tail_start(left.body)
+    end = sentence_ends(right.body)[0]
+    start, continuation = left.body[tail:], right.body[:end]
+    # 단어 중간에서 시작하는 중복 구간도 한 번만 센다.
+    overlap = next((len(start) - i for i in range(len(start))
+                    if start[i] == continuation[0] and continuation.startswith(start[i:])), 0)
+    source = start + (' ' if not overlap else '') + continuation[overlap:]
+    if len(_COMPARATIVE.findall(source)) != 2 or re.search(
+            r'\b(?:and|or)\s+(?:shorter|longer|smaller|larger|greater|more|less|fewer)\b', source, re.I):
+        return False
+    pair_ids = {left.evidence.chunk_id, right.evidence.chunk_id}
+    return not any(_has_independent_comparison(item, ' '.join(claim.text.split()), second - first)
+                   for item in selections if item.evidence.chunk_id not in pair_ids)
+
+
 def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInput]) -> ExtractionAssessment:
     """실제 인용한 근거만 평가하며, 불명확한 구절 위치는 안전하다고 간주하지 않는다."""
     selections = _select_claim(claim, evidence)
@@ -149,9 +192,13 @@ def assess_extraction_risk(claim: GeneratedClaim, evidence: Sequence[EvidenceInp
     for selected in selections:
         tail = incomplete_tail_start(selected.body)
         if tail is not None and selected.end > tail:
-            if not any(joined(selected, other) for other in selections):
+            following = [other for other in selections if joined(selected, other)]
+            if not following:
                 return ExtractionAssessment(ExtractionReason.UNFINISHED_TAIL,
                     selected.evidence.evidence_id, tail_detail(selected, tail))
+            if any(_conflicting_joined_comparisons(claim, selected, other, selections)
+                   for other in following):
+                return ExtractionAssessment(ExtractionReason.AMBIGUOUS_OVERLAP, selected.evidence.evidence_id)
         ends = sentence_ends(selected.body)
         prefix_end = ends[0] if ends else len(selected.body)
         if fragment_flags(selected.body)[0] and selected.start < prefix_end:
