@@ -126,5 +126,8 @@ def test_real_chroma_close_failure_is_not_promoted_to_success_on_retry(tmp_path,
     finally:  # 테스트가 남긴 시스템만 정리한다(동작 코드는 이렇게 강제로 닫지 않는다)
         monkeypatch.undo()
         system = SharedSystemClient._identifier_to_system.pop(identifier, None)
+        getattr(SharedSystemClient, '_identifier_to_refcount', {}).pop(identifier, None)
         if system is not None:
             system.stop()
+    assert identifier not in SharedSystemClient._identifier_to_system
+    assert identifier not in getattr(SharedSystemClient, '_identifier_to_refcount', {})

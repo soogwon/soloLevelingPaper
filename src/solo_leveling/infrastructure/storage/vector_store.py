@@ -14,6 +14,7 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 import math
+import threading
 from typing import List, Optional
 
 
@@ -33,6 +34,22 @@ class ChromaCloseResult(str, Enum):
 
 _CLOSED_MARK = '_solo_leveling_closed'
 _FAILED_MARK = '_solo_leveling_close_failed'
+_LOCK_MARK = '_solo_leveling_close_lock'
+_LOCK_GUARD = threading.Lock()
+_UNATTACHABLE_LOCK = threading.RLock()  # 속성을 붙일 수 없는 객체용. 이런 객체끼리는 서로 직렬화된다.
+
+
+def _close_lock(client):
+    """클라이언트마다 하나의 종료 잠금. 처음 만드는 순간만 전역 보호 잠금 아래에서 한다."""
+    with _LOCK_GUARD:
+        lock = getattr(client, _LOCK_MARK, None)
+        if lock is None:
+            lock = threading.RLock()
+            try:
+                setattr(client, _LOCK_MARK, lock)
+            except Exception:
+                return _UNATTACHABLE_LOCK
+        return lock
 
 
 def close_client(client) -> ChromaCloseResult:
@@ -44,6 +61,10 @@ def close_client(client) -> ChromaCloseResult:
       표시를 먼저 하고 자원을 해제하므로, 해제가 중간에 실패한 뒤의 재호출은 아무것도 하지 않고 성공처럼
       돌아온다. 그 반환으로는 자원이 실제로 해제됐는지 알 수 없어서 CLOSED/ALREADY_CLOSED로 올리지 않는다.
       같은 경로를 쓰는 새 클라이언트를 만들거나 프로세스를 끝내는 것이 복구 방법이다.
+    - 같은 클라이언트에 대한 종료 호출이 겹치면(여러 스레드) 먼저 들어온 호출의 결과가 확정될 때까지 나머지는 기다린다(#135).
+      해제 도중인 클라이언트를 보고 다른 호출이 CLOSED/ALREADY_CLOSED를 돌려주지 않으며, 해제가 실패하면 기다린 호출과
+      이후 재호출 모두 FAILED다. 객체별 잠금을 붙일 수 있는 클라이언트(Chroma 포함)는 다른 클라이언트의 종료를 서로 막지 않는다. 속성을 붙일 수 없는 객체끼리는 공통 잠금 때문에 직렬화된다.
+      종료가 끝나지 않으면 기다리는 호출도 끝나지 않는다(타임아웃으로 성공·실패를 추측하지 않는다).
     - 같은 경로를 공유하는 다른 클라이언트나 전역 캐시는 건드리지 않는다
       (reset·캐시 삭제·강제 stop을 종료 수단으로 쓰지 않는다).
     호출자는 FAILED·UNSUPPORTED를 성공으로 보지 말고, 원래 작업의 오류를 이 결과로
@@ -51,26 +72,31 @@ def close_client(client) -> ChromaCloseResult:
 
     한계: 속성을 붙일 수 없는 객체(__slots__ 등)는 실패·성공 표시를 기억하지 못한다. Chroma 클라이언트는 해당 없다.
     """
-    if client is None or getattr(client, _CLOSED_MARK, False) is True:
+    if client is None:
         return ChromaCloseResult.ALREADY_CLOSED
-    if getattr(client, _FAILED_MARK, False) is True:
-        return ChromaCloseResult.FAILED
-    close = getattr(client, 'close', None)
-    if not callable(close):
-        return ChromaCloseResult.UNSUPPORTED
-    try:
-        close()
-    except Exception:
+    # 같은 클라이언트의 상태 확인·실제 종료·결과 기록을 한 잠금 아래에서 한다(#135). 종료가 진행 중일 때 들어온 다른 호출은
+    # 그 결과가 확정될 때까지 기다리고, 확정된 결과(성공이면 ALREADY_CLOSED, 실패면 FAILED)를 그대로 본다.
+    with _close_lock(client):
+        if getattr(client, _CLOSED_MARK, False) is True:
+            return ChromaCloseResult.ALREADY_CLOSED
+        if getattr(client, _FAILED_MARK, False) is True:
+            return ChromaCloseResult.FAILED
+        close = getattr(client, 'close', None)
+        if not callable(close):
+            return ChromaCloseResult.UNSUPPORTED
         try:
-            setattr(client, _FAILED_MARK, True)
+            close()
+        except Exception:
+            try:
+                setattr(client, _FAILED_MARK, True)
+            except Exception:
+                pass
+            return ChromaCloseResult.FAILED
+        try:
+            setattr(client, _CLOSED_MARK, True)
         except Exception:
             pass
-        return ChromaCloseResult.FAILED
-    try:
-        setattr(client, _CLOSED_MARK, True)
-    except Exception:
-        pass
-    return ChromaCloseResult.CLOSED
+        return ChromaCloseResult.CLOSED
 
 
 def get_collection(client, name: str = "chunks"):
