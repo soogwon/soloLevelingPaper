@@ -108,7 +108,7 @@ Chroma 시스템 수는 설치된 버전의 `SharedSystemClient._identifier_to_s
 `ExitStack`에 각 클라이언트의 공개 `close()`를 등록하므로 테스트나 fixture 준비가
 실패해도 생성한 클라이언트가 정리된다. 공유 캐시 전체를 비우거나 수집 코드의
 클라이언트를 가로채지 않는다. 현재 종료 API 검증 버전은 ChromaDB 1.5.9이며,
-이전 버전 호환성과 지원 버전 범위는 후속 협의 대상이다.
+설치 허용 범위는 `chromadb>=1.5.9,<1.6`이다(`chroma-support-policy.md`). 1.5.9 외의 허용 패치는 종료 동작 미확인이다.
 
 | 수정 후 검증 | 결과 |
 |---|---|
