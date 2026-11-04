@@ -269,8 +269,9 @@ def test_get_segment_texts_returns_current_text_so_service_can_detect_drift(env)
         conn.execute("UPDATE chunks SET original_text='Changed.' WHERE chunk_id='c1'")
     assert ann.get_segment_texts(db, ctx, a.annotation_id)[0] == 'Changed.'
     assert ann.get_annotation(db, ctx, a.annotation_id).segments[0].quote_snapshot == 'First'  # 스냅샷은 보존
-    with closing(get_connection(db)) as conn, conn:  # 청크의 번역 리비전이 달라지면 번역 구간은 None
-        conn.execute("UPDATE chunks SET translation_revision_id=NULL WHERE chunk_id='c1'")
+    with closing(get_connection(db)) as conn, conn:  # 그 번역 리비전에 성공 번역이 없으면 번역 구간은 None
+        conn.execute("UPDATE translation_results SET failure_code='provider_unavailable', translated_text=NULL "
+                     "WHERE translation_revision_id='t1' AND chunk_id='c1'")
     assert ann.get_segment_texts(db, ctx, a.annotation_id)[1] is None
     with pytest.raises(ResourceNotFoundError):
         ann.get_segment_texts(db, ctx, 'nope')
@@ -354,3 +355,11 @@ def test_results_and_errors_never_carry_note_text(env):
     with pytest.raises(AnnotationValidationError) as error:
         ann.create_annotation(db, ctx, 'note', SECRET * 1000, [])
     assert SECRET not in str(error.value)
+
+
+def test_translation_segment_text_comes_from_its_revision_not_chunks_text(env):
+    db, ctx = env
+    a = make(db, ctx, segments=[seg('c1', 0, 3, '첫째.', target='translation', translation_revision_id='t1')])
+    with closing(get_connection(db)) as conn, conn:  # chunks.text가 비어 있거나 달라져도(복구 이후) 리비전 결과가 기준이다
+        conn.execute("UPDATE chunks SET text=NULL, translation_revision_id=NULL WHERE chunk_id='c1'")
+    assert ann.get_segment_texts(db, ctx, a.annotation_id) == {0: '첫째.'}
