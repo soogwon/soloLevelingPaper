@@ -271,6 +271,26 @@ def get_translation_metadata(db_path: str, parse_revision_id: str,
         return dict(row) if row else None
 
 
+def get_pending_translation_chunks(db_path: str, parse_revision_id: str,
+                                   translation_revision_id: str | None = None) -> List[Chunk]:
+    """번역 성공 행이 없는 청크를 chunk_index 순서로 돌려준다(최초 등록 재개용).
+
+    판단 기준은 chunks.text가 아니라 번역 리비전별 결과(translation_results)다. 번역 리비전이 아직 없으면 모든 청크가 대상이다.
+    실패 행이 있는 청크는 대상에 포함된다(재시도). 반환 Chunk의 text는 비어 있다(번역할 원문만 필요하다).
+    """
+    with closing(get_connection(db_path)) as conn:
+        rows = conn.execute(
+            '''SELECT c.chunk_id, c.parse_revision_id, c.chunk_index, c.original_text, c.printed_page_label,
+                      c.pdf_page, c.section_id
+               FROM chunks c WHERE c.parse_revision_id=?
+                 AND NOT EXISTS (SELECT 1 FROM translation_results r WHERE r.chunk_id=c.chunk_id
+                                 AND r.translation_revision_id=? AND r.failure_code IS NULL
+                                 AND r.translated_text IS NOT NULL)
+               ORDER BY c.chunk_index''',
+            (parse_revision_id, translation_revision_id)).fetchall()
+        return [Chunk(**dict(r), text=None, translation_revision_id=None) for r in rows]
+
+
 def save_translation_batch(db_path: str, batch: TranslationBatchResult) -> None:
     """최초 번역을 원자적으로 저장하고, 재시도 시 실패한 청크만 채운다.
 
@@ -306,22 +326,24 @@ def save_translation_batch(db_path: str, batch: TranslationBatchResult) -> None:
                 rev.parse_revision_id, item.request.original_text,
             ):
                 raise ValueError('translation source does not match database')
-            prior = conn.execute('SELECT failure_code FROM translation_results WHERE translation_revision_id=? AND chunk_id=?',
+            prior = conn.execute('SELECT failure_code, translated_text FROM translation_results '
+                                 'WHERE translation_revision_id=? AND chunk_id=?',
                                  (rev.translation_revision_id, row['chunk_id'])).fetchone()
             code = item.failure_code.value if item.failure_code else None
+            # 판단은 translation_results만 본다. chunks.text는 이전 버전 호환용 사본이며 결정에 쓰지 않는다.
+            prior_success = prior is not None and prior['failure_code'] is None and prior['translated_text'] is not None
             identical = (prior is not None and prior['failure_code'] == code
-                         and (not item.succeeded or (row['text'], row['translation_revision_id']) == (item.text, rev.translation_revision_id)))
+                         and (not item.succeeded or prior['translated_text'] == item.text))
             if identical:
                 continue
             if published:
                 raise ValueError('published translation cannot be changed')
-            if row['text'] is not None or row['translation_revision_id'] is not None:
+            if prior_success:
                 raise ValueError('successful translation cannot be overwritten')
             if item.succeeded:
-                count = conn.execute('UPDATE chunks SET text=?, translation_revision_id=? WHERE chunk_id=? AND text IS NULL AND translation_revision_id IS NULL',
-                                     (item.text, rev.translation_revision_id, row['chunk_id'])).rowcount
-                if count != 1:
-                    raise ValueError('translation update conflict')
+                conn.execute('UPDATE chunks SET text=?, translation_revision_id=? WHERE chunk_id=? '
+                             'AND text IS NULL AND translation_revision_id IS NULL',
+                             (item.text, rev.translation_revision_id, row['chunk_id']))
             conn.execute('''INSERT INTO translation_results (translation_revision_id, chunk_id, failure_code, translated_text)
                             VALUES (?, ?, ?, ?)
                             ON CONFLICT(translation_revision_id, chunk_id) DO UPDATE SET
@@ -414,7 +436,9 @@ def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
                                 WHERE t.translation_revision_id=? AND p.parse_revision_id=?
                                 AND p.version_id=? AND j.job_id=? AND j.status='processing' ''',
                              (embedding_set.translation_revision_id, parse_revision_id, version_id, job_id)).fetchone()
-        actual = conn.execute('SELECT COUNT(*) FROM chunks WHERE parse_revision_id=? AND translation_revision_id=? AND text IS NOT NULL',
+        actual = conn.execute('SELECT COUNT(*) FROM chunks c JOIN translation_results r ON r.chunk_id=c.chunk_id '
+                              'WHERE c.parse_revision_id=? AND r.translation_revision_id=? '
+                              'AND r.failure_code IS NULL AND r.translated_text IS NOT NULL',
                               (parse_revision_id, embedding_set.translation_revision_id)).fetchone()[0]
         if not valid or actual != chunk_count:
             raise ValueError('index does not match the job and translated chunks')

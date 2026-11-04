@@ -390,6 +390,12 @@ def _migrate_translation_results(conn: sqlite3.Connection) -> None:
             'WHERE c.chunk_id=translation_results.chunk_id '
             'AND c.translation_revision_id=translation_results.translation_revision_id) '
             'WHERE failure_code IS NULL AND translated_text IS NULL')
+        # 결과 행이 없는 옛 성공 청크(chunks.text만 있던 DB)를 결과 표로 옮긴다. 이미 있는 행은 건드리지 않는다.
+        conn.execute(
+            'INSERT OR IGNORE INTO translation_results (translation_revision_id, chunk_id, failure_code, translated_text) '
+            'SELECT c.translation_revision_id, c.chunk_id, NULL, c.text FROM chunks c '
+            'JOIN translation_revisions t ON t.translation_revision_id=c.translation_revision_id '
+            'WHERE c.text IS NOT NULL AND c.translation_revision_id IS NOT NULL')
 
 
 def _migrate_search_indexes(conn: sqlite3.Connection) -> None:
