@@ -1246,13 +1246,33 @@ def save_reflection_answer(db_path: str, context_id: str, phase: str, template_i
         return ReflectionAnswer(**dict(row))
 
 
+def _read_context_answers(db_path: str, context_id: str, phase: str | None) -> List[ReflectionAnswer]:
+    """맥락과 답변을 한 문장(SELECT 한 번)으로 읽어 같은 시점을 본다. 맥락이 없으면 ResourceNotFoundError.
+
+    learning_contexts를 기준으로 reflection_answers를 LEFT JOIN한다. 행이 하나도 없으면 맥락이 없는 것이고,
+    답변 열이 모두 비어 있는 한 행이면 맥락은 있으나 답변이 없는 것이다(빈 문자열 초안은 text가 ''인 실제 행이라 구분된다).
+    맥락 확인과 답변 읽기를 따로 하면 그 사이에 다른 연결이 둘을 함께 지울 때 '미작성'으로 잘못 보일 수 있다(#161).
+    """
+    on_phase, params = (' AND a.phase=?', (phase, context_id)) if phase is not None else ('', (context_id,))
+    with closing(get_connection(db_path)) as conn:
+        rows = conn.execute(
+            f'''SELECT a.context_id AS a_context_id, a.phase, a.template_id, a.text, a.status,
+                       a.created_at, a.updated_at
+                FROM learning_contexts c
+                LEFT JOIN reflection_answers a ON a.context_id=c.context_id{on_phase}
+                WHERE c.context_id=?
+                ORDER BY a.created_at, a.template_id''',
+            params).fetchall()
+    if not rows:
+        raise ResourceNotFoundError('context not found')
+    return [ReflectionAnswer(row['a_context_id'], row['phase'], row['template_id'], row['text'], row['status'],
+                             row['created_at'], row['updated_at'])
+            for row in rows if row['template_id'] is not None]
+
+
 def get_reflection_answers_all(db_path: str, context_id: str) -> List[ReflectionAnswer]:
     """한 맥락의 읽기 전·후 답변을 한 번의 읽기(한 연결, 한 SELECT)로 돌려준다. 맥락이 없으면 ResourceNotFoundError."""
-    with closing(get_connection(db_path)) as conn:
-        if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
-            raise ResourceNotFoundError('context not found')
-        return [ReflectionAnswer(**dict(r)) for r in conn.execute(
-            'SELECT * FROM reflection_answers WHERE context_id=? ORDER BY created_at, template_id', (context_id,))]
+    return _read_context_answers(db_path, context_id, None)
 
 
 def get_reflection_answers(db_path: str, context_id: str, phase: str) -> List[ReflectionAnswer]:
@@ -1260,9 +1280,4 @@ def get_reflection_answers(db_path: str, context_id: str, phase: str) -> List[Re
     from solo_leveling.domain.reflection import templates_for
 
     templates_for(phase)  # 지원하지 않는 시점이면 ReflectionValidationError
-    with closing(get_connection(db_path)) as conn:
-        if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
-            raise ResourceNotFoundError('context not found')
-        return [ReflectionAnswer(**dict(r)) for r in conn.execute(
-            'SELECT * FROM reflection_answers WHERE context_id=? AND phase=? ORDER BY created_at, template_id',
-            (context_id, phase))]
+    return _read_context_answers(db_path, context_id, phase)
