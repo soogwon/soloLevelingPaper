@@ -258,13 +258,17 @@ def get_latest_parse_revision(db_path: str, version_id: str) -> Optional[ParseRe
         return ParseRevision(**dict(row)) if row else None
 
 
-def get_translation_metadata(db_path: str, parse_revision_id: str) -> Optional[dict]:
+def get_translation_metadata(db_path: str, parse_revision_id: str,
+                             translation_revision_id: str | None = None) -> Optional[dict]:
+    """리비전을 지정하면 해당 번역을, 최초 등록 재개 시에는 가장 먼저 삽입한 번역을 조회한다."""
+    query = 'SELECT * FROM translation_revisions WHERE parse_revision_id=?'
+    params = [parse_revision_id]
+    if translation_revision_id is not None:
+        query += ' AND translation_revision_id=?'
+        params.append(translation_revision_id)
     with closing(get_connection(db_path)) as conn:
-        rows = conn.execute('SELECT * FROM translation_revisions WHERE parse_revision_id=?',
-                            (parse_revision_id,)).fetchall()
-        if len(rows) > 1:
-            raise ValueError('multiple translations are not supported by the initial-translation policy')
-        return dict(rows[0]) if rows else None
+        row = conn.execute(query + ' ORDER BY rowid LIMIT 1', params).fetchone()
+        return dict(row) if row else None
 
 
 def save_translation_batch(db_path: str, batch: TranslationBatchResult) -> None:
@@ -343,16 +347,21 @@ def get_translated_chunks(db_path: str, parse_revision_id: str, translation_revi
         if not conn.execute('SELECT 1 FROM translation_revisions WHERE translation_revision_id=? AND parse_revision_id=?',
                             (translation_revision_id, parse_revision_id)).fetchone():
             raise ValueError('translation does not belong to parse revision')
-        return [Chunk(**dict(row)) for row in conn.execute(
-            '''SELECT c.chunk_id, c.parse_revision_id, c.chunk_index, c.original_text,
-                      r.translated_text AS text, r.translation_revision_id AS translation_revision_id,
-                      c.printed_page_label, c.pdf_page, c.section_id
-               FROM chunks c JOIN translation_results r ON r.chunk_id=c.chunk_id
-               WHERE c.parse_revision_id=? AND r.translation_revision_id=?
-                 AND r.failure_code IS NULL AND r.translated_text IS NOT NULL
-               ORDER BY c.chunk_index''',
-            (parse_revision_id, translation_revision_id),
-        )]
+        return read_translated_chunks(conn, parse_revision_id, translation_revision_id)
+
+
+def read_translated_chunks(conn, parse_revision_id: str, translation_revision_id: str) -> List[Chunk]:
+    """호출자의 조회 트랜잭션에서 지정한 리비전의 성공 번역을 읽는다."""
+    return [Chunk(**dict(row)) for row in conn.execute(
+        '''SELECT c.chunk_id, c.parse_revision_id, c.chunk_index, c.original_text,
+                  r.translated_text AS text, r.translation_revision_id AS translation_revision_id,
+                  c.printed_page_label, c.pdf_page, c.section_id
+           FROM chunks c JOIN translation_results r ON r.chunk_id=c.chunk_id
+           WHERE c.parse_revision_id=? AND r.translation_revision_id=?
+             AND r.failure_code IS NULL AND r.translated_text IS NOT NULL
+           ORDER BY c.chunk_index''',
+        (parse_revision_id, translation_revision_id),
+    )]
 
 
 def get_search_index(db_path: str, version_id: str, parse_revision_id: str | None = None,
@@ -802,9 +811,16 @@ def get_learning_context(db_path: str, context_id: str) -> Optional[LearningCont
 
 
 def _evidence_detail(conn, context_id: str, evidence: Evidence) -> EvidenceDetail:
-    row = conn.execute('''SELECT c.*, p.original_filename, l.version_id FROM learning_contexts l
+    row = conn.execute('''SELECT c.original_text, c.parse_revision_id, c.printed_page_label, c.pdf_page,
+                                 r.translated_text AS text, r.translation_revision_id, p.original_filename, l.version_id
+                          FROM learning_contexts l
+                          JOIN search_indexes s ON s.embedding_set_id=l.embedding_set_id
+                               AND s.version_id=l.version_id AND s.parse_revision_id=l.parse_revision_id
+                               AND s.translation_revision_id=l.translation_revision_id
                           JOIN chunks c ON c.parse_revision_id=l.parse_revision_id
-                                       AND c.translation_revision_id=l.translation_revision_id
+                          JOIN translation_results r ON r.chunk_id=c.chunk_id
+                               AND r.translation_revision_id=l.translation_revision_id
+                               AND r.failure_code IS NULL AND r.translated_text IS NOT NULL
                           JOIN paper_versions p ON p.version_id=l.version_id
                           WHERE l.context_id=? AND c.chunk_id=?''',
                        (context_id, evidence.chunk_id)).fetchone()

@@ -28,7 +28,7 @@ def test_resolves_context_and_filters(parts):
     _, contexts, retriever, calls = parts
     result = ContextSearchService(contexts, retriever).search('어텐션이란?', 'ctx', 3,
                                                            pdf_pages=(2,), section_ids=('intro',))
-    assert result.scope == SearchScope('v', 'p', 't', (2,), ('intro',))
+    assert result.scope == SearchScope('v', 'p', 't', (2,), ('intro',), 'idx')
     assert calls == [('어텐션이란?', result.scope, 3)]
 
 

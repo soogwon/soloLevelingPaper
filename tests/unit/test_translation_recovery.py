@@ -95,6 +95,14 @@ def test_recovery_creates_new_revision_and_publishes_atomically(db):
     assert rows(db, 'SELECT * FROM translation_recovery_locks') == []
 
 
+def test_metadata_for_initial_resume_and_pinned_revision(db):
+    run_recovery(db)
+    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), N, [])
+    assert repo.get_translation_metadata(db, 'p1')['translation_revision_id'] == 't1'
+    assert repo.get_translation_metadata(db, 'p1', 't2')['translation_revision_id'] == 't2'
+    assert repo.get_translation_metadata(db, 'different-parse', 't2') is None
+
+
 def test_pinned_index_rejects_mismatched_revision(db):
     run_recovery(db)
     repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), N, [])

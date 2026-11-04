@@ -81,10 +81,12 @@ class SQLitePaperDetailReader:
             for eid in ids:
                 if eid in known:
                     continue
-                e = conn.execute('''SELECT e.*, c.parse_revision_id, c.translation_revision_id,
-                    c.original_text, c.text, c.pdf_page, c.printed_page_label, c.section_id
+                e = conn.execute('''SELECT e.*, c.parse_revision_id, r.translation_revision_id,
+                    c.original_text, r.translated_text AS text, c.pdf_page, c.printed_page_label, c.section_id
                     FROM evidences e JOIN chunks c ON c.chunk_id=e.chunk_id
-                    WHERE e.evidence_id=? AND e.context_id=?''', (eid, context_id)).fetchone()
+                    JOIN translation_results r ON r.chunk_id=c.chunk_id AND r.translation_revision_id=?
+                        AND r.failure_code IS NULL AND r.translated_text IS NOT NULL
+                    WHERE e.evidence_id=? AND e.context_id=?''', (context['translation_revision_id'], eid, context_id)).fetchone()
                 if (e is None or e['parse_revision_id'] != context['parse_revision_id']
                         or e['translation_revision_id'] != context['translation_revision_id']
                         or (scope != 'paper' and e['section_id'] != scope)):

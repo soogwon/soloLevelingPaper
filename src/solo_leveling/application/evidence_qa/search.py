@@ -23,7 +23,7 @@ class ContextSearchService:
         require_text(context.translation_revision_id, 'translation_revision_id')
         require_text(context.embedding_set_id, 'embedding_set_id')
         scope = SearchScope(context.version_id, context.parse_revision_id,
-                            context.translation_revision_id, pdf_pages, section_ids)
+                            context.translation_revision_id, pdf_pages, section_ids, embedding_set_id=context.embedding_set_id)
         result = self.retriever.search(question, scope, top_k)
         if result.scope != scope or result.query != question or result.embedding_set_id != context.embedding_set_id:
             raise ValueError('검색 결과가 요청한 학습 맥락과 일치하지 않습니다.')

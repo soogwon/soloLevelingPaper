@@ -73,7 +73,7 @@ def test_section_scope_does_not_leak_other_section(detail):
 @pytest.mark.parametrize('sql',[
     "UPDATE evidences SET quote_original='다른 원문' WHERE evidence_id='e1'",
     "UPDATE evidences SET quote_ko='다른 번역' WHERE evidence_id='e1'",
-    "UPDATE chunks SET translation_revision_id='wrong' WHERE chunk_id='c1'",
+    "UPDATE translation_results SET translation_revision_id='wrong' WHERE chunk_id='c1'",
     "UPDATE learning_contexts SET embedding_set_id='wrong'",
     "UPDATE evidences SET context_id='other' WHERE evidence_id='e1'",
     "UPDATE summary_items SET evidence_ids='[\"missing\"]' WHERE position=0",

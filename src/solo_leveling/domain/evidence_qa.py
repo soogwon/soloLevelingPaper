@@ -57,11 +57,13 @@ class SearchScope:
     translation_revision_id: str | None
     pdf_pages: tuple[int, ...] = ()
     section_ids: tuple[str, ...] = ()
+    embedding_set_id: str | None = None
 
     def __post_init__(self) -> None:
         require_text(self.version_id, "version_id")
         require_text(self.parse_revision_id, "parse_revision_id")
         optional_text(self.translation_revision_id, "translation_revision_id")
+        optional_text(self.embedding_set_id, "embedding_set_id")
         require_tuple(self.pdf_pages, int, "pdf_pages")
         require_tuple(self.section_ids, str, "section_ids")
         for page in self.pdf_pages:
