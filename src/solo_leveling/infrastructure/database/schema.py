@@ -204,6 +204,7 @@ CREATE TABLE IF NOT EXISTS quiz_attempts (
     submitted_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_quiz_attempts_context ON quiz_attempts(context_id, step, submitted_at);
+CREATE INDEX IF NOT EXISTS idx_quiz_attempts_context_time ON quiz_attempts(context_id, submitted_at);
 CREATE TABLE IF NOT EXISTS quiz_attempt_answers (
     attempt_id TEXT NOT NULL REFERENCES quiz_attempts(attempt_id),
     position INTEGER NOT NULL,

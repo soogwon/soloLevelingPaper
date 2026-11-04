@@ -60,6 +60,14 @@ class StoredQuizService:
         except ResourceNotFoundError:
             raise ContractError('NOT_FOUND') from None
 
+    def history_page(self, context_id, step, limit, cursor):
+        try:
+            return self.attempts.history_page(context_id, step, limit, cursor)
+        except AttemptValidationError:
+            raise ContractError('INVALID_ARGUMENT') from None
+        except ResourceNotFoundError:
+            raise ContractError('NOT_FOUND') from None
+
     def scores(self, context_id):
         try:
             return self.attempts.step_scores(context_id)

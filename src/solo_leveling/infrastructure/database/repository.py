@@ -36,7 +36,8 @@ from solo_leveling.domain.paper_summary import (
 )
 from solo_leveling.domain.quiz import Quiz, QuizQuestion, QuizValidationError
 from solo_leveling.domain.quiz_attempt import (
-    AnswerResult, AttemptValidationError, QuizAttempt, SubmitOutcome, SubmitResult, validate_request_key)
+    DEFAULT_HISTORY_PAGE, MAX_HISTORY_PAGE, AnswerResult, AttemptValidationError, QuizAttempt, QuizAttemptPage,
+    QuizAttemptSummary, SubmitOutcome, SubmitResult, validate_request_key)
 from solo_leveling.domain.reflection import ReflectionAnswer, validate_answer as validate_reflection_answer
 
 from solo_leveling.domain.learning_progress import (
@@ -1119,6 +1120,58 @@ def list_quiz_attempts(db_path: str, context_id: str, step: Optional[str] = None
     with closing(get_connection(db_path)) as conn:
         rows = conn.execute(query + ' ORDER BY submitted_at, rowid', params).fetchall()
         return [_attempt_from_row(conn, row) for row in rows]
+
+
+def _attempt_scope(context_id: str, step: Optional[str]) -> tuple[str, list]:
+    where, params = 'context_id=?', [context_id]
+    if step is not None:
+        where, params = where + ' AND step=?', params + [step]
+    return where, params
+
+
+def quiz_attempt_page_query(context_id: str, step: Optional[str], limit: int, anchor=None) -> tuple[str, list]:
+    """시도 요약 한 페이지의 SQL과 매개변수를 만든다. 커서가 있으면 인덱스 탐색 범위가 커서 위치에서 시작한다(#145).
+
+    `submitted_at <= 기준시각`은 인덱스의 범위 조건이 되어 앞쪽 행을 훑지 않는다. 같은 시각의 행은 뒤따르는
+    `(submitted_at < ? OR rowid < ?)`로 걸러 기준 시도보다 먼저 저장한 것만 남긴다. OR 조건만 쓰면 범위로 쓰이지 못한다.
+    """
+    where, params = _attempt_scope(context_id, step)
+    if anchor is not None:
+        where += ' AND submitted_at <= ? AND (submitted_at < ? OR rowid < ?)'
+        params += [anchor['submitted_at'], anchor['submitted_at'], anchor['pos']]
+    sql = ('SELECT attempt_id, context_id, quiz_id, step, correct_count, total_count, submitted_at '
+           f'FROM quiz_attempts WHERE {where} ORDER BY submitted_at DESC, rowid DESC LIMIT ?')
+    return sql, params + [limit + 1]
+
+
+def list_quiz_attempt_page(db_path: str, context_id: str, step: Optional[str] = None,
+                           limit: int = DEFAULT_HISTORY_PAGE, cursor: Optional[str] = None) -> QuizAttemptPage:
+    """시도 요약을 최신순 한 페이지로 돌려준다(#145). 답안·정답·근거 본문은 읽지 않는다.
+
+    정렬은 제출 시각 내림차순, 같은 시각이면 나중에 저장한 시도(rowid)가 먼저다. attempt_id의 사전순은 쓰지 않는다.
+    커서는 이전 페이지 마지막 항목의 attempt_id이며, 같은 맥락·요청한 단계 범위 안에서 찾은 정렬 기준값 다음부터 읽는다.
+    범위 밖이거나 없는 커서는 AttemptValidationError다. LIMIT + 1건을 읽어 다음 페이지 유무만 판정한다.
+    한 번의 읽기 스냅샷 안에서 커서 조회와 페이지 조회를 하므로 페이지 사이에 새 제출이 들어와도 이어지는 쪽에는 영향이 없다.
+    """
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_HISTORY_PAGE:
+        raise AttemptValidationError(f'limit은 1~{MAX_HISTORY_PAGE} 정수여야 합니다.')
+    if step is not None and step not in LEARNING_STEPS:
+        raise AttemptValidationError(f'지원하지 않는 학습 단계: {step!r}')
+    if cursor is not None and (not isinstance(cursor, str) or not cursor):
+        raise AttemptValidationError('커서가 올바르지 않습니다.')
+    with closing(get_connection(db_path)) as conn:
+        conn.execute('BEGIN')
+        anchor = None
+        if cursor is not None:
+            where, params = _attempt_scope(context_id, step)
+            anchor = conn.execute(f'SELECT submitted_at, rowid AS pos FROM quiz_attempts WHERE {where} AND attempt_id=?',
+                                  params + [cursor]).fetchone()
+            if anchor is None:
+                raise AttemptValidationError('커서가 올바르지 않습니다.')
+        sql, params = quiz_attempt_page_query(context_id, step, limit, anchor)
+        rows = conn.execute(sql, params).fetchall()
+    items = tuple(QuizAttemptSummary(**dict(r)) for r in rows[:limit])
+    return QuizAttemptPage(items, items[-1].attempt_id if len(rows) > limit else None)
 
 
 def get_attempt_wrong_evidence(db_path: str, attempt: QuizAttempt) -> GetEvidenceResult:

@@ -17,7 +17,8 @@ from solo_leveling.domain.learning_progress import LEARNING_STEPS
 from solo_leveling.domain.models import now_iso
 from solo_leveling.domain.quiz import Quiz, QuizQuestion
 from solo_leveling.domain.quiz_attempt import (
-    AnswerResult, AttemptValidationError, QuizAttempt, SubmitResult, submit_input_hash, validate_request_key,
+    DEFAULT_HISTORY_PAGE, AnswerResult, AttemptValidationError, QuizAttempt, QuizAttemptPage, SubmitResult,
+    submit_input_hash, validate_request_key,
 )
 from solo_leveling.infrastructure.database import repository as repo
 
@@ -162,6 +163,15 @@ class QuizAttemptService:
         if repo.get_learning_context(self.db_path, context_id) is None:
             raise ResourceNotFoundError('context not found')
         return tuple(repo.list_quiz_attempts(self.db_path, context_id, step))
+
+    def history_page(self, context_id: str, step: Optional[str] = None, limit: int = DEFAULT_HISTORY_PAGE,
+                     cursor: Optional[str] = None) -> QuizAttemptPage:
+        """시도 요약을 최신순 한 페이지로 돌려준다. 답안은 읽지 않는다(#145)."""
+        if step is not None and step not in LEARNING_STEPS:
+            raise AttemptValidationError(f'지원하지 않는 학습 단계: {step!r}')
+        if repo.get_learning_context(self.db_path, context_id) is None:
+            raise ResourceNotFoundError('context not found')
+        return repo.list_quiz_attempt_page(self.db_path, context_id, step, limit, cursor)
 
     def step_scores(self, context_id: str) -> Tuple[StepScore, ...]:
         """단계별 시도 횟수, 가장 최근 점수, 최고 점수. 시도가 없는 단계도 포함한다."""

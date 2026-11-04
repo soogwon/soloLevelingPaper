@@ -79,6 +79,33 @@ class QuizAttempt:
         return tuple(r for r in self.results if not r.is_correct)
 
 
+# ── 시도 목록(#145) ────────────────────────────────────────────
+MAX_HISTORY_PAGE = 100
+DEFAULT_HISTORY_PAGE = 20
+
+
+@dataclass(frozen=True)
+class QuizAttemptSummary:
+    """목록용 시도 요약. 개별 답안·정답·근거 본문은 담지 않는다."""
+    attempt_id: str
+    context_id: str
+    quiz_id: str
+    step: str
+    correct_count: int
+    total_count: int
+    submitted_at: str
+
+    @property
+    def score(self) -> float:
+        return self.correct_count / self.total_count
+
+
+@dataclass(frozen=True)
+class QuizAttemptPage:
+    items: Tuple[QuizAttemptSummary, ...]
+    next_cursor: Optional[str]  # 다음 페이지가 있을 때만 마지막 항목의 attempt_id
+
+
 # ── 제출 요청 키와 저장 결과 (#110) ─────────────────────────────
 REQUEST_KEY_MAX_LENGTH = 128
 
