@@ -40,10 +40,10 @@ class InterleavingConnection:
         return getattr(self._conn, name)
 
 
-def delete_context_with_answers(db):
+def delete_context_with_answers(db, timeout=0.05):
     """답변과 맥락을 한 트랜잭션으로 지운다. 잠겨 있어 못 지우면 False(읽기가 끝나기 전에는 끼어들 수 없다는 뜻)."""
     try:
-        with closing(sqlite3.connect(db, timeout=0.05)) as conn, conn:
+        with closing(sqlite3.connect(db, timeout=timeout)) as conn, conn:
             conn.execute('PRAGMA foreign_keys = OFF')
             conn.execute('BEGIN IMMEDIATE')
             conn.execute('DELETE FROM reflection_answers WHERE context_id IN (SELECT context_id FROM learning_contexts)')
@@ -93,25 +93,72 @@ def test_phase_filter_returns_only_that_phase_and_keeps_empty_phase_as_existing_
         repo.get_reflection_answers(db, 'no-such-context', PHASE_AFTER)
 
 
-@pytest.mark.parametrize('read', ['all', 'comparison'])
-def test_concurrent_delete_never_looks_like_unwritten(ctx, monkeypatch, read):
-    """첫 SELECT 직후 다른 연결이 답변과 맥락을 함께 지워도, 삭제 전 초안이거나 not-found여야지 미작성이면 안 된다."""
+class Deleter:
+    """읽기 중에 끼어드는 삭제. 훅이 불릴 때마다 아직 안 지워졌으면 다시 시도하고, 성공은 한 번만 센다."""
+
+    def __init__(self, db, delete=None):
+        self.db, self.delete, self.done, self.attempts = db, delete or delete_context_with_answers, False, 0
+
+    def attempt(self, timeout=0.05):
+        if not self.done:
+            self.attempts += 1
+            self.done = self.delete(self.db, timeout)
+
+
+def remaining(db, context_id):
+    """별도 연결로 실제 커밋된 상태를 본다: (맥락 수, 그 맥락의 답변 수)."""
+    with closing(sqlite3.connect(db)) as conn:
+        return (conn.execute('SELECT COUNT(*) FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone()[0],
+                conn.execute('SELECT COUNT(*) FROM reflection_answers WHERE context_id=?', (context_id,)).fetchone()[0])
+
+
+def run_concurrent_delete(ctx, monkeypatch, read, delete=None):
     db, context_id = ctx
     service = ReflectionService(db)
     service.save_answer(context_id, PHASE_BEFORE, 'before.hypothesis', '삭제 전 초안', 'draft')
-    outcome = {}
-    intercept_with(monkeypatch, db, lambda: outcome.setdefault('deleted', delete_context_with_answers(db)))
-    # hook은 한 번만 의미가 있다(setdefault). 읽기 사이에 못 끼어들면 close 뒤에 실행되어 삭제 전 결과가 그대로여야 한다.
-
+    assert remaining(db, context_id) == (1, 1)
+    deleter = Deleter(db, delete)
+    intercept_with(monkeypatch, db, deleter.attempt)
     try:
         result = (repo.get_reflection_answers_all(db, context_id) if read == 'all'
                   else service.get_comparison(context_id))
     except ResourceNotFoundError:
         result = 'not-found'
+    # 읽기 연결이 닫힌 뒤, 읽기 중에 잠겨서 못 지웠다면 다시 시도한다(잠금이 풀려 있어야 한다).
+    deleter.attempt(timeout=5)
+    # 어느 반환 분기를 택했든 삭제가 실제로 커밋됐는지 별도 연결로 확인한다.
+    assert deleter.done, '삭제가 실행되지 않았다'
+    assert remaining(db, context_id) == (0, 0), '맥락과 답변이 함께 사라져야 한다'
 
     if result == 'not-found':
-        assert outcome['deleted'] is True  # 삭제가 끝난 뒤의 not-found만 허용
-        return
+        return result
     texts = ([a.text for a in result] if read == 'all'
              else [i.answer.text for i in result.before.items if i.answer is not None])
-    assert texts == ['삭제 전 초안']  # 삭제 전의 일관된 결과만 허용(미작성 [] 이면 안 된다)
+    assert texts == ['삭제 전 초안']   # 삭제 전의 일관된 결과만 허용(미작성 [] 이면 안 된다)
+    return result
+
+
+@pytest.mark.parametrize('read', ['all', 'comparison'])
+def test_concurrent_delete_never_looks_like_unwritten(ctx, monkeypatch, read):
+    """읽는 도중 다른 연결이 답변과 맥락을 함께 지워도, 삭제 전 초안이거나 not-found여야지 미작성이면 안 된다."""
+    run_concurrent_delete(ctx, monkeypatch, read)
+
+
+@pytest.mark.parametrize('read', ['all', 'comparison'])
+def test_control_without_the_delete_the_scenario_fails(ctx, monkeypatch, read):
+    """대조 실험: 삭제를 생략(항상 False)하면 같은 검사가 실패해야 한다. 그렇지 않으면 위 테스트는 삭제 없이도 통과한다."""
+    with pytest.raises(AssertionError):
+        run_concurrent_delete(ctx, monkeypatch, read, delete=lambda db, timeout: False)
+
+
+@pytest.mark.parametrize('read', ['all', 'comparison'])
+def test_delayed_first_attempt_is_retried_and_committed(ctx, monkeypatch, read):
+    """첫 시도가 잠겨 실패하고 다음 시도가 성공하는 경우도 정확히 표현한다(첫 결과만 기록하지 않는다)."""
+    calls = []
+
+    def flaky(db, timeout):
+        calls.append(timeout)
+        return False if len(calls) == 1 else delete_context_with_answers(db, timeout)
+
+    run_concurrent_delete(ctx, monkeypatch, read, delete=flaky)
+    assert len(calls) >= 2                                  # 첫 시도 실패 뒤 재시도로 지워졌다
