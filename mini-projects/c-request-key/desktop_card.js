@@ -5,7 +5,7 @@ const status = document.querySelector('output');
 async function act(action) {
   try {
     const result = await app.callServerTool({name: 'probe_action', arguments: {action}});
-    status.textContent = result.content[0].text;
+    status.textContent = result.isError ? '상태 확인 불가' : result.content[0].text;
   } catch {
     status.textContent = '상태 확인 불가';
   }

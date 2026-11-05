@@ -1,6 +1,7 @@
 """#119 합성 요청 한 건만 지원하는 Desktop 호출자 보관·재조회 실험."""
 import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -39,12 +40,19 @@ def submit():
 
 def restore():
     try:
-        context, key = json.loads(journal.read_text(encoding='utf-8'))
+        stored = json.loads(journal.read_text(encoding='utf-8'))
+        if (not isinstance(stored, list) or len(stored) != 2
+                or not all(isinstance(value, str) for value in stored)):
+            return '키 복원 실패'
+        context, key = stored
         if context != context_id or str(UUID(key)) != key:
             return '키 복원 실패'
     except (OSError, ValueError, TypeError):
         return '키 복원 실패'
-    view = ask_executions.lookup_execution(db, key)
+    try:
+        view = ask_executions.lookup_execution(db, key)
+    except sqlite3.Error:
+        return '상태 확인 불가'
     if view.context_id != context_id:
         return '상태 확인 불가'
     return '저장된 결과 복원' if view.result_json == '{"synthetic":true}' else view.state.value

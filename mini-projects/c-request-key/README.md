@@ -1,5 +1,21 @@
 # #119 C 요청 키 복구 계약 검토
 
+## 복원 오류 회귀 검증
+
+키 파일은 문자열 두 개가 담긴 배열인지 확인한 뒤 UUID를 검사한다.
+잘못된 파일은 상태 조회 전에 거부한다. SQLite 조회 오류와 카드가 받은 MCP 오류 응답은
+`상태 확인 불가`로 표시한다.
+
+```sh
+PYTHONPATH=src python -m pytest mini-projects/c-request-key tests/unit/test_ask_executions.py tests/unit/mcp/test_ask_cancellation.py -q
+node --test mini-projects/c-request-key/desktop_card.test.mjs
+```
+
+합성 응답 유실 뒤 파일 손상·없는 키·DB 조회 오류를 주입하고, 정상 파일 복원 후에도
+실행 기록이 completed 한 건인지 확인한다. 오류 이후 begin/complete 추가 호출은 각각
+0회여야 한다. 카드 검증은 MCP 오류 응답과 호출 예외를 각각 주입하고 고정 문구 및
+이후 정상 복원을 확인한다. 아래 macOS Desktop 실측과 별도의 자동 회귀 검사다.
+
 2026-11-03 · 기준 main `2230865` · macOS · Python 3.12
 
 ## 결론
