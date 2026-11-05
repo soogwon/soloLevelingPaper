@@ -18,7 +18,7 @@ MCP 호스트에 반환하는 정상 근거·본문과 진단 로그는 구분�
 
 | 위험 / 경계 | 현재 방어 | 검증 파일 | 남은 제한 |
 |---|---|---|---|
-| 입력 경로 → 로컬 파일: 허용 폴더 밖 접근 | 절대·상위·Windows 특수 경로와 루트 밖 심볼릭 링크 거부 | `tests/unit/mcp/test_local_files.py`, `tests/unit/mcp/test_runtime.py` | 검사 후 경로 교체·하드링크 원본 위치는 보장하지 않음 |
+| 입력 경로 → 로컬 파일: 허용 폴더 밖 접근 | 절대·상위·Windows 특수 경로와 루트 밖 심볼릭 링크 거부, 열린 파일의 단일 링크·종류·크기 검사, POSIX 디렉터리 핸들 기준 열기 | `tests/unit/mcp/test_local_files.py`, `tests/unit/mcp/test_runtime.py` | Windows 재분석 지점 경쟁, 루트 상위 폴더·관리 저장소 교체는 별도 범위 |
 | 입력 PDF → 관리 저장소: 위장·과대 파일과 덮어쓰기 | 확장자·헤더·스트림 크기 검사, 해시 기반 저장·기존 내용 확인 | `tests/unit/mcp/test_local_files.py`, `tests/unit/test_pdf_store.py` | 헤더 검사는 악성 PDF 검사나 파서 격리가 아님 |
 | 설정 → 번역·생성 제공자: 의도하지 않은 전송 | 외부 호출 허용이 참이고 로컬 전용이 거짓일 때만 호출 | `tests/unit/mcp/test_external_api_policy.py`, `tests/unit/mcp/test_runtime.py`, `tests/unit/translation/test_openai_provider.py` | 호스트 통신·모델 다운로드까지 차단하는 설정이 아님 |
 | 제공자·내부 예외 → MCP 응답: 키·경로 노출 | 원본 예외 대신 고정 오류 응답으로 변환 | `tests/unit/mcp/test_server.py`, `tests/unit/translation/test_openai_provider.py`, `tests/unit/test_openai_generator.py` | 정상 도구 결과에는 요청한 원문 근거가 포함될 수 있음 |
@@ -84,8 +84,16 @@ python -m pytest -q -p no:cacheprovider --basetemp=<새로운 테스트 전용 �
 - [x] Desktop·진단·직접 실행 설정의 정상·실패·시간 초과·종료 검증 및 MCP stdio 회귀 (Windows)
 - [ ] 검증 환경·결과·남은 제한을 바탕으로 #64 완료 여부 판단
 
-검사 후 경로 교체 방어는 이번 범위에서 보류한다. 신뢰할 수 있는 로컬 폴더라는
-전제가 달라지면 별도 설계가 필요하다. PDF·모델 출력의 지시문에 의한 프롬프트 주입,
+로컬 PDF 가져오기는 열린 파일의 종류·크기·링크 수를 검사하며 링크 수가 1인 일반 파일만 읽는다.
+macOS/Linux에서는 해석된 상대 경로를 import 루트의 디렉터리 핸들부터 순서대로 열고
+각 단계의 심볼릭 링크 추적을 거부한다. FIFO로 교체돼도 비차단 열기 후 일반 파일 검사에서 거부한다.
+열기 전에 해석된 루트 내부 심볼릭 링크는 기존처럼 사용할 수 있다.
+
+Windows는 열린 파일 검사까지 적용하며 재분석 지점 교체 경쟁은 별도 핸들 기반 구현·검증이 필요하다.
+import 루트 상위 폴더의 교체, 관리 저장소 자체의 교체, 열린 동일 파일에 대한 동시 쓰기는
+이번 보완으로 격리하지 않는다. 단일 링크 검사는 검사 시점의 링크 수를 기준으로 하며
+파일의 과거 원본 위치나 이후 링크 생성을 증명하지 않는다. 데이터 폴더의 쓰기 권한을
+신뢰할 수 있는 사용자로 제한하는 전제는 계속 필요하다. PDF·모델 출력의 지시문에 의한 프롬프트 주입,
 악성 PDF 파싱, 원격 인증·인가도 현재 경로 검사나 로그 필터만으로 해결되지 않는다.
 
 관련 안내: [외부 전송 데이터와 시점](external-data-transfer.md),

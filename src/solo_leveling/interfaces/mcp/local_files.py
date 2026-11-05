@@ -1,8 +1,11 @@
 """MCP가 접근할 수 있는 로컬 PDF 범위와 관리 복사본을 준비한다."""
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path, PureWindowsPath
 
 from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
@@ -26,6 +29,42 @@ class LocalPdfStore:
             raise ValueError('MAX_UPLOAD_BYTES는 양의 정수여야 합니다.')
         self.max_bytes = max_bytes
 
+    @contextmanager
+    def _open_source(self, source: Path):
+        """열린 파일을 검사한 뒤에만 읽는다. POSIX에서는 디렉터리별 링크 추적도 막는다."""
+        descriptor = None
+        directory = None
+        try:
+            if os.name == 'posix':
+                flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                directory = os.open(self.import_root, flags)
+                parts = source.relative_to(self.import_root).parts
+                for part in parts[:-1]:
+                    child = os.open(part, flags, dir_fd=directory)
+                    os.close(directory)
+                    directory = child
+                descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                     dir_fd=directory)
+            else:
+                # Windows의 재분석 지점 경쟁 방어는 별도 핸들 기반 구현이 필요하다.
+                descriptor = os.open(source, os.O_RDONLY | getattr(os, 'O_BINARY', 0))
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+                raise InvalidArgumentError('단일 링크의 일반 PDF 파일만 가져올 수 있습니다.')
+            if not 5 <= opened.st_size <= self.max_bytes:
+                raise UnsupportedDocumentError('PDF 파일 크기가 허용 범위를 벗어났습니다.')
+            reader = os.fdopen(descriptor, 'rb')
+            descriptor = None  # 소유권을 스트림에 넘긴다.
+        except OSError:
+            raise InvalidArgumentError('PDF 파일을 안전하게 열 수 없습니다.') from None
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            if directory is not None:
+                os.close(directory)
+        with reader:
+            yield reader
+
     def import_pdf(self, relative_path: str) -> ManagedPdf:
         if not isinstance(relative_path, str) or not relative_path.strip():
             raise InvalidArgumentError('상대 PDF 경로가 필요합니다.')
@@ -48,7 +87,7 @@ class LocalPdfStore:
         if size < 5 or size > self.max_bytes:
             raise UnsupportedDocumentError('PDF 파일 크기가 허용 범위를 벗어났습니다.')
 
-        with source.open('rb') as reader:
+        with self._open_source(source) as reader:
             stored = PdfStore(self.managed_root, self.max_bytes).save_stream(reader)
         normalized = requested.as_posix()
         fingerprint = hashlib.sha256(json.dumps({

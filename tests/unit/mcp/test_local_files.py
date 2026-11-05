@@ -1,6 +1,7 @@
 """로컬 PDF 가져오기 경계와 관리 복사본을 검증한다."""
 
 import errno
+import os
 from pathlib import Path
 
 import pytest
@@ -184,3 +185,133 @@ def test_existing_managed_file_must_match_content(tmp_path):
     imported.path.write_bytes(b'x' * len(source.read_bytes()))
     with pytest.raises(RuntimeError):
         pdfs.import_pdf('paper.pdf')
+
+
+def test_hardlinked_pdf_is_rejected_before_copy(tmp_path):
+    import os
+    pdfs, imports = store(tmp_path)
+    outside = tmp_path / 'outside.pdf'
+    outside.write_bytes(b'%PDF-private')
+    os.link(outside, imports / 'paper.pdf')
+    with pytest.raises(InvalidArgumentError):
+        pdfs.import_pdf('paper.pdf')
+    assert not (tmp_path / 'pdfs').exists()
+    assert outside.read_bytes() == b'%PDF-private'
+
+
+def test_internal_symlink_still_imports_resolved_file(tmp_path):
+    pdfs, imports = store(tmp_path)
+    (imports / 'original.pdf').write_bytes(b'%PDF-original')
+    symlink_or_skip(imports / 'alias.pdf', imports / 'original.pdf')
+    assert pdfs.import_pdf('alias.pdf').path.read_bytes() == b'%PDF-original'
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX 디렉터리 핸들 검증')
+@pytest.mark.parametrize('replacement', ['file_link', 'directory_link', 'fifo', 'hardlink'])
+def test_replacement_after_validation_is_rejected_before_copy(tmp_path, monkeypatch, replacement):
+    import os
+    pdfs, imports = store(tmp_path)
+    nested = imports / 'nested'
+    nested.mkdir()
+    source = nested / 'paper.pdf'
+    source.write_bytes(b'%PDF-safe')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'paper.pdf').write_bytes(b'%PDF-private')
+    original_open = pdfs._open_source
+
+    def replace_then_open(path):
+        if replacement == 'directory_link':
+            nested.rename(imports / 'previous')
+            nested.symlink_to(outside, target_is_directory=True)
+        else:
+            source.unlink()
+            if replacement == 'file_link':
+                source.symlink_to(outside / 'paper.pdf')
+            elif replacement == 'fifo':
+                os.mkfifo(source)
+            else:
+                os.link(outside / 'paper.pdf', source)
+        return original_open(path)
+
+    monkeypatch.setattr(pdfs, '_open_source', replace_then_open)
+    with pytest.raises(InvalidArgumentError):
+        pdfs.import_pdf('nested/paper.pdf')
+    assert not (tmp_path / 'pdfs').exists()
+
+
+def test_opened_file_size_is_rechecked(tmp_path, monkeypatch):
+    pdfs, imports = store(tmp_path, max_bytes=10)
+    source = imports / 'paper.pdf'
+    source.write_bytes(b'%PDF-safe')
+    original_open = pdfs._open_source
+
+    def grow_then_open(path):
+        source.write_bytes(b'%PDF-' + b'x' * 20)
+        return original_open(path)
+
+    monkeypatch.setattr(pdfs, '_open_source', grow_then_open)
+    with pytest.raises(UnsupportedDocumentError):
+        pdfs.import_pdf('paper.pdf')
+    assert not (tmp_path / 'pdfs').exists()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX 디렉터리 핸들 검증')
+def test_open_directory_handle_stays_on_original_directory_after_replacement(tmp_path, monkeypatch):
+    pdfs, imports = store(tmp_path)
+    nested = imports / 'nested'
+    nested.mkdir()
+    (nested / 'paper.pdf').write_bytes(b'%PDF-safe')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'paper.pdf').write_bytes(b'%PDF-private')
+    original_open = os.open
+
+    def replace_parent(path, flags, *args, **kwargs):
+        if path == 'paper.pdf' and kwargs.get('dir_fd') is not None:
+            nested.rename(imports / 'previous')
+            nested.symlink_to(outside, target_is_directory=True)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'open', replace_parent)
+    result = pdfs.import_pdf('nested/paper.pdf')
+    assert result.path.read_bytes() == b'%PDF-safe'
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX 파일·디렉터리 핸들 검증')
+@pytest.mark.parametrize('outcome', ['success', 'rejected', 'copy_failed'])
+def test_import_closes_opened_descriptors_on_every_exit(tmp_path, monkeypatch, outcome):
+    from solo_leveling.infrastructure.storage.pdf_store import PdfStore
+
+    pdfs, imports = store(tmp_path)
+    (imports / 'nested').mkdir()
+    source = imports / 'nested' / 'paper.pdf'
+    source.write_bytes(b'%PDF-safe')
+    if outcome == 'rejected':
+        os.link(source, imports / 'other.pdf')
+    descriptors = []
+    original_open = os.open
+
+    def track_open(*args, **kwargs):
+        descriptor = original_open(*args, **kwargs)
+        descriptors.append(descriptor)
+        return descriptor
+
+    def fail_copy(*args, **kwargs):
+        raise OSError('합성 복사 실패')
+
+    monkeypatch.setattr(os, 'open', track_open)
+    if outcome == 'copy_failed':
+        monkeypatch.setattr(PdfStore, 'save_stream', fail_copy)
+        with pytest.raises(OSError, match='합성 복사 실패'):
+            pdfs.import_pdf('nested/paper.pdf')
+    elif outcome == 'rejected':
+        with pytest.raises(InvalidArgumentError):
+            pdfs.import_pdf('nested/paper.pdf')
+    else:
+        pdfs.import_pdf('nested/paper.pdf')
+    assert len(descriptors) == 3
+    for descriptor in descriptors:
+        with pytest.raises(OSError) as caught:
+            os.fstat(descriptor)
+        assert caught.value.errno == errno.EBADF
