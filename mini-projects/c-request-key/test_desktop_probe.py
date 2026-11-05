@@ -77,6 +77,31 @@ def test_restore_errors_keep_one_execution_and_recovery_still_works(probe, tmp_p
         assert conn.execute('SELECT status FROM ask_executions').fetchall() == [('completed',)]
 
 
+def test_restore_scopes_lookup_to_saved_context_without_new_execution(probe, tmp_path, monkeypatch):
+    db, chunks = setup_db.__wrapped__(tmp_path)
+    publish(db, chunks)
+    store = probe.ask_executions
+    begin = Mock(wraps=store.begin_execution)
+    complete = Mock(wraps=store.complete_execution)
+    lookup = Mock(wraps=store.lookup_execution)
+    monkeypatch.setattr(store, 'begin_execution', begin)
+    monkeypatch.setattr(store, 'complete_execution', complete)
+    monkeypatch.setattr(store, 'lookup_execution', lookup)
+    with pytest.raises(RuntimeError, match='합성 접수 응답 유실'):
+        probe.submit()
+    begin.reset_mock()
+    complete.reset_mock()
+    context, key = json.loads(probe.journal.read_text(encoding='utf-8'))
+
+    assert probe.restore() == '저장된 결과 복원'
+    lookup.assert_called_once_with(probe.db, key, context_id=probe.context_id)
+
+    assert store.lookup_execution(probe.db, key, context_id='other-context').state.value == 'not_found'
+    assert context == probe.context_id
+    begin.assert_not_called()
+    complete.assert_not_called()
+
+
 def test_journal_write_failure_never_submits(probe, monkeypatch):
     probe.journal.mkdir()
     begin = Mock()

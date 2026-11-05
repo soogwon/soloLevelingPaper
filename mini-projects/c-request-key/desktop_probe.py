@@ -50,7 +50,7 @@ def restore():
     except (OSError, ValueError, TypeError):
         return '키 복원 실패'
     try:
-        view = ask_executions.lookup_execution(db, key)
+        view = ask_executions.lookup_execution(db, key, context_id=context_id)
     except sqlite3.Error:
         return '상태 확인 불가'
     if view.context_id != context_id:
