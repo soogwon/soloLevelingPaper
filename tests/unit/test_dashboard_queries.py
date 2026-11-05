@@ -84,7 +84,8 @@ def test_unknown_context_and_missing_database_do_not_create_data(setup_db, tmp_p
 @pytest.mark.parametrize('mutation', [
     "UPDATE learning_contexts SET version_id='other'",
     "INSERT INTO learning_progress VALUES ('ctx','preview','[\"preview\",\"preview\"]',NULL,NULL,'now')",
-    "INSERT INTO quiz_attempts VALUES ('bad','ctx','q','preview',2,1,'now')",
+    "INSERT INTO quiz_attempts (attempt_id, context_id, quiz_id, step, correct_count, total_count, submitted_at, attempt_seq) "
+    "VALUES ('bad','ctx','q','preview',2,1,'now',1)",
 ])
 def test_inconsistent_links_or_values_are_rejected(setup_db, mutation):
     db, chunks = setup_db

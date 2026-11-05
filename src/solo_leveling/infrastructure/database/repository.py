@@ -1040,7 +1040,11 @@ def _insert_attempt(conn, attempt: QuizAttempt) -> None:
     missing = sorted({e for r in attempt.results for e in r.evidence_ids} - known)
     if missing:
         raise AttemptValidationError(f'이 맥락에 없는 evidence_id: {", ".join(missing)}')
-    conn.execute('INSERT INTO quiz_attempts VALUES (?, ?, ?, ?, ?, ?, ?)',
+    # 같은 시각의 순서는 영속 저장 순번(attempt_seq)으로 정한다(#176). 호출자가 연 쓰기 트랜잭션(BEGIN IMMEDIATE) 안이라
+    # 최댓값 조회와 삽입 사이에 다른 저장이 끼어들지 않는다.
+    conn.execute('INSERT INTO quiz_attempts (attempt_id, context_id, quiz_id, step, correct_count, total_count, '
+                 'submitted_at, attempt_seq) VALUES (?, ?, ?, ?, ?, ?, ?, '
+                 '(SELECT COALESCE(MAX(attempt_seq), 0) + 1 FROM quiz_attempts))',
                  (attempt.attempt_id, attempt.context_id, attempt.quiz_id, attempt.step,
                   attempt.correct_count, attempt.total_count, attempt.submitted_at))
     for r in attempt.results:
@@ -1146,7 +1150,7 @@ def list_quiz_attempts(db_path: str, context_id: str, step: Optional[str] = None
     if step is not None:
         query, params = query + ' AND step=?', params + [step]
     with closing(get_connection(db_path)) as conn:
-        rows = conn.execute(query + ' ORDER BY submitted_at, rowid', params).fetchall()
+        rows = conn.execute(query + ' ORDER BY submitted_at, attempt_seq', params).fetchall()
         return [_attempt_from_row(conn, row) for row in rows]
 
 
@@ -1158,17 +1162,18 @@ def _attempt_scope(context_id: str, step: Optional[str]) -> tuple[str, list]:
 
 
 def quiz_attempt_page_query(context_id: str, step: Optional[str], limit: int, anchor=None) -> tuple[str, list]:
-    """시도 요약 한 페이지의 SQL과 매개변수를 만든다. 커서가 있으면 인덱스 탐색 범위가 커서 위치에서 시작한다(#145).
+    """시도 요약 한 페이지의 SQL과 매개변수를 만든다. 커서가 있으면 인덱스 탐색이 커서 위치에서 시작한다(#145, #176).
 
-    `submitted_at <= 기준시각`은 인덱스의 범위 조건이 되어 앞쪽 행을 훑지 않는다. 같은 시각의 행은 뒤따르는
-    `(submitted_at < ? OR rowid < ?)`로 걸러 기준 시도보다 먼저 저장한 것만 남긴다. OR 조건만 쓰면 범위로 쓰이지 못한다.
+    `(submitted_at, attempt_seq) < (기준시각, 기준순번)` 행 값 비교는 정렬 순서와 같은 두 열의 인덱스 범위가 되어, 같은 제출 시각의
+    시도가 아주 많아도 기준 시도보다 앞선 행을 훑지 않는다. 시각만 범위로 쓰고 순번은 뒤따르는 OR로 거르는 방식은
+    모든 행이 같은 시각이면 범위가 좁혀지지 않아 뒤쪽 페이지일수록 비용이 늘어난다. 행 값 비교에는 SQLite 3.15 이상이 필요하다.
     """
     where, params = _attempt_scope(context_id, step)
     if anchor is not None:
-        where += ' AND submitted_at <= ? AND (submitted_at < ? OR rowid < ?)'
-        params += [anchor['submitted_at'], anchor['submitted_at'], anchor['pos']]
+        where += ' AND (submitted_at, attempt_seq) < (?, ?)'
+        params += [anchor['submitted_at'], anchor['pos']]
     sql = ('SELECT attempt_id, context_id, quiz_id, step, correct_count, total_count, submitted_at '
-           f'FROM quiz_attempts WHERE {where} ORDER BY submitted_at DESC, rowid DESC LIMIT ?')
+           f'FROM quiz_attempts WHERE {where} ORDER BY submitted_at DESC, attempt_seq DESC LIMIT ?')
     return sql, params + [limit + 1]
 
 
@@ -1176,7 +1181,7 @@ def list_quiz_attempt_page(db_path: str, context_id: str, step: Optional[str] = 
                            limit: int = DEFAULT_HISTORY_PAGE, cursor: Optional[str] = None) -> QuizAttemptPage:
     """시도 요약을 최신순 한 페이지로 돌려준다(#145). 답안·정답·근거 본문은 읽지 않는다.
 
-    정렬은 제출 시각 내림차순, 같은 시각이면 나중에 저장한 시도(rowid)가 먼저다. attempt_id의 사전순은 쓰지 않는다.
+    정렬은 제출 시각 내림차순, 같은 시각이면 나중에 저장한 시도(영속 저장 순번 attempt_seq)가 먼저다. attempt_id의 사전순은 쓰지 않는다.
     커서는 이전 페이지 마지막 항목의 attempt_id이며, 같은 맥락·요청한 단계 범위 안에서 찾은 정렬 기준값 다음부터 읽는다.
     범위 밖이거나 없는 커서는 AttemptValidationError다. LIMIT + 1건을 읽어 다음 페이지 유무만 판정한다.
     한 번의 읽기 스냅샷 안에서 커서 조회와 페이지 조회를 하므로 페이지 사이에 새 제출이 들어와도 이어지는 쪽에는 영향이 없다.
@@ -1192,7 +1197,7 @@ def list_quiz_attempt_page(db_path: str, context_id: str, step: Optional[str] = 
         anchor = None
         if cursor is not None:
             where, params = _attempt_scope(context_id, step)
-            anchor = conn.execute(f'SELECT submitted_at, rowid AS pos FROM quiz_attempts WHERE {where} AND attempt_id=?',
+            anchor = conn.execute(f'SELECT submitted_at, attempt_seq AS pos FROM quiz_attempts WHERE {where} AND attempt_id=?',
                                   params + [cursor]).fetchone()
             if anchor is None:
                 raise AttemptValidationError('커서가 올바르지 않습니다.')
