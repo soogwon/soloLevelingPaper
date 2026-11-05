@@ -201,10 +201,12 @@ CREATE TABLE IF NOT EXISTS quiz_attempts (
     step TEXT NOT NULL,
     correct_count INTEGER NOT NULL,
     total_count INTEGER NOT NULL,
-    submitted_at TEXT NOT NULL
+    submitted_at TEXT NOT NULL,
+    -- 같은 제출 시각의 순서를 정하는 영속 저장 순번(#176). 저장할 때 (기존 최댓값 + 1)을 같은 쓰기 트랜잭션에서 붙이고
+    -- 한 번 붙으면 바꾸지 않는다. 암묵적 rowid는 INTEGER PRIMARY KEY가 없는 표에서 VACUUM·복원 때 바뀔 수 있어 쓰지 않는다.
+    -- 기존 DB에는 아래 이관(_migrate_quiz_attempt_seq)이 열을 더하고 현재 순서대로 채운 뒤 인덱스를 만든다.
+    attempt_seq INTEGER
 );
-CREATE INDEX IF NOT EXISTS idx_quiz_attempts_context ON quiz_attempts(context_id, step, submitted_at);
-CREATE INDEX IF NOT EXISTS idx_quiz_attempts_context_time ON quiz_attempts(context_id, submitted_at);
 CREATE TABLE IF NOT EXISTS quiz_attempt_answers (
     attempt_id TEXT NOT NULL REFERENCES quiz_attempts(attempt_id),
     position INTEGER NOT NULL,
@@ -380,6 +382,7 @@ def init_db(db_path: str) -> None:
         _migrate_translation_results(conn)
         _migrate_search_indexes(conn)
         _migrate_search_index_chunks(conn)
+        _migrate_quiz_attempt_seq(conn)
         # 기존 생성된 DB에 컬럼을 추가하는 형식.
         # 초기값은 NULL로 번역 설정을 임의로 채우지 않는다.
         with conn:
@@ -416,6 +419,33 @@ def _migrate_translation_results(conn: sqlite3.Connection) -> None:
             'JOIN translation_revisions t ON t.translation_revision_id=c.translation_revision_id '
             'AND t.parse_revision_id=c.parse_revision_id '
             'WHERE c.text IS NOT NULL AND c.translation_revision_id IS NOT NULL')
+
+
+def _migrate_quiz_attempt_seq(conn: sqlite3.Connection) -> None:
+    """quiz_attempts.attempt_seq(영속 저장 순번)를 더하고 비어 있는 행을 현재 저장 순서(rowid)대로 채운다(#176).
+
+    한 쓰기 트랜잭션에서 하며 반복 실행해도 같은 결과다. 이미 채워진 순번은 바꾸지 않고, 비어 있는 행에는 기존 최댓값 뒤로
+    이어 붙인다. 순번은 현재 보이는 순서(제출 시각, 같은 시각이면 저장 순서)를 그대로 보존한다. 조회 인덱스는 순번 열로 만들고,
+    순번 이전의 인덱스는 새 인덱스가 대신하므로 지운다.
+    """
+    conn.commit()
+    conn.execute('BEGIN IMMEDIATE')
+    with conn:
+        if 'attempt_seq' not in {row['name'] for row in conn.execute('PRAGMA table_info(quiz_attempts)')}:
+            conn.execute('ALTER TABLE quiz_attempts ADD COLUMN attempt_seq INTEGER')
+        missing = [row[0] for row in conn.execute(
+            'SELECT rowid FROM quiz_attempts WHERE attempt_seq IS NULL ORDER BY rowid')]
+        if missing:
+            base = conn.execute('SELECT COALESCE(MAX(attempt_seq), 0) FROM quiz_attempts').fetchone()[0]
+            conn.executemany('UPDATE quiz_attempts SET attempt_seq=? WHERE rowid=?',
+                             [(base + offset + 1, rowid) for offset, rowid in enumerate(missing)])
+        conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_quiz_attempts_seq ON quiz_attempts(attempt_seq)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_quiz_attempts_context_seq '
+                     'ON quiz_attempts(context_id, step, submitted_at, attempt_seq)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_quiz_attempts_context_time_seq '
+                     'ON quiz_attempts(context_id, submitted_at, attempt_seq)')
+        conn.execute('DROP INDEX IF EXISTS idx_quiz_attempts_context')
+        conn.execute('DROP INDEX IF EXISTS idx_quiz_attempts_context_time')
 
 
 def _migrate_search_index_chunks(conn: sqlite3.Connection) -> None:

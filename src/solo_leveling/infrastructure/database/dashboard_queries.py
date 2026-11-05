@@ -89,7 +89,7 @@ class DashboardReader:
     def _scores(conn, context_id):
         # 채점은 다시 하지 않고 저장된 정답 수·문항 수만 집계한다.
         rows = conn.execute('SELECT * FROM quiz_attempts WHERE context_id=? '
-                            'ORDER BY submitted_at, rowid', (context_id,)).fetchall()
+                            'ORDER BY submitted_at, attempt_seq', (context_id,)).fetchall()
         if any(row['step'] not in LEARNING_STEPS or row['total_count'] <= 0
                or not 0 <= row['correct_count'] <= row['total_count'] for row in rows):
             raise DataIntegrityError('저장된 퀴즈 점수가 올바르지 않습니다.')
