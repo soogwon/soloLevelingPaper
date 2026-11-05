@@ -8,8 +8,9 @@
 - outcome: complete | partial | failed. queued·processing은 null.
 - 알 수 없는 limitations 문자열은 failure_code로 쓰지 않고 fallback(ingestion_failed / interrupted)으로 처리한다.
   예외 메시지·경로·원문은 담지 않는다.
-- failure_code는 아래 고정 코드와 TranslationFailureCode에 정의된 번역 실패 코드뿐이다(미등록·깨진 항목은 translation_failed). empty_pages 같은 품질 경고는 failure_code도 outcome도 바꾸지 않는다.
+- failure_code는 아래 고정 코드와 TranslationFailureCode에 정의된 번역 실패 코드뿐이다(미등록 코드나 형식이 맞지 않는 항목은 translation_failed). empty_pages 같은 품질 경고는 failure_code도 outcome도 바꾸지 않는다.
 """
+import re
 from typing import Optional
 
 from solo_leveling.domain.translation import TranslationFailureCode
@@ -42,17 +43,20 @@ def _empty(outcome: Optional[str] = None) -> dict:
 _TRANSLATION_CODES = frozenset(code.value for code in TranslationFailureCode)
 
 
+_PARTIAL_RECORD = re.compile(r'translation_failed:([A-Za-z0-9_-]{1,64}):([A-Za-z0-9_]{1,64})')
+
+
 def _first_partial_code(limitations) -> Optional[str]:
     """첫 번째 'translation_failed:<chunk_id>:<code>' 항목의 코드. 항목이 없으면 None.
 
-    TranslationFailureCode에 정의된 값만 그대로 돌려준다. 미등록 값이나 형식이 깨진 항목은 고정 코드
-    'translation_failed'로 대체한다(공개해도 되는 코드인지는 값을 만드는 이 단계에서 판단한다, #60).
+    기록 형식을 엄격히 검사한다: 필드는 정확히 세 개이고(접두어, 청크 ID, 코드), 청크 ID는 영문·숫자·밑줄·하이픈 1~64자,
+    코드는 TranslationFailureCode에 정의된 값이어야 한다. 하나라도 어긋나면(필드 수가 다르거나, 청크 ID에 콜론·공백이
+    있거나, 미등록 코드이거나) 값을 그대로 내보내지 않고 고정 코드 'translation_failed'로 대체한다(#60, #180).
     """
     for item in limitations:
         if isinstance(item, str) and item.startswith(_PARTIAL_PREFIX):
-            parts = item.split(':')
-            code = parts[-1] if len(parts) >= 3 else None
-            return code if code in _TRANSLATION_CODES else 'translation_failed'
+            match = _PARTIAL_RECORD.fullmatch(item)
+            return match[2] if match and match[2] in _TRANSLATION_CODES else 'translation_failed'
     return None
 
 
