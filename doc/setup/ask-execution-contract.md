@@ -21,6 +21,11 @@ Desktop의 대기 시간이 끝나도 서버는 작업을 계속할 수 있고(�
 - **만료 거부**: `now < lease_expires_at`일 때만 하트비트·결과 저장·실패 기록이 된다. 지난 뒤에는 원래 소유자라도 `LEASE_LOST`이고
   아무것도 바꾸지 않는다. 토큰이 다르거나 이미 끝난 실행도 `LEASE_LOST`다.
 - **읽기 전용 조회**: `lookup_execution`은 행을 바꾸지 않고, 실행을 시작·재시작하지 않는다.
+  `context_id`는 필수 인자다(생략하면 `TypeError`, 비어 있으면 `ExecutionValidationError`). 저장된 context와 다르면 없는 키와 같은 `not_found`로,
+  다른 context의 상태·본문·존재 여부를 드러내지 않는다. 서비스의 `lookup`도 이 함수에 context를 넘긴다.
+- **답변·근거·완료의 저장 단위**: `complete_execution(..., evidences=, history=)` 하나가 임대 확인, 근거 저장, 이력 저장, 완료 상태와 공개 답변을
+  쓰기 잠금 하나에서 확정한다. 근거 검증·삽입이나 완료 UPDATE가 실패하면 근거와 완료 상태가 함께 롤백되고, 임대 만료·잘못된 토큰·잠금 대기 중 만료는
+  근거를 넣기 전에 `LEASE_LOST`로 돌아온다. 이력 저장만 실패하면 답변은 보존하고 `verification_history.status`를 `failed`로 표시한다.
 - **EXPIRED·NOT_FOUND는 자동 재실행의 근거가 아니다.** 결과 7일이 지나면 EXPIRED(본문은 돌려주지 않음), 키 기록 30일이 지나도 정리 전까지는 EXPIRED다.
   정리 뒤에는 NOT_FOUND다.
 
