@@ -14,7 +14,7 @@ class EchoTranslationProvider:
 def main():
     db_path = './test_data/db.sqlite'
     chroma_dir = './test_data/chroma'
-    tmp_pdf_dir = './test_data/tmp_pdfs'
+    pdf_dir = './test_data/pdfs'
 
     translation_service = TranslationService(EchoTranslationProvider())
     translation_settings = TranslationSettings(
@@ -23,14 +23,14 @@ def main():
 
     # 1. URL로 PDF 직접 등록
     r1 = register_and_ingest_url(
-        db_path, chroma_dir, 'https://arxiv.org/pdf/1706.03762.pdf', tmp_pdf_dir,
+        db_path, chroma_dir, 'https://arxiv.org/pdf/1706.03762.pdf', pdf_dir,
         translation_service=translation_service, translation_settings=translation_settings,
     )
     print('PDF 등록:', r1)
 
     # 2. URL로 HTML(초록 페이지) 등록
     r2 = register_and_ingest_url(
-        db_path, chroma_dir, 'https://arxiv.org/abs/1706.03762', tmp_pdf_dir,
+        db_path, chroma_dir, 'https://arxiv.org/abs/1706.03762', pdf_dir,
         translation_service=translation_service, translation_settings=translation_settings,
     )
     print('HTML 등록:', r2)
