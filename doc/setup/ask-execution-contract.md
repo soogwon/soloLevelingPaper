@@ -48,7 +48,7 @@ Desktop의 대기 시간이 끝나도 서버는 작업을 계속할 수 있고(�
 - 실행 준비·스레드 시작 실패는 `EXECUTION_START_FAILED`, 하트비트 갱신 예외는 `HEARTBEAT_FAILED`로 기록합니다. 실패 기록 시에도 소유권을 검사하며, 기록에 성공하면 같은 키의 재호출과 상태 조회에서 같은 실패를 확인할 수 있습니다.
 - 완료 또는 실패를 처리하다 실패 상태까지 DB에 기록할 수 없으면 서비스는 본문 없는 `STATUS_UNKNOWN`을 반환합니다. 호출자는 같은 키로 조회합니다. 임대가 유효한 동안에는 `running`, 갱신 없이 만료된 뒤에는 `failed / LEASE_EXPIRED`로 보일 수 있습니다. 하트비트 시 행이 없으면 `NOT_FOUND`, 기존 행의 실행권이 없으면 `LEASE_LOST`를 반환합니다.
 - 같은 검증 실행 ID가 이미 있으면 저장 시각을 제외한 이력 내용이 일치할 때만 스냅샷에 `saved`를 표시합니다. 내용이 다르면 기존 이력을 보존하고 `failed`를 표시합니다.
-- C의 MCP 접수·조회와 Desktop 복원 경로는 별도 연결 대상입니다.
+- 호출자가 키를 보관한 뒤 `submit_paper_question`에 context_id, request_key, question을 전달합니다. 최초 호출은 완료까지 기다립니다. 응답을 놓치면 같은 context_id와 request_key로 읽기 전용 `get_paper_question_status`를 호출합니다. 두 도구는 state, failure_code, answer를 반환하고 완료된 answer에는 저장된 공개 답변과 인용이 들어 있습니다.
 - 호출 전 키 보관은 호출자(C) 범위다. 서버가 접수 뒤 저장한 키를 호출 전 보관으로 간주하지 않는다.
 
 ## 정리(삭제는 명시적 호출뿐)

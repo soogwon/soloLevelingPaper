@@ -91,7 +91,7 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
     factory = Mock(return_value=embedder)
     monkeypatch.setattr(runtime, 'ProcessEmbedder', factory)
     semantic = SimpleNamespace(verifier=SimpleNamespace(prompt_version='semantic-v2')) if enabled else None
-    services = SimpleNamespace(answer=SimpleNamespace(semantic_verification=semantic), evidence=object(),
+    services = SimpleNamespace(executions=object(), answer=SimpleNamespace(semantic_verification=semantic), evidence=object(),
         search=SimpleNamespace(contexts=object()), translation=object(), translation_settings=object())
     build = Mock(return_value=services)
     monkeypatch.setattr(runtime, 'build_services', build)
