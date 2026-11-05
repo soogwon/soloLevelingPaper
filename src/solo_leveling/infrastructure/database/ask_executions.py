@@ -5,6 +5,9 @@
   임대가 지난 실행도 새 소유자에게 넘기지 않는다(자동 재시작 금지). 새 실행은 새 키로만 시작한다.
 - 같은 키라도 저장된 context나 입력 해시가 다르면 RequestConflictError. 상태·본문을 읽기 전에 먼저 확인한다.
 - 임대 만료 판단 시각은 쓰기 잠금을 얻은 직후에 정한다(잠금 대기 중에 임대가 지났으면 LEASE_LOST). 시각을 주입한 경우는 그 값을 쓴다.
+- 답변과 근거의 저장 단위: complete_execution_with_evidences는 임대 확인, 근거 저장, 완료 상태와 공개 답변(result_json)을
+  쓰기 잠금 하나 안에서 확정한다. 근거 검증이나 저장이 실패하면 완료 상태와 근거가 함께 롤백되고 실행은 running으로 남는다.
+  임대가 이미 끝났으면 근거를 넣기 전에 LEASE_LOST로 돌아와 아무것도 쓰지 않는다.
 - 만료된 실행의 하트비트·결과·실패 기록은 LEASE_LOST로 거부하고 아무것도 바꾸지 않는다. 임대 판정은 now < lease_expires_at이다.
 - lookup_execution은 읽기 전용이다. 상태는 저장된 시각과 now로 계산하며 조회가 행을 바꾸지 않는다.
 - 결과 보존이 지나면 EXPIRED로 보이고 본문은 돌려주지 않는다. 실제 정리(purge)는 plan으로 건수를 본 뒤 명시적으로 호출한다.
@@ -25,6 +28,7 @@ from solo_leveling.domain.ask_execution import (
     ExecutionResult, ExecutionState, ExecutionValidationError, ExecutionView, PurgePlan, PurgeResult,
     check_failure_code, check_text)
 from solo_leveling.domain.models import RequestConflictError
+from solo_leveling.infrastructure.database.repository import insert_evidences
 from solo_leveling.infrastructure.database.schema import get_connection
 
 
@@ -168,6 +172,37 @@ def complete_execution(db_path: str, request_key: str, owner_token: str, result_
             conn.execute('SELECT * FROM ask_executions WHERE request_key=?', (request_key,)).fetchone(), stamp))
 
 
+def complete_execution_with_evidences(db_path: str, request_key: str, owner_token: str, result_json: str,
+                                      evidences: list, now: Optional[datetime] = None) -> ExecutionResult:
+    """새 근거와 완료 기록(공개 답변 포함)을 한 트랜잭션으로 확정한다.
+
+    임대를 먼저 확인하므로 늦은 소유자의 답변·근거는 어느 것도 저장되지 않는다(LEASE_LOST).
+    근거 검증·저장이 실패하면 예외가 나가고 전체가 롤백되어 실행은 running 그대로다.
+    호출자는 이 경우 fail_execution으로 실패를 기록한다.
+    """
+    check_text(request_key, 'request_key')
+    check_text(owner_token, 'owner_token')
+    if not isinstance(result_json, str) or not result_json or len(result_json.encode('utf-8')) > MAX_RESULT_BYTES:
+        raise ExecutionValidationError('result_json')
+    try:
+        json.loads(result_json)
+    except ValueError:
+        raise ExecutionValidationError('result_json') from None
+    fixed = _ts(now) if now is not None else None
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        stamp, moment = _at_lock(fixed)
+        row, code = _owned_running(conn, request_key, owner_token, stamp)
+        if row is None:
+            return ExecutionResult(code)
+        insert_evidences(conn, row['context_id'], list(evidences))
+        conn.execute("UPDATE ask_executions SET status='completed', result_json=?, finished_at=?, "
+                     'result_expires_at=? WHERE request_key=?',
+                     (result_json, stamp, _ts(moment + timedelta(days=RESULT_RETENTION_DAYS)), request_key))
+        return ExecutionResult(ExecutionOutcome.SAVED, view=_view(
+            conn.execute('SELECT * FROM ask_executions WHERE request_key=?', (request_key,)).fetchone(), stamp))
+
+
 def fail_execution(db_path: str, request_key: str, owner_token: str, failure_code: str,
                    now: Optional[datetime] = None) -> ExecutionResult:
     """실행을 실패로 기록한다. 고정 코드(대문자·숫자·밑줄)만 받는다. 만료·토큰 불일치는 LEASE_LOST."""
@@ -187,13 +222,24 @@ def fail_execution(db_path: str, request_key: str, owner_token: str, failure_cod
             conn.execute('SELECT * FROM ask_executions WHERE request_key=?', (request_key,)).fetchone(), stamp))
 
 
-def lookup_execution(db_path: str, request_key: str, now: Optional[datetime] = None) -> ExecutionView:
-    """키로 상태를 읽는다. 읽기 전용이며 실행을 시작·재시작하지 않는다. 없으면 NOT_FOUND."""
+def lookup_execution(db_path: str, request_key: str, now: Optional[datetime] = None,
+                     context_id: Optional[str] = None) -> ExecutionView:
+    """키로 상태를 읽는다. 읽기 전용이며 실행을 시작·재시작하지 않는다. 없으면 NOT_FOUND.
+
+    context_id를 주면 저장된 context와 같을 때만 상태·본문을 돌려주고, 다르면 읽기 전에 RequestConflictError다.
+    키만 알면 다른 context의 답변을 읽을 수 없도록 호출자는 항상 context_id를 넘긴다.
+    """
     check_text(request_key, 'request_key')
+    if context_id is not None:
+        check_text(context_id, 'context_id')
     stamp = _ts(now)
     with closing(get_connection(db_path)) as conn:
         row = conn.execute('SELECT * FROM ask_executions WHERE request_key=?', (request_key,)).fetchone()
-    return ExecutionView(ExecutionState.NOT_FOUND) if row is None else _view(row, stamp)
+    if row is None:
+        return ExecutionView(ExecutionState.NOT_FOUND)
+    if context_id is not None and row['context_id'] != context_id:
+        raise RequestConflictError('같은 request_key가 다른 context에 사용되었습니다.')
+    return _view(row, stamp)
 
 
 def plan_execution_purge(db_path: str, now: Optional[datetime] = None) -> PurgePlan:

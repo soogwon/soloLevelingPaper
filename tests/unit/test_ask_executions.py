@@ -443,3 +443,83 @@ def test_malformed_owner_token_is_lease_lost_without_exception_and_changes_nothi
     assert ax.fail_execution(db, 'k1', bad, 'SOME_FAILURE', at(seconds=1)).outcome is O.LEASE_LOST
     assert snapshot(db) == before
     assert ax.heartbeat_execution(db, 'k1', token, at(seconds=1)).outcome is O.RENEWED     # 진짜 토큰은 그대로 동작
+
+
+# ── 답변·근거·완료의 저장 단위, 조회 context 확인(#119 B 요청) ──────────────────
+def _evidences(db):
+    with closing(get_connection(db)) as conn:
+        return [r[0] for r in conn.execute('SELECT evidence_id FROM evidences ORDER BY evidence_id')]
+
+
+def _good_evidence():
+    from solo_leveling.domain.models import Evidence
+    return Evidence('e-ask-1', 'c1', '첫째', 'First')
+
+
+def test_complete_with_evidences_commits_state_answer_and_evidence_together(env):
+    db, ctx = env
+    token = start(db, ctx)
+    result = ax.complete_execution_with_evidences(db, 'k1', token, RESULT, [_good_evidence()], at(seconds=5))
+    assert result.outcome is O.SAVED
+    assert _evidences(db) == ['e-ask-1']
+    view = ax.lookup_execution(db, 'k1', at(seconds=6), context_id=ctx)
+    assert (view.state, view.result_json) == (S.COMPLETED, RESULT)
+
+
+def test_failed_evidence_validation_rolls_back_completion_and_keeps_running(env):
+    from solo_leveling.domain.models import Evidence
+    db, ctx = env
+    token = start(db, ctx)
+    before = snapshot(db)
+    bad = [_good_evidence(), Evidence('e-bad', 'c1', '없는 번역', 'First')]
+    with pytest.raises(ValueError):
+        ax.complete_execution_with_evidences(db, 'k1', token, RESULT, bad, at(seconds=5))
+    assert _evidences(db) == []          # 앞의 정상 근거도 함께 롤백된다
+    assert snapshot(db) == before        # 완료 상태·답변도 저장되지 않았다
+    assert ax.lookup_execution(db, 'k1', at(seconds=6), context_id=ctx).state is S.RUNNING
+    assert ax.fail_execution(db, 'k1', token, 'EVIDENCE_INVALID', at(seconds=7)).outcome is O.SAVED
+
+
+def test_late_owner_publishes_neither_answer_nor_evidence(env):
+    db, ctx = env
+    token = start(db, ctx)
+    before = snapshot(db)
+    late = ax.complete_execution_with_evidences(db, 'k1', token, RESULT, [_good_evidence()], at(seconds=90))
+    assert late.outcome is O.LEASE_LOST
+    assert _evidences(db) == [] and snapshot(db) == before
+
+
+def test_wrong_token_publishes_nothing(env):
+    db, ctx = env
+    start(db, ctx)
+    other = 'f' * 32
+    result = ax.complete_execution_with_evidences(db, 'k1', other, RESULT, [_good_evidence()], at(seconds=5))
+    assert result.outcome is O.LEASE_LOST and _evidences(db) == []
+
+
+def test_lease_ending_while_waiting_for_the_write_lock_publishes_nothing(env, lock_wait):
+    db, ctx = env
+    token = start(db, ctx)
+    lock_wait(LEASE_SECONDS + 1)   # 잠금을 기다리는 동안 임대 경계를 넘는다
+    result = ax.complete_execution_with_evidences(db, 'k1', token, RESULT, [_good_evidence()])
+    assert result.outcome is O.LEASE_LOST and _evidences(db) == []
+
+
+def test_lookup_with_another_context_is_a_conflict_and_never_returns_the_body(env):
+    db, ctx = env
+    token = start(db, ctx)
+    ax.complete_execution(db, 'k1', token, RESULT, at(seconds=5))
+    with pytest.raises(RequestConflictError) as error:
+        ax.lookup_execution(db, 'k1', at(seconds=6), context_id='other-context')
+    assert '비밀-답변-본문' not in str(error.value)
+    assert ax.lookup_execution(db, 'k1', at(seconds=6), context_id=ctx).result_json == RESULT
+
+
+def test_status_unknown_recovery_lookup_follows_the_lease(env):
+    """실패 기록까지 못 쓴 경우: 임대가 남으면 running, 갱신 없이 만료되면 failed/LEASE_EXPIRED."""
+    db, ctx = env
+    start(db, ctx)
+    running = ax.lookup_execution(db, 'k1', at(seconds=30), context_id=ctx)
+    assert (running.state, running.failure_code, running.result_json) == (S.RUNNING, None, None)
+    failed = ax.lookup_execution(db, 'k1', at(seconds=61), context_id=ctx)
+    assert (failed.state, failed.failure_code, failed.result_json) == (S.FAILED, LEASE_EXPIRED, None)

@@ -21,6 +21,11 @@ Desktop의 대기 시간이 끝나도 서버는 작업을 계속할 수 있고(�
 - **만료 거부**: `now < lease_expires_at`일 때만 하트비트·결과 저장·실패 기록이 된다. 지난 뒤에는 원래 소유자라도 `LEASE_LOST`이고
   아무것도 바꾸지 않는다. 토큰이 다르거나 이미 끝난 실행도 `LEASE_LOST`다.
 - **읽기 전용 조회**: `lookup_execution`은 행을 바꾸지 않고, 실행을 시작·재시작하지 않는다.
+  호출자는 `context_id`를 함께 넘긴다. 저장된 context와 다르면 상태·본문을 읽기 전에 `RequestConflictError`이며, 키만으로 다른 context의 답변을 읽을 수 없다.
+- **답변·근거·완료의 저장 단위**: `complete_execution_with_evidences`가 임대 확인, 새 근거 저장, 완료 상태와 공개 답변(`result_json`)을 쓰기 잠금 하나 안에서 확정한다.
+  근거 검증·저장이 실패하면 예외가 나가고 완료 상태와 근거가 함께 롤백되어 실행은 `running`으로 남는다(호출자가 `fail_execution`으로 실패를 기록한다).
+  임대가 이미 끝났거나 토큰이 다르면 근거를 넣기 전에 `LEASE_LOST`로 돌아와 답변·근거 모두 저장되지 않는다.
+  근거를 따로 저장한 뒤 `complete_execution`을 부르면 완료가 실패해도 근거가 남으므로, 새 근거가 있는 답변은 이 함수를 쓴다.
 - **EXPIRED·NOT_FOUND는 자동 재실행의 근거가 아니다.** 결과 7일이 지나면 EXPIRED(본문은 돌려주지 않음), 키 기록 30일이 지나도 정리 전까지는 EXPIRED다.
   정리 뒤에는 NOT_FOUND다.
 
@@ -39,8 +44,11 @@ Desktop의 대기 시간이 끝나도 서버는 작업을 계속할 수 있고(�
 ## 호출 순서(서비스 연결 시)
 1. `begin_execution` → `STARTED`면 토큰을 보관하고 실행한다. 그 밖의 결과면 실행하지 않고 상태를 보여 준다.
 2. 실행 중 10초마다 `heartbeat_execution`. `LEASE_LOST`면 즉시 중단하고 결과를 저장하지 않는다.
-3. 끝나면 `complete_execution`(JSON 결과, 256KiB 이하) 또는 `fail_execution`(대문자 고정 코드).
+3. 끝나면 `complete_execution_with_evidences`(근거가 있는 답변) 또는 `complete_execution`(JSON 결과, 256KiB 이하), 실패면 `fail_execution`(대문자 고정 코드).
    `LEASE_LOST`이면 늦은 결과이므로 저장되지 않았다.
+- **실패 기록까지 쓸 수 없을 때**: 서비스는 본문 없는 `STATUS_UNKNOWN`을 돌려주고, 호출자는 같은 키와 context로 `lookup_execution`을 부른다.
+  임대가 남아 있으면 `running`, 갱신 없이 만료되면 `failed / LEASE_EXPIRED`이며, 두 경우 모두 본문은 없다.
+  이 조회는 실행을 시작하지 않으며 같은 키로 자동 재시작하지 않는다.
 - 이 PR은 저장소만 추가하며 ask_paper 서비스·MCP에는 연결하지 않는다(B 서비스·C MCP 몫).
 - 호출 전 키 보관은 호출자(C) 범위다. 서버가 접수 뒤 저장한 키를 호출 전 보관으로 간주하지 않는다.
 

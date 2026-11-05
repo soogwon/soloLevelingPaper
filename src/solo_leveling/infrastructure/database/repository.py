@@ -866,16 +866,21 @@ def _evidence_detail(conn, context_id: str, evidence: Evidence) -> EvidenceDetai
     return detail
 
 
+def insert_evidences(conn, context_id: str, evidences: List[Evidence]) -> None:
+    """호출자가 연 트랜잭션 안에서 근거를 검증하고 넣는다. 커밋·롤백은 호출자가 한다."""
+    if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
+        raise ValueError('context not found')
+    for evidence in evidences:
+        _evidence_detail(conn, context_id, evidence)
+        conn.execute('INSERT INTO evidences VALUES (?, ?, ?, ?, ?, ?)',
+                     (evidence.evidence_id, context_id, evidence.chunk_id,
+                      evidence.quote_ko, evidence.quote_original, now_iso()))
+
+
 def save_evidences(db_path: str, context_id: str, evidences: List[Evidence]) -> None:
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
-        if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
-            raise ValueError('context not found')
-        for evidence in evidences:
-            _evidence_detail(conn, context_id, evidence)
-            conn.execute('INSERT INTO evidences VALUES (?, ?, ?, ?, ?, ?)',
-                         (evidence.evidence_id, context_id, evidence.chunk_id,
-                          evidence.quote_ko, evidence.quote_original, now_iso()))
+        insert_evidences(conn, context_id, evidences)
 
 
 def get_evidences(db_path: str, context_id: str, evidence_ids: List[str]) -> GetEvidenceResult:
