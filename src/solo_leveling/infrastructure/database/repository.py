@@ -10,7 +10,7 @@ from contextlib import closing
 from pathlib import PureWindowsPath, PurePosixPath
 from typing import List, Optional
 
-from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
+from solo_leveling.application.evidence_qa.errors import DataIntegrityError, ResourceNotFoundError
 from solo_leveling.domain.models import (
     Chunk,
     JobStage,
@@ -37,7 +37,7 @@ from solo_leveling.domain.paper_summary import (
 from solo_leveling.domain.quiz import Quiz, QuizQuestion, QuizValidationError
 from solo_leveling.domain.quiz_attempt import (
     DEFAULT_HISTORY_PAGE, MAX_HISTORY_PAGE, AnswerResult, AttemptValidationError, QuizAttempt, QuizAttemptPage,
-    QuizAttemptSummary, SubmitOutcome, SubmitResult, validate_request_key)
+    QuizAttemptSummary, QuizStepScoreSummary, SubmitOutcome, SubmitResult, validate_request_key)
 from solo_leveling.domain.reflection import ReflectionAnswer, validate_answer as validate_reflection_answer
 
 from solo_leveling.domain.learning_progress import (
@@ -1200,6 +1200,46 @@ def list_quiz_attempt_page(db_path: str, context_id: str, step: Optional[str] = 
         rows = conn.execute(sql, params).fetchall()
     items = tuple(QuizAttemptSummary(**dict(r)) for r in rows[:limit])
     return QuizAttemptPage(items, items[-1].attempt_id if len(rows) > limit else None)
+
+
+def list_quiz_step_score_summaries(db_path: str, context_id: str) -> List[QuizStepScoreSummary]:
+    """맥락의 단계별 시도 수·최신 점수·최고 점수를 답안 테이블 없이 집계한다(#177).
+
+    최신 시도는 이력 목록과 동일하게 제출 시각 내림차순, 동률이면 나중에 저장된 행(rowid)을 택한다.
+    반환에는 시도가 존재하는 단계만 포함하며, 빈 단계 채우기와 학습 단계 순서는 서비스가 담당한다.
+    """
+    step_placeholders = ', '.join('?' for _ in LEARNING_STEPS)
+    sql = f'''
+        WITH ranked AS (
+            SELECT step, attempt_id, correct_count, total_count,
+                   COUNT(*) OVER (PARTITION BY step) AS attempt_count,
+                   MAX(CAST(correct_count AS REAL) / total_count)
+                       OVER (PARTITION BY step) AS best_score,
+                   SUM(CASE WHEN step NOT IN ({step_placeholders}) OR total_count <= 0
+                                 OR correct_count < 0 OR correct_count > total_count
+                            THEN 1 ELSE 0 END) OVER () AS invalid_count,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY step ORDER BY submitted_at DESC, rowid DESC
+                   ) AS latest_rank
+            FROM quiz_attempts
+            WHERE context_id=?
+        )
+        SELECT step, attempt_count, attempt_id AS latest_attempt_id,
+               correct_count AS latest_correct, total_count AS latest_total,
+               CAST(correct_count AS REAL) / total_count AS latest_score,
+               best_score, invalid_count
+        FROM ranked
+        WHERE latest_rank=1
+    '''
+    with closing(get_connection(db_path)) as conn:
+        rows = conn.execute(sql, (*LEARNING_STEPS, context_id)).fetchall()
+    if rows and rows[0]['invalid_count']:
+        raise DataIntegrityError('저장된 퀴즈 점수가 올바르지 않습니다.')
+    return [QuizStepScoreSummary(
+        step=row['step'], attempt_count=row['attempt_count'],
+        latest_attempt_id=row['latest_attempt_id'], latest_correct=row['latest_correct'],
+        latest_total=row['latest_total'], latest_score=row['latest_score'], best_score=row['best_score'],
+    ) for row in rows]
 
 
 def get_attempt_wrong_evidence(db_path: str, attempt: QuizAttempt) -> GetEvidenceResult:

@@ -106,6 +106,18 @@ class QuizAttemptPage:
     next_cursor: Optional[str]  # 다음 페이지가 있을 때만 마지막 항목의 attempt_id
 
 
+@dataclass(frozen=True)
+class QuizStepScoreSummary:
+    """단계별 점수 집계용 요약. 개별 답안 행은 읽지 않는다(#177)."""
+    step: str
+    attempt_count: int
+    latest_attempt_id: str
+    latest_correct: int
+    latest_total: int
+    latest_score: float
+    best_score: float
+
+
 # ── 제출 요청 키와 저장 결과 (#110) ─────────────────────────────
 REQUEST_KEY_MAX_LENGTH = 128
 

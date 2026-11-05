@@ -3,6 +3,7 @@ from contextlib import closing
 
 import pytest
 
+from solo_leveling.application.evidence_qa.errors import DataIntegrityError
 from solo_leveling.application.quiz.attempts import QuizAttemptService
 from solo_leveling.domain.models import Evidence, LearningContext
 from solo_leveling.domain.quiz_attempt import AnswerResult, AttemptValidationError, QuizAttempt
@@ -134,6 +135,96 @@ def test_page_does_not_read_answers(env):
     assert len(repo.list_quiz_attempt_page(env, 'ctx', None, 3).items) == 3
     with pytest.raises(Exception):
         repo.list_quiz_attempts(env, 'ctx')                  # 기존 전체 조회는 답안이 필요해 실패한다(대비)
+
+
+def test_step_scores_do_not_read_answers_and_keep_empty_steps(env):
+    save(env, attempt('p1', correct=2),
+         attempt('p2', correct=1, submitted_at='2026-11-01T00:00:05+00:00'),
+         attempt('r1', step='review', correct=0))
+    with closing(get_connection(env)) as conn, conn:
+        conn.execute('DROP TABLE quiz_attempt_answers')
+    scores = {score.step: score for score in QuizAttemptService(env).step_scores('ctx')}
+    assert (scores['preview'].attempt_count, scores['preview'].latest_attempt_id,
+            scores['preview'].latest_score, scores['preview'].best_score) == (2, 'p2', 0.5, 1.0)
+    assert scores['review'].attempt_count == 1 and scores['review'].latest_attempt_id == 'r1'
+    assert scores['structure'].attempt_count == 0 and scores['deep_read'].best_score is None
+
+
+def test_step_scores_same_time_latest_is_the_later_saved_attempt(env):
+    save(env, attempt('z', correct=2), attempt('a', correct=0))
+    preview = {score.step: score for score in QuizAttemptService(env).step_scores('ctx')}['preview']
+    assert preview.latest_attempt_id == 'a' and preview.latest_score == 0.0 and preview.best_score == 1.0
+
+
+def test_step_score_summary_matches_the_previous_full_attempt_aggregation(env):
+    save(env, attempt('p1', correct=2),
+         attempt('r1', step='review', correct=0),
+         attempt('p2', correct=1, submitted_at='2026-11-01T00:00:05+00:00'))
+    attempts = repo.list_quiz_attempts(env, 'ctx')
+    expected = {}
+    for step in ('preview', 'review'):
+        same_step = [item for item in attempts if item.step == step]
+        latest = same_step[-1]
+        expected[step] = (len(same_step), latest.attempt_id, latest.correct_count,
+                          latest.total_count, latest.score, max(item.score for item in same_step))
+    actual = {score.step: score for score in QuizAttemptService(env).step_scores('ctx')}
+    for step, values in expected.items():
+        score = actual[step]
+        assert (score.attempt_count, score.latest_attempt_id, score.latest_correct,
+                score.latest_total, score.latest_score, score.best_score) == values
+
+
+def test_step_scores_are_context_isolated(env):
+    save(env, attempt('ctx-attempt', correct=2), attempt('other-attempt', context_id='ctx2', correct=0))
+    first = {score.step: score for score in QuizAttemptService(env).step_scores('ctx')}['preview']
+    other = {score.step: score for score in QuizAttemptService(env).step_scores('ctx2')}['preview']
+    assert (first.attempt_count, first.latest_attempt_id) == (1, 'ctx-attempt')
+    assert (other.attempt_count, other.latest_attempt_id) == (1, 'other-attempt')
+
+
+@pytest.mark.parametrize('step,correct,total', [
+    ('unknown', 1, 2),
+    ('preview', -1, 2),
+    ('preview', 3, 2),
+    ('preview', 0, 0),
+])
+def test_step_scores_reject_corrupt_summary_rows(env, step, correct, total):
+    with closing(get_connection(env)) as conn, conn:
+        conn.execute('PRAGMA foreign_keys = OFF')
+        conn.execute('INSERT INTO quiz_attempts VALUES (?, ?, ?, ?, ?, ?, ?)',
+                     ('broken', 'ctx', 'quiz1', step, correct, total, T0))
+    with pytest.raises(DataIntegrityError):
+        QuizAttemptService(env).step_scores('ctx')
+
+
+def test_step_scores_large_history_uses_two_summary_queries_without_answers(env, monkeypatch):
+    bulk_insert(env, 10_000, per_second=4)
+    with closing(get_connection(env)) as conn, conn:
+        conn.execute('DROP TABLE quiz_attempt_answers')
+    statements = []
+    real_get_connection = repo.get_connection
+
+    class TracedConnection:
+        def __init__(self, path):
+            self.connection = real_get_connection(path)
+
+        def execute(self, sql, params=()):
+            statements.append(' '.join(sql.split()))
+            return self.connection.execute(sql, params)
+
+        def close(self):
+            self.connection.close()
+
+    monkeypatch.setattr(repo, 'get_connection', TracedConnection)
+    scores = {score.step: score for score in QuizAttemptService(env).step_scores('ctx')}
+    assert scores['preview'].attempt_count == 5000
+    assert scores['review'].attempt_count == 5000
+    assert scores['preview'].latest_attempt_id == 'b09998'
+    assert scores['review'].latest_attempt_id == 'b09999'
+    assert scores['preview'].latest_score == scores['review'].latest_score == 0.5
+    assert len(statements) == 2
+    assert all('quiz_attempt_answers' not in sql for sql in statements)
+    assert any('COUNT(*) OVER' in sql and 'MAX(' in sql for sql in statements)
 
 
 def test_large_history_reads_only_one_page_using_an_index(env):
