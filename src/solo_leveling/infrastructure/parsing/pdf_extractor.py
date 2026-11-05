@@ -19,9 +19,10 @@ extract_words() 기반 재구성은 오히려 단어 자체를 잘못 묶어 도
 14~15페이지, 어텐션 시각화 그림)에는 그림에 박힌 세로/회전 캡션 텍스트가
 있다. pdfplumber는 이런 회전 문자를 본문 읽기 순서에 그대로 끼워 넣다가
 뒤죽박죽 뒤집힌 텍스트로 나오는 문제가 있었다(진단 스크립트로 문자별
-`upright` 속성을 확인해 원인 확정). 이런 회전 텍스트는 애초에 읽을 수
-있는 본문이 아니라 그림의 일부이므로, 추출 전에 upright=False인 문자를
-걸러내서 본문 추출 결과에서 아예 빼도록 했다. 표는 같은 방식(회전 필터)
+`upright` 속성을 확인해 원인 확정). 추출 전에 upright=False인 문자를
+걸러내도록 했다. 다만 회전된 표 헤더·본문 등 고유 정보도 빠질 수 있으므로
+모든 PDF에서 그림의 일부라고 단정하지 않는다. #26에서 페이지별 제외량을 집계한다.
+표는 같은 방식(회전 필터)
 으로 검증했을 때 원래도 문제 없었음을 확인했다 — extract_tables()로
 바꾸면 오히려 셀 병합 문제가 생겨 더 나빠지므로 표는 손대지 않았다.
 """
@@ -29,8 +30,10 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
+from uuid import uuid4
 
 import pdfplumber
+from solo_leveling.parsing_diagnostics import RotationMetrics, emit_rotation_metrics
 
 from solo_leveling.infrastructure.parsing.sections import (
     LineStyle, detect_headings, find_body_size,
@@ -95,6 +98,8 @@ class ExtractedPage:
     # 본문에서 분리한 쪽 번호 후보(#15). 저장하거나 인용에 쓰지 않는다.
     # printed_page_label로 쓸지는 #31에서 정한다.
     page_number_candidate: str | None = None
+    # 추출 시점의 집계. None은 미집계이며 0개 제외와 구분한다. DB에는 저장하지 않는다.
+    rotation_metrics: RotationMetrics | None = None
 
 
 def _is_upright(obj: dict) -> bool:
@@ -149,8 +154,8 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
     printed_page_label(인쇄된 페이지 번호) 자동 인식은 22번 문서에서 "미정"으로
     명시되어 있어, 여기서는 항상 None을 반환하며 추측해서 채우지 않는다.
 
-    회전된(upright=False) 문자는 본문이 아니라 그림에 박힌 캡션/축 레이블인
-    경우가 대부분이라 추출 전에 걸러낸다(위 docstring 참고).
+    기존 upright 필터는 유지하며, 회전된 표 헤더 등 고유 정보의 유실 가능성을
+    점검할 수 있도록 필터 전 char 객체 수와 제외 수·비율을 페이지별로 기록한다.
 
     쪽 번호(#15): 페이지 아래 여백의 숫자만 있는 줄은 본문에서 떼어 page_number_candidate에 둔다.
     이 값은 printed_page_label을 채우는 데 쓰지 않는다(자동 인식 여부는 #31에서 결정).
@@ -161,13 +166,17 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
     pages: List[ExtractedPage] = []
     page_styles: list[list[LineStyle]] = []
     size_counts: list[tuple[float, int]] = []
+    parse_id = uuid4().hex
     with _open_pdf(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
+            chars = page.chars
+            metrics = RotationMetrics(len(chars), sum(not _is_upright(char) for char in chars))
             upright_only = page.filter(_is_upright)
             text = upright_only.extract_text(x_tolerance=TEXT_X_TOLERANCE) or ""
             text, page_number = split_page_number(upright_only, text)
             pages.append(ExtractedPage(pdf_page=i, text=text, printed_page_label=None,
-                                       page_number_candidate=page_number))
+                                       page_number_candidate=page_number, rotation_metrics=metrics))
+            emit_rotation_metrics(parse_id, i, metrics)
             try:
                 styles = _line_styles(upright_only)
             except Exception:
