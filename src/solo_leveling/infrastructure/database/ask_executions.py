@@ -6,7 +6,7 @@
 - 같은 키라도 저장된 context나 입력 해시가 다르면 RequestConflictError. 상태·본문을 읽기 전에 먼저 확인한다.
 - 임대 만료 판단 시각은 쓰기 잠금을 얻은 직후에 정한다(잠금 대기 중에 임대가 지났으면 LEASE_LOST). 시각을 주입한 경우는 그 값을 쓴다.
 - 만료된 실행의 하트비트·결과·실패 기록은 LEASE_LOST로 거부하고 아무것도 바꾸지 않는다. 임대 판정은 now < lease_expires_at이다.
-- lookup_execution은 읽기 전용이다. 상태는 저장된 시각과 now로 계산하며 조회가 행을 바꾸지 않는다.
+- lookup_execution은 context_id가 필수이고 다른 context의 키는 NOT_FOUND다. 읽기 전용이다. 상태는 저장된 시각과 now로 계산하며 조회가 행을 바꾸지 않는다.
 - 결과 보존이 지나면 EXPIRED로 보이고 본문은 돌려주지 않는다. 실제 정리(purge)는 plan으로 건수를 본 뒤 명시적으로 호출한다.
   유효한 임대의 실행은 정리하지 않는다.
 - 시각은 호출자가 now를 주입할 수 있다(테스트·정리 기준). 없으면 현재 UTC.
@@ -209,13 +209,21 @@ def fail_execution(db_path: str, request_key: str, owner_token: str, failure_cod
             conn.execute('SELECT * FROM ask_executions WHERE request_key=?', (request_key,)).fetchone(), stamp))
 
 
-def lookup_execution(db_path: str, request_key: str, now: Optional[datetime] = None) -> ExecutionView:
-    """키로 상태를 읽는다. 읽기 전용이며 실행을 시작·재시작하지 않는다. 없으면 NOT_FOUND."""
+def lookup_execution(db_path: str, request_key: str, now: Optional[datetime] = None, *,
+                     context_id: str) -> ExecutionView:
+    """키와 context로 상태를 읽는다. 읽기 전용이며 실행을 시작·재시작하지 않는다.
+
+    context_id는 필수다. 없거나 비면 ExecutionValidationError이고, 저장된 context와 다르면 키가 없는 것과 같은
+    NOT_FOUND를 돌려주어 다른 context의 상태·본문·존재 여부를 드러내지 않는다.
+    """
     check_text(request_key, 'request_key')
+    check_text(context_id, 'context_id')
     stamp = _ts(now)
     with closing(get_connection(db_path)) as conn:
         row = conn.execute('SELECT * FROM ask_executions WHERE request_key=?', (request_key,)).fetchone()
-    return ExecutionView(ExecutionState.NOT_FOUND) if row is None else _view(row, stamp)
+    if row is None or row['context_id'] != context_id:
+        return ExecutionView(ExecutionState.NOT_FOUND)
+    return _view(row, stamp)
 
 
 def plan_execution_purge(db_path: str, now: Optional[datetime] = None) -> PurgePlan:

@@ -44,11 +44,7 @@ class AskExecutionService:
         self.answer_service = answer
 
     def lookup(self, request_key, *, context_id):
-        check_text(context_id, 'context_id')
-        view = store.lookup_execution(self.db_path, request_key)
-        if view.context_id != context_id:
-            return ExecutionView(ExecutionState.NOT_FOUND)
-        return view
+        return store.lookup_execution(self.db_path, request_key, context_id=context_id)
 
     def run(self, request_key, question, *, context_id, top_k=5, pdf_pages=(), section_ids=(), strict_pages=False):
         """Use the effective question. Return a token-free result for both first call and replay."""

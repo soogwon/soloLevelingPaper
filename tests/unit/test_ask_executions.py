@@ -89,14 +89,14 @@ def test_heartbeat_extends_the_lease_from_the_renewal_time(env):
     token = start(db, ctx)
     renewed = ax.heartbeat_execution(db, 'k1', token, at(seconds=50))
     assert renewed.outcome is O.RENEWED
-    assert ax.lookup_execution(db, 'k1', at(seconds=100)).state is S.RUNNING  # 원래 임대(60초)는 지났지만 갱신됨
-    assert ax.lookup_execution(db, 'k1', at(seconds=110)).failure_code == LEASE_EXPIRED  # 갱신 시각 + 60초
+    assert ax.lookup_execution(db, 'k1', at(seconds=100), context_id=ctx).state is S.RUNNING  # 원래 임대(60초)는 지났지만 갱신됨
+    assert ax.lookup_execution(db, 'k1', at(seconds=110), context_id=ctx).failure_code == LEASE_EXPIRED  # 갱신 시각 + 60초
 
 
 def test_lease_boundary_is_exclusive(env):
     db, ctx = env
     token = start(db, ctx)
-    assert ax.lookup_execution(db, 'k1', at(seconds=59, microseconds=999999)).state is S.RUNNING
+    assert ax.lookup_execution(db, 'k1', at(seconds=59, microseconds=999999), context_id=ctx).state is S.RUNNING
     late = ax.heartbeat_execution(db, 'k1', token, at(seconds=60))
     assert late.outcome is O.LEASE_LOST
 
@@ -115,7 +115,7 @@ def test_late_result_save_is_rejected_and_nothing_is_stored(env):
     before = snapshot(db)
     assert ax.complete_execution(db, 'k1', token, RESULT, at(seconds=90)).outcome is O.LEASE_LOST
     assert snapshot(db) == before
-    view = ax.lookup_execution(db, 'k1', at(seconds=90))
+    view = ax.lookup_execution(db, 'k1', at(seconds=90), context_id=ctx)
     assert (view.state, view.failure_code, view.result_json) == (S.FAILED, LEASE_EXPIRED, None)
 
 
@@ -158,9 +158,9 @@ def test_complete_stores_result_and_lookup_returns_it_until_retention_ends(env):
     token = start(db, ctx)
     saved = ax.complete_execution(db, 'k1', token, RESULT, at(seconds=20))
     assert saved.outcome is O.SAVED
-    view = ax.lookup_execution(db, 'k1', at(days=6))
+    view = ax.lookup_execution(db, 'k1', at(days=6), context_id=ctx)
     assert (view.state, view.result_json) == (S.COMPLETED, RESULT)
-    gone = ax.lookup_execution(db, 'k1', at(seconds=20, days=7))
+    gone = ax.lookup_execution(db, 'k1', at(seconds=20, days=7), context_id=ctx)
     assert (gone.state, gone.result_json) == (S.EXPIRED, None)  # 결과 7일
     assert ax.begin_execution(db, 'k1', 'h1', ctx, at(days=8)).outcome is O.EXPIRED  # 자동 재실행 아님
     assert len(snapshot(db)) == 1
@@ -174,7 +174,7 @@ def test_second_completion_and_completion_after_failure_are_rejected(env):
     token2 = start(db, ctx, key='k2')
     assert ax.fail_execution(db, 'k2', token2, 'GENERATION_FAILED', at(seconds=1)).outcome is O.SAVED
     assert ax.complete_execution(db, 'k2', token2, RESULT, at(seconds=2)).outcome is O.LEASE_LOST
-    assert ax.lookup_execution(db, 'k2', at(seconds=3)).failure_code == 'GENERATION_FAILED'
+    assert ax.lookup_execution(db, 'k2', at(seconds=3), context_id=ctx).failure_code == 'GENERATION_FAILED'
 
 
 def test_repeated_begin_on_a_finished_key_reports_the_stored_state(env):
@@ -189,8 +189,8 @@ def test_key_record_expiry_turns_everything_into_expired_until_purged(env):
     db, ctx = env
     token = start(db, ctx)
     ax.fail_execution(db, 'k1', token, 'GENERATION_FAILED', at(seconds=1))
-    assert ax.lookup_execution(db, 'k1', at(days=29)).state is S.FAILED
-    assert ax.lookup_execution(db, 'k1', at(days=30)).state is S.EXPIRED
+    assert ax.lookup_execution(db, 'k1', at(days=29), context_id=ctx).state is S.FAILED
+    assert ax.lookup_execution(db, 'k1', at(days=30), context_id=ctx).state is S.EXPIRED
 
 
 # ── 읽기 전용 조회 ─────────────────────────────────────────
@@ -200,22 +200,22 @@ def test_lookup_never_changes_stored_data(env):
     start(db, ctx, key='k2')
     before = snapshot(db)
     for offset in (0, 30, 61, 3600, 86400 * 8, 86400 * 40):
-        ax.lookup_execution(db, 'k1', at(seconds=offset))
-        ax.lookup_execution(db, 'k2', at(seconds=offset))
-        ax.lookup_execution(db, 'unknown', at(seconds=offset))
+        ax.lookup_execution(db, 'k1', at(seconds=offset), context_id=ctx)
+        ax.lookup_execution(db, 'k2', at(seconds=offset), context_id=ctx)
+        ax.lookup_execution(db, 'unknown', at(seconds=offset), context_id=ctx)
     assert snapshot(db) == before
 
 
 def test_lookup_of_unknown_key_is_not_found_and_does_not_start_anything(env):
     db, ctx = env
-    assert ax.lookup_execution(db, 'unknown', T0).state is S.NOT_FOUND
+    assert ax.lookup_execution(db, 'unknown', T0, context_id=ctx).state is S.NOT_FOUND
     assert snapshot(db) == []
 
 
 def test_lookup_view_never_contains_the_owner_token(env):
     db, ctx = env
     token = start(db, ctx)
-    view = ax.lookup_execution(db, 'k1', T0)
+    view = ax.lookup_execution(db, 'k1', T0, context_id=ctx)
     assert token not in repr(view)
     assert token not in repr(ax.begin_execution(db, 'k1', 'h1', ctx, at(seconds=1)))
 
@@ -225,7 +225,7 @@ def test_state_survives_reconnect_like_a_server_restart(env):
     token = start(db, ctx)
     ax.heartbeat_execution(db, 'k1', token, at(seconds=30))
     # 새 연결만으로 같은 상태를 읽고 같은 토큰으로 이어서 갱신·완료할 수 있다.
-    assert ax.lookup_execution(db, 'k1', at(seconds=40)).state is S.RUNNING
+    assert ax.lookup_execution(db, 'k1', at(seconds=40), context_id=ctx).state is S.RUNNING
     assert ax.complete_execution(db, 'k1', token, RESULT, at(seconds=45)).outcome is O.SAVED
 
 
@@ -254,10 +254,10 @@ def test_purge_clears_expired_results_first_then_deletes_expired_keys(env):
     assert (result.results_cleared, result.rows_deleted, result.complete) == (1, 0, True)
     with closing(get_connection(db)) as conn:
         assert conn.execute("SELECT result_json FROM ask_executions WHERE request_key='a'").fetchone()[0] is None
-    assert ax.lookup_execution(db, 'a', when).state is S.EXPIRED  # 키 기록은 남아 있다
+    assert ax.lookup_execution(db, 'a', when, context_id=ctx).state is S.EXPIRED  # 키 기록은 남아 있다
     later = ax.purge_expired_executions(db, at(days=31))
     assert later.rows_deleted == 1
-    assert ax.lookup_execution(db, 'a', at(days=31)).state is S.NOT_FOUND
+    assert ax.lookup_execution(db, 'a', at(days=31), context_id=ctx).state is S.NOT_FOUND
 
 
 def test_purge_never_deletes_an_execution_with_a_valid_lease(env):
@@ -443,3 +443,109 @@ def test_malformed_owner_token_is_lease_lost_without_exception_and_changes_nothi
     assert ax.fail_execution(db, 'k1', bad, 'SOME_FAILURE', at(seconds=1)).outcome is O.LEASE_LOST
     assert snapshot(db) == before
     assert ax.heartbeat_execution(db, 'k1', token, at(seconds=1)).outcome is O.RENEWED     # 진짜 토큰은 그대로 동작
+
+
+# ── 조회는 context가 필수, 근거·답변·완료의 원자 저장(#119 B 최종 리뷰) ──────────
+def _evidence_ids(db):
+    with closing(get_connection(db)) as conn:
+        return [r[0] for r in conn.execute('SELECT evidence_id FROM evidences ORDER BY evidence_id')]
+
+
+def _good(evidence_id='e-ask-1'):
+    from solo_leveling.domain.models import Evidence
+    return Evidence(evidence_id, 'c1', '첫째', 'First')
+
+
+def test_lookup_requires_context_id_and_never_returns_the_body_without_it(env):
+    db, ctx = env
+    token = start(db, ctx)
+    ax.complete_execution(db, 'k1', token, RESULT, at(seconds=5))
+    with pytest.raises(TypeError):   # 생략할 수 없다
+        ax.lookup_execution(db, 'k1', at(seconds=6))
+    for bad in ('', '   ', None, 17):
+        with pytest.raises(ExecutionValidationError) as error:
+            ax.lookup_execution(db, 'k1', at(seconds=6), context_id=bad)
+        assert '비밀-답변-본문' not in str(error.value)
+
+
+def test_lookup_with_another_context_is_not_found_and_hides_the_record(env):
+    db, ctx = env
+    token = start(db, ctx)
+    ax.complete_execution(db, 'k1', token, RESULT, at(seconds=5))
+    other = ax.lookup_execution(db, 'k1', at(seconds=6), context_id='other-context')
+    missing = ax.lookup_execution(db, 'nope', at(seconds=6), context_id='other-context')
+    assert (other.state, other.result_json, other.context_id) == (S.NOT_FOUND, None, None)
+    assert other == missing   # 다른 context의 키는 없는 키와 구분되지 않는다
+    assert ax.lookup_execution(db, 'k1', at(seconds=6), context_id=ctx).result_json == RESULT
+
+
+def test_complete_with_evidences_stores_answer_state_and_evidence_together(env):
+    db, ctx = env
+    token = start(db, ctx)
+    result = ax.complete_execution(db, 'k1', token, RESULT, at(seconds=5), evidences=[_good()])
+    assert result.outcome is O.SAVED and _evidence_ids(db) == ['e-ask-1']
+    view = ax.lookup_execution(db, 'k1', at(seconds=6), context_id=ctx)
+    assert (view.state, view.result_json) == (S.COMPLETED, RESULT)
+
+
+def test_second_evidence_failure_rolls_back_the_first_and_the_completion(env):
+    from solo_leveling.domain.models import Evidence
+    db, ctx = env
+    token = start(db, ctx)
+    before = snapshot(db)
+    with pytest.raises(ValueError):
+        ax.complete_execution(db, 'k1', token, RESULT, at(seconds=5),
+                              evidences=[_good(), Evidence('e-bad', 'c1', '없는 번역', 'First')])
+    assert _evidence_ids(db) == [] and snapshot(db) == before
+    assert ax.lookup_execution(db, 'k1', at(seconds=6), context_id=ctx).state is S.RUNNING
+
+
+def test_duplicate_evidence_insert_rolls_back_everything(env):
+    db, ctx = env
+    token = start(db, ctx)
+    before = snapshot(db)
+    with pytest.raises(Exception):
+        ax.complete_execution(db, 'k1', token, RESULT, at(seconds=5), evidences=[_good(), _good()])
+    assert _evidence_ids(db) == [] and snapshot(db) == before
+
+
+def test_completion_update_failure_after_evidence_insert_rolls_back_the_evidence(env):
+    db, ctx = env
+    token = start(db, ctx)
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute("""CREATE TRIGGER reject_result BEFORE UPDATE OF result_json ON ask_executions
+                        BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END""")
+    before = snapshot(db)
+    with pytest.raises(Exception):
+        ax.complete_execution(db, 'k1', token, RESULT, at(seconds=5), evidences=[_good()])
+    assert _evidence_ids(db) == [] and snapshot(db) == before
+
+
+@pytest.mark.parametrize('case', ['late', 'wrong_token', 'lock_wait'])
+def test_no_evidence_or_completion_is_created_without_a_valid_lease(env, lock_wait, case):
+    db, ctx = env
+    token = start(db, ctx)
+    before = snapshot(db)
+    when, use = at(seconds=5), token
+    if case == 'late':
+        when = at(seconds=90)
+    elif case == 'wrong_token':
+        use = 'f' * 32
+    else:
+        lock_wait(LEASE_SECONDS + 1)
+        when = None
+    result = ax.complete_execution(db, 'k1', use, RESULT, when, evidences=[_good()])
+    assert result.outcome is O.LEASE_LOST
+    assert _evidence_ids(db) == [] and snapshot(db) == before
+
+
+def test_repeating_the_key_after_completion_creates_nothing_new(env):
+    db, ctx = env
+    token = start(db, ctx)
+    ax.complete_execution(db, 'k1', token, RESULT, at(seconds=5), evidences=[_good()])
+    saved = snapshot(db)
+    again = ax.begin_execution(db, 'k1', 'h1', ctx, at(seconds=6))
+    assert again.outcome is O.COMPLETED and again.owner_token is None
+    late = ax.complete_execution(db, 'k1', token, RESULT, at(seconds=7), evidences=[_good('e-ask-2')])
+    assert late.outcome is O.LEASE_LOST
+    assert _evidence_ids(db) == ['e-ask-1'] and snapshot(db) == saved
