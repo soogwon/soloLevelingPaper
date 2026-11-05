@@ -39,11 +39,11 @@ def test_partial_update_and_delete_respect_revision(env):
     assert (updated.body, updated.step, updated.revision) == ('수정', 'preview', 2)
     assert service.update(ctx, key, 1, step=None).outcome == AnnotationOutcome.CONFLICT
     assert service.delete(ctx, key, 1).outcome == AnnotationOutcome.CONFLICT
-    assert service.list(ctx, step='preview', kind='note') == [updated]
+    assert service.list(ctx, step='preview', kind='note').items == (updated,)
     cleared = service.update(ctx, key, 2, step=None).annotation
     assert (cleared.body, cleared.step) == ('수정', None)
     assert service.delete(ctx, key, 3).outcome == AnnotationOutcome.DELETED
-    assert service.list(ctx) == []
+    assert service.list(ctx).items == ()
 
 
 def test_foreign_context_and_missing_list(env):
@@ -53,7 +53,7 @@ def test_foreign_context_and_missing_list(env):
     key = service.create(ctx, 'note', '비공개').annotation.annotation_id
     with pytest.raises(ResourceNotFoundError):
         service.get(other, key)
-    assert service.list(other) == []
+    assert service.list(other).items == ()
     assert service.update(other, key, 1, body='다른 메모').outcome == AnnotationOutcome.NOT_FOUND
     assert service.delete(other, key, 1).outcome == AnnotationOutcome.NOT_FOUND
     with pytest.raises(ResourceNotFoundError):
@@ -66,7 +66,7 @@ def test_translation_segments_are_not_reported_as_verified(env):
     translated = SegmentInput('c1', 0, 1, '첫', 'translation', 't1')
     with pytest.raises(AnnotationValidationError):
         service.create(ctx, 'highlight', '', segments=[translated])
-    assert service.list(ctx) == []
+    assert service.list(ctx).items == ()
     existing = store.create_annotation(db, ctx, 'highlight', '', [translated]).annotation
     assert service.get(ctx, existing.annotation_id).location_status == 'unavailable'
 
@@ -87,13 +87,13 @@ def test_partial_update_only_copies_fields_from_expected_revision(env, monkeypat
     assert read(db, ctx, key).body == '동시 수정'
 
 
-@pytest.mark.parametrize('segments', [None, '', b''])
+@pytest.mark.parametrize('segments', [None, '', b'', bytearray(), memoryview(b'')])
 def test_invalid_segment_list_does_not_create_unanchored_note(env, segments):
     db, ctx = env
     service = AnnotationService(db)
     with pytest.raises(AnnotationValidationError):
         service.create(ctx, 'note', '메모', segments=segments)
-    assert service.list(ctx) == []
+    assert service.list(ctx).items == ()
 
 
 def test_partial_update_checks_revision_format_even_for_missing_annotation(env):
@@ -118,3 +118,71 @@ def test_service_requires_context_for_every_operation(env, invalid_context):
         with pytest.raises(AnnotationValidationError):
             operation()
     assert service.get(ctx, key).annotation == saved
+
+
+def test_page_cursor_and_limit_contract(env):
+    db, ctx = env
+    service = AnnotationService(db)
+    keys = {service.create(ctx, 'note', str(n)).annotation.annotation_id for n in range(21)}
+    first = service.list(ctx, kind='note')
+    assert len(first.items) == 20 and first.next_cursor
+    last = AnnotationService(db).list(ctx, kind='note', cursor=first.next_cursor)
+    assert len(last.items) == 1 and last.next_cursor is None
+    assert {a.annotation_id for a in first.items + last.items} == keys
+    for kwargs, code in [({'cursor': first.next_cursor}, 'INVALID_CURSOR'), ({'limit': 51}, 'INVALID_LIMIT')]:
+        with pytest.raises(AnnotationValidationError) as caught:
+            service.list(ctx, **kwargs)
+        assert caught.value.code == code
+
+
+def test_mixed_translation_rejected_before_repository_and_edits_are_atomic(env, monkeypatch):
+    db, ctx = env
+    service = AnnotationService(db)
+    original = SegmentInput('c1', 0, 5, 'First')
+    translated = SegmentInput('c1', 0, 1, '첫', 'translation', 't1')
+    saved = service.create(ctx, 'note', '기존', segments=[original]).annotation
+    with monkeypatch.context() as guard:
+        for name in ('get_annotation', 'update_annotation', 'create_annotation'):
+            guard.setattr(store, name, lambda *a, **kw: pytest.fail('unexpected store call'))
+        for action in (
+            lambda: service.create(ctx, 'note', '새 기록', segments=[original, translated]),
+            lambda: service.update(ctx, saved.annotation_id, 1, body='수정', segments=[original, translated]),
+        ):
+            with pytest.raises(AnnotationValidationError) as caught:
+                action()
+            assert caught.value.code == 'TRANSLATION_NOT_SUPPORTED'
+        with pytest.raises(AnnotationValidationError) as caught:
+            service.update(ctx, saved.annotation_id, 1, body='수정', segments=[original])
+        assert caught.value.code is None
+    assert service.list(ctx).items == (saved,)
+
+
+def test_create_preserves_repository_limit_codes(env):
+    db, ctx = env
+    service = AnnotationService(db)
+    segment = SegmentInput('c1', 0, 5, 'First')
+    for segments, code in [
+        ([segment, segment], 'DUPLICATE_SEGMENT'),
+        ([SegmentInput('c1', n, n + 2000, 'x' * 2000) for n in range(5)], 'QUOTE_TOTAL_TOO_LONG'),
+    ]:
+        with pytest.raises(AnnotationValidationError) as caught:
+            service.create(ctx, 'highlight', '', segments=segments)
+        assert caught.value.code == code
+    assert service.list(ctx).items == ()
+
+
+def test_long_unicode_context_can_follow_its_own_cursor(env):
+    from solo_leveling.domain.models import LearningContext
+    db, other = env
+    ctx = '가' * 64
+    repository.create_learning_context(db, LearningContext(ctx, 'v1', 'p1', 't1', embedding_set_id='idx'))
+    service = AnnotationService(db)
+    keys = {service.create(ctx, 'note', str(n)).annotation.annotation_id for n in range(2)}
+    first = service.list(ctx, limit=1)
+    assert first.next_cursor
+    last = service.list(ctx, limit=1, cursor=first.next_cursor)
+    assert len(first.items) == len(last.items) == 1 and last.next_cursor is None
+    assert {first.items[0].annotation_id, last.items[0].annotation_id} == keys
+    with pytest.raises(AnnotationValidationError) as error:
+        service.list(other, cursor=first.next_cursor)
+    assert error.value.code == 'INVALID_CURSOR'

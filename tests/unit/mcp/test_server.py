@@ -69,6 +69,28 @@ def test_tools_and_annotations():
     assert tools['ask_paper'].inputSchema['$defs']['Focus']['additionalProperties'] is False
 
 
+def test_client_receives_external_transfer_notices_before_tool_calls():
+    server, _, _ = make_server(ingestion=Mock())
+
+    assert '시작하기 전에' in server.instructions
+
+    async def check_notices():
+        async with create_connected_server_and_client_session(server) as client:
+            descriptions = {tool.name: tool.description for tool in (await client.list_tools()).tools}
+            registration = descriptions['add_paper']
+            question = descriptions['ask_paper']
+            for description in (registration, question):
+                assert '외부 API 호출을 허용한 경우' in description
+                assert 'OpenAI' in description
+            assert '백그라운드 번역' in registration
+            assert '논문 전체 원문' in registration
+            assert '검색 후 질문' in question
+            assert '원문·번역' in question
+            assert '추가 전송' in question
+
+    run(check_notices())
+
+
 def test_ask_tool_description_explains_verification_and_partial():
     server, _, _ = make_server()
     tool = next(tool for tool in run(server.list_tools()) if tool.name == 'ask_paper')
@@ -165,6 +187,22 @@ def test_history_schema_is_optional_and_host_guidance_is_explicit():
     assert '이력 상태 미제공' in tool.description
     assert 'saved는 의미 검증 성공을 뜻하지 않습니다' in tool.description
     assert '이력 저장 실패를 이유로 질문을 자동 재호출하지 마세요' in tool.description
+
+
+def test_focus_strict_pages_is_forwarded():
+    server, answer, _ = make_server()
+    answer.answer.return_value = answer_response()
+    run(server.call_tool('ask_paper', {'context_id': 'context', 'question': '질문',
+                                     'focus': {'pdf_pages': [6], 'strict_pages': True}}))
+    answer.answer.assert_called_once_with('질문', context_id='context', top_k=5,
+        pdf_pages=(6,), section_ids=(), strict_pages=True)
+
+
+def test_focus_strict_pages_rejects_string_boolean():
+    from solo_leveling.interfaces.mcp.server import Focus
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        Focus(strict_pages='false')
 
 
 def test_get_evidence_returns_stored_details():

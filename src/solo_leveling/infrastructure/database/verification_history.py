@@ -9,6 +9,7 @@
 """
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 from typing import List, Optional
 
 from solo_leveling.domain.models import now_iso
@@ -24,40 +25,53 @@ def save_verification_history(db_path: str, record: VerificationHistoryRecord) -
     try:
         with closing(get_connection(db_path)) as conn, conn:
             conn.execute('BEGIN IMMEDIATE')
-            if conn.execute('SELECT 1 FROM verification_runs WHERE run_id=?', (record.run_id,)).fetchone():
-                return HistoryResult(HistoryOutcome.DUPLICATE_RUN, record.run_id)
-            context = conn.execute('SELECT * FROM learning_contexts WHERE context_id=?',
-                                   (record.context_id,)).fetchone()
-            if context is None or any(context[key] != getattr(record, key) for key in (
-                    'version_id', 'parse_revision_id', 'translation_revision_id', 'embedding_set_id')):
-                return HistoryResult(HistoryOutcome.REFERENCE_MISMATCH)
-            for claim in record.claims:
-                for ref in claim.references:
-                    chunk = conn.execute(
-                        'SELECT original_text, parse_revision_id FROM chunks WHERE chunk_id=?',
-                        (ref.chunk_id,)).fetchone()
-                    if (chunk is None or chunk['parse_revision_id'] != context['parse_revision_id']
-                            or not _was_published(conn, context, ref.chunk_id)
-                            or chunk_content_hash(chunk['original_text']) != ref.content_hash):
-                        return HistoryResult(HistoryOutcome.REFERENCE_MISMATCH)
-            conn.execute('INSERT INTO verification_runs (run_id, context_id, version_id, parse_revision_id, '
-                         'translation_revision_id, embedding_set_id, model, instruction_version, elapsed_ms, '
-                         'level, failure_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                         (record.run_id, record.context_id, record.version_id, record.parse_revision_id,
-                          record.translation_revision_id, record.embedding_set_id, record.model,
-                          record.instruction_version, record.elapsed_ms, record.level, record.failure, now_iso()))
-            for position, claim in enumerate(record.claims):
-                conn.execute('INSERT INTO verification_claims (run_id, position, claim_id, claim_text, verdict, '
-                             'reason, retained) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                             (record.run_id, position, claim.claim_id, claim.text, claim.verdict, claim.reason,
-                              1 if claim.retained else 0))
-                for ref_position, ref in enumerate(claim.references):
-                    conn.execute('INSERT INTO verification_claim_refs (run_id, position, ref_position, chunk_id, '
-                                 'content_hash) VALUES (?, ?, ?, ?, ?)',
-                                 (record.run_id, position, ref_position, ref.chunk_id, ref.content_hash))
-            return HistoryResult(HistoryOutcome.SAVED, record.run_id)
+            return insert_verification_history(conn, record)
     except sqlite3.Error:
         return HistoryResult(HistoryOutcome.SAVE_FAILED)  # 세부 내용은 남기지 않는다. with 블록이 되돌렸다.
+
+
+def ensure_verification_history(conn, record):
+    """Accept a duplicate only if this transaction sees the exact same history."""
+    outcome = insert_verification_history(conn, record).outcome
+    if outcome == HistoryOutcome.DUPLICATE_RUN:
+        previous = _load(conn, record.context_id, record.run_id)
+        return previous is not None and replace(previous, created_at=None) == record
+    return outcome == HistoryOutcome.SAVED
+
+
+def insert_verification_history(conn, record):
+    if conn.execute('SELECT 1 FROM verification_runs WHERE run_id=?', (record.run_id,)).fetchone():
+        return HistoryResult(HistoryOutcome.DUPLICATE_RUN, record.run_id)
+    context = conn.execute('SELECT * FROM learning_contexts WHERE context_id=?',
+                           (record.context_id,)).fetchone()
+    if context is None or any(context[key] != getattr(record, key) for key in (
+            'version_id', 'parse_revision_id', 'translation_revision_id', 'embedding_set_id')):
+        return HistoryResult(HistoryOutcome.REFERENCE_MISMATCH)
+    for claim in record.claims:
+        for ref in claim.references:
+            chunk = conn.execute(
+                'SELECT original_text, parse_revision_id FROM chunks WHERE chunk_id=?',
+                (ref.chunk_id,)).fetchone()
+            if (chunk is None or chunk['parse_revision_id'] != context['parse_revision_id']
+                    or not _was_published(conn, context, ref.chunk_id)
+                    or chunk_content_hash(chunk['original_text']) != ref.content_hash):
+                return HistoryResult(HistoryOutcome.REFERENCE_MISMATCH)
+    conn.execute('INSERT INTO verification_runs (run_id, context_id, version_id, parse_revision_id, '
+                 'translation_revision_id, embedding_set_id, model, instruction_version, elapsed_ms, '
+                 'level, failure_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                 (record.run_id, record.context_id, record.version_id, record.parse_revision_id,
+                  record.translation_revision_id, record.embedding_set_id, record.model,
+                  record.instruction_version, record.elapsed_ms, record.level, record.failure, now_iso()))
+    for position, claim in enumerate(record.claims):
+        conn.execute('INSERT INTO verification_claims (run_id, position, claim_id, claim_text, verdict, '
+                     'reason, retained) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                     (record.run_id, position, claim.claim_id, claim.text, claim.verdict, claim.reason,
+                      1 if claim.retained else 0))
+        for ref_position, ref in enumerate(claim.references):
+            conn.execute('INSERT INTO verification_claim_refs (run_id, position, ref_position, chunk_id, '
+                         'content_hash) VALUES (?, ?, ?, ?, ?)',
+                         (record.run_id, position, ref_position, ref.chunk_id, ref.content_hash))
+    return HistoryResult(HistoryOutcome.SAVED, record.run_id)
 
 
 def _was_published(conn, context, chunk_id: str) -> bool:

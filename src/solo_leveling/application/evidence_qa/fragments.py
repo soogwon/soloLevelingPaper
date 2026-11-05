@@ -7,9 +7,8 @@
 
 import re
 
-_CLOSERS = ')]}"\'”’'
-_SENTENCE_ENDS = ('.', '!', '?')
 _LEADING_CONTINUATIONS = ',;:)]}'
+_ABBREVIATIONS = re.compile(r'(?i)(?:\b(?:eqs?|figs?|secs?|refs?|dr|prof|mr|mrs|vs|etc)|e\.g|i\.e|et\s+al)\.$')
 
 
 def evidence_body(text: str) -> str:
@@ -18,9 +17,35 @@ def evidence_body(text: str) -> str:
                             if not line.strip().isdigit()).split())
 
 
-def sentence_ends(text: str) -> tuple[int, ...]:
-    """소수점과 말줄임표를 제외한 문장 끝 후보다. 언어학적 완결성 검사는 아니다."""
-    return tuple(m.end() for m in re.finditer(r'''(?<![.])[.!?](?![.\d])[)\]}"'”’]*(?=\s|$)''', text))
+def sentence_ends(text: str, *, outside_page: bool = False) -> tuple[int, ...]:
+    """페이지 밖에서는 불확실한 점을 건너뛰어 다음 문장까지 읽지 않는다."""
+    ends = []
+    for match in re.finditer(r'''[.!?。！？][)\]}"'”’]*''', text):
+        pos = match.start()
+        if text[pos] == '.':
+            before, after = text[:pos], text[pos + 1:]
+            if before.endswith('.') or after.startswith('.'):
+                if outside_page:
+                    break
+                continue
+            if after[:1].isdigit():  # 1.5, .5
+                continue
+            abbreviation = _ABBREVIATIONS.search(text[:pos + 1])
+            if abbreviation:
+                # Eq. 3처럼 번호가 붙은 참조 외에는 약어가 문장 끝일 수도 있다.
+                if outside_page and not (re.fullmatch(r'(?:eqs?|figs?|secs?|refs?)\.',
+                                                       abbreviation.group(), re.I)
+                                         and re.match(r'\s+\d', after)):
+                    break
+                continue
+            if after and after[0].isalnum():
+                # PDF 공백 누락으로 확인한 변수 뒤 경계(d.Other claim.)만 허용한다.
+                if not (re.search(r'\b[a-z]$', before) and re.match(r'(?:[A-Z][a-z]+\b|[AI](?=\s))', after)):
+                    if outside_page:
+                        break
+                    continue
+        ends.append(match.end())
+    return tuple(ends)
 
 
 def incomplete_tail_start(text: str) -> int | None:
@@ -44,5 +69,6 @@ def fragment_flags(original_text: str) -> tuple[bool, bool]:
     if not body:
         return False, False
     starts_mid = body[0].islower() or body[0] in _LEADING_CONTINUATIONS
-    ends_mid = not body.rstrip(_CLOSERS).endswith(_SENTENCE_ENDS)
+    ends = sentence_ends(body)
+    ends_mid = not ends or ends[-1] != len(body)
     return starts_mid, ends_mid

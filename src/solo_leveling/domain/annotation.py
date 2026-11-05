@@ -8,6 +8,7 @@
 """
 import base64
 import binascii
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -180,15 +181,20 @@ def validate_page_limit(limit) -> int:
     return limit
 
 
-_CURSOR_FIELDS = ('c', 's', 'k', 't', 'i')
+_LEGACY_CURSOR_FIELDS = {'c', 's', 'k', 't', 'i'}
 _CURSOR_ALPHABET = re.compile(r'[A-Za-z0-9_-]+')
 _MAX_CURSOR_LENGTH = 512
 
 
+def _scope_digest(context_id, step, kind):
+    scope = json.dumps([context_id, step, kind], ensure_ascii=True, separators=(',', ':'))
+    return hashlib.sha256(scope.encode('ascii')).hexdigest()
+
+
 def encode_cursor(context_id: str, step: Optional[str], kind: Optional[str], created_at: str,
                   annotation_id: str) -> str:
-    """다음 페이지의 시작 위치를 불투명 문자열로 만든다. 발급한 맥락·필터가 함께 들어간다."""
-    raw = json.dumps({'c': context_id, 's': step, 'k': kind, 't': created_at, 'i': annotation_id},
+    """다음 페이지의 시작 위치를 불투명 문자열로 만든다. 맥락·필터는 고정 길이 해시로 묶는다."""
+    raw = json.dumps({'scope': _scope_digest(context_id, step, kind), 't': created_at, 'i': annotation_id},
                      separators=(',', ':'), sort_keys=True)
     return base64.urlsafe_b64encode(raw.encode('utf-8')).decode('ascii').rstrip('=')
 
@@ -211,9 +217,15 @@ def decode_cursor(cursor, context_id: str, step: Optional[str], kind: Optional[s
         data = json.loads(decoded.decode('utf-8'))
     except (binascii.Error, UnicodeDecodeError, ValueError):
         raise invalid() from None
-    if not isinstance(data, dict) or set(data) != set(_CURSOR_FIELDS):
+    if not isinstance(data, dict):
         raise invalid()
-    if (data['c'], data['s'], data['k']) != (context_id, step, kind):
+    if data.keys() == {'scope', 't', 'i'}:
+        matches = data['scope'] == _scope_digest(context_id, step, kind)
+    elif data.keys() == _LEGACY_CURSOR_FIELDS:
+        matches = (data['c'], data['s'], data['k']) == (context_id, step, kind)
+    else:
+        raise invalid()
+    if not matches:
         raise invalid()
     created_at, annotation_id = data['t'], data['i']
     if not all(isinstance(v, str) and v for v in (created_at, annotation_id)):

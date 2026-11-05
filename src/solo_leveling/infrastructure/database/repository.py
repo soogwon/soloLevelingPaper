@@ -272,6 +272,26 @@ def get_translation_metadata(db_path: str, parse_revision_id: str,
         return dict(row) if row else None
 
 
+def get_pending_translation_chunks(db_path: str, parse_revision_id: str,
+                                   translation_revision_id: str | None = None) -> List[Chunk]:
+    """번역 성공 행이 없는 청크를 chunk_index 순서로 돌려준다(최초 등록 재개용).
+
+    판단 기준은 chunks.text가 아니라 번역 리비전별 결과(translation_results)다. 번역 리비전이 아직 없으면 모든 청크가 대상이다.
+    실패 행이 있는 청크는 대상에 포함된다(재시도). 반환 Chunk의 text는 비어 있다(번역할 원문만 필요하다).
+    """
+    with closing(get_connection(db_path)) as conn:
+        rows = conn.execute(
+            '''SELECT c.chunk_id, c.parse_revision_id, c.chunk_index, c.original_text, c.printed_page_label,
+                      c.pdf_page, c.section_id
+               FROM chunks c WHERE c.parse_revision_id=?
+                 AND NOT EXISTS (SELECT 1 FROM translation_results r WHERE r.chunk_id=c.chunk_id
+                                 AND r.translation_revision_id=? AND r.failure_code IS NULL
+                                 AND r.translated_text IS NOT NULL)
+               ORDER BY c.chunk_index''',
+            (parse_revision_id, translation_revision_id)).fetchall()
+        return [Chunk(**dict(r), text=None, translation_revision_id=None) for r in rows]
+
+
 def save_translation_batch(db_path: str, batch: TranslationBatchResult) -> None:
     """최초 번역을 원자적으로 저장하고, 재시도 시 실패한 청크만 채운다.
 
@@ -307,22 +327,24 @@ def save_translation_batch(db_path: str, batch: TranslationBatchResult) -> None:
                 rev.parse_revision_id, item.request.original_text,
             ):
                 raise ValueError('translation source does not match database')
-            prior = conn.execute('SELECT failure_code FROM translation_results WHERE translation_revision_id=? AND chunk_id=?',
+            prior = conn.execute('SELECT failure_code, translated_text FROM translation_results '
+                                 'WHERE translation_revision_id=? AND chunk_id=?',
                                  (rev.translation_revision_id, row['chunk_id'])).fetchone()
             code = item.failure_code.value if item.failure_code else None
+            # 판단은 translation_results만 본다. chunks.text는 이전 버전 호환용 사본이며 결정에 쓰지 않는다.
+            prior_success = prior is not None and prior['failure_code'] is None and prior['translated_text'] is not None
             identical = (prior is not None and prior['failure_code'] == code
-                         and (not item.succeeded or (row['text'], row['translation_revision_id']) == (item.text, rev.translation_revision_id)))
+                         and (not item.succeeded or prior['translated_text'] == item.text))
             if identical:
                 continue
             if published:
                 raise ValueError('published translation cannot be changed')
-            if row['text'] is not None or row['translation_revision_id'] is not None:
+            if prior_success:
                 raise ValueError('successful translation cannot be overwritten')
             if item.succeeded:
-                count = conn.execute('UPDATE chunks SET text=?, translation_revision_id=? WHERE chunk_id=? AND text IS NULL AND translation_revision_id IS NULL',
-                                     (item.text, rev.translation_revision_id, row['chunk_id'])).rowcount
-                if count != 1:
-                    raise ValueError('translation update conflict')
+                conn.execute('UPDATE chunks SET text=?, translation_revision_id=? WHERE chunk_id=? '
+                             'AND text IS NULL AND translation_revision_id IS NULL',
+                             (item.text, rev.translation_revision_id, row['chunk_id']))
             conn.execute('''INSERT INTO translation_results (translation_revision_id, chunk_id, failure_code, translated_text)
                             VALUES (?, ?, ?, ?)
                             ON CONFLICT(translation_revision_id, chunk_id) DO UPDATE SET
@@ -415,7 +437,9 @@ def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
                                 WHERE t.translation_revision_id=? AND p.parse_revision_id=?
                                 AND p.version_id=? AND j.job_id=? AND j.status='processing' ''',
                              (embedding_set.translation_revision_id, parse_revision_id, version_id, job_id)).fetchone()
-        actual = conn.execute('SELECT COUNT(*) FROM chunks WHERE parse_revision_id=? AND translation_revision_id=? AND text IS NOT NULL',
+        actual = conn.execute('SELECT COUNT(*) FROM chunks c JOIN translation_results r ON r.chunk_id=c.chunk_id '
+                              'WHERE c.parse_revision_id=? AND r.translation_revision_id=? '
+                              'AND r.failure_code IS NULL AND r.translated_text IS NOT NULL',
                               (parse_revision_id, embedding_set.translation_revision_id)).fetchone()[0]
         if not valid or actual != chunk_count:
             raise ValueError('index does not match the job and translated chunks')
@@ -845,13 +869,17 @@ def _evidence_detail(conn, context_id: str, evidence: Evidence) -> EvidenceDetai
 def save_evidences(db_path: str, context_id: str, evidences: List[Evidence]) -> None:
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
-        if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
-            raise ValueError('context not found')
-        for evidence in evidences:
-            _evidence_detail(conn, context_id, evidence)
-            conn.execute('INSERT INTO evidences VALUES (?, ?, ?, ?, ?, ?)',
-                         (evidence.evidence_id, context_id, evidence.chunk_id,
-                          evidence.quote_ko, evidence.quote_original, now_iso()))
+        insert_evidences(conn, context_id, evidences)
+
+
+def insert_evidences(conn, context_id, evidences):
+    if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
+        raise ValueError('context not found')
+    for evidence in evidences:
+        _evidence_detail(conn, context_id, evidence)
+        conn.execute('INSERT INTO evidences VALUES (?, ?, ?, ?, ?, ?)',
+                     (evidence.evidence_id, context_id, evidence.chunk_id,
+                      evidence.quote_ko, evidence.quote_original, now_iso()))
 
 
 def get_evidences(db_path: str, context_id: str, evidence_ids: List[str]) -> GetEvidenceResult:
@@ -1299,13 +1327,33 @@ def save_reflection_answer(db_path: str, context_id: str, phase: str, template_i
         return ReflectionAnswer(**dict(row))
 
 
+def _read_context_answers(db_path: str, context_id: str, phase: str | None) -> List[ReflectionAnswer]:
+    """맥락과 답변을 한 문장(SELECT 한 번)으로 읽어 같은 시점을 본다. 맥락이 없으면 ResourceNotFoundError.
+
+    learning_contexts를 기준으로 reflection_answers를 LEFT JOIN한다. 행이 하나도 없으면 맥락이 없는 것이고,
+    답변 열이 모두 비어 있는 한 행이면 맥락은 있으나 답변이 없는 것이다(빈 문자열 초안은 text가 ''인 실제 행이라 구분된다).
+    맥락 확인과 답변 읽기를 따로 하면 그 사이에 다른 연결이 둘을 함께 지울 때 '미작성'으로 잘못 보일 수 있다(#161).
+    """
+    on_phase, params = (' AND a.phase=?', (phase, context_id)) if phase is not None else ('', (context_id,))
+    with closing(get_connection(db_path)) as conn:
+        rows = conn.execute(
+            f'''SELECT a.context_id AS a_context_id, a.phase, a.template_id, a.text, a.status,
+                       a.created_at, a.updated_at
+                FROM learning_contexts c
+                LEFT JOIN reflection_answers a ON a.context_id=c.context_id{on_phase}
+                WHERE c.context_id=?
+                ORDER BY a.created_at, a.template_id''',
+            params).fetchall()
+    if not rows:
+        raise ResourceNotFoundError('context not found')
+    return [ReflectionAnswer(row['a_context_id'], row['phase'], row['template_id'], row['text'], row['status'],
+                             row['created_at'], row['updated_at'])
+            for row in rows if row['template_id'] is not None]
+
+
 def get_reflection_answers_all(db_path: str, context_id: str) -> List[ReflectionAnswer]:
     """한 맥락의 읽기 전·후 답변을 한 번의 읽기(한 연결, 한 SELECT)로 돌려준다. 맥락이 없으면 ResourceNotFoundError."""
-    with closing(get_connection(db_path)) as conn:
-        if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
-            raise ResourceNotFoundError('context not found')
-        return [ReflectionAnswer(**dict(r)) for r in conn.execute(
-            'SELECT * FROM reflection_answers WHERE context_id=? ORDER BY created_at, template_id', (context_id,))]
+    return _read_context_answers(db_path, context_id, None)
 
 
 def get_reflection_answers(db_path: str, context_id: str, phase: str) -> List[ReflectionAnswer]:
@@ -1313,9 +1361,4 @@ def get_reflection_answers(db_path: str, context_id: str, phase: str) -> List[Re
     from solo_leveling.domain.reflection import templates_for
 
     templates_for(phase)  # 지원하지 않는 시점이면 ReflectionValidationError
-    with closing(get_connection(db_path)) as conn:
-        if not conn.execute('SELECT 1 FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone():
-            raise ResourceNotFoundError('context not found')
-        return [ReflectionAnswer(**dict(r)) for r in conn.execute(
-            'SELECT * FROM reflection_answers WHERE context_id=? AND phase=? ORDER BY created_at, template_id',
-            (context_id, phase))]
+    return _read_context_answers(db_path, context_id, phase)

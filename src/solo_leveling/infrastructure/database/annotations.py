@@ -176,9 +176,7 @@ def annotation_page_query(context_id: str, step: Optional[str], kind: Optional[s
                           after: Optional[Tuple[str, str]] = None) -> Tuple[str, list]:
     """한 페이지의 SQL과 매개변수를 만든다. 커서가 있으면 인덱스 탐색이 커서 위치에서 시작한다(#56).
 
-    `created_at >= 기준시각`이 인덱스(context_id, created_at, annotation_id)의 범위 조건이 되어 앞쪽 행을 훑지 않는다.
-    같은 시각의 행은 뒤따르는 `(created_at > ? OR annotation_id > ?)`로 걸러 기준 기록 뒤의 것만 남긴다.
-    OR 한 덩어리만 쓰면 범위로 쓰이지 못해 뒤쪽 페이지일수록 비용이 늘어난다.
+    같은 시각의 기록도 annotation_id로 이어 읽도록 정렬 순서와 같은 두 열을 인덱스 범위로 사용한다.
     """
     query, params = 'SELECT annotation_id, created_at FROM annotations WHERE context_id=?', [context_id]
     if step is not None:
@@ -186,8 +184,8 @@ def annotation_page_query(context_id: str, step: Optional[str], kind: Optional[s
     if kind is not None:
         query, params = query + ' AND kind=?', params + [kind]
     if after is not None:
-        query, params = (query + ' AND created_at >= ? AND (created_at > ? OR annotation_id > ?)',
-                         params + [after[0], after[0], after[1]])
+        query += ' AND (created_at, annotation_id) > (?, ?)'
+        params.extend(after)
     return query + ' ORDER BY created_at, annotation_id LIMIT ?', params + [size + 1]
 
 

@@ -11,10 +11,12 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 from solo_leveling.application.evidence_qa.serialization import (
-    serialize_answer_response, serialize_stored_evidence_result,
+    public_answer_payload as _answer_payload, serialize_stored_evidence_result,
 )
 from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
 from solo_leveling.application.evidence_qa.ports import DefaultContextStore
+from solo_leveling.domain.ask_execution import ExecutionOutcome, ExecutionValidationError, ExecutionView
+from solo_leveling.infrastructure.generation.ask_execution_service import AskExecutionService
 from solo_leveling.domain.evidence_qa import require_text
 from solo_leveling.application.paper_detail.service import PaperDetailService
 from .errors import to_tool_error
@@ -27,6 +29,7 @@ from .quiz_tools import QuizContractAdapter, register_quiz
 
 HOST_INSTRUCTIONS = '''등록된 논문에서 한국어 근거 답변과 원문 근거를 조회합니다.
 add_paper → get_paper_status → start_learning → ask_paper → get_evidence 순서로 사용합니다.
+등록·질문을 시작하기 전에 각 도구 설명에 있는 OpenAI 전송 데이터와 시점을 사용자에게 안내하세요.
 반환된 version_id, job_id, context_id, evidence_id를 다음 호출에 그대로 전달합니다.
 저장 요약과 논문 상세는 get_paper_detail로 조회합니다. summary가 없다고 자동 생성하지 마세요.
 section_ids는 저장된 식별자이며 원문 절 제목으로 추측해 바꾸지 마세요.
@@ -52,7 +55,7 @@ status=ok는 질문 전체의 완전한 답변을 보장하지 않습니다. mod
 주장과 근거의 의미 일치나 수식의 정확성을 검증했다는 뜻이 아닙니다.
 근거가 문장 중간에서 끊기면 get_evidence로 저장 근거를 확인하세요. 이 도구는 재검색하거나
 누락 문장을 복구하지 않습니다. 검색된 근거에 없다고 논문 전체에 없다고 단정하지 마세요.
-사용자가 지정한 페이지·섹션 범위를 유지하고, 범위 밖 문맥이 필요하면 범위 확장을 안내하세요.
+지정 범위 밖에서는 같은 섹션의 다음 페이지에서 끊긴 문장의 끝만 보충할 수 있습니다. 사용자가 페이지를 엄격히 제한하면 focus.strict_pages=true로 호출하세요.
 논문 근거 상세 화면은 반환된 인용문만 보여주며 PDF 전체나 정밀 좌표를 표시하지 않습니다.
 화면이 표시되지 않아도 동일한 JSON 응답을 사용하세요.
 printed_page_label이 없으면 pdf_page를 'PDF 기준 N페이지'로 표시하세요.
@@ -65,7 +68,7 @@ MCP 호출 또는 호스트 권한 검사가 실패하면 실패 사실을 안�
 
 class AnswerService(Protocol):
     def answer(self, question: str, *, context_id: str, top_k: int,
-               pdf_pages: tuple[int, ...], section_ids: tuple[str, ...]): ...
+               pdf_pages: tuple[int, ...], section_ids: tuple[str, ...], strict_pages: bool = False): ...
 
 
 class EvidenceService(Protocol):
@@ -90,6 +93,7 @@ class MCPServices:
     detail: PaperDetailService | None = None
     reflection: ReflectionService | None = None
     quiz: QuizContractAdapter | None = None
+    executions: AskExecutionService | None = None
 
 
 class Focus(BaseModel):
@@ -98,6 +102,8 @@ class Focus(BaseModel):
 
     pdf_pages: list[int] = Field(default_factory=list)
     section_ids: list[str] = Field(default_factory=list)
+    strict_pages: bool = Field(default=False, strict=True,
+        description='true이면 다음 페이지의 잘린 문장 보충도 금지합니다.')
 
 
 class PaperSource(BaseModel):
@@ -147,6 +153,17 @@ class AskPaperOutput(BaseModel):
         if self.verification_history is None:
             payload.pop('verification_history', None)
         return payload
+
+
+class ExecutionOutput(TypedDict):
+    state: str
+    failure_code: str | None
+    answer: AskPaperOutput | None
+
+
+def _execution_output(view: ExecutionView) -> ExecutionOutput:
+    return {'state': view.state.value, 'failure_code': view.failure_code,
+            'answer': AskPaperOutput.model_validate_json(view.result_json) if view.result_json else None}
 
 
 class EvidenceOutput(CitationOutput):
@@ -242,22 +259,6 @@ class StartLearningOutput(TypedDict):
     capabilities: list[str]
 
 
-def _answer_payload(response) -> dict:
-    serialized = serialize_answer_response(response)
-    payload = {
-        'context_id': serialized['context_id'],
-        'verification_level': serialized['verification_level'],
-        **serialized['answer'],
-    }
-    # B의 선택적 상태만 전달한다. 누락·잘못된 값으로 저장 성공이나 미사용을 추정하지 않는다.
-    history = getattr(response, 'verification_history', None)
-    if isinstance(history, dict):
-        status = history.get('status')
-        if isinstance(status, str) and status in ('not_used', 'saved', 'failed'):
-            payload['verification_history'] = {'status': status}
-    return payload
-
-
 def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
     """저장소 수명이나 환경 설정에 관여하지 않고 MCP 도구만 구성한다."""
     server = ReflectionInputServer('solo-leveling-paper',
@@ -321,7 +322,10 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                         idempotentHint=True, openWorldHint=True))
         async def add_paper(source: PaperSource, request_key: str) -> AddPaperOutput:
-            """import 루트의 PDF를 관리 저장소로 복사하고 등록 작업을 시작합니다."""
+            """import 루트의 PDF를 관리 저장소로 복사하고 등록 작업을 시작합니다.
+            외부 API 호출을 허용한 경우, 등록 후 백그라운드 번역 단계에서 원문 청크와 대상 언어를 OpenAI에 보냅니다.
+            여러 청크를 합하면 논문 전체 원문이 전송될 수 있습니다.
+            """
             try:
                 result = await anyio.to_thread.run_sync(
                     lambda: services.ingestion.add_local_pdf(source.relative_path, request_key))
@@ -393,10 +397,61 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                     'goal': context.goal,
                     'known_concepts': list(context.known_concepts),
                     'status': 'ready',
-                    'capabilities': ['ask_paper', 'get_evidence'],
+                    'capabilities': ['ask_paper', 'get_evidence'] + (
+                        ['submit_paper_question', 'get_paper_question_status'] if services.executions else []),
                 }
             except Exception as error:
                 raise to_tool_error(error) from None
+
+    if services.executions is not None:
+        @server.tool(structured_output=True, annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+        async def submit_paper_question(context_id: str, request_key: str, question: str,
+                standalone_question: str | None = None, focus: Focus | None = None,
+                top_k: Annotated[int, Field(strict=True, ge=1, le=20)] = 5) -> ExecutionOutput:
+            """호출 전에 보관한 요청 키로 질문합니다. 외부 호출 허용 시 질문과 번역·원문 근거를 OpenAI로 보냅니다.
+            최초 호출은 답변을 기다립니다. 응답을 놓치면 같은 context_id와 키로 get_paper_question_status를 조회하세요.
+            상태를 확인할 수 없을 때 새 키로 자동 제출하지 마세요."""
+            try:
+                require_text(question, 'question')
+                if standalone_question is not None:
+                    require_text(standalone_question, 'standalone_question')
+            except ValueError:
+                raise to_tool_error(InvalidArgumentError('question')) from None
+            try:
+                result = await anyio.to_thread.run_sync(lambda: services.executions.run(
+                    request_key, standalone_question if standalone_question is not None else question,
+                    context_id=context_id, top_k=top_k, pdf_pages=tuple(focus.pdf_pages) if focus else (),
+                    section_ids=tuple(focus.section_ids) if focus else (),
+                    strict_pages=focus.strict_pages if focus else False))
+                if result.view is not None:
+                    return _execution_output(result.view)
+                state = ('not_found' if result.outcome == ExecutionOutcome.CONTEXT_NOT_FOUND
+                         else result.outcome.value)
+                return {'state': state, 'failure_code': None, 'answer': None}
+            except ExecutionValidationError:
+                raise to_tool_error(InvalidArgumentError('request')) from None
+            except Exception as error:
+                raise to_tool_error(error) from None
+            finally:
+                # 작업을 기다리는 동안 취소된 요청에는 두 번째 응답을 보내지 않는다.
+                await anyio.lowlevel.checkpoint()
+
+        @server.tool(structured_output=True, annotations=ToolAnnotations(
+            readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+        async def get_paper_question_status(context_id: str, request_key: str) -> ExecutionOutput:
+            """원래 학습 맥락과 요청 키로 실행 상태와 저장된 답변을 조회합니다. 질문을 다시 실행하지 않습니다."""
+            try:
+                view = await anyio.to_thread.run_sync(
+                    lambda: services.executions.lookup(request_key, context_id=context_id))
+                return _execution_output(view)
+            except ExecutionValidationError:
+                raise to_tool_error(InvalidArgumentError('request')) from None
+            except Exception as error:
+                raise to_tool_error(error) from None
+            finally:
+                # 작업을 기다리는 동안 취소된 요청에는 두 번째 응답을 보내지 않는다.
+                await anyio.lowlevel.checkpoint()
 
     @server.tool(name='ask_paper', structured_output=True,
         meta={'ui': {'resourceUri': DETAIL_APP_URI}},
@@ -409,6 +464,8 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                         top_k: Annotated[int, Field(strict=True, ge=1, le=20)] = 5) -> AskPaperOutput:
         """기존 context로 질문하고 주장별 한국어·원문 근거를 반환합니다.
 
+        외부 API 호출을 허용한 경우, 검색 후 질문과 선택한 근거의 원문·번역을 OpenAI에 보냅니다.
+        답변 보완·의미 검증이 실행되면 초안이나 주장·인용 원문이 추가 전송될 수 있습니다.
         verification_level의 structural_only는 구조 검사 수준이며 의미 검증 완료를 뜻하지 않습니다.
         model_checked는 실제 인용 원문을 대상으로 모델 기반 의미 검증을 완료했다는 뜻입니다.
         반환된 주장은 의미 검증을 통과했지만, 모델의 오판 가능성이 있으므로 사실성 보증은 아닙니다.
@@ -422,7 +479,7 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         의미 검증에서 일부 주장이 제외되면 partial/semantic_limited로 반환합니다.
         검증 전에 모든 주장이 제외되면 structural_only일 수 있으며, 이것만으로 설정 비활성화를 단정하지 마세요.
         ok도 질문 전체에 대한 답변 완전성 보증은 아닙니다. 제외된 내용을 배경지식으로 보충하지 마세요.
-        focus는 사용자 지정 범위를 유지하세요. pdf_pages는 인쇄 번호가 아닌 물리 PDF 페이지입니다.
+        focus는 사용자 지정 범위를 유지하세요. pdf_pages는 물리 PDF 페이지입니다. 다음 페이지에서 문장 끝을 보충하지 않으려면 strict_pages=true를 지정하세요.
         호스트의 시간 초과나 대기 취소만으로 서버 작업이 중단됐다고 판단하지 마세요.
         서버에서 API 호출과 근거 저장이 계속될 수 있으므로 자동 재호출하지 마세요.
         실행 상태를 확인할 수 없으면 그 한계를 알리고 추가 호출 여부를 사용자에게 확인하세요.
@@ -437,9 +494,10 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             effective_question = standalone_question if standalone_question is not None else question
             pages = tuple(focus.pdf_pages) if focus is not None else ()
             sections = tuple(focus.section_ids) if focus is not None else ()
+            strict = {"strict_pages": True} if focus and focus.strict_pages else {}
             response = await anyio.to_thread.run_sync(lambda: services.answer.answer(
                 effective_question, context_id=context_id, top_k=top_k,
-                pdf_pages=pages, section_ids=sections))
+                pdf_pages=pages, section_ids=sections, **strict))
             # 동기 작업 대기 중 도착한 MCP 취소를 반영해 이미 취소 응답한 요청에 재응답하지 않는다.
             # 실행 중인 스레드의 API 호출·저장을 취소하는 것은 아니다.
             await anyio.lowlevel.checkpoint()
