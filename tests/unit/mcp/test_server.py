@@ -69,6 +69,28 @@ def test_tools_and_annotations():
     assert tools['ask_paper'].inputSchema['$defs']['Focus']['additionalProperties'] is False
 
 
+def test_client_receives_external_transfer_notices_before_tool_calls():
+    server, _, _ = make_server(ingestion=Mock())
+
+    assert '시작하기 전에' in server.instructions
+
+    async def check_notices():
+        async with create_connected_server_and_client_session(server) as client:
+            descriptions = {tool.name: tool.description for tool in (await client.list_tools()).tools}
+            registration = descriptions['add_paper']
+            question = descriptions['ask_paper']
+            for description in (registration, question):
+                assert '외부 API 호출을 허용한 경우' in description
+                assert 'OpenAI' in description
+            assert '백그라운드 번역' in registration
+            assert '논문 전체 원문' in registration
+            assert '검색 후 질문' in question
+            assert '원문·번역' in question
+            assert '추가 전송' in question
+
+    run(check_notices())
+
+
 def test_ask_tool_description_explains_verification_and_partial():
     server, _, _ = make_server()
     tool = next(tool for tool in run(server.list_tools()) if tool.name == 'ask_paper')
