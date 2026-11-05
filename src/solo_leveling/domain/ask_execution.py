@@ -33,6 +33,7 @@ class ExecutionOutcome(str, Enum):
     COMPLETED = 'completed'                    # 같은 키의 결과가 있다(만료 전).
     FAILED = 'failed'                          # 같은 키의 실행이 실패했거나 임대가 만료됐다. 자동 재시작하지 않는다.
     EXPIRED = 'expired'                        # 결과 또는 키 기록의 보존 기간이 지났다. 자동 재실행의 근거가 아니다.
+    STATUS_UNKNOWN = 'status_unknown'          # 실패 기록도 쓸 수 없었다. 같은 키로 조회한다.
     CONTEXT_NOT_FOUND = 'context_not_found'
     RENEWED = 'renewed'                        # 하트비트 갱신됨
     SAVED = 'saved'                            # 결과/실패 기록됨

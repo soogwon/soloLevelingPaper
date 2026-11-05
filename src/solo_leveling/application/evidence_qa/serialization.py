@@ -19,6 +19,22 @@ def serialize_answer_response(response) -> dict:
     }
 
 
+def public_answer_payload(response) -> dict:
+    serialized = serialize_answer_response(response)
+    payload = {
+        'context_id': serialized['context_id'],
+        'verification_level': serialized['verification_level'],
+        **serialized['answer'],
+    }
+    # B의 선택적 상태만 전달한다. 누락·잘못된 값으로 저장 성공이나 미사용을 추정하지 않는다.
+    history = getattr(response, 'verification_history', None)
+    if isinstance(history, dict):
+        status = history.get('status')
+        if isinstance(status, str) and status in ('not_used', 'saved', 'failed'):
+            payload['verification_history'] = {'status': status}
+    return payload
+
+
 def _citation(citation: Citation) -> dict:
     return {
         "evidence_id": citation.evidence_id, "chunk_id": citation.chunk_id,

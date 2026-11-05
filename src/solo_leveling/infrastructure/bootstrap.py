@@ -7,6 +7,7 @@ from solo_leveling.application.evidence_qa.entry import SearchEntryService
 from solo_leveling.application.evidence_qa.evidence import EvidenceService
 from solo_leveling.application.translation.service import TranslationService
 from solo_leveling.domain.translation import TranslationSettings
+from solo_leveling.infrastructure.generation.ask_execution_service import AskExecutionService
 from solo_leveling.infrastructure.embeddings.embedder import embed_texts
 from solo_leveling.infrastructure.generation.evidence_store import SQLiteEvidenceReader, SQLiteEvidenceWriter
 from solo_leveling.infrastructure.generation.openai_generator import OpenAIClaimGenerator, OpenAIGenerationSettings
@@ -23,6 +24,7 @@ class EvidenceQAServices:
     evidence: EvidenceService
     translation: TranslationService
     translation_settings: TranslationSettings
+    executions: AskExecutionService
 
 
 def build_services(db_path: str, chroma_client, *, generation: OpenAIGenerationSettings,
@@ -36,8 +38,9 @@ def build_services(db_path: str, chroma_client, *, generation: OpenAIGenerationS
         semantic = SemanticVerificationService(OpenAISemanticVerifier(generation, verification),
             max_claims=verification.max_claims, max_input_chars=verification.max_input_chars)
     writer = SQLiteEvidenceWriter(db_path)
-    return EvidenceQAServices(search,
-        AnswerService(search, OpenAIClaimGenerator(generation), writer, save_history=writer.save_history,
-                      continuation_reader=retriever, semantic_verification=semantic),
+    answer = AnswerService(search, OpenAIClaimGenerator(generation), writer, save_history=writer.save_history,
+                      continuation_reader=retriever, semantic_verification=semantic)
+    return EvidenceQAServices(search, answer,
         EvidenceService(SQLiteEvidenceReader(db_path)),
-        TranslationService(OpenAITranslationProvider(translation)), translation.translation_settings)
+        TranslationService(OpenAITranslationProvider(translation)), translation.translation_settings,
+        AskExecutionService(db_path, answer))

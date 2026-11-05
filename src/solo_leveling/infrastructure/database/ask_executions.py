@@ -15,6 +15,7 @@
 import hmac
 import json
 import re
+import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -25,6 +26,9 @@ from solo_leveling.domain.ask_execution import (
     ExecutionResult, ExecutionState, ExecutionValidationError, ExecutionView, PurgePlan, PurgeResult,
     check_failure_code, check_text)
 from solo_leveling.domain.models import RequestConflictError
+from solo_leveling.infrastructure.database.repository import insert_evidences
+from solo_leveling.infrastructure.database.verification_history import ensure_verification_history
+from solo_leveling.domain.verification_history import validate_record
 from solo_leveling.infrastructure.database.schema import get_connection
 
 
@@ -144,7 +148,7 @@ def heartbeat_execution(db_path: str, request_key: str, owner_token: str,
 
 
 def complete_execution(db_path: str, request_key: str, owner_token: str, result_json: str,
-                       now: Optional[datetime] = None) -> ExecutionResult:
+                       now: Optional[datetime] = None, *, evidences=(), history=None) -> ExecutionResult:
     """결과를 저장하고 실행을 끝낸다. 임대가 만료됐거나 토큰이 다르면 LEASE_LOST로 거부한다(늦은 저장 차단)."""
     check_text(request_key, 'request_key')
     check_text(owner_token, 'owner_token')
@@ -161,6 +165,24 @@ def complete_execution(db_path: str, request_key: str, owner_token: str, result_
         row, code = _owned_running(conn, request_key, owner_token, stamp)
         if row is None:
             return ExecutionResult(code)
+        if evidences:
+            insert_evidences(conn, row['context_id'], evidences)
+        if history is not None:
+            if history.context_id != row['context_id']:
+                raise ExecutionValidationError('history context')
+            conn.execute('SAVEPOINT ask_history')
+            try:
+                validate_record(history)
+                saved = ensure_verification_history(conn, history)
+            except (sqlite3.Error, ValueError):
+                conn.execute('ROLLBACK TO ask_history')
+                saved = False
+            conn.execute('RELEASE ask_history')
+            payload = json.loads(result_json)
+            payload['verification_history'] = {'status': 'saved' if saved else 'failed'}
+            result_json = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+            if len(result_json.encode('utf-8')) > MAX_RESULT_BYTES:
+                raise ExecutionValidationError('result_json')
         conn.execute("UPDATE ask_executions SET status='completed', result_json=?, finished_at=?, "
                      'result_expires_at=? WHERE request_key=?',
                      (result_json, stamp, _ts(moment + timedelta(days=RESULT_RETENTION_DAYS)), request_key))
