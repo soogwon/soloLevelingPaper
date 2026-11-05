@@ -282,13 +282,13 @@ def test_normal_non_ascii_position_still_works(env):
     assert decode_cursor(cursor, 'ctx', None, None) == ('2026-01-01T00:00:00+00:00', '메모-가')
 
 
-def bulk_annotations(db, ctx, total, per_second=1):
+def bulk_annotations(db, ctx, total, per_second=1, *, notes_only=False):
     with closing(get_connection(db)) as conn, conn:
         conn.execute('PRAGMA foreign_keys = OFF')
         conn.executemany(
             'INSERT INTO annotations(annotation_id, context_id, kind, body, step, revision, created_at, updated_at) '
             "VALUES (?, ?, ?, '', ?, 1, ?, ?)",
-            [(f'b{i:05d}', ctx, ('note', 'highlight')[i % 2], ('preview', 'review', None)[i % 3],
+            [(f'b{i:05d}', ctx, 'note' if notes_only else ('note', 'highlight')[i % 2], ('preview', 'review', None)[i % 3],
               f'2026-01-01T{(i // per_second) // 3600:02d}:{((i // per_second) % 3600) // 60:02d}:{(i // per_second) % 60:02d}+00:00',
               '2026-01-01T00:00:00+00:00') for i in range(total)])
 
@@ -314,9 +314,19 @@ def test_deep_page_starts_at_the_cursor_in_the_index(env, step, kind):
     plan_early, work_early, n_early = page_work(db, ctx, step, kind, 'b00010')
     plan_deep, work_deep, n_deep = page_work(db, ctx, step, kind, 'b05400')
     for plan in (plan_early, plan_deep):
-        assert 'created_at>' in plan and 'idx_annotations_page' in plan and 'TEMP B-TREE' not in plan, plan
+        assert 'SEARCH' in plan and 'idx_annotations_page' in plan and 'TEMP B-TREE' not in plan, plan
     assert n_early == 21 and n_deep >= 1
     assert work_deep < work_early * 3 and work_deep < 3000, (work_early, work_deep)   # 위치와 거의 무관하다
+
+
+@pytest.mark.parametrize('step, kind', [(None, None), ('review', 'note')])
+def test_deep_cursor_inside_one_timestamp_has_bounded_work(env, step, kind):
+    db, ctx = env
+    bulk_annotations(db, ctx, 10_000, per_second=10_000, notes_only=True)
+    _, early, early_rows = page_work(db, ctx, step, kind, 'b00010')
+    _, deep, deep_rows = page_work(db, ctx, step, kind, 'b09001')
+    assert early_rows == deep_rows == 21  # 요청 20건과 다음 페이지 확인용 1건
+    assert deep < 3 * early, (early, deep)
 
 
 def test_same_timestamp_boundaries_have_no_gap_or_duplicate(env):
