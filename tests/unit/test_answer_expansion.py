@@ -14,6 +14,7 @@ from solo_leveling.domain.evidence_qa import (
     GeneratedAnswerDraft, GeneratedClaim, RetrievedChunk, RetrievalMethod, SearchResult, SearchScope,
 )
 from solo_leveling.domain.models import Chunk
+from solo_leveling.diagnostics import diagnostic_verbosity
 
 
 @pytest.fixture
@@ -40,7 +41,9 @@ def setup():
 
 def test_expands_once_with_same_context_and_scope_and_saves_only_final(setup, capsys):
     service, search, generator, writer, first, second, inputs = setup
-    response = service.answer('질문', version_id='v', pdf_pages=(1,), section_ids=('method',))
+    # 후보 ID 추적을 검사하는 이 합성 테스트에서만 상세 추적을 켠다.
+    with diagnostic_verbosity(raw=True):
+        response = service.answer('질문', version_id='v', pdf_pages=(1,), section_ids=('method',))
     assert [call.kwargs['top_k'] for call in search.call_args_list] == [5, 10]
     assert search.call_args_list[1].kwargs == dict(context_id='ctx', version_id='v', top_k=10,
                                                  pdf_pages=(1,), section_ids=('method',))

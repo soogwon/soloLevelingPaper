@@ -9,6 +9,9 @@ import pytest
 from tests.integration.test_scoped_search import setup_search
 from solo_leveling.application.evidence_qa.answer import AnswerService
 from solo_leveling.application.evidence_qa.entry import SearchEntryService
+from solo_leveling.application.evidence_qa.semantic import SemanticVerificationService
+from solo_leveling.domain.semantic_verification import SemanticReason, SemanticVerdict
+from solo_leveling.infrastructure.generation.fake_semantic_verifier import FakeSemanticVerifier
 from solo_leveling.domain.evidence_qa import GeneratedAnswerDraft, GeneratedClaim
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.database.schema import get_connection
@@ -60,3 +63,36 @@ def test_cross_page_candidate_is_saved_and_read_with_own_page(setup_search):
     stored = repo.get_evidences(db, 'ctx', ids)
     assert {(e.chunk_id, e.pdf_page) for e in stored.evidence} == {('a', 6), ('b', 7)}
     assert len(response.search.items) == 1
+
+
+@pytest.mark.parametrize('strict', [False, True])
+def test_page_completion_through_real_stores(setup_search, strict):
+    db, _, retriever, _, _ = setup_search
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute("UPDATE chunks SET original_text='Faster when the sequence', pdf_page=6 WHERE chunk_id='a'")
+        conn.execute("UPDATE chunks SET original_text='length n is below d.Other claim.', pdf_page=7, section_id='intro' WHERE chunk_id='b'")
+    def generate(question, evidence):
+        assert [e.chunk_id for e in evidence] == (['a'] if strict else ['a', 'b'])
+        if strict:
+            return GeneratedAnswerDraft(())
+        assert evidence[1].original_text == 'length n is below d.'
+        assert evidence[1].text_ko is None
+        return GeneratedAnswerDraft((GeneratedClaim('n이 d보다 작을 때 더 빠르다.', tuple(e.evidence_id for e in evidence)),))
+    service = AnswerService(SearchEntryService(SQLiteContextReader(db), retriever),
+        SimpleNamespace(generate_claims=generate), SQLiteEvidenceWriter(db), continuation_reader=retriever)
+    service.semantic_verification = SemanticVerificationService(FakeSemanticVerifier([
+        (SemanticVerdict.SUPPORTED, SemanticReason.FULL_SUPPORT)]))
+    service.save_history = SQLiteEvidenceWriter(db).save_history
+    response = service.answer('조건은?', context_id='ctx', top_k=1, pdf_pages=(6,), strict_pages=strict)
+    assert [i.chunk.pdf_page for i in response.search.items] == [6]
+    if not strict:
+        assert response.verification_history == {'status': 'saved'}
+        stored = repo.get_evidences(db, 'ctx', [c.evidence_id for c in response.result.citations])
+        following = next(e for e in stored.evidence if e.chunk_id == 'b')
+        assert following.pdf_page == 7
+        assert following.quote_original == 'length n is below d.'
+        assert following.quote_ko is None
+    with closing(get_connection(db)) as conn:
+        row = conn.execute("SELECT original_text, text FROM chunks WHERE chunk_id='b'").fetchone()
+        assert row['original_text'] == 'length n is below d.Other claim.'
+        assert row['text'] == '병렬 처리'

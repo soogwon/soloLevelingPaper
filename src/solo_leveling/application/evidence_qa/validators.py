@@ -5,7 +5,9 @@ The storage adapter must verify parse_revision_id belongs to version_id and that
 the selected embedding set uses compatible models and preprocessing.
 """
 
+from dataclasses import replace
 from solo_leveling.domain.models import Chunk, Evidence
+from .page_completion import completion_excerpt
 from solo_leveling.domain.evidence_qa import (
     AnswerResult, AnswerStatus, Citation, GetEvidenceResult, SearchResult,
     SearchScope, optional_text, positive_int, require_text,
@@ -38,8 +40,15 @@ def validate_search_result(result: SearchResult) -> None:
     ids = [chunk.chunk_id for chunk in result.candidate_chunks]
     if len(ids) != len(set(ids)):
         raise ValueError('근거 후보의 청크 ID가 중복됩니다.')
-    for chunk in result.candidate_chunks:
-        validate_chunk(chunk, result.scope)
+    for item in result.items:
+        validate_chunk(item.chunk, result.scope)
+    for chunk in result.supplemental_chunks:
+        validate_candidate(chunk, result)
+
+
+def validate_candidate(chunk: Chunk, search: SearchResult) -> None:
+    excerpt = completion_excerpt(search, chunk)
+    validate_chunk(chunk, replace(search.scope, pdf_pages=()) if excerpt else search.scope)
 
 
 def validate_answer_result(result: AnswerResult) -> None:
@@ -67,11 +76,14 @@ def validate_citation(citation: Citation, search: SearchResult) -> None:
     if not candidates:
         raise ValueError("citation references a chunk outside search results")
     for chunk in candidates:
-        validate_chunk(chunk, scope)
+        validate_candidate(chunk, search)
         if (citation.pdf_page, citation.printed_page_label) != (chunk.pdf_page, chunk.printed_page_label):
             raise ValueError("citation page differs from chunk")
         if citation.quote_original not in chunk.original_text:
             raise ValueError("original quote is absent from chunk")
+        excerpt = completion_excerpt(search, chunk)
+        if excerpt and (citation.quote_original not in excerpt or citation.quote_ko is not None):
+            raise ValueError('페이지 밖 근거는 연결 문장의 원문 발췌만 허용합니다.')
         if citation.quote_ko is not None:
             if scope.translation_revision_id is None or chunk.text is None or citation.quote_ko not in chunk.text:
                 raise ValueError("translated quote is absent or translation is not pinned")

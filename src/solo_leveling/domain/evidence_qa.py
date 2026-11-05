@@ -97,6 +97,8 @@ class SearchResult:
     items: tuple[RetrievedChunk, ...]
     # 검색 순위와 분리된 문맥 보충 청크다. 점수·순위를 임의로 부여하지 않는다.
     supplemental_chunks: tuple[Chunk, ...] = ()
+    # 일반 검색 범위는 유지하면서 다음 페이지의 문장 끝부분만 보충할 수 있다.
+    allow_page_completion: bool = False
 
     def __post_init__(self) -> None:
         require_text(self.query, "query")
@@ -105,6 +107,8 @@ class SearchResult:
         optional_text(self.embedding_set_id, "embedding_set_id")
         require_tuple(self.items, RetrievedChunk, "items")
         require_tuple(self.supplemental_chunks, Chunk, "supplemental_chunks")
+        if type(self.allow_page_completion) is not bool:
+            raise ValueError('페이지 문장 보충 설정은 불리언이어야 합니다.')
 
     @property
     def candidate_chunks(self) -> tuple[Chunk, ...]:

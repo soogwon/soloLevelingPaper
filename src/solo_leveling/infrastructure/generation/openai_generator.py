@@ -184,7 +184,8 @@ class OpenAIClaimGenerator:
         for item in evidence:
             if not isinstance(item, EvidenceInput):
                 raise ValueError('올바른 생성 근거가 필요합니다.')
-            require_text(item.text_ko, 'text_ko')
+            if item.text_ko is not None or item.follows_evidence_id is None:
+                require_text(item.text_ko, 'text_ko')
             if item.evidence_id in ids:
                 raise ValueError('입력 근거 ID가 중복됩니다.')
             ids.add(item.evidence_id)

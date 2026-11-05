@@ -5,12 +5,13 @@ from dataclasses import replace
 from solo_leveling.domain.evidence_qa import SearchResult, positive_int
 from .fragments import fragment_flags, evidence_body, sentence_ends
 from .ports import ContinuationReader
-from .validators import validate_chunk, validate_search_result
+from .validators import validate_candidate, validate_search_result
 
 
 def supplement_continuations(search: SearchResult, reader: ContinuationReader,
-                            limit: int = 20, *, include_overlapping_neighbors: bool = False) -> SearchResult:
-    """검색 순위는 유지하고 범위 안의 다음 청크만 독립 후보로 추가한다."""
+                            limit: int = 20, *, include_overlapping_neighbors: bool = False,
+                            allow_page_completion: bool = True) -> SearchResult:
+    """검색 순위를 유지하고 다음 청크를 추가한다. 페이지 밖은 문장 완성에 한정한다."""
     positive_int(limit, 'max_supplemental_chunks')
     validate_search_result(search)
     if search.supplemental_chunks:
@@ -24,9 +25,10 @@ def supplement_continuations(search: SearchResult, reader: ContinuationReader,
         if include_overlapping_neighbors and index not in incomplete)
     if not indices:
         return search
+    search = replace(search, allow_page_completion=allow_page_completion)
     by_index = {}
     for chunk in reader.following_chunks(search, indices):
-        validate_chunk(chunk, search.scope)
+        validate_candidate(chunk, search)
         if chunk.chunk_index not in indices or chunk.chunk_index in by_index:
             raise ValueError('보충 청크 번호가 요청과 다르거나 중복됩니다.')
         by_index[chunk.chunk_index] = chunk

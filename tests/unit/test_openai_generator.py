@@ -67,16 +67,18 @@ def test_request_contract_and_normal_conversion(setup):
     response.close.assert_called_once()
 
 
-def test_continuation_relation_is_sent_to_provider(setup):
+@pytest.mark.parametrize('translation', ['조건 뒤', None])
+def test_continuation_relation_is_sent_to_provider(setup, translation):
     generator, _, post, _ = setup
     evidence = (
         EvidenceInput('first', 'c1', '조건 앞', 'Faster when', None, 6, False, True),
-        EvidenceInput('next', 'c2', '조건 뒤', 'the sequence is short.', None, 7,
+        EvidenceInput('next', 'c2', translation, 'the sequence is short.', None, 7,
                       True, False, 'first'),
     )
     generator.generate_claims('조건은?', evidence)
     payload = post.call_args.kwargs['json']
     supplied = json.loads(payload['input'][0]['content'])['evidence']
+    assert supplied[1]['text_ko'] == translation
     assert supplied[1]['follows_evidence_id'] == 'first'
     assert '해당 근거 ID들을 모두 인용하라' in payload['instructions']
 
