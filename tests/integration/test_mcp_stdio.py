@@ -36,6 +36,8 @@ def test_stdio_server_lists_tools(tmp_path):
                         'get_learning_dashboard',
                         'get_reading_questions', 'save_reading_answer', 'get_reading_comparison',
                         'get_quiz', 'submit_quiz', 'get_quiz_attempt', 'list_quiz_attempts',
+                        'create_annotation', 'get_annotation', 'list_annotations',
+                        'update_annotation', 'delete_annotation',
                         'get_quiz_scores', 'review_quiz_attempt',
                     }
                     ask = next(tool for tool in tools.tools if tool.name == 'ask_paper')
