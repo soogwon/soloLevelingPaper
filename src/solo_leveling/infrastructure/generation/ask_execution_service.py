@@ -50,16 +50,21 @@ class AskExecutionService:
             return ExecutionView(ExecutionState.NOT_FOUND)
         return view
 
-    def run(self, request_key, question, *, context_id, top_k=5, pdf_pages=(), section_ids=()):
+    def run(self, request_key, question, *, context_id, top_k=5, pdf_pages=(), section_ids=(), strict_pages=False):
         """Use the effective question. Return a token-free result for both first call and replay."""
         try:
             validate_search_input(question, top_k, pdf_pages, section_ids)
+            if type(strict_pages) is not bool:
+                raise ValueError('strict_pages must be bool')
             if top_k > 20:
                 raise ValueError('top_k exceeds 20')
         except ValueError as error:
             raise InvalidArgumentError(str(error)) from None
         scope = dict(context_id=context_id, top_k=top_k, pdf_pages=tuple(sorted(pdf_pages)),
                      section_ids=tuple(sorted(section_ids)))
+        # False는 기존 기본 동작과 동일하다. 기존 v1 키를 재실행하지 않도록 해시를 보존한다.
+        if strict_pages:
+            scope['strict_pages'] = True
         data = json.dumps(dict(question=question, **scope), sort_keys=True, separators=(',', ':'))
         digest = 'v1:' + hashlib.sha256(data.encode('ascii')).hexdigest()
         started = store.begin_execution(self.db_path, request_key, digest, context_id)

@@ -422,7 +422,8 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                 result = await anyio.to_thread.run_sync(lambda: services.executions.run(
                     request_key, standalone_question if standalone_question is not None else question,
                     context_id=context_id, top_k=top_k, pdf_pages=tuple(focus.pdf_pages) if focus else (),
-                    section_ids=tuple(focus.section_ids) if focus else ()))
+                    section_ids=tuple(focus.section_ids) if focus else (),
+                    strict_pages=focus.strict_pages if focus else False))
                 if result.view is not None:
                     return _execution_output(result.view)
                 state = ('not_found' if result.outcome == ExecutionOutcome.CONTEXT_NOT_FOUND

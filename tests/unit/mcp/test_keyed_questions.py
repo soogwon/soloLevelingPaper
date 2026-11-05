@@ -8,6 +8,26 @@ from solo_leveling.interfaces.mcp.server import create_server, MCPServices
 from tests.unit.test_ask_execution_service import env, setup_db
 
 
+def test_mcp_forwards_strict_pages_without_coercion():
+    from solo_leveling.domain.ask_execution import ExecutionResult, ExecutionOutcome
+    executions = Mock()
+    executions.run.return_value = ExecutionResult(ExecutionOutcome.CONTEXT_NOT_FOUND)
+    server = create_server(MCPServices(Mock(), Mock(), executions=executions))
+    async def scenario():
+        async with create_connected_server_and_client_session(server) as client:
+            args = {'context_id': 'ctx', 'request_key': 'key', 'question': '질문',
+                    'focus': {'pdf_pages': [6], 'strict_pages': True}}
+            result = await client.call_tool('submit_paper_question', args)
+            assert not result.isError
+            assert executions.run.call_args.kwargs['strict_pages'] is True
+            assert executions.run.call_args.kwargs['pdf_pages'] == (6,)
+            args['focus']['strict_pages'] = 'true'
+            invalid = await client.call_tool('submit_paper_question', args)
+            assert invalid.isError
+            assert executions.run.call_count == 1
+    asyncio.run(scenario())
+
+
 def test_lookup_while_running_and_after_reconnect(env):
     _, ctx, executions, entered, release, calls = env
     server = create_server(MCPServices(Mock(), Mock(), executions=executions))
