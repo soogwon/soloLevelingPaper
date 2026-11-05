@@ -7,6 +7,11 @@
 공통 타입·종료 JSON 구문·기간 계산의 구현 범위와 한계는
 [최신 계약 기록](log-retention-contract.md#2026-11-03-삭제-없는-1차-구현)을 참조한다.
 
+2026-11-05: POSIX 기본·상세 MCP 실행기는 새 safe/detail 파일과 종료 JSON을 생성한다.
+지연 작업 정리·stderr 복원·파일 닫기 뒤에만 게시하며 실패한 묶음은 종료 미확인 상태로 남는다.
+Windows 및 원본·스택 수집은 기존 방식이다. [구현과 검증 범위](log-retention-contract.md)를 참조한다.
+미리보기의 activity는 계속 unknown이며 종료 JSON을 정리 권한으로 사용하지 않는다.
+
 ## 현재 가능한 작업
 
 ```powershell

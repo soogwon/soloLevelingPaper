@@ -75,7 +75,7 @@ raise SystemExit(main(sys.argv[1:]))
     assert result.returncode == 1
     assert result.stdout.strip() == 'MCP_STDOUT_UNCHANGED'
     assert result.stderr == ''
-    text = next(tmp_path.glob('mcp-*.log')).read_text(encoding='utf-8')
+    text = next(tmp_path.glob('*.log')).read_text(encoding='utf-8')
     assert ('SYNTHETIC_PRIVATE_TEXT' in text) is raw
     assert ('SYNTHETIC_PRIVATE_KEY' in text) is raw
     assert 'SYNTHETIC_EXCEPTION_SECRET' not in text
