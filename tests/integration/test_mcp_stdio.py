@@ -31,7 +31,7 @@ def test_stdio_server_lists_tools(tmp_path):
                     tools = await session.list_tools()
                     assert {tool.name for tool in tools.tools} == {
                         'add_paper', 'get_paper_status', 'start_learning',
-                        'ask_paper', 'get_evidence',
+                        'ask_paper', 'get_evidence', 'submit_paper_question', 'get_paper_question_status',
                         'list_paper_jobs', 'get_paper_detail',
                         'get_learning_dashboard',
                         'get_reading_questions', 'save_reading_answer', 'get_reading_comparison',

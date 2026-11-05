@@ -66,6 +66,43 @@ def test_concurrent_request_replays_same_public_result(env):
     assert len(repository.get_evidences(db, ctx, ids).evidence) == 2
 
 
+def test_strict_pages_is_forwarded_and_conflicts_without_reexecution(env, monkeypatch):
+    _, ctx, runner, _, release, calls = env
+    release.set()
+    seen = []
+    original = AnswerService.answer
+    def answer(self, *args, **kwargs):
+        seen.append(kwargs.get('strict_pages', False))
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(AnswerService, 'answer', answer)
+    first = runner.run('strict', '질문', context_id=ctx, pdf_pages=(1, 2), strict_pages=True)
+    assert first.outcome == O.COMPLETED
+    assert runner.run('strict', '질문', context_id=ctx, pdf_pages=(1, 2), strict_pages=True) == first
+    with pytest.raises(RequestConflictError):
+        runner.run('strict', '질문', context_id=ctx, pdf_pages=(1, 2), strict_pages=False)
+    assert seen == [True] and len(calls) == 1
+
+
+def test_explicit_false_preserves_old_key_hash(env):
+    _, ctx, runner, _, release, calls = env
+    release.set()
+    first = runner.run('legacy', '질문', context_id=ctx)
+    assert runner.run('legacy', '질문', context_id=ctx, strict_pages=False) == first
+    with pytest.raises(RequestConflictError):
+        runner.run('legacy', '질문', context_id=ctx, strict_pages=True)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('value', [1, 'true', None])
+def test_bad_strict_pages_does_not_claim_key(env, value):
+    from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
+    _, ctx, runner, _, _, calls = env
+    with pytest.raises(InvalidArgumentError):
+        runner.run('invalid', '질문', context_id=ctx, strict_pages=value)
+    assert runner.lookup('invalid', context_id=ctx).state == S.NOT_FOUND
+    assert calls == []
+
+
 def test_expired_while_searching_cannot_save(env):
     db, ctx, runner, entered, release, _ = env
     with ThreadPoolExecutor() as pool:

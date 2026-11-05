@@ -155,6 +155,7 @@ def build_runtime_server(values: Mapping[str, str]):
                         report('RUNTIME_SHUTDOWN_DEFERRED')
 
         server = create_server(MCPServices(
+            executions=gate.wrap(services.executions),
             answer=gate.wrap(services.answer), evidence=gate.wrap(services.evidence),
             ingestion=gate.wrap(ingestion), contexts=gate.wrap(services.search.contexts),
             detail=gate.wrap(PaperDetailService(SQLitePaperDetailReader(str(paths.db_path)))),
