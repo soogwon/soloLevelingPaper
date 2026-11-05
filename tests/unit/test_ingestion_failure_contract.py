@@ -89,3 +89,39 @@ def test_only_defined_translation_failure_codes_pass_through():
         assert result['failure_code'] == code.value and result['outcome'] == 'partial'
     for bad in ('PROVIDER_UNAVAILABLE', 'provider-unavailable', 'provider_unavailable ', '', 'a:b'):
         assert describe_outcome('ready', 'index', [f'translation_failed:c1:{bad}'])['failure_code'] == 'translation_failed'
+
+
+# ── 부분 번역 실패 기록 검증(#180): 청크 ID·필드 수·코드를 엄격히 검사한다 ─────────────
+@pytest.mark.parametrize('record', [
+    f'translation_failed:{CHUNK}:provider_unavailable:extra',    # 필드가 네 개
+    f'translation_failed:{CHUNK}:other:provider_unavailable',    # 마지막 필드만 유효한 코드
+    'translation_failed::provider_unavailable',                  # 빈 청크 ID
+    f'translation_failed:{CHUNK}:',                              # 빈 코드
+    'translation_failed:a b:provider_unavailable',               # 청크 ID에 공백
+    'translation_failed:C:/Users/x:provider_unavailable',        # 청크 ID에 경로 모양
+    f'translation_failed:{CHUNK}:provider_unavailable ',         # 끝 공백
+    f'translation_failed:{CHUNK}:provider_unavailable\n',        # 끝 줄바꿈
+    f'translation_failed:{CHUNK}:Provider_Unavailable',          # 대소문자가 다른 코드
+    f'translation_failed:{"x" * 65}:provider_unavailable',       # 너무 긴 청크 ID
+    'translation_failed:한글청크:provider_unavailable',          # 허용 문자 밖
+    'translation_failed:',                                       # 접두어만
+])
+def test_malformed_partial_record_is_replaced_by_the_fixed_code(record):
+    result = describe_outcome('ready', 'index', [record])
+    assert (result['outcome'], result['failure_code']) == ('partial', 'translation_failed')
+
+
+def test_malformed_first_record_is_not_skipped_for_a_later_valid_one():
+    result = describe_outcome('ready', 'index', [
+        f'translation_failed:{CHUNK}:provider_unavailable:extra', f'translation_failed:{CHUNK}:empty_translation'])
+    assert result['failure_code'] == 'translation_failed'
+
+
+@pytest.mark.parametrize('code', ['provider_unavailable', 'empty_translation'])
+def test_well_formed_record_keeps_its_registered_code(code):
+    assert describe_outcome('ready', 'index', [f'translation_failed:{CHUNK}:{code}'])['failure_code'] == code
+
+
+@pytest.mark.parametrize('bad', [None, 5, b'translation_failed:x:provider_unavailable', ['translation_failed']])
+def test_non_string_limitation_items_are_ignored(bad):
+    assert describe_outcome('ready', 'index', [bad])['outcome'] == 'complete'
