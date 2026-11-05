@@ -28,6 +28,7 @@ from solo_leveling.infrastructure.embeddings.embedder import (
 )
 from solo_leveling.infrastructure.embeddings.process_embedder import EmbeddingProcessError
 from solo_leveling.infrastructure.parsing.chunker import chunk_pages
+from solo_leveling.infrastructure.storage.pdf_store import PdfStore
 from solo_leveling.infrastructure.parsing.pdf_extractor import (
     extract_pages, ExtractedPage, PdfExtractionError,
 )
@@ -35,6 +36,9 @@ from solo_leveling.infrastructure.storage.vector_store import (
     get_client, upsert_chunk_embeddings, verify_chunk_embeddings, delete_by_embedding_set,
     close_client, ChromaCloseResult,
 )
+
+# MCP 런타임의 MAX_UPLOAD_BYTES 기본값과 같다.
+DEFAULT_MAX_PDF_BYTES = 31457280
 
 
 def _release_owned_client(client) -> None:
@@ -322,10 +326,10 @@ def register_and_ingest(
 
 
 def register_and_ingest_url(
-    db_path: str, chroma_dir: str, url: str, tmp_pdf_dir: str,
+    db_path: str, chroma_dir: str, url: str, pdf_dir: str,
     paper_id: Optional[str] = None, embedding_model: str = DEFAULT_MODEL_NAME, *,
     translation_service: TranslationService, translation_settings: TranslationSettings,
-    chroma_client=None,
+    chroma_client=None, max_pdf_bytes: int = DEFAULT_MAX_PDF_BYTES,
 ) -> dict:
     """URL로 논문을 등록한다(M1 기능 ①의 URL 부분).
 
@@ -336,7 +340,9 @@ def register_and_ingest_url(
     주의: HTML로 등록된 논문은 pdf_page가 항상 1이고 printed_page_label도 항상
     None이다 — 실제 인쇄 페이지 개념이 없기 때문이다.
 
-    tmp_pdf_dir: PDF로 판별된 경우 다운로드한 바이트를 저장할 임시 폴더.
+    pdf_dir: PDF로 판별된 경우 내려받은 바이트를 보관할 영구 PDF 저장소(MCP의
+    PDF_SUBDIR와 같은 폴더). 로컬 등록과 같은 PdfStore를 거쳐 `<sha256>.pdf`로
+    저장하므로 같은 내용은 한 파일만 남고 임시 파일이 쌓이지 않는다.
     URL 사설망 차단은 infrastructure/parsing/url_ingest.py에서 처리하며, 이는
     최소 방어선이다 — 정식 네트워크 정책은 C 담당 영역과 통합이 필요하다.
     """
@@ -345,12 +351,9 @@ def register_and_ingest_url(
     kind, response = fetch_and_classify(url)
 
     if kind == 'pdf':
-        Path(tmp_pdf_dir).mkdir(parents=True, exist_ok=True)
-        tmp_path = Path(tmp_pdf_dir) / f'{uuid.uuid4()}.pdf'
-        with open(tmp_path, 'wb') as f:
-            f.write(response.content)
+        stored = PdfStore(Path(pdf_dir), max_pdf_bytes).save_bytes(response.content)
         result = register_and_ingest(
-            db_path, chroma_dir, str(tmp_path),
+            db_path, chroma_dir, str(stored.path),
             original_filename=Path(url).name or 'downloaded.pdf', paper_id=paper_id,
             embedding_model=embedding_model,
             translation_service=translation_service, translation_settings=translation_settings,

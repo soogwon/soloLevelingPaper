@@ -412,3 +412,81 @@ def test_same_html_url_without_paper_id_is_reused(tmp_path, monkeypatch):
     assert first["reused_existing"] is False
     assert second["reused_existing"] is True
     assert second["version_id"] == first["version_id"]
+
+
+def _stub_pdf_url(monkeypatch, content, url_kind='pdf'):
+    from types import SimpleNamespace
+    from solo_leveling.infrastructure.parsing import url_ingest
+
+    response = SimpleNamespace(content=content, text='')
+    monkeypatch.setattr(url_ingest, 'fetch_and_classify', lambda url: (url_kind, response))
+
+
+def _url_kwargs():
+    return dict(
+        translation_service=TranslationService(FixtureProvider()),
+        translation_settings=TranslationSettings('fake', 'fixture', 'prompt1'),
+    )
+
+
+def test_url_pdf_is_kept_in_hash_named_managed_store(tmp_path, monkeypatch):
+    """URL PDF도 로컬 등록과 같은 `<sha256>.pdf` 영구 저장소를 쓰고 임시 파일을 남기지 않는다."""
+    from solo_leveling.workers.ingestion import register_and_ingest_url
+
+    pdf_path, db_path, chroma_dir = _write_papers(tmp_path)
+    content = Path(pdf_path).read_bytes()
+    _stub_pdf_url(monkeypatch, content)
+    pdf_dir = tmp_path / 'pdfs'
+
+    result = register_and_ingest_url(
+        db_path, chroma_dir, 'https://example.org/a.pdf', str(pdf_dir), **_url_kwargs())
+
+    assert result['source_kind'] == 'url_pdf'
+    assert sorted(p.name for p in pdf_dir.iterdir()) == [f'{compute_file_hash(pdf_path)}.pdf']
+    assert (pdf_dir / f'{compute_file_hash(pdf_path)}.pdf').read_bytes() == content
+
+
+def test_same_url_pdf_twice_keeps_one_file_and_reuses_registration(tmp_path, monkeypatch):
+    from solo_leveling.workers.ingestion import register_and_ingest_url
+
+    pdf_path, db_path, chroma_dir = _write_papers(tmp_path)
+    _stub_pdf_url(monkeypatch, Path(pdf_path).read_bytes())
+    pdf_dir = tmp_path / 'pdfs'
+
+    first = register_and_ingest_url(
+        db_path, chroma_dir, 'https://example.org/a.pdf', str(pdf_dir), **_url_kwargs())
+    second = register_and_ingest_url(
+        db_path, chroma_dir, 'https://example.org/b.pdf', str(pdf_dir), **_url_kwargs())
+
+    assert len(list(pdf_dir.iterdir())) == 1
+    assert second['reused_existing'] is True
+    assert second['version_id'] == first['version_id']
+
+
+def test_url_pdf_matches_local_registration_of_same_bytes(tmp_path, monkeypatch):
+    """같은 바이트면 URL로 등록해도 로컬 등록과 같은 논문으로 취급된다."""
+    from solo_leveling.workers.ingestion import register_and_ingest_url
+
+    pdf_path, db_path, chroma_dir = _write_papers(tmp_path)
+    _stub_pdf_url(monkeypatch, Path(pdf_path).read_bytes())
+
+    from_url = register_and_ingest_url(
+        db_path, chroma_dir, 'https://example.org/a.pdf', str(tmp_path / 'pdfs'), **_url_kwargs())
+    local = register_and_ingest(db_path, chroma_dir, pdf_path)
+
+    assert local['reused_existing'] is True
+    assert local['version_id'] == from_url['version_id']
+
+
+def test_url_pdf_rejects_oversize_and_bad_header_without_leftovers(tmp_path, monkeypatch):
+    from solo_leveling.infrastructure.storage.pdf_store import UnsupportedDocumentError
+    from solo_leveling.workers.ingestion import register_and_ingest_url
+
+    _, db_path, chroma_dir = _write_papers(tmp_path)
+    pdf_dir = tmp_path / 'pdfs'
+    for content, limit in ((b'%PDF-1.4 ' + b'x' * 100, 50), (b'<html>not a pdf</html>', 1000)):
+        _stub_pdf_url(monkeypatch, content)
+        with pytest.raises(UnsupportedDocumentError):
+            register_and_ingest_url(db_path, chroma_dir, 'https://example.org/a.pdf',
+                                    str(pdf_dir), max_pdf_bytes=limit, **_url_kwargs())
+    assert not pdf_dir.exists() or list(pdf_dir.iterdir()) == []
