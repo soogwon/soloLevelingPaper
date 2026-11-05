@@ -1,5 +1,21 @@
 # #119 C 요청 키 복구 계약 검토
 
+## 복원 오류 회귀 검증
+
+키 파일은 문자열 두 개가 담긴 배열인지 확인한 뒤 UUID를 검사한다.
+잘못된 파일은 상태 조회 전에 거부한다. SQLite 조회 오류와 카드가 받은 MCP 오류 응답은
+`상태 확인 불가`로 표시한다.
+
+```sh
+PYTHONPATH=src python -m pytest mini-projects/c-request-key tests/unit/test_ask_executions.py tests/unit/mcp/test_ask_cancellation.py -q
+node --test mini-projects/c-request-key/desktop_card.test.mjs
+```
+
+합성 응답 유실 뒤 파일 손상·없는 키·DB 조회 오류를 주입하고, 정상 파일 복원 후에도
+실행 기록이 completed 한 건인지 확인한다. 오류 이후 begin/complete 추가 호출은 각각
+0회여야 한다. 카드 검증은 MCP 오류 응답과 호출 예외를 각각 주입하고 고정 문구 및
+이후 정상 복원을 확인한다. 아래 macOS Desktop 실측과 별도의 자동 회귀 검사다.
+
 2026-11-03 · 기준 main `2230865` · macOS · Python 3.12
 
 ## 결론
@@ -95,3 +111,21 @@ M1에서는 계약 검토까지, 영속 실행·조회 도구는 공동 후속 �
 이번 결과만으로 #119를 종료하지 않는다. 실제 API 호출이나 Desktop 설정 변경은 수행하지 않았다.
 검토 내용은 [#119 C 검토 댓글](https://github.com/soogwon/soloLevelingPaper/issues/119#issuecomment-6603677672)에 공유했다.
 이 문서와 실험의 병합은 제안 계약의 합의나 제품 기능 구현 완료를 의미하지 않는다.
+
+## macOS Desktop 로컬 호출자 실험 (#168 병합 이후)
+
+`desktop_probe.py`는 합성 context 한 개와 사용자 요청 한 건을 위한 로컬 호출자다. 실행 기록 DB와 별도인 호출자 파일에 context와 UUID를 먼저 저장한다. 같은 파일이 있거나 보관에 실패하면 제출하지 않는다. 실제 #168 저장소에 합성 결과를 저장한 직후 의도적으로 도구 오류를 내서 최초 응답으로는 결과를 받을 수 없게 한다. 조회 버튼은 파일을 읽고 기존 결과만 확인한다.
+
+저장소 루트에서 dev 의존성과 상태 카드의 node 의존성(`npm ci --prefix ui/paper-status`)을 준비한 뒤 실행한다.
+
+```sh
+probe_dir=$(mktemp -d)
+node mini-projects/c-request-key/build_probe.mjs "$probe_dir"
+PYTHONPATH="$PWD/src:$PWD" python mini-projects/c-request-key/desktop_probe.py "$probe_dir" init
+```
+
+임시 Desktop 커넥터의 command에는 같은 Python의 절대 경로, args에는 스크립트 절대 경로와 위 임시 디렉터리를 설정한다. env.PYTHONPATH에는 저장소 src와 저장소 루트를 지정한다. 시크릿 대화에서 show_recovery_probe를 호출해 합성 요청을 한 번 제출하고, 새 카드 및 Desktop 재시작 뒤 조회한다. 실험마다 빈 디렉터리를 사용한다. 기존 보관 파일을 삭제해 자동 재접수하는 흐름은 지원하지 않는다.
+
+이 실험에서 1개 파일은 요청 하나에만 대응한다. 실제 여러 요청의 선택, 보관 기한과 B 서비스 연결은 제품 통합 시 별도로 다룬다. 응답 유실은 도구 오류로 주입하므로 네트워크 단절이나 60초 시간 초과 측정으로 해석하지 않는다.
+
+macOS 검증 결과 (main `07532f1` 기준): Claude Desktop 시크릿 카드에서 1회 제출 후 의도한 도구 오류가 표시됐다. 앱을 종료하고 새로 실행한 뒤 별도 시크릿 대화에서 새 카드를 열었다. 조회 버튼만 눌러 “저장된 결과 복원”을 확인했고, 실행 DB에는 completed 한 행만 남았다. 별도 임시 디렉터리에서는 보관 실패 시 접수 0회, 보관 파일 손상·없는 키 조회 시 추가 접수 0회를 확인했다. 제품 ask_paper의 서비스 연결과 실제 네트워크 시간 초과는 별도 범위다.
