@@ -2,6 +2,8 @@ export function mountQuestionCard(app, doc) {
   const el = id => doc.getElementById(id);
   const list = el('requests'), input = el('question'), output = el('result');
   let context, version = 0, busy = false, ready = false;
+  // 입력 없이 재생된 최초 결과도 복원한다. null은 유효한 새 입력을 기다리는 상태다.
+  let expectedContext;
   function controls() {
     el('submit').disabled = busy || !ready || !input.value.trim();
     list.disabled = el('restore').disabled = busy || !list.value;
@@ -35,12 +37,36 @@ export function mountQuestionCard(app, doc) {
       : '요청을 확인하지 못했습니다. 같은 질문 카드를 다시 열어 확인하세요.'; }
     finally { if (current === version) { busy = false; controls(); } }
   }
-  app.ontoolresult = async reply => {
+  function reset(message) {
     ++version;
-    context = reply?.structuredContent?.context_id;
-    input.value = ''; list.replaceChildren(); ready = false; controls();
-    output.textContent = '저장된 요청을 확인하고 있습니다.';
-    if (reply?.isError || !context) { output.textContent = '학습 맥락을 확인할 수 없습니다.'; return; }
+    context = undefined;
+    busy = ready = false;
+    input.value = '';
+    list.replaceChildren();
+    output.textContent = message;
+    controls();
+  }
+  app.ontoolinputpartial = () => {
+    expectedContext = null;
+    reset('학습 맥락을 기다리고 있습니다.');
+  };
+  app.ontoolinput = ({arguments: args}) => {
+    expectedContext = args?.context_id ?? null;
+    reset('학습 맥락을 기다리고 있습니다.');
+  };
+  app.ontoolcancelled = () => {
+    expectedContext = null;
+    reset('요청이 취소되었습니다.');
+  };
+  app.ontoolresult = async reply => {
+    const received = reply?.structuredContent?.context_id;
+    if (expectedContext === null || (received && expectedContext !== undefined && received !== expectedContext)) return;
+    if (reply?.isError || typeof received !== 'string' || !received.trim()) {
+      reset('학습 맥락을 확인할 수 없습니다.');
+      return;
+    }
+    reset('저장된 요청을 확인하고 있습니다.');
+    context = received;
     await action(async current => {
       const data = await tool('list_card_question_keys', {context_id: context});
       if (current !== version) return;
@@ -74,5 +100,5 @@ export function mountQuestionCard(app, doc) {
     });
   };
   controls();
-  app.connect().catch(() => { ++version; ready = false; controls(); output.textContent = '카드를 연결하지 못했습니다.'; });
+  app.connect().catch(() => reset('카드를 연결하지 못했습니다.'));
 }

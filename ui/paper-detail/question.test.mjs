@@ -8,7 +8,8 @@ function card(call) {
   const doc = new JSDOM(readFileSync(new URL('./question-template.html', import.meta.url), 'utf8')).window.document;
   const app = { connect: async () => {}, callServerTool: call };
   mountQuestionCard(app, doc);
-  return {el: id => doc.getElementById(id), open: () => app.ontoolresult({structuredContent: {context_id: 'ctx'}})};
+  return {app, el: id => doc.getElementById(id),
+    open: (context_id = 'ctx') => app.ontoolresult({structuredContent: {context_id}})};
 }
 const ok = structuredContent => ({structuredContent});
 async function submit(c) {
@@ -63,3 +64,42 @@ test('첫 응답 유실 뒤 새 카드는 보관한 키로 조회만 한다', as
   assert.equal(calls.filter(n => n === 'submit_paper_question').length, 1);
   assert.equal(calls.filter(n => n === 'reserve_card_question_key').length, 1);
 });
+
+for (const event of ['새 입력', '취소']) {
+  test(event + ' 뒤에는 지연된 이전 키로 제출하거나 이전 답변을 복원하지 않는다', async () => {
+    const calls = [];
+    let finishReservation;
+    const c = card(async ({name, arguments: args}) => {
+      calls.push([name, args.context_id]);
+      if (name === 'list_card_question_keys') return ok({requests: [{request_key: 'key', created_at: 100}]});
+      if (name === 'get_paper_question_status') return ok({state: 'completed',
+        answer: {status: 'ok', answer_ko: '저장 답변', citations: []}});
+      if (name === 'reserve_card_question_key' && args.context_id === 'old')
+        return new Promise(resolve => { finishReservation = resolve; });
+      if (name === 'reserve_card_question_key') return ok({request_key: 'new-key'});
+      return ok({state: 'in_progress'});
+    });
+    const newInput = () => c.app.ontoolinput?.({arguments: {context_id: 'new'}});
+    await c.open('old');
+    const pending = submit(c);
+    assert.equal(typeof finishReservation, 'function');
+    if (event === '취소') c.app.ontoolcancelled?.({});
+    else newInput();
+    const count = calls.length;
+    finishReservation(ok({request_key: 'old-key'}));
+    await pending;
+    await c.open('old');
+    assert.equal(c.el('question').value, '');
+    assert.equal(c.el('requests').options.length, 0);
+    assert.doesNotMatch(c.el('result').textContent, /저장 답변/);
+    for (const id of ['question', 'submit', 'restore']) assert.equal(c.el(id).disabled, true);
+    await submit(c);
+    c.el('restore').click();
+    assert.equal(calls.length, count);
+    if (event === '취소') newInput();
+    await c.open('new');
+    await submit(c);
+    assert.deepEqual(calls.filter(([name]) => name === 'submit_paper_question'),
+      [['submit_paper_question', 'new']]);
+  });
+}
