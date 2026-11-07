@@ -9,7 +9,7 @@ import pytest
 
 from tests.fixtures.pdf_builder import build_styled_pdf
 from solo_leveling.infrastructure.parsing import pdf_extractor
-from solo_leveling.infrastructure.parsing.chunker import chunk_pages
+from solo_leveling.infrastructure.parsing.chunker import chunk_pages, chunk_pages_with_sections
 from solo_leveling.infrastructure.parsing.pdf_extractor import ExtractedPage, extract_pages
 from solo_leveling.infrastructure.parsing.sections import (
     LineStyle, PageHeading, is_heading_line, make_section_id,
@@ -78,6 +78,36 @@ def test_chunks_follow_headings_and_carry_across_pages():
         (2, "02-introduction", "1 Introduction"),
         (3, "02-introduction", "Intro continues on this page."),
     ]
+
+
+def test_section_catalog_keeps_titles_order_pages_and_chunk_ranges():
+    first = _text("Abstract", "Summary")
+    second = _text("More", "1 Introduction", "Intro", "2 Method", "Method body")
+    pages = [
+        ExtractedPage(1, first, headings=[PageHeading("Abstract", 0)]),
+        ExtractedPage(2, second, headings=[
+            PageHeading("1 Introduction", second.index("1 Introduction")),
+            PageHeading("2 Method", second.index("2 Method")),
+        ]),
+        ExtractedPage(3, "Method continues"),
+    ]
+    chunks, sections = chunk_pages_with_sections("rev", pages, chunk_size=500, overlap=80)
+    assert [(s.section_id, s.title, s.ordinal, s.level, s.parent_section_id,
+             s.start_pdf_page, s.end_pdf_page) for s in sections] == [
+        ("01-abstract", "Abstract", 1, 1, None, 1, 2),
+        ("02-introduction", "1 Introduction", 2, 1, None, 2, 2),
+        ("03-method", "2 Method", 3, 1, None, 2, 3),
+    ]
+    ranges = {s.section_id: (s.start_chunk_index, s.end_chunk_index) for s in sections}
+    for section_id, expected in ranges.items():
+        indexes = [c.chunk_index for c in chunks if c.section_id == section_id]
+        assert expected == (min(indexes), max(indexes))
+
+
+def test_section_without_body_keeps_nullable_chunk_range():
+    page = ExtractedPage(1, "Abstract", headings=[PageHeading("Abstract", 0)])
+    _, sections = chunk_pages_with_sections("rev", [page], chunk_size=500, overlap=80)
+    assert sections[0].start_chunk_index == 0  # 제목 자체도 원문 청크에 포함된다
 
 
 def test_pages_without_headings_chunk_exactly_as_before():

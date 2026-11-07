@@ -27,7 +27,7 @@ from solo_leveling.infrastructure.embeddings.embedder import (
     DEFAULT_MODEL_NAME, embed_texts, embedding_dimension,
 )
 from solo_leveling.infrastructure.embeddings.process_embedder import EmbeddingProcessError
-from solo_leveling.infrastructure.parsing.chunker import chunk_pages
+from solo_leveling.infrastructure.parsing.chunker import chunk_pages_with_sections
 from solo_leveling.infrastructure.storage.pdf_store import PdfStore
 from solo_leveling.infrastructure.parsing.pdf_extractor import (
     extract_pages, ExtractedPage, PdfExtractionError,
@@ -213,7 +213,7 @@ def _ingest_pages(
         if not chunks:
             pages = pages_provider()
             parse_revision = ParseRevision(str(uuid.uuid4()), version_id, len(pages))
-            chunks = chunk_pages(parse_revision.parse_revision_id, pages)
+            chunks, sections = chunk_pages_with_sections(parse_revision.parse_revision_id, pages)
             # 파싱 결과 전체를 원자적으로 저장해 중단 시 절반만 남는 것을 막는다.
             with closing(repo.get_connection(db_path)) as conn, conn:
                 conn.execute('INSERT INTO parse_revisions VALUES (?, ?, ?, ?)',
@@ -224,6 +224,12 @@ def _ingest_pages(
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                     [(c.chunk_id, c.parse_revision_id, c.chunk_index, c.original_text, c.text,
                       c.translation_revision_id, c.printed_page_label, c.pdf_page, c.section_id) for c in chunks])
+                conn.executemany('''INSERT INTO sections
+                    (parse_revision_id, section_id, title, parent_section_id, ordinal, level,
+                     start_pdf_page, end_pdf_page, start_chunk_index, end_chunk_index)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    [(s.parse_revision_id, s.section_id, s.title, s.parent_section_id, s.ordinal, s.level,
+                      s.start_pdf_page, s.end_pdf_page, s.start_chunk_index, s.end_chunk_index) for s in sections])
         if not chunks:
             limitations = ['extraction_empty']
         else:
