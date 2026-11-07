@@ -467,6 +467,10 @@ def _migrate_search_index_chunks(conn: sqlite3.Connection) -> None:
                 'AND r.translated_text IS NOT NULL', (row['index_parse'], row['index_translation']))}
             if len(candidates) != row['chunk_count']:
                 continue
+            members = {r[0] for r in conn.execute(
+                'SELECT chunk_id FROM search_index_chunks WHERE embedding_set_id=?', (row['embedding_set_id'],))}
+            if members == candidates:
+                continue
             conn.execute('DELETE FROM search_index_chunks WHERE embedding_set_id=?', (row['embedding_set_id'],))
             conn.executemany('INSERT INTO search_index_chunks (embedding_set_id, chunk_id) VALUES (?, ?)',
                              [(row['embedding_set_id'], chunk_id) for chunk_id in sorted(candidates)])

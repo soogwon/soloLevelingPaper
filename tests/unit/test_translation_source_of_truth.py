@@ -235,9 +235,12 @@ def test_upgrade_removes_legacy_null_translation_member_and_rejects_reference(pu
 
 
 def test_other_published_indexes_are_not_touched(published):
-    members_before = members(published)
+    # 정상 색인의 행을 다시 쓰면 초기화가 실패하도록 한다.
+    for operation in ('INSERT', 'DELETE', 'UPDATE'):
+        sql(published, f'''CREATE TRIGGER reject_member_{operation} BEFORE {operation} ON search_index_chunks
+                           BEGIN SELECT RAISE(ABORT, '정상 색인의 멤버 변경'); END''')
     init_db(published)
-    assert members(published) == members_before == ['c0', 'c1']
+    assert members(published) == ['c0', 'c1']
 
 
 def other_parse_revision_copy(db):
