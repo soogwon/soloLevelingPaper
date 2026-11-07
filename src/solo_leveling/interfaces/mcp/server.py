@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Annotated, Literal, Protocol
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 import anyio
 from solo_leveling.diagnostics import traced
@@ -29,6 +29,7 @@ from .status_app import STATUS_APP_URI, register_status_app
 from .dashboard import DashboardService, register_dashboard
 from .reflection import ReflectionInputServer, ReflectionService, register_reflection
 from solo_leveling.application.annotations.service import AnnotationService
+from solo_leveling.domain.annotation import Annotation
 from .annotation_tools import register_annotations
 from .quiz_tools import QuizContractAdapter, register_quiz
 
@@ -206,6 +207,12 @@ class SavedSummaryOutput(TypedDict):
     verification_level: Literal['structural_only']
 
 
+class DetailAnnotationPageOutput(TypedDict):
+    context_id: str
+    items: list[Annotation]
+    next_cursor: str | None
+
+
 class PaperDetailOutput(TypedDict):
     context_id: str
     paper_id: str
@@ -221,6 +228,7 @@ class PaperDetailOutput(TypedDict):
     keywords: list[str]
     important_sentences: list[str]
     limitations: list[str]
+    annotation_page: NotRequired[DetailAnnotationPageOutput | None]
 
 
 class RegistrationPreview(TypedDict):
@@ -304,10 +312,15 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             다음 페이지는 같은 context_id·scope와 summary_id·next_offset으로 조회하세요.
             키워드와 중요 문장은 저장 데이터가 없으면 빈 목록과 limitations로 안내합니다.
             저장 요약의 structural_only는 근거 연결 검사이며 모델 의미 검증을 뜻하지 않습니다.
+            annotation_page가 있으면 같은 context 전체의 기록 첫 20건입니다. scope/limit/offset은 요약에만 적용됩니다.
+            기록의 다음 페이지는 list_annotations에 같은 context_id와 next_cursor를 전달하세요(필터 없음).
+            저장 인용문은 현재 위치 검증 결과가 아닙니다. 이동 시 get_annotation으로 확인하세요.
             """
             try:
-                return await anyio.to_thread.run_sync(lambda: services.detail.get(
+                detail = await anyio.to_thread.run_sync(lambda: services.detail.get(
                     context_id, scope=scope, offset=offset, limit=limit, summary_id=summary_id))
+                # 구버전 서비스도 text/structuredContent에 같은 기본값을 반환한다.
+                return {'annotation_page': None, **detail}
             except Exception as error:
                 raise to_tool_error(error) from None
     if services.dashboard is not None:
