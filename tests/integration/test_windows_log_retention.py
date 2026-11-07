@@ -2,6 +2,7 @@
 import ctypes
 from ctypes import wintypes
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import subprocess
@@ -265,6 +266,41 @@ def test_two_publishers_have_one_winner(tmp_path):
     winner = next(path for state, path in results if state == 'published')
     assert final.read_bytes() == winner.read_bytes()
     assert final.stat().st_ino == winner.stat().st_ino
+
+
+def _publish_in_child(source, final, barrier):
+    barrier.wait(timeout=15)
+    try:
+        os.link(source, final)
+    except FileExistsError:
+        raise SystemExit(2)
+
+
+def test_separate_processes_cannot_overwrite_closed_metadata(tmp_path):
+    ctx = multiprocessing.get_context('spawn')
+    barrier = ctx.Barrier(2)
+    final = tmp_path / 'bundle.closed.json'
+    sources = [tmp_path / 'first.tmp', tmp_path / 'second.tmp']
+    children = []
+    try:
+        for source in sources:
+            source.write_bytes(source.name.encode())
+            child = ctx.Process(target=_publish_in_child, args=(source, final, barrier))
+            child.start()
+            children.append(child)
+        for child in children:
+            child.join(timeout=25)
+        codes = [child.exitcode for child in children]
+        assert codes.count(0) == codes.count(2) == 1, codes
+        winner = sources[codes.index(0)]
+        assert final.samefile(winner)
+        assert final.read_bytes() == winner.name.encode()
+    finally:
+        for child in children:
+            if child.is_alive():
+                child.kill()
+            child.join()
+            child.close()
 
 
 if __name__ == '__main__':
