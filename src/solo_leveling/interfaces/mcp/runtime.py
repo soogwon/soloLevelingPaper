@@ -18,7 +18,9 @@ from solo_leveling.infrastructure.database.schema import init_db
 from solo_leveling.infrastructure.database.dashboard_queries import DashboardReader
 from solo_leveling.infrastructure.generation.openai_generator import OpenAIGenerationSettings
 from solo_leveling.infrastructure.generation.semantic_verifier import SemanticSettings
-from solo_leveling.infrastructure.storage.vector_store import get_client, close_client, ChromaCloseResult
+from solo_leveling.infrastructure.storage.vector_store import (
+    get_client, close_client, ChromaCloseResult, restore_legacy_index_memberships,
+)
 from solo_leveling.infrastructure.translation.openai_provider import OpenAITranslationConfig
 from solo_leveling.application.paper_detail.service import PaperDetailService
 from solo_leveling.application.reflection.service import ReflectionService
@@ -128,6 +130,7 @@ def build_runtime_server(values: Mapping[str, str]):
         init_db(str(paths.db_path))
         mark_interrupted_jobs_on_startup(str(paths.db_path))
         client = get_client(str(paths.chroma_dir))
+        restore_legacy_index_memberships(str(paths.db_path), client)
         services = build_services(str(paths.db_path), client,
             generation=settings.generation,
             translation=settings.translation, embedder=embedder, verification=settings.verification)
