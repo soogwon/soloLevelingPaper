@@ -96,6 +96,44 @@ test('빈 답변의 실제 검증 수준은 유지하고 빈 주장 영역만 �
  assert.match(el('verification').textContent,/structural_only/);
 });
 
+test('저장된 목차만 표시하고 다른 파싱 리비전의 제목은 거부한다',()=>{
+ const {app,el}=setup();
+ const row={section_id:'s1',parse_revision_id:'p',title:'Methods',ordinal:1,level:1,parent_section_id:null,start_pdf_page:5,end_pdf_page:7};
+ app.ontoolresult(detailPayload({section_catalog:[row]}));
+ assert.match(el('toc-items').textContent,/Methods · PDF 5–7페이지/);
+ assert.match(el('location').textContent,/Methods/);
+ app.ontoolresult(detailPayload({section_catalog:[{...row,parse_revision_id:'other'}]}));
+ assert.equal(el('content').hidden,true);
+ assert.equal(el('toc-items').children.length,0);
+ app.ontoolresult(detailPayload({section_catalog:[]}));
+ assert.match(el('toc-status').textContent,/저장된 목차가 없습니다/);
+});
+
+test('목차 제목과 메모 저장을 함께 유지하고 출처 항목의 카드 미지원과 데이터 부재를 구분한다', async () => {
+  const {app, el} = setup();
+  const row = {section_id:'s1',parse_revision_id:'p',title:'Methods',ordinal:1,level:1,
+    parent_section_id:null,start_pdf_page:5,end_pdf_page:7};
+  const first = evidence('e1', {section_id:'s1',annotation_start:0,annotations:[]});
+  let request;
+  app.callServerTool = async call => {
+    request = call;
+    return {structuredContent:{outcome:'saved',annotation:{annotation_id:'a',context_id:'ctx',kind:'note',body:'내 메모'}}};
+  };
+  app.ontoolresult(detailPayload({section_catalog:[row],evidence:[first],keywords:[{text:'Methods'}]}));
+  assert.match(el('toc-items').textContent,/Methods/);
+  assert.match(el('location').textContent,/Methods/);
+  assert.match(el('availability').textContent,/화면 표시는 아직 지원하지 않습니다/);
+  assert.doesNotMatch(el('availability').textContent,/제공되지 않습니다/);
+  el('note-body').value = '내 메모';
+  await el('save-note').onclick();
+  assert.equal(request.name,'create_annotation');
+  assert.equal(request.arguments.request.context_id,'ctx');
+  assert.equal(request.arguments.request.segments[0].chunk_id,first.chunk_id);
+  assert.match(el('records').textContent,/내 메모/);
+  assert.match(el('location').textContent,/Methods/);
+  assert.match(el('toc-items').textContent,/Methods/);
+});
+
 test('저장 중 근거를 전환해도 요청 위치와 표시 목록은 섞이지 않는다', async () => {
   const {app, el} = setup();
   const first = evidence('e1', {annotation_start: 3, annotations: [], quote_original: '😀가'});

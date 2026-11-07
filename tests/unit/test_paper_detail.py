@@ -163,6 +163,31 @@ def test_saved_summary_through_mcp_has_nested_contract(detail):
     assert data['evidence'][0]['quote_original']=='First.'
 
 
+def test_catalog_uses_context_revision_even_after_reparse(detail):
+    from solo_leveling.domain.models import PaperSection, ParseRevision
+    db, service = detail
+    repo.insert_parse_revision(db, ParseRevision('new', 'v1', 2))
+    repo.insert_sections(db, [PaperSection('s1', 'new', '새 제목', 1, 1, 1, 2)])
+    assert service.get('ctx')['section_catalog'] == []
+    repo.insert_sections(db, [PaperSection('s2', 'p1', '하위 제목', 2, 2, 2, 2, 's1'),
+                              PaperSection('s1', 'p1', '기존 제목', 1, 1, 1, 2)])
+    before = Path(db).read_bytes()
+    toc = service.get('ctx')['section_catalog']
+    assert [(s['title'], s['parent_section_id']) for s in toc] == [('기존 제목', None), ('하위 제목', 's1')]
+    assert Path(db).read_bytes() == before
+
+
+def test_legacy_detail_without_catalog_table_is_read_only(detail):
+    db, service = detail
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute('DROP TABLE sections')
+    before = Path(db).read_bytes()
+    result = service.get('ctx')
+    assert result['section_catalog'] == []
+    assert result['section_ids'] == ['s1', 's2']
+    assert Path(db).read_bytes() == before
+
+
 @pytest.mark.parametrize('corruption', [
     "UPDATE chunks SET parse_revision_id='other' WHERE chunk_id='c2'",
     "UPDATE paper_insights SET chunk_id='missing' WHERE position=1",
@@ -438,7 +463,10 @@ def test_insights_summary_and_annotations_share_mcp_detail_without_writes(detail
     from unittest.mock import Mock
     from mcp.shared.memory import create_connected_server_and_client_session
     from solo_leveling.interfaces.mcp.server import MCPServices, create_server
+    from solo_leveling.domain.models import PaperSection
     db, _ = detail
+    repo.insert_sections(db, [PaperSection('s1', 'p1', 'Introduction', 1, 1, 1, 1),
+                              PaperSection('s2', 'p1', 'Results', 2, 1, 2, 2)])
     summary = save(db)
     collection = repo.save_paper_insights(db, 'ctx', 'paper', [
         PaperInsightInput(KIND_KEYWORD, 'First', CONTENT_EXTRACTED, PRODUCER_EXTRACTOR,
@@ -460,6 +488,9 @@ def test_insights_summary_and_annotations_share_mcp_detail_without_writes(detail
             assert json.loads(result.content[0].text) == data
             assert data['summary']['summary_id'] == summary.summary_id
             assert data['summary']['next_offset'] == 1
+            assert [section['title'] for section in data['section_catalog']] == ['Introduction', 'Results']
+            assert data['section_catalog'][0]['parse_revision_id'] == data['parse_revision_id']
+            assert data['section_catalog'][0]['section_id'] == data['evidence'][0]['section_id']
             assert data['keywords'][0]['producer_version'] == 'rules-v2'
             assert data['keywords'][0]['collection_created_at'] == collection.created_at
             assert data['important_sentences'][0]['producer_version'] is None

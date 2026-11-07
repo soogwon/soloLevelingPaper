@@ -102,12 +102,21 @@ class SQLitePaperDetailReader:
         saved = conn.execute('SELECT * FROM summaries WHERE context_id=? AND scope=?', (context_id, scope)).fetchone()
         if expected_summary_id is not None and (saved is None or saved['summary_id'] != expected_summary_id):
             raise InvalidArgumentError('요약이 변경되었습니다. offset=0으로 다시 조회하세요.')
+        # 이전 설치본의 DB도 읽기 전용으로 열 수 있도록 카탈로그 유무를 먼저 확인한다.
+        catalog = []
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sections'").fetchone():
+            catalog = [dict(row) for row in conn.execute(
+                """SELECT section_id, parse_revision_id, title, ordinal, level, parent_section_id,
+                          start_pdf_page, end_pdf_page FROM sections
+                   WHERE parse_revision_id=? ORDER BY ordinal""", (context['parse_revision_id'],))]
         result = {
             'context_id': context_id, 'paper_id': metadata['paper_id'], 'title': metadata['title'],
             'file_display_name': filename, 'version_id': context['version_id'],
             'parse_revision_id': context['parse_revision_id'],
             'translation_revision_id': context['translation_revision_id'], 'scope': scope,
-            'section_ids': sections, 'summary': None, 'evidence': [],
+            'section_ids': sections,
+            'section_catalog': catalog,
+            'summary': None, 'evidence': [],
             'keywords': [], 'important_sentences': [],
             'limitations': ['keywords_not_available', 'important_sentences_not_available'],
         }

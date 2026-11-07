@@ -226,6 +226,17 @@ class SavedSummaryOutput(TypedDict):
     verification_level: Literal['structural_only']
 
 
+class DetailSectionOutput(TypedDict):
+    section_id: str
+    parse_revision_id: str
+    title: str
+    ordinal: int
+    level: int
+    parent_section_id: str | None
+    start_pdf_page: int
+    end_pdf_page: int
+
+
 class PaperInsightOutput(TypedDict):
     insight_id: str
     text: str
@@ -260,6 +271,7 @@ class PaperDetailOutput(TypedDict):
     translation_revision_id: str
     scope: str
     section_ids: list[str]
+    section_catalog: list[DetailSectionOutput]
     summary: SavedSummaryOutput | None
     evidence: list[DetailEvidenceOutput]
     keywords: list[PaperInsightOutput]
@@ -357,7 +369,7 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                 detail = await anyio.to_thread.run_sync(lambda: services.detail.get(
                     context_id, scope=scope, offset=offset, limit=limit, summary_id=summary_id))
                 # 구버전 서비스도 text/structuredContent에 같은 기본값을 반환한다.
-                return {'annotation_page': None, **detail}
+                return {'annotation_page': None, 'section_catalog': [], **detail}
             except Exception as error:
                 raise to_tool_error(error) from None
 
