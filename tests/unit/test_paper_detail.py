@@ -119,10 +119,39 @@ def test_annotations_follow_context_and_exact_original_range(detail):
         create_annotation(db, context, kind, body, [segment])
     first, second = service.get('ctx')['evidence']
     assert first['annotation_start'] == 2
-    assert {(item['kind'], item['body']) for item in first['annotations']} == {('note', '메모'), ('highlight', '')}
+    assert first['annotation_count'] == 2
+    rest = service.annotation_page('ctx', 'e1', first['annotation_cursor'])
+    assert {(item['kind'], item['body']) for item in first['annotations'] + rest['annotations']} == {('note', '메모'), ('highlight', '')}
     assert second['annotations'] == []
     with closing(sqlite3.connect(db)) as conn, conn:
         conn.execute("UPDATE chunks SET original_text='😀 First. First.' WHERE chunk_id='c1'")
     ambiguous = service.get('ctx')['evidence'][0]
     assert ambiguous['annotation_start'] is None
     assert ambiguous['annotations'] == []
+
+
+def test_many_long_notes_keep_detail_small_and_pages_complete(detail):
+    import json
+    db, service = detail
+    save(db)
+    with sqlite3.connect(db) as conn:
+        for i in range(100):
+            key = f'long-{i:03}'
+            conn.execute("INSERT INTO annotations VALUES (?, 'ctx','note',?,NULL,1,'2026','2026')", (key, 'x'*5000))
+            conn.execute("INSERT INTO annotation_segments VALUES (?,0,'c1','p1','original',NULL,0,6,'First.')", (key,))
+    result = service.get('ctx', limit=1)
+    assert len(json.dumps(result).encode()) < 8000
+    first = result['evidence'][0]
+    assert first['annotation_count'] == 100 and len(first['annotations']) == 1
+    records = list(first['annotations'])
+    cursor = first['annotation_cursor']
+    while cursor:
+        page = service.annotation_page('ctx', 'e1', cursor)
+        assert 1 <= len(page['annotations']) <= 3
+        records.extend(page['annotations'])
+        cursor = page['annotation_cursor']
+    assert [r['annotation_id'] for r in records] == [f'long-{i:03}' for i in reversed(range(100))]
+    assert all(r['body'] == 'x'*5000 for r in records)
+    assert service.annotation_page('ctx', 'e2')['annotations'] == []
+    with pytest.raises(ResourceNotFoundError):
+        service.annotation_page('other', 'e1', first['annotation_cursor'])

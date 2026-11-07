@@ -33,7 +33,7 @@ def test_stdio_server_lists_tools(tmp_path):
                         'prepare_paper_registration', 'cancel_paper_registration',
                         'add_paper', 'get_paper_status', 'start_learning',
                         'ask_paper', 'get_evidence', 'submit_paper_question', 'get_paper_question_status',
-                        'list_paper_jobs', 'get_paper_detail',
+                        'list_paper_jobs', 'get_paper_detail', 'list_evidence_annotations',
                         'get_learning_dashboard',
                         'get_reading_questions', 'save_reading_answer', 'get_reading_comparison',
                         'get_quiz', 'submit_quiz', 'get_quiz_attempt', 'list_quiz_attempts',

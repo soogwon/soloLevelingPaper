@@ -118,3 +118,26 @@ test('저장 중 근거를 전환해도 요청 위치와 표시 목록은 섞이
   el('evidence-list').firstChild.click();
   assert.match(el('records').textContent, /첫 근거의 메모/);
 });
+
+test('더 보기는 선택한 근거의 커서로만 조회하고 실패 후 다시 시도할 수 있다', async () => {
+  const {app, el} = setup();
+  const cursor = {created_at:'2026', annotation_id:'a2'};
+  const first = evidence('e1', {annotation_start:0, annotation_count:2, annotation_cursor:cursor,
+    annotations:[{annotation_id:'a2', kind:'note', body:'최신 기록'}]});
+  const calls = [];
+  app.callServerTool = async call => {
+    calls.push(call);
+    if (calls.length === 1) throw Error();
+    return {structuredContent:{context_id:'ctx', evidence_id:'e1', annotation_start:0,
+      annotation_count:2, annotation_cursor:null, annotations:[{annotation_id:'a1', kind:'note', body:'이전 기록'}]}};
+  };
+  app.ontoolresult(detailPayload({evidence:[first]}));
+  assert.equal(calls.length, 0);
+  await el('more-records').onclick();
+  assert.equal(el('more-records').disabled, false);
+  assert.match(el('record-status').textContent, /다시 시도/);
+  await el('more-records').onclick();
+  assert.deepEqual(calls[1], {name:'list_evidence_annotations', arguments:{context_id:'ctx', evidence_id:'e1', cursor}});
+  assert.match(el('records').textContent, /최신 기록.*이전 기록/);
+  assert.equal(el('more-records').hidden, true);
+});

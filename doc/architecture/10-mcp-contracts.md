@@ -277,7 +277,7 @@ get_evidence는 해당 context에 저장된 번역문·추출 원문 근거를 �
 - 메타데이터: `context_id`, `paper_id`, nullable `title`, 경로를 제거한 `file_display_name`, `version_id`, `parse_revision_id`, `translation_revision_id`, `scope`, `section_ids`.
 - `summary`: 저장 요약이 없으면 null. 있으면 `summary_id`, `created_at`, `items`, `total_items`, nullable `next_offset`, `verification_level=structural_only`.
 - `items`: `position`, `kind`(claim/method/result/limitation), `text`, `evidence_ids`. 현재 페이지 항목만 반환한다.
-- `evidence`: 현재 페이지 항목의 저장 근거. 각 근거에는 `section_id`, 원문 청크에서 인용이 시작되는 문자 위치 `annotation_start`, 같은 맥락·인용 구간의 `annotations` 목록이 있다. 목록 항목은 `annotation_id`, `kind`, `body`를 담는다. 위치가 모호하거나 길이 제한을 넘으면 시작 위치는 null이고 목록은 비어 있다.
+- `evidence`: 현재 페이지 항목의 저장 근거. 각 근거에는 `section_id`, 원문 청크에서 인용이 시작되는 문자 위치 `annotation_start`, 같은 맥락·인용 구간의 `annotations` 목록이 있다. 기본 응답은 전체 건수 `annotation_count`와 최신 기록 최대 1건을 포함한다. `annotation_cursor`가 있으면 같은 `context_id`·`evidence_id`와 함께 `list_evidence_annotations`의 `cursor`로 전달해 다음 기록을 최대 3건 조회한다. 목록 항목은 `annotation_id`, `kind`, `body`를 담는다. 위치가 모호하거나 길이 제한을 넘으면 시작 위치는 null이고 목록은 비어 있다.
 - `keywords`, `important_sentences`: 현재 저장 계약이 없어 빈 목록. `limitations`에 `keywords_not_available`, `important_sentences_not_available`, 요약 부재 시 `summary_not_available`을 반환한다.
 - 같은 읽기 트랜잭션에서 context·게시 색인·번역 리비전·근거 인용문 연결을 검사한다. 섹션 조회는 섹션 밖 근거를 거부한다. DB 변경·생성 API 호출은 없다.
 - UI의 다음 페이지는 자동 호출하지 않으며 채팅에서 사용할 조회 인자를 표시한다. 요약 부재를 생성 동의로 해석하지 않는다.

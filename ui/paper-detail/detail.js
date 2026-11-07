@@ -5,12 +5,15 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
   const optional = (v) => v === null || typeof v === 'string';
   let timer;
   let selected;
+  const annotationPanel = el('annotations');
   function clear(message, busy = false) {
     clearTimeout(timer);
     selected = null;
-    el('annotations').hidden = true;
-    el('note-body').value = '';
-    el('records').replaceChildren();
+    if (annotationPanel) {
+      annotationPanel.hidden = true;
+      el('note-body').value = '';
+      el('records').replaceChildren();
+    }
     el('content').hidden = true;
     el('claims').replaceChildren();
     el('claims-section').hidden = true;
@@ -85,6 +88,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
     el('content').hidden = false;
     el('detail').hidden = !evidence.length;
     const pending = new Set();
+    const loading = new Set();
     function showRecords(e) {
       const records = el('records');
       records.replaceChildren();
@@ -94,9 +98,37 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
           : '하이라이트 · ' + (record.body || e.quote_original);
         records.append(li);
       }
-      el('editor').disabled = e.annotation_start == null || pending.has(e);
+      el('more-records').hidden = !e.annotation_cursor;
+      el('more-records').disabled = loading.has(e) || pending.has(e);
+      el('editor').disabled = e.annotation_start == null || pending.has(e) || loading.has(e);
       el('record-status').textContent = e.annotation_start == null ? '원문 위치를 확정할 수 없어 작성할 수 없습니다.'
-        : pending.has(e) ? '저장 중입니다.' : records.children.length ? '' : '저장된 기록이 없습니다.';
+        : pending.has(e) ? '저장 중입니다.' : records.children.length ? `기록 ${records.children.length}건 표시 · 전체 ${e.annotation_count ?? records.children.length}건` : '저장된 기록이 없습니다.';
+    }
+    async function loadMore(e) {
+      if (selected !== e || loading.has(e) || !e.annotation_cursor) return;
+      loading.add(e);
+      showRecords(e);
+      try {
+        const result = await app.callServerTool({name: 'list_evidence_annotations', arguments: {
+          context_id: data.context_id, evidence_id: e.evidence_id, cursor: e.annotation_cursor,
+        }});
+        const page = result?.structuredContent;
+        if (result?.isError || page?.context_id !== data.context_id || page.evidence_id !== e.evidence_id
+            || page.annotation_start !== e.annotation_start || !Array.isArray(page.annotations)) throw new Error();
+        e.annotations.push(...page.annotations);
+        e.annotation_count = page.annotation_count;
+        e.annotation_cursor = page.annotation_cursor;
+      } catch {
+        if (selected === e) el('record-status').textContent = '기록을 불러오지 못했습니다. 다시 시도하세요.';
+        return;
+      } finally {
+        loading.delete(e);
+        if (selected === e) {
+          el('more-records').disabled = pending.has(e);
+          el('editor').disabled = pending.has(e) || e.annotation_start == null;
+        }
+      }
+      if (selected === e) showRecords(e);
     }
     async function save(e, kind) {
       if (selected !== e || pending.has(e) || !Number.isSafeInteger(e.annotation_start)) return;
@@ -117,6 +149,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
         const record = saved?.annotation;
         if (result?.isError || saved?.outcome !== 'saved' || record?.context_id !== data.context_id
             || record.kind !== kind || record.body !== body || !nonempty(record.annotation_id)) throw new Error();
+        e.annotation_count = (e.annotation_count ?? e.annotations.length) + 1;
         e.annotations.unshift(record);
         if (selected === e && kind === 'note') el('note-body').value = '';
       } catch {
@@ -132,9 +165,12 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
     }
     function select(e, focus = false) {
       selected = e;
-      el('note-body').value = '';
-      el('annotations').hidden = !(detailed && Array.isArray(e.annotations));
-      if (!el('annotations').hidden) {
+      if (annotationPanel) {
+        el('note-body').value = '';
+        annotationPanel.hidden = !(detailed && Array.isArray(e.annotations));
+      }
+      if (annotationPanel && !annotationPanel.hidden) {
+        el('more-records').onclick = () => loadMore(e);
         showRecords(e);
         el('save-note').onclick = () => save(e, 'note');
         el('save-highlight').onclick = () => save(e, 'highlight');

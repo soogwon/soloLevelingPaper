@@ -189,7 +189,23 @@ class EvidenceAnnotationOutput(TypedDict):
     body: str
 
 
+class AnnotationCursor(TypedDict):
+    created_at: str
+    annotation_id: str
+
+
+class EvidenceAnnotationPage(TypedDict):
+    context_id: str
+    evidence_id: str
+    annotation_start: int | None
+    annotation_count: int
+    annotation_cursor: AnnotationCursor | None
+    annotations: list[EvidenceAnnotationOutput]
+
+
 class DetailEvidenceOutput(EvidenceOutput):
+    annotation_count: int
+    annotation_cursor: AnnotationCursor | None
     annotation_start: int | None
     annotations: list[EvidenceAnnotationOutput]
     section_id: str | None
@@ -313,6 +329,15 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             try:
                 return await anyio.to_thread.run_sync(lambda: services.detail.get(
                     context_id, scope=scope, offset=offset, limit=limit, summary_id=summary_id))
+            except Exception as error:
+                raise to_tool_error(error) from None
+
+        @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
+        async def list_evidence_annotations(context_id: str, evidence_id: str,
+                                            cursor: AnnotationCursor | None = None) -> EvidenceAnnotationPage:
+            """같은 맥락·원문 인용 구간의 기록을 3건씩 조회합니다. 다음 조회에는 annotation_cursor를 전달하세요."""
+            try:
+                return await anyio.to_thread.run_sync(services.detail.annotation_page, context_id, evidence_id, cursor)
             except Exception as error:
                 raise to_tool_error(error) from None
     if services.dashboard is not None:

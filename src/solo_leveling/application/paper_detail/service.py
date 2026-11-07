@@ -8,6 +8,8 @@ class DetailReader(Protocol):
     def get(self, context_id: str, scope: str, offset: int, limit: int,
             summary_id: str | None) -> dict: ...
 
+    def annotation_page(self, context_id: str, evidence_id: str, cursor: dict | None) -> dict: ...
+
 
 class PaperDetailService:
     def __init__(self, reader: DetailReader):
@@ -29,3 +31,6 @@ class PaperDetailService:
         except ValueError as exc:
             raise InvalidArgumentError(str(exc)) from None
         return self.reader.get(context_id, scope, offset, limit, summary_id)
+
+    def annotation_page(self, context_id: str, evidence_id: str, cursor: dict | None = None) -> dict:
+        return self.reader.annotation_page(context_id, evidence_id, cursor)

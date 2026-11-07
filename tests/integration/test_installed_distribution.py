@@ -60,7 +60,7 @@ async def run():
                 'add_paper', 'get_paper_status', 'list_paper_jobs',
                 'start_learning', 'ask_paper', 'get_evidence', 'get_learning_dashboard',
                 'submit_paper_question', 'get_paper_question_status',
-                'get_paper_detail', 'get_reading_questions', 'save_reading_answer', 'get_reading_comparison',
+                'get_paper_detail', 'list_evidence_annotations', 'get_reading_questions', 'save_reading_answer', 'get_reading_comparison',
                 'get_quiz', 'submit_quiz', 'get_quiz_attempt', 'list_quiz_attempts',
                 'create_annotation', 'get_annotation', 'list_annotations',
                         'update_annotation', 'delete_annotation',
