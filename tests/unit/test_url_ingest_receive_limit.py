@@ -18,11 +18,17 @@ class Response:
         self.is_permanent_redirect = False
         self.closed = False
         self.yielded = 0
+        self.offset = 0
+        self.chunk_sizes = []
         self.status_error = status_error
 
     @property
     def content(self):
         return getattr(self, '_content', self.body)
+
+    @property
+    def text(self):
+        return self.content.decode('utf-8', errors='replace')
 
     def raise_for_status(self):
         if self.status_error is not None:
@@ -32,8 +38,10 @@ class Response:
         self.closed = True
 
     def iter_content(self, chunk_size):
-        for offset in range(0, len(self.body), chunk_size):
-            block = self.body[offset:offset + chunk_size]
+        self.chunk_sizes.append(chunk_size)
+        while self.offset < len(self.body):
+            block = self.body[self.offset:self.offset + chunk_size]
+            self.offset += len(block)
             self.yielded += len(block)
             yield block
 
@@ -50,6 +58,19 @@ class Session:
 
     def close(self):
         self.closed = True
+
+
+class SmallPieceResponse(Response):
+    """서버가 요청한 chunk_size보다 작은 조각을 반복해서 주는 경우를 흉내 낸다."""
+
+    def iter_content(self, chunk_size):
+        self.chunk_sizes.append(chunk_size)
+        while self.offset < len(self.body):
+            size = min(2, chunk_size)
+            block = self.body[self.offset:self.offset + size]
+            self.offset += len(block)
+            self.yielded += len(block)
+            yield block
 
 
 def install(monkeypatch, *responses):
@@ -93,6 +114,53 @@ def test_pdf_magic_switches_unknown_response_to_pdf_limit(monkeypatch):
     with pytest.raises(url_ingest.ResponseTooLargeError):
         url_ingest.fetch_url(response.url, pdf_max_bytes=10, other_max_bytes=100)
     assert response.yielded == 11
+
+
+def test_unknown_pdf_magic_allows_exact_pdf_boundary(monkeypatch):
+    response = Response(
+        b'%PDF-12345', url='https://example.org/download', headers={'Content-Length': '10'})
+    install(monkeypatch, response)
+    kind, fetched = url_ingest.fetch_and_classify(
+        response.url, pdf_max_bytes=10, other_max_bytes=100)
+    assert kind == 'pdf' and fetched.content == b'%PDF-12345'
+    assert response.yielded == 10
+
+
+def test_invalid_pdf_magic_is_classified_as_other_and_uses_other_limit(monkeypatch):
+    response = Response(b'%PDFx' + b'a' * 75, url='https://example.org/download', headers={})
+    install(monkeypatch, response)
+    kind, fetched = url_ingest.fetch_and_classify(
+        response.url, pdf_max_bytes=10, other_max_bytes=100)
+    assert kind == 'other' and fetched.content == response.body
+
+
+def test_unknown_content_length_waits_for_pdf_magic_before_selecting_limit(monkeypatch):
+    response = Response(
+        b'%PDF-' + b'a' * 75, url='https://example.org/download', headers={'Content-Length': '80'})
+    install(monkeypatch, response)
+    kind, fetched = url_ingest.fetch_and_classify(
+        response.url, pdf_max_bytes=100, other_max_bytes=20)
+    assert kind == 'pdf' and fetched.content == response.body
+    assert response.chunk_sizes[0] == 5
+
+
+def test_unknown_pdf_magic_can_be_split_across_small_chunks(monkeypatch):
+    response = SmallPieceResponse(
+        b'%PDF-' + b'a' * 75, url='https://example.org/download', headers={'Content-Length': '80'})
+    install(monkeypatch, response)
+    kind, fetched = url_ingest.fetch_and_classify(
+        response.url, pdf_max_bytes=100, other_max_bytes=20)
+    assert kind == 'pdf' and fetched.content == response.body
+    assert response.chunk_sizes[0] == 5
+
+
+def test_unknown_pdf_applies_smaller_pdf_limit_after_split_magic(monkeypatch):
+    response = Response(
+        b'%PDF-' + b'a' * 75, url='https://example.org/download', headers={'Content-Length': '80'})
+    install(monkeypatch, response)
+    with pytest.raises(url_ingest.ResponseTooLargeError):
+        url_ingest.fetch_url(response.url, pdf_max_bytes=10, other_max_bytes=100)
+    assert response.chunk_sizes[0] == 5 and response.yielded == 5
 
 
 def test_pdf_path_with_query_is_rejected_from_content_length_before_body(monkeypatch):

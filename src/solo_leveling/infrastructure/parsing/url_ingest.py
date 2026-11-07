@@ -84,6 +84,26 @@ def _looks_like_pdf(response: requests.Response, url: str) -> bool:
             or urlparse(url).path.lower().endswith('.pdf'))
 
 
+def _has_pdf_magic(content: bytes) -> bool:
+    """저장 단계(PdfStore)와 같은 PDF 헤더 기준을 사용한다."""
+    return content.startswith(b'%PDF-')
+
+
+def _declared_length(response: requests.Response) -> Optional[int]:
+    content_length = response.headers.get("Content-Length")
+    if content_length is None:
+        return None
+    try:
+        return int(content_length)
+    except ValueError:
+        return None  # 헤더 형식이 이상하면 무시하고 실제 크기로 판단
+
+
+def _check_deadline(deadline: float, response: requests.Response) -> None:
+    if time.monotonic() > deadline:
+        raise TimeoutError(f"응답 다운로드 시간이 허용 범위를 초과했습니다: {response.url}")
+
+
 def _consume_with_limits(response: requests.Response, pdf_max_bytes: int,
                          other_max_bytes: int, deadline: float, url: str) -> bytes:
     """스트리밍으로 읽으며 크기·시간 제한을 강제한다.
@@ -92,30 +112,48 @@ def _consume_with_limits(response: requests.Response, pdf_max_bytes: int,
     수신한 바이트 수를 누적해서 판단하므로 우회되지 않는다.
     """
     pdf_response = _looks_like_pdf(response, url)
-    max_bytes = pdf_max_bytes if pdf_response else other_max_bytes
-    content_length = response.headers.get("Content-Length")
-    if content_length is not None:
-        try:
-            declared_length = int(content_length)
-        except ValueError:
-            declared_length = None  # 헤더 형식이 이상하면 무시하고 실제 크기로 판단
+    declared_length = _declared_length(response)
+    chunks, total = [], 0
+
+    if pdf_response:
+        max_bytes = pdf_max_bytes
         if declared_length is not None and declared_length > max_bytes:
             raise ResponseTooLargeError()
+    else:
+        # 종류가 확정되기 전에는 작은 쪽 상한으로 거부할 수 없다. 어느 종류여도
+        # 초과하는 선언값만 즉시 거부하고, 최대 5바이트를 읽어 magic을 확인한다.
+        if declared_length is not None and declared_length > max(pdf_max_bytes, other_max_bytes):
+            raise ResponseTooLargeError()
+        prefix_size = min(5, max(pdf_max_bytes, other_max_bytes) + 1)
+        prefix_iter = response.iter_content(chunk_size=prefix_size)
+        prefix = b''
+        prefix_exhausted = False
+        for chunk in prefix_iter:
+            _check_deadline(deadline, response)
+            if not chunk:
+                continue
+            chunks.append(chunk)
+            total += len(chunk)
+            prefix = (prefix + chunk)[:5]
+            if total > max(pdf_max_bytes, other_max_bytes) or len(prefix) >= 5:
+                break
+        else:
+            prefix_exhausted = True
+        pdf_response = _has_pdf_magic(prefix)
+        max_bytes = pdf_max_bytes if pdf_response else other_max_bytes
+        if declared_length is not None and declared_length > max_bytes:
+            raise ResponseTooLargeError()
+        if total > max_bytes:
+            raise ResponseTooLargeError()
+        if prefix_exhausted:
+            return b"".join(chunks)
 
-    chunks = []
-    total = 0
-    # PDF 여부를 magic bytes로 뒤늦게 알게 되는 응답도 PDF 상한+1 이상을 한 번에 읽지 않는다.
-    chunk_size = min(65536, pdf_max_bytes + 1, other_max_bytes + 1)
-    prefix = b''
+    # 판정 뒤에는 남은 허용량+1만 요청해 실제 수신도 최대 한 바이트 초과에서 멈춘다.
+    chunk_size = min(65536, max_bytes - total + 1)
     for chunk in response.iter_content(chunk_size=chunk_size):
-        if time.monotonic() > deadline:
-            raise TimeoutError(f"응답 다운로드 시간이 허용 범위를 초과했습니다: {response.url}")
+        _check_deadline(deadline, response)
         if not chunk:
             continue
-        prefix = (prefix + chunk)[:5]
-        if not pdf_response and prefix.startswith(b'%PDF-'):
-            pdf_response = True
-            max_bytes = pdf_max_bytes
         total += len(chunk)
         if total > max_bytes:
             raise ResponseTooLargeError()
@@ -177,9 +215,9 @@ def classify_content(response: requests.Response, url: str) -> str:
     content_type = response.headers.get("Content-Type", "").lower()
     if "application/pdf" in content_type:
         return "pdf"
-    if url.lower().endswith(".pdf") and response.content[:4] == b"%PDF":
+    if urlparse(url).path.lower().endswith(".pdf") and _has_pdf_magic(response.content):
         return "pdf"
-    if response.content[:4] == b"%PDF":
+    if _has_pdf_magic(response.content):
         return "pdf"
     if "text/html" in content_type or "<html" in response.text[:1000].lower():
         return "html"
