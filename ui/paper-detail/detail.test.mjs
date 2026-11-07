@@ -121,7 +121,7 @@ test('저장 중 근거를 전환해도 요청 위치와 표시 목록은 섞이
 
 test('더 보기는 선택한 근거의 커서로만 조회하고 실패 후 다시 시도할 수 있다', async () => {
   const {app, el} = setup();
-  const cursor = {created_at:'2026', annotation_id:'a2'};
+  const cursor = 'opaque-next-page';
   const first = evidence('e1', {annotation_start:0, annotation_count:2, annotation_cursor:cursor,
     annotations:[{annotation_id:'a2', kind:'note', body:'최신 기록'}]});
   const calls = [];
@@ -140,4 +140,23 @@ test('더 보기는 선택한 근거의 커서로만 조회하고 실패 후 다
   assert.deepEqual(calls[1], {name:'list_evidence_annotations', arguments:{context_id:'ctx', evidence_id:'e1', cursor}});
   assert.match(el('records').textContent, /최신 기록.*이전 기록/);
   assert.equal(el('more-records').hidden, true);
+});
+
+test('저장 결과 미확정 뒤에는 근거 재선택으로 재시도할 수 없고 상세 재조회로 복구한다', async () => {
+  const {app, el} = setup();
+  const first = evidence('e1', {annotation_start:0, annotations:[]});
+  const second = evidence('e2', {annotation_start:0, annotations:[]});
+  let calls = 0;
+  app.callServerTool = async () => { calls++; return {isError:true}; };
+  app.ontoolresult(detailPayload({evidence:[first,second]}));
+  await el('save-highlight').onclick();
+  el('evidence-list').lastChild.click();
+  assert.equal(el('editor').disabled,false);
+  el('evidence-list').firstChild.click();
+  assert.equal(el('editor').disabled,true);
+  await el('save-highlight').onclick();
+  assert.equal(calls,1);
+  app.ontoolresult(detailPayload({evidence:[{...first,annotations:[{kind:'highlight',body:''}]}]}));
+  assert.equal(el('editor').disabled,false);
+  assert.match(el('records').textContent,/하이라이트/);
 });

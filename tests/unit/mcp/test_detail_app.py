@@ -46,6 +46,7 @@ def test_saved_detail_tool_is_readonly_and_preserves_json():
         assert tool.meta['ui']['resourceUri'] == DETAIL_APP_URI
         assert tool.annotations.readOnlyHint is True
         content, data = await server.call_tool('get_paper_detail', {'context_id':'ctx'})
-        assert json.loads(content[0].text) == data == detail.get.return_value
+        assert json.loads(content[0].text) == data
+        assert data == {**detail.get.return_value, 'annotation_page': None}
     asyncio.run(scenario())
     detail.get.assert_called_once_with('ctx', scope='paper', offset=0, limit=20, summary_id=None)

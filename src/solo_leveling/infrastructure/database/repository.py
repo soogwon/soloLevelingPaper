@@ -5,6 +5,7 @@ infrastructure/database — 리포지토리
 processing_jobs.limitations는 JSON 문자열로 저장한다(SQLite에 배열 타입이 없어서).
 """
 import json
+import sqlite3
 from collections.abc import Collection
 from uuid import uuid4
 from contextlib import closing
@@ -26,6 +27,7 @@ from solo_leveling.domain.models import (
     EmbeddingSet,
     LearningContext,
     Evidence,
+    PaperSection,
     now_iso,
     RequestConflictError,
 )
@@ -145,6 +147,93 @@ def get_chunk(db_path: str, chunk_id: str) -> Optional[Chunk]:
     row = conn.execute("SELECT * FROM chunks WHERE chunk_id = ?", (chunk_id,)).fetchone()
     conn.close()
     return Chunk(**dict(row)) if row else None
+
+
+def insert_sections(db_path: str, sections: List[PaperSection]) -> None:
+    """섹션 카탈로그를 저장한다. 같은 리비전의 청크 참조도 함께 검증한다."""
+    with closing(get_connection(db_path)) as conn, conn:
+        insert_sections_in_transaction(conn, sections)
+
+
+def insert_sections_in_transaction(conn: sqlite3.Connection, sections: List[PaperSection]) -> None:
+    """호출자의 트랜잭션에서 섹션 계층을 검증하고 저장한다."""
+    if not sections:
+        return
+    revision_ids = {section.parse_revision_id for section in sections}
+    if len(revision_ids) != 1:
+        raise ValueError('sections must belong to one parse revision')
+    parse_revision_id = next(iter(revision_ids))
+    revision = conn.execute(
+        'SELECT page_count FROM parse_revisions WHERE parse_revision_id=?', (parse_revision_id,),
+    ).fetchone()
+    if revision is None:
+        raise ResourceNotFoundError('parse revision not found')
+    by_id = {section.section_id: section for section in sections}
+    ids = by_id.keys()
+    if len(ids) != len(sections) or len({s.ordinal for s in sections}) != len(sections):
+        raise ValueError('section ids and ordinals must be unique')
+    for section in sections:
+        if not section.title.strip() or section.start_pdf_page > revision['page_count'] \
+                or section.end_pdf_page > revision['page_count']:
+            raise ValueError('section title or page range is invalid')
+        if section.parent_section_id is not None and section.parent_section_id not in ids:
+            raise ValueError('parent section must belong to the same parse revision')
+    # 각 부모 경로를 한 번만 따라가며 부모가 자식보다 먼저 저장되도록 정렬한다.
+    ordered = []
+    completed = set()
+    for section in sections:
+        path = []
+        visiting = set()
+        current = section.section_id
+        while current is not None and current not in completed:
+            if current in visiting:
+                raise ValueError('section hierarchy contains a cycle')
+            visiting.add(current)
+            path.append(by_id[current])
+            current = by_id[current].parent_section_id
+        ordered.extend(reversed(path))
+        completed.update(visiting)
+    unknown = conn.execute(
+        "SELECT DISTINCT section_id FROM chunks WHERE parse_revision_id=? AND section_id IS NOT NULL "
+        f"AND section_id NOT IN ({','.join('?' for _ in ids)})",
+        (parse_revision_id, *ids),
+    ).fetchall()
+    if unknown:
+        raise DataIntegrityError('chunk references a section missing from the catalog')
+    conn.executemany(
+        '''INSERT INTO sections
+           (parse_revision_id, section_id, title, parent_section_id, ordinal, level,
+            start_pdf_page, end_pdf_page, start_chunk_index, end_chunk_index)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        [(s.parse_revision_id, s.section_id, s.title, s.parent_section_id, s.ordinal, s.level,
+          s.start_pdf_page, s.end_pdf_page, s.start_chunk_index, s.end_chunk_index) for s in ordered],
+    )
+
+
+def get_section_catalog(db_path: str, version_id: str, parse_revision_id: str) -> List[PaperSection]:
+    """정확한 버전/파싱 리비전 쌍의 섹션을 문서 순서대로 반환한다.
+
+    없는 카탈로그는 빈 목록, 없는 리소스는 ResourceNotFoundError, 다른 버전에
+    속한 리비전은 DataIntegrityError로 구분한다.
+    """
+    conn = get_connection(db_path)
+    try:
+        version = conn.execute('SELECT 1 FROM paper_versions WHERE version_id=?', (version_id,)).fetchone()
+        if version is None:
+            raise ResourceNotFoundError('paper version not found')
+        revision = conn.execute(
+            'SELECT version_id FROM parse_revisions WHERE parse_revision_id=?', (parse_revision_id,),
+        ).fetchone()
+        if revision is None:
+            raise ResourceNotFoundError('parse revision not found')
+        if revision['version_id'] != version_id:
+            raise DataIntegrityError('parse revision does not belong to paper version')
+        rows = conn.execute(
+            'SELECT * FROM sections WHERE parse_revision_id=? ORDER BY ordinal', (parse_revision_id,),
+        ).fetchall()
+        return [PaperSection(**dict(row)) for row in rows]
+    finally:
+        conn.close()
 
 
 # ── 처리 작업 ────────────────────────────────────────────────────
@@ -450,6 +539,51 @@ def _insert_search_index_chunks(conn, embedding_set_id: str, chunk_ids: tuple[st
     )
 
 
+def list_unconfirmed_search_indexes(db_path: str) -> list[dict]:
+    """게시 청크 소속의 신뢰 가능한 출처가 아직 없는 구버전 색인을 돌려준다."""
+    with closing(get_connection(db_path)) as conn:
+        return [dict(row) for row in conn.execute(
+            'SELECT s.embedding_set_id, s.version_id, s.parse_revision_id, s.chunk_count, v.paper_id '
+            'FROM search_indexes s JOIN paper_versions v ON v.version_id=s.version_id '
+            'LEFT JOIN search_index_chunk_snapshots m ON m.embedding_set_id=s.embedding_set_id '
+            'WHERE m.embedding_set_id IS NULL ORDER BY s.embedding_set_id')]
+
+
+def confirm_search_index_chunks(db_path: str, embedding_set_id: str,
+                                chunk_ids: Collection[str]) -> bool:
+    """실제 벡터 컬렉션에서 확인한 구버전 게시 집합을 원자적으로 기록한다.
+
+    다른 런타임이 먼저 출처를 확정했다면 그 스냅샷을 덮어쓰지 않고 False를 돌려준다.
+    """
+    if isinstance(chunk_ids, (str, bytes)) or not isinstance(chunk_ids, Collection):
+        raise ValueError('confirmed chunk ids must be a collection')
+    confirmed = tuple(chunk_ids)
+    if (not confirmed or len(set(confirmed)) != len(confirmed)
+            or any(type(chunk_id) is not str or not chunk_id.strip() for chunk_id in confirmed)):
+        raise ValueError('confirmed chunk ids must be unique non-empty strings')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        if conn.execute(
+                'SELECT 1 FROM search_index_chunk_snapshots WHERE embedding_set_id=?',
+                (embedding_set_id,)).fetchone():
+            return False
+        index = conn.execute(
+            'SELECT parse_revision_id, chunk_count FROM search_indexes WHERE embedding_set_id=?',
+            (embedding_set_id,)).fetchone()
+        if index is None or index['chunk_count'] != len(confirmed):
+            raise ValueError('confirmed chunk ids do not match the published index')
+        known = {row['chunk_id'] for row in conn.execute(
+            'SELECT chunk_id FROM chunks WHERE parse_revision_id=?', (index['parse_revision_id'],))}
+        if set(confirmed) - known:
+            raise ValueError('confirmed chunk ids do not belong to the published parse revision')
+        conn.execute('DELETE FROM search_index_chunks WHERE embedding_set_id=?', (embedding_set_id,))
+        _insert_search_index_chunks(conn, embedding_set_id, tuple(sorted(confirmed)))
+        conn.execute(
+            "INSERT INTO search_index_chunk_snapshots (embedding_set_id, source) VALUES (?, 'vector_store')",
+            (embedding_set_id,))
+        return True
+
+
 def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
                          embedding_set: EmbeddingSet, job_id: str, chunk_ids: Collection[str],
                          limitations: list[str]) -> None:
@@ -479,6 +613,8 @@ def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
                      (embedding_set.embedding_set_id, version_id, parse_revision_id,
                       embedding_set.translation_revision_id, job_id, chunk_count))
         _insert_search_index_chunks(conn, embedding_set.embedding_set_id, published_chunk_ids)
+        conn.execute('INSERT INTO search_index_chunk_snapshots (embedding_set_id, source) VALUES (?, ?)',
+                     (embedding_set.embedding_set_id, 'publish'))
         conn.execute("UPDATE processing_jobs SET status='ready', stage='index', limitations=?, updated_at=? WHERE job_id=?",
                      (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
 
@@ -608,6 +744,8 @@ def publish_recovered_index(db_path: str, job_id: str, embedding_set: EmbeddingS
                      (embedding_set.embedding_set_id, lock['version_id'], old['parse_revision_id'],
                       embedding_set.translation_revision_id, job_id, chunk_count))
         _insert_search_index_chunks(conn, embedding_set.embedding_set_id, published_chunk_ids)
+        conn.execute('INSERT INTO search_index_chunk_snapshots (embedding_set_id, source) VALUES (?, ?)',
+                     (embedding_set.embedding_set_id, 'publish'))
         conn.execute("UPDATE processing_jobs SET status='ready', stage='index', limitations=?, updated_at=? "
                      'WHERE job_id=?', (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
         conn.execute('DELETE FROM translation_recovery_locks WHERE job_id=?', (job_id,))

@@ -95,7 +95,10 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
         search=SimpleNamespace(contexts=object()), translation=object(), translation_settings=object())
     build = Mock(return_value=services)
     monkeypatch.setattr(runtime, 'build_services', build)
-    monkeypatch.setattr(runtime, 'get_client', Mock(return_value=object()))
+    client = object()
+    monkeypatch.setattr(runtime, 'get_client', Mock(return_value=client))
+    restore = Mock()
+    monkeypatch.setattr(runtime, 'restore_legacy_index_memberships', restore)
     manager = Mock()
     manager_factory = Mock(return_value=manager)
     monkeypatch.setattr(runtime, 'LocalIngestionManager', manager_factory)
@@ -106,6 +109,7 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
     if raw_setting is not None:
         values['SOLO_LEVELING_COLLECT_RAW_LOGS'] = raw_setting
     lifespan = runtime.build_runtime_server(values)
+    restore.assert_called_once_with(str(runtime.runtime_paths(values).db_path), client)
     # 상세 조회와 대시보드가 같은 저장소에 각각 연결되는지 확인한다.
     connected = create.call_args.args[0]
     assert connected.answer.target is services.answer
@@ -114,6 +118,7 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
     assert connected.contexts.target is services.search.contexts
     assert isinstance(connected.detail.target, runtime.PaperDetailService)
     assert isinstance(connected.detail.reader, runtime.SQLitePaperDetailReader)
+    assert connected.detail.target.annotations is connected.annotations.target
     assert isinstance(connected.dashboard.target, runtime.DashboardReader)
     assert isinstance(connected.reflection.target, runtime.ReflectionService)
     assert connected.reflection.db_path == str(runtime.runtime_paths(values).db_path)
@@ -158,15 +163,19 @@ def test_external_policy_reaches_real_providers(tmp_path, monkeypatch, allow, lo
     monkeypatch.setattr(requests, 'post', post)
     embedder = Mock()
     monkeypatch.setattr(runtime, 'ProcessEmbedder', Mock(return_value=embedder))
-    monkeypatch.setattr(runtime, 'get_client', Mock(return_value=Mock()))
+    client = Mock()
+    monkeypatch.setattr(runtime, 'get_client', Mock(return_value=client))
     monkeypatch.setattr(runtime, 'init_db', Mock())
     monkeypatch.setattr(runtime, 'mark_interrupted_jobs_on_startup', Mock())
+    restore = Mock()
+    monkeypatch.setattr(runtime, 'restore_legacy_index_memberships', restore)
     manager_factory = Mock()
     monkeypatch.setattr(runtime, 'LocalIngestionManager', manager_factory)
     monkeypatch.setattr(runtime, 'create_server', lambda services, **kwargs: services)
 
     # build_services는 대역으로 바꾸지 않아 실제 번역·생성 제공자까지 연결한다.
     services = runtime.build_runtime_server(values)
+    restore.assert_called_once_with(str(runtime.runtime_paths(values).db_path), client)
     generation = services.answer.generator.settings
     ingestion_services = manager_factory.call_args.args[3]
     translation = ingestion_services.translation.provider.config

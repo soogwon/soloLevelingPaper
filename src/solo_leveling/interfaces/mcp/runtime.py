@@ -18,12 +18,15 @@ from solo_leveling.infrastructure.database.schema import init_db
 from solo_leveling.infrastructure.database.dashboard_queries import DashboardReader
 from solo_leveling.infrastructure.generation.openai_generator import OpenAIGenerationSettings
 from solo_leveling.infrastructure.generation.semantic_verifier import SemanticSettings
-from solo_leveling.infrastructure.storage.vector_store import get_client, close_client, ChromaCloseResult
+from solo_leveling.infrastructure.storage.vector_store import (
+    get_client, close_client, ChromaCloseResult, restore_legacy_index_memberships,
+)
 from solo_leveling.infrastructure.translation.openai_provider import OpenAITranslationConfig
 from solo_leveling.application.paper_detail.service import PaperDetailService
 from solo_leveling.application.reflection.service import ReflectionService
 from solo_leveling.infrastructure.retrieval.paper_detail import SQLitePaperDetailReader
 from solo_leveling.application.annotations.service import AnnotationService
+from .question_card import QuestionKeys
 from .server import MCPServices, create_server
 from .quiz_tools import QuizContractAdapter, StoredQuizService
 from .ingestion import IngestionServices, LocalIngestionManager
@@ -128,6 +131,7 @@ def build_runtime_server(values: Mapping[str, str]):
         init_db(str(paths.db_path))
         mark_interrupted_jobs_on_startup(str(paths.db_path))
         client = get_client(str(paths.chroma_dir))
+        restore_legacy_index_memberships(str(paths.db_path), client)
         services = build_services(str(paths.db_path), client,
             generation=settings.generation,
             translation=settings.translation, embedder=embedder, verification=settings.verification)
@@ -155,14 +159,16 @@ def build_runtime_server(values: Mapping[str, str]):
                     if not await asyncio.to_thread(lifetime.done.wait, settings.shutdown_timeout):
                         report('RUNTIME_SHUTDOWN_DEFERRED')
 
+        annotations = AnnotationService(str(paths.db_path))
         server = create_server(MCPServices(
+            question_keys=gate.wrap(QuestionKeys(paths.data_root.resolve() / 'card-question-keys.sqlite3')),
             executions=gate.wrap(services.executions),
             answer=gate.wrap(services.answer), evidence=gate.wrap(services.evidence),
             ingestion=gate.wrap(ingestion), contexts=gate.wrap(services.search.contexts),
-            detail=gate.wrap(PaperDetailService(SQLitePaperDetailReader(str(paths.db_path)))),
+            detail=gate.wrap(PaperDetailService(SQLitePaperDetailReader(str(paths.db_path)), annotations)),
             dashboard=gate.wrap(DashboardReader(str(paths.db_path))),
             reflection=gate.wrap(ReflectionService(str(paths.db_path))),
-            annotations=gate.wrap(AnnotationService(str(paths.db_path))),
+            annotations=gate.wrap(annotations),
             quiz=gate.wrap(QuizContractAdapter(StoredQuizService(str(paths.db_path)))),
         ), lifespan=lifespan)
         track_lifetime(lifetime)

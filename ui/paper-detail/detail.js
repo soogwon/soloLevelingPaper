@@ -87,6 +87,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
     el('message').textContent = evidence.length ? `근거 ${evidence.length}개 · 선택하면 해당 인용 구간으로 이동합니다.` : detailed && data.summary === null ? '저장된 요약이 없어 표시할 근거가 없습니다.' : '반환된 근거가 없습니다.';
     el('content').hidden = false;
     el('detail').hidden = !evidence.length;
+    const uncertain = new Set();
     const pending = new Set();
     const loading = new Set();
     function showRecords(e) {
@@ -100,8 +101,9 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
       }
       el('more-records').hidden = !e.annotation_cursor;
       el('more-records').disabled = loading.has(e) || pending.has(e);
-      el('editor').disabled = e.annotation_start == null || pending.has(e) || loading.has(e);
-      el('record-status').textContent = e.annotation_start == null ? '원문 위치를 확정할 수 없어 작성할 수 없습니다.'
+      el('editor').disabled = uncertain.has(e) || e.annotation_start == null || pending.has(e) || loading.has(e);
+      el('record-status').textContent = uncertain.has(e) ? '저장 결과가 확인되지 않았습니다. 상세 카드를 다시 조회해 기록을 확인하세요.'
+        : e.annotation_start == null ? '원문 위치를 확정할 수 없어 작성할 수 없습니다.'
         : pending.has(e) ? '저장 중입니다.' : records.children.length ? `기록 ${records.children.length}건 표시 · 전체 ${e.annotation_count ?? records.children.length}건` : '저장된 기록이 없습니다.';
     }
     async function loadMore(e) {
@@ -125,13 +127,13 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
         loading.delete(e);
         if (selected === e) {
           el('more-records').disabled = pending.has(e);
-          el('editor').disabled = pending.has(e) || e.annotation_start == null;
+          el('editor').disabled = uncertain.has(e) || pending.has(e) || e.annotation_start == null;
         }
       }
       if (selected === e) showRecords(e);
     }
     async function save(e, kind) {
-      if (selected !== e || pending.has(e) || !Number.isSafeInteger(e.annotation_start)) return;
+      if (selected !== e || uncertain.has(e) || loading.has(e) || pending.has(e) || !Number.isSafeInteger(e.annotation_start)) return;
       const body = kind === 'note' ? el('note-body').value : '';
       if (kind === 'note' && !body.trim()) {
         el('record-status').textContent = '메모 내용을 입력하세요.';
@@ -153,11 +155,9 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
         e.annotations.unshift(record);
         if (selected === e && kind === 'note') el('note-body').value = '';
       } catch {
+        uncertain.add(e);
         pending.delete(e);
-        if (selected === e) {
-          showRecords(e);
-          el('record-status').textContent = '저장 결과를 확인하려면 다시 저장하기 전에 상세 카드를 다시 여세요.';
-        }
+        if (selected === e) showRecords(e);
         return;
       }
       pending.delete(e);

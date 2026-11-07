@@ -2,6 +2,10 @@
 
 ## 구현 범위
 
+#231의 서비스·응답 연결 이후 메모 조회의 추가 필드와 C의 남은 UI 범위는
+[논문 상세 기록 조회 계약](paper-detail-annotations.md)을 따른다.
+아래는 기존 상세 뷰어의 구현·검증 기록이다.
+
 `ask_paper`, `get_evidence`, `get_paper_detail`에 `ui://solo-leveling/paper-detail.html`을 연결한다.
 기존 도구의 입출력 JSON·검색/생성/검증·DB 저장은 변경하지 않는다. 저장 요약 조회 도구만 추가한다.
 

@@ -111,13 +111,17 @@ def prepare_runtime(monkeypatch):
     monkeypatch.setattr(runtime, 'build_services', Mock(return_value=services))
     monkeypatch.setattr(runtime, 'init_db', Mock())
     monkeypatch.setattr(runtime, 'mark_interrupted_jobs_on_startup', Mock())
+    monkeypatch.setattr(runtime, 'restore_legacy_index_memberships', Mock())
     manager = Mock()
     monkeypatch.setattr(runtime, 'LocalIngestionManager', Mock(return_value=manager))
     monkeypatch.setattr(runtime, 'create_server', Mock(side_effect=lambda services, *, lifespan: (services, lifespan)))
     return embedder, client, manager
 
 
-@pytest.mark.parametrize('stage', ['init_db', 'get_client', 'build_services', 'LocalIngestionManager', 'create_server'])
+@pytest.mark.parametrize('stage', [
+    'init_db', 'get_client', 'restore_legacy_index_memberships', 'build_services',
+    'LocalIngestionManager', 'create_server',
+])
 def test_partial_initialization_cleans_owned_resources(tmp_path, monkeypatch, stage):
     embedder, client, manager = prepare_runtime(monkeypatch)
     original = ValueError('original-private')

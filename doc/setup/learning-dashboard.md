@@ -11,6 +11,7 @@
 | 논문 | 맥락에 고정된 version의 제목·파일 표시명·학습 목적 |
 | 처리 상태 | 맥락의 색인을 게시한 job. 최신 재처리 작업의 상태와 다를 수 있음 |
 | 요약 | 같은 context에 저장된 전체 범위(`paper`) 요약과 근거 ID. 없으면 `null` |
+| 메모 | 같은 context의 note 전체 건수와 최근 수정순 최대 3건. 미리보기는 각 120자까지 표시하고 더 길면 말줄임표를 붙인다. |
 | 학습 진행 | preview / structure / deep_read / review 중 완료한 단계 비율(0~1) |
 | 퀴즈 | 같은 context의 단계별 시도 횟수·최근 정답 수/문항 수·최근/최고 점수(0~1) |
 
@@ -28,7 +29,7 @@ DB가 없다고 빈 DB를 만들지 않는다. 임베딩·생성·채점·단계
 
 - 도구: `get_learning_dashboard(context_id: string)` — 공백 ID 거부, 미등록 ID는 `NOT_FOUND`.
 - 출력: `context_id`, `version_id`, `paper_id`, `title`(nullable), `file_display_name`, `goal`,
-  `processing`, `progress`, `summary`(nullable), `quiz_scores`. 중첩 스키마는 도구 목록에서 확인한다.
+  `processing`, `progress`, `summary`(nullable), `quiz_scores`, `notes`(count, previews). 중첩 스키마는 도구 목록에서 확인한다.
 - 처리 상태는 저장된 job 상태이며 실시간 벡터 무결성 검사나 전체 번역 완료 보증이 아니다.
 - 조회 속성: 읽기 전용·멱등, 외부 API 호출 없음.
 - UI: `ui://solo-leveling/learning-dashboard.html`, `text/html;profile=mcp-app`.
@@ -72,7 +73,7 @@ Claude Desktop에서 기존 학습 맥락으로 `get_learning_dashboard`를 호�
 초기 1차 범위에는 메모·하이라이트(#56), 논문 상세 화면(#62), 질문·퀴즈 풀이 화면(#63),
 단계 변경 도구나 요약·퀴즈 생성 도구가 포함되지 않는다. 내부 서비스로 저장된 데이터는
 조회할 수 있으나 아직 MCP로 모든 데이터를 생성할 수 있다는 뜻은 아니다.
-아래 후속 변경에서 논문 상세 연결을 추가했다. 메모 요약·퀴즈 화면 연결 등 후속
+아래 후속 변경에서 논문 상세 연결을 추가했다. 퀴즈 화면 연결 등 후속
 범위가 남아 있으므로 #61 전체를 종료하지 않는다.
 
 ## 논문 상세 연결 보완

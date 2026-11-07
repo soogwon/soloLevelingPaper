@@ -201,3 +201,13 @@ for (const fault of ['missing-summary', 'missing-parse', 'missing-translation', 
     assert.equal(calls, 2);
   });
 }
+
+test('메모 미리보기는 텍스트로 표시하고 빈 목록에서는 이전 메모를 지운다', async () => {
+  const { app, get } = await setup();
+  app.ontoolresult(result({ notes: { count: 1, previews: ['<b>메모</b>'] } }));
+  assert.equal(get('note-previews').textContent, '<b>메모</b>');
+  assert.equal(get('note-previews').querySelector('b'), null);
+  app.ontoolresult(result({ notes: { count: 0, previews: [] } }));
+  assert.equal(get('note-count').textContent, '저장된 메모가 없습니다.');
+  assert.equal(get('note-previews').children.length, 0);
+});

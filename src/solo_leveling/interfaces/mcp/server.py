@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Annotated, Literal, Protocol
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 import anyio
 from solo_leveling.diagnostics import traced
@@ -24,16 +24,19 @@ from .registration_consent import (
 )
 from .errors import to_tool_error
 from .detail_app import DETAIL_APP_URI, register_detail_app
+from .question_card import QuestionKeys, register_question_card
 from .status_app import STATUS_APP_URI, register_status_app
 from .dashboard import DashboardService, register_dashboard
 from .reflection import ReflectionInputServer, ReflectionService, register_reflection
 from solo_leveling.application.annotations.service import AnnotationService
+from solo_leveling.domain.annotation import Annotation
 from .annotation_tools import register_annotations
 from .quiz_tools import QuizContractAdapter, register_quiz
 
 
 HOST_INSTRUCTIONS = '''등록된 논문에서 한국어 근거 답변과 원문 근거를 조회합니다.
 prepare_paper_registration → 사용자 카드 확인 → get_paper_status → start_learning → ask_paper → get_evidence 순서로 사용합니다.
+Desktop에서 복원 가능한 새 질문이나 이전 질문 조회를 요청하면 open_paper_question_card에 기존 context_id를 전달하세요.
 등록·질문을 시작하기 전에 각 도구 설명에 있는 OpenAI 전송 데이터와 시점을 사용자에게 안내하세요.
 등록 요청에는 prepare_paper_registration으로 안내 카드를 표시하세요. 이 단계는 등록 완료가 아닙니다.
 사용자가 카드에서 동의하고 등록해야 작업이 시작됩니다. add_paper는 카드 전용이며 대신 호출하지 마세요.
@@ -103,6 +106,7 @@ class MCPServices:
     quiz: QuizContractAdapter | None = None
     executions: AskExecutionService | None = None
     annotations: AnnotationService | None = None
+    question_keys: QuestionKeys | None = None
 
 
 class Focus(BaseModel):
@@ -189,23 +193,18 @@ class EvidenceAnnotationOutput(TypedDict):
     body: str
 
 
-class AnnotationCursor(TypedDict):
-    created_at: str
-    annotation_id: str
-
-
 class EvidenceAnnotationPage(TypedDict):
     context_id: str
     evidence_id: str
     annotation_start: int | None
     annotation_count: int
-    annotation_cursor: AnnotationCursor | None
+    annotation_cursor: str | None
     annotations: list[EvidenceAnnotationOutput]
 
 
 class DetailEvidenceOutput(EvidenceOutput):
     annotation_count: int
-    annotation_cursor: AnnotationCursor | None
+    annotation_cursor: str | None
     annotation_start: int | None
     annotations: list[EvidenceAnnotationOutput]
     section_id: str | None
@@ -227,6 +226,12 @@ class SavedSummaryOutput(TypedDict):
     verification_level: Literal['structural_only']
 
 
+class DetailAnnotationPageOutput(TypedDict):
+    context_id: str
+    items: list[Annotation]
+    next_cursor: str | None
+
+
 class PaperDetailOutput(TypedDict):
     context_id: str
     paper_id: str
@@ -242,6 +247,7 @@ class PaperDetailOutput(TypedDict):
     keywords: list[str]
     important_sentences: list[str]
     limitations: list[str]
+    annotation_page: NotRequired[DetailAnnotationPageOutput | None]
 
 
 class RegistrationPreview(TypedDict):
@@ -325,16 +331,21 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             다음 페이지는 같은 context_id·scope와 summary_id·next_offset으로 조회하세요.
             키워드와 중요 문장은 저장 데이터가 없으면 빈 목록과 limitations로 안내합니다.
             저장 요약의 structural_only는 근거 연결 검사이며 모델 의미 검증을 뜻하지 않습니다.
+            annotation_page가 있으면 같은 context 전체의 기록 첫 20건입니다. scope/limit/offset은 요약에만 적용됩니다.
+            기록의 다음 페이지는 list_annotations에 같은 context_id와 next_cursor를 전달하세요(필터 없음).
+            저장 인용문은 현재 위치 검증 결과가 아닙니다. 이동 시 get_annotation으로 확인하세요.
             """
             try:
-                return await anyio.to_thread.run_sync(lambda: services.detail.get(
+                detail = await anyio.to_thread.run_sync(lambda: services.detail.get(
                     context_id, scope=scope, offset=offset, limit=limit, summary_id=summary_id))
+                # 구버전 서비스도 text/structuredContent에 같은 기본값을 반환한다.
+                return {'annotation_page': None, **detail}
             except Exception as error:
                 raise to_tool_error(error) from None
 
         @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
         async def list_evidence_annotations(context_id: str, evidence_id: str,
-                                            cursor: AnnotationCursor | None = None) -> EvidenceAnnotationPage:
+                                            cursor: str | None = None) -> EvidenceAnnotationPage:
             """같은 맥락·원문 인용 구간의 기록을 3건씩 조회합니다. 다음 조회에는 annotation_cursor를 전달하세요."""
             try:
                 return await anyio.to_thread.run_sync(services.detail.annotation_page, context_id, evidence_id, cursor)
@@ -490,6 +501,9 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                 raise to_tool_error(error) from None
 
     if services.executions is not None:
+        if services.question_keys is not None:
+            register_question_card(server, services.question_keys)
+
         @server.tool(structured_output=True, annotations=ToolAnnotations(
             readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
         async def submit_paper_question(context_id: str, request_key: str, question: str,

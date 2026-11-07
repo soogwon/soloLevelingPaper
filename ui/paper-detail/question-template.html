@@ -1,0 +1,9 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark"><title>논문 질문</title>
+<style>body{margin:1rem;font:1rem/1.6 system-ui}textarea,select,button{font:inherit}textarea{width:95%}button,select{margin:.35rem 0;padding:.35rem .6rem}output{display:block;white-space:pre-wrap;overflow-wrap:anywhere}</style></head>
+<body><main><h1>논문 질문</h1>
+<section><h2>저장된 질문 결과</h2><label>요청 시각 <select id="requests" disabled></select></label>
+<button id="restore" disabled>결과 조회</button><output id="result" aria-live="polite">저장된 요청을 확인하고 있습니다.</output></section>
+<section><h2>새 질문</h2><label>질문 내용<textarea id="question" rows="3"></textarea></label>
+<p>제출하면 외부 호출이 허용된 경우 질문과 선택된 논문 원문·번역을 OpenAI에 전송합니다. 보완·검증 과정에서 답변 초안과 인용문도 전송할 수 있습니다.</p>
+<button id="submit" disabled>질문 제출</button></section></main><!-- APP_SCRIPT --></body></html>
