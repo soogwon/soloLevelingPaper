@@ -4,8 +4,13 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
   const nonempty = (v) => typeof v === 'string' && v.trim().length > 0;
   const optional = (v) => v === null || typeof v === 'string';
   let timer;
+  let selected;
   function clear(message, busy = false) {
     clearTimeout(timer);
+    selected = null;
+    el('annotations').hidden = true;
+    el('note-body').value = '';
+    el('records').replaceChildren();
     el('content').hidden = true;
     el('claims').replaceChildren();
     el('claims-section').hidden = true;
@@ -79,7 +84,61 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
     el('message').textContent = evidence.length ? `근거 ${evidence.length}개 · 선택하면 해당 인용 구간으로 이동합니다.` : detailed && data.summary === null ? '저장된 요약이 없어 표시할 근거가 없습니다.' : '반환된 근거가 없습니다.';
     el('content').hidden = false;
     el('detail').hidden = !evidence.length;
+    const pending = new Set();
+    function showRecords(e) {
+      const records = el('records');
+      records.replaceChildren();
+      for (const record of e.annotations) {
+        const li = doc.createElement('li');
+        li.textContent = record.kind === 'note' ? '메모 · ' + record.body
+          : '하이라이트 · ' + (record.body || e.quote_original);
+        records.append(li);
+      }
+      el('editor').disabled = e.annotation_start == null || pending.has(e);
+      el('record-status').textContent = e.annotation_start == null ? '원문 위치를 확정할 수 없어 작성할 수 없습니다.'
+        : pending.has(e) ? '저장 중입니다.' : records.children.length ? '' : '저장된 기록이 없습니다.';
+    }
+    async function save(e, kind) {
+      if (selected !== e || pending.has(e) || !Number.isSafeInteger(e.annotation_start)) return;
+      const body = kind === 'note' ? el('note-body').value : '';
+      if (kind === 'note' && !body.trim()) {
+        el('record-status').textContent = '메모 내용을 입력하세요.';
+        return;
+      }
+      pending.add(e);
+      showRecords(e);
+      try {
+        const result = await app.callServerTool({name: 'create_annotation', arguments: {request: {
+          context_id: data.context_id, kind, body, segments: [{chunk_id: e.chunk_id,
+            start_offset: e.annotation_start, end_offset: e.annotation_start + Array.from(e.quote_original).length,
+            quote_snapshot: e.quote_original}],
+        }}});
+        const saved = result?.structuredContent;
+        const record = saved?.annotation;
+        if (result?.isError || saved?.outcome !== 'saved' || record?.context_id !== data.context_id
+            || record.kind !== kind || record.body !== body || !nonempty(record.annotation_id)) throw new Error();
+        e.annotations.unshift(record);
+        if (selected === e && kind === 'note') el('note-body').value = '';
+      } catch {
+        pending.delete(e);
+        if (selected === e) {
+          showRecords(e);
+          el('record-status').textContent = '저장 결과를 확인하려면 다시 저장하기 전에 상세 카드를 다시 여세요.';
+        }
+        return;
+      }
+      pending.delete(e);
+      if (selected === e) showRecords(e);
+    }
     function select(e, focus = false) {
+      selected = e;
+      el('note-body').value = '';
+      el('annotations').hidden = !(detailed && Array.isArray(e.annotations));
+      if (!el('annotations').hidden) {
+        showRecords(e);
+        el('save-note').onclick = () => save(e, 'note');
+        el('save-highlight').onclick = () => save(e, 'highlight');
+      }
       el('location').textContent = `PDF 기준 ${e.pdf_page}페이지${e.section_id ? ` · 섹션 ID ${e.section_id}` : ''}${e.printed_page_label ? ` · 인쇄 표기 ${e.printed_page_label}` : ''}`;
       el('file').textContent = e.file_display_name ?? '파일명은 이 응답에서 제공되지 않았습니다.';
       el('original').textContent = e.quote_original;

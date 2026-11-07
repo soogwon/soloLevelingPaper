@@ -262,11 +262,11 @@ get_evidence는 해당 context에 저장된 번역문·추출 원문 근거를 �
 모의 응답 테스트는 실제 모델 품질이나 번역·색인 완료를 증명하지 않는다. 실행 명령은 [설치·실행 안내](../setup/mcp-server.md)를 따른다.
 
 
-## #62 읽기 전용 근거 상세 UI
+## #62 근거 상세 UI
 
 `ask_paper`와 `get_evidence`는 같은 근거 상세 UI 리소스를 제공한다. 기존 JSON 계약은 유지한다.
 주장별 버튼은 반환된 근거의 원문·번역·페이지로 화면 안에서 이동하며 추가 검색을 하지 않는다.
-PDF 좌표·키워드·중요 문장·메모 저장은 이번 구현 범위에 포함되지 않는다. 섹션은 저장된 ID만 제공한다.
+저장 요약 상세에서는 선택한 원문 인용에 메모·하이라이트를 작성할 수 있다. 섹션은 저장된 ID만 제공한다.
 구현 범위와 검증 순서는 [논문 상세 UI 안내](../setup/paper-detail-app.md)를 따른다.
 
 ### get_paper_detail 응답 계약
@@ -277,7 +277,7 @@ PDF 좌표·키워드·중요 문장·메모 저장은 이번 구현 범위에 �
 - 메타데이터: `context_id`, `paper_id`, nullable `title`, 경로를 제거한 `file_display_name`, `version_id`, `parse_revision_id`, `translation_revision_id`, `scope`, `section_ids`.
 - `summary`: 저장 요약이 없으면 null. 있으면 `summary_id`, `created_at`, `items`, `total_items`, nullable `next_offset`, `verification_level=structural_only`.
 - `items`: `position`, `kind`(claim/method/result/limitation), `text`, `evidence_ids`. 현재 페이지 항목만 반환한다.
-- `evidence`: 현재 페이지 항목의 저장 근거. get_evidence 필드에 nullable `section_id`를 추가한다.
-- `keywords`, `important_sentences`: 현재 저장 계약이 없어 빈 목록. `limitations`에 `keywords_not_available`, `important_sentences_not_available`, `annotations_not_connected`, 요약 부재 시 `summary_not_available`을 반환한다.
+- `evidence`: 현재 페이지 항목의 저장 근거. 각 근거에는 `section_id`, 원문 청크에서 인용이 시작되는 문자 위치 `annotation_start`, 같은 맥락·인용 구간의 `annotations` 목록이 있다. 목록 항목은 `annotation_id`, `kind`, `body`를 담는다. 위치가 모호하거나 길이 제한을 넘으면 시작 위치는 null이고 목록은 비어 있다.
+- `keywords`, `important_sentences`: 현재 저장 계약이 없어 빈 목록. `limitations`에 `keywords_not_available`, `important_sentences_not_available`, 요약 부재 시 `summary_not_available`을 반환한다.
 - 같은 읽기 트랜잭션에서 context·게시 색인·번역 리비전·근거 인용문 연결을 검사한다. 섹션 조회는 섹션 밖 근거를 거부한다. DB 변경·생성 API 호출은 없다.
 - UI의 다음 페이지는 자동 호출하지 않으며 채팅에서 사용할 조회 인자를 표시한다. 요약 부재를 생성 동의로 해석하지 않는다.

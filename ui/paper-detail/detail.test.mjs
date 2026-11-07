@@ -95,3 +95,26 @@ test('빈 답변의 실제 검증 수준은 유지하고 빈 주장 영역만 �
  assert.equal(el('verification').hidden,false);
  assert.match(el('verification').textContent,/structural_only/);
 });
+
+test('저장 중 근거를 전환해도 요청 위치와 표시 목록은 섞이지 않는다', async () => {
+  const {app, el} = setup();
+  const first = evidence('e1', {annotation_start: 3, annotations: [], quote_original: '😀가'});
+  const second = evidence('e2', {annotation_start: 0, annotations: []});
+  let finish;
+  let request;
+  app.callServerTool = call => {
+    request = call.arguments.request;
+    return new Promise(resolve => { finish = resolve; });
+  };
+  app.ontoolresult(detailPayload({evidence: [first, second]}));
+  el('note-body').value = '첫 근거의 메모';
+  el('save-note').click();
+  assert.equal(request.context_id, 'ctx');
+  assert.deepEqual(request.segments, [{chunk_id:'c-e1', start_offset:3, end_offset:5, quote_snapshot:'😀가'}]);
+  el('evidence-list').lastChild.click();
+  finish({structuredContent: {outcome:'saved', annotation: {...request, annotation_id:'a1'}}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(el('records').children.length, 0);
+  el('evidence-list').firstChild.click();
+  assert.match(el('records').textContent, /첫 근거의 메모/);
+});

@@ -183,7 +183,15 @@ class GetEvidenceOutput(TypedDict):
     evidence: list[EvidenceOutput]
 
 
+class EvidenceAnnotationOutput(TypedDict):
+    annotation_id: str
+    kind: Literal['note', 'highlight']
+    body: str
+
+
 class DetailEvidenceOutput(EvidenceOutput):
+    annotation_start: int | None
+    annotations: list[EvidenceAnnotationOutput]
     section_id: str | None
 
 

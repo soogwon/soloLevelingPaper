@@ -102,3 +102,27 @@ def test_saved_summary_through_mcp_has_nested_contract(detail):
     assert data['summary']['items'][0]['evidence_ids']==['e1']
     assert data['evidence'][0]['section_id']=='s1'
     assert data['evidence'][0]['quote_original']=='First.'
+
+
+def test_annotations_follow_context_and_exact_original_range(detail):
+    from solo_leveling.domain.annotation import SegmentInput
+    from solo_leveling.domain.models import LearningContext
+    from solo_leveling.infrastructure.database.annotations import create_annotation
+
+    db, service = detail
+    save(db)
+    repo.create_learning_context(db, LearningContext('other', 'v1', 'p1', 't1', embedding_set_id='idx'))
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute("UPDATE chunks SET original_text='😀 First.' WHERE chunk_id='c1'")
+    segment = SegmentInput('c1', 2, 8, 'First.')
+    for context, kind, body in [('ctx', 'note', '메모'), ('ctx', 'highlight', ''), ('other', 'note', '다른 맥락')]:
+        create_annotation(db, context, kind, body, [segment])
+    first, second = service.get('ctx')['evidence']
+    assert first['annotation_start'] == 2
+    assert {(item['kind'], item['body']) for item in first['annotations']} == {('note', '메모'), ('highlight', '')}
+    assert second['annotations'] == []
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute("UPDATE chunks SET original_text='😀 First. First.' WHERE chunk_id='c1'")
+    ambiguous = service.get('ctx')['evidence'][0]
+    assert ambiguous['annotation_start'] is None
+    assert ambiguous['annotations'] == []
