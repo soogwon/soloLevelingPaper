@@ -56,6 +56,7 @@ async def run():
             await session.initialize()
             tools = await session.list_tools()
             assert {t.name for t in tools.tools} == {
+                'prepare_paper_registration', 'cancel_paper_registration',
                 'add_paper', 'get_paper_status', 'list_paper_jobs',
                 'start_learning', 'ask_paper', 'get_evidence', 'get_learning_dashboard',
                 'submit_paper_question', 'get_paper_question_status',

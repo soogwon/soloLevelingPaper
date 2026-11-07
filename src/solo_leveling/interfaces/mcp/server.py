@@ -7,7 +7,7 @@ from typing_extensions import TypedDict
 import anyio
 from solo_leveling.diagnostics import traced
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 from solo_leveling.application.evidence_qa.serialization import (
@@ -19,6 +19,9 @@ from solo_leveling.domain.ask_execution import ExecutionOutcome, ExecutionValida
 from solo_leveling.infrastructure.generation.ask_execution_service import AskExecutionService
 from solo_leveling.domain.evidence_qa import require_text
 from solo_leveling.application.paper_detail.service import PaperDetailService
+from .registration_consent import (
+    RegistrationGate, REGISTRATION_NOTICE, REGISTRATION_APP_URI, register_registration_app,
+)
 from .errors import to_tool_error
 from .detail_app import DETAIL_APP_URI, register_detail_app
 from .status_app import STATUS_APP_URI, register_status_app
@@ -30,8 +33,11 @@ from .quiz_tools import QuizContractAdapter, register_quiz
 
 
 HOST_INSTRUCTIONS = '''등록된 논문에서 한국어 근거 답변과 원문 근거를 조회합니다.
-add_paper → get_paper_status → start_learning → ask_paper → get_evidence 순서로 사용합니다.
+prepare_paper_registration → 사용자 카드 확인 → get_paper_status → start_learning → ask_paper → get_evidence 순서로 사용합니다.
 등록·질문을 시작하기 전에 각 도구 설명에 있는 OpenAI 전송 데이터와 시점을 사용자에게 안내하세요.
+등록 요청에는 prepare_paper_registration으로 안내 카드를 표시하세요. 이 단계는 등록 완료가 아닙니다.
+사용자가 카드에서 동의하고 등록해야 작업이 시작됩니다. add_paper는 카드 전용이며 대신 호출하지 마세요.
+거절·취소 후 자동 재호출하지 마세요. 카드 미지원 호스트에서는 등록할 수 없습니다.
 반환된 version_id, job_id, context_id, evidence_id를 다음 호출에 그대로 전달합니다.
 저장 요약과 논문 상세는 get_paper_detail로 조회합니다. summary가 없다고 자동 생성하지 마세요.
 section_ids는 저장된 식별자이며 원문 절 제목으로 추측해 바꾸지 마세요.
@@ -214,6 +220,13 @@ class PaperDetailOutput(TypedDict):
     limitations: list[str]
 
 
+class RegistrationPreview(TypedDict):
+    status: Literal['confirmation_required']
+    notice: str
+    source: PaperSource
+    request_key: str
+
+
 class AddPaperOutput(TypedDict):
     paper_id: str
     version_id: str
@@ -323,14 +336,49 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             except Exception as error:
                 raise to_tool_error(error) from None
 
+        registration_gate = RegistrationGate()
+        register_registration_app(server)
+
+        @server.tool(name='prepare_paper_registration', structured_output=True,
+            meta={'ui': {'resourceUri': REGISTRATION_APP_URI}},
+            annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                        idempotentHint=False, openWorldHint=False))
+        async def prepare_paper_registration(
+            source: PaperSource, request_key: str,
+        ) -> Annotated[CallToolResult, RegistrationPreview]:
+            """외부 전송 안내 카드를 표시합니다. 아직 파일 복사나 등록을 시작하지 않습니다.
+
+            외부 API 호출을 허용한 경우, 등록 후 백그라운드 번역에서 원문 청크와 대상 언어를
+            OpenAI로 보냅니다. 논문 전체 원문이 전송될 수 있습니다. 사용자에게 카드 확인을 요청하세요.
+            """
+            # 일회성 토큰은 모델에 보이는 응답 대신 카드용 메타데이터에만 전달한다.
+            return CallToolResult(
+                content=[TextContent(type='text', text=REGISTRATION_NOTICE)],
+                structuredContent={'status': 'confirmation_required', 'notice': REGISTRATION_NOTICE,
+                                   'source': source.model_dump(), 'request_key': request_key},
+                _meta={'confirmation_token': registration_gate.prepare(source.relative_path, request_key)},
+            )
+
+        @server.tool(name='cancel_paper_registration', structured_output=True,
+            meta={'ui': {'visibility': ['app']}},
+            annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                        idempotentHint=True, openWorldHint=False))
+        async def cancel_paper_registration(confirmation_token: str) -> dict[str, str]:
+            """카드에서 등록을 취소합니다. 파일이나 작업을 생성하지 않습니다."""
+            registration_gate.cancel(confirmation_token)
+            return {'status': 'cancelled'}
+
         @server.tool(name='add_paper', structured_output=True,
+            meta={'ui': {'visibility': ['app']}},
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                         idempotentHint=True, openWorldHint=True))
-        async def add_paper(source: PaperSource, request_key: str) -> AddPaperOutput:
+        async def add_paper(source: PaperSource, request_key: str, confirmation_token: str) -> AddPaperOutput:
             """import 루트의 PDF를 관리 저장소로 복사하고 등록 작업을 시작합니다.
             외부 API 호출을 허용한 경우, 등록 후 백그라운드 번역 단계에서 원문 청크와 대상 언어를 OpenAI에 보냅니다.
             여러 청크를 합하면 논문 전체 원문이 전송될 수 있습니다.
+            등록 안내 카드에서 사용자 동의 후에만 호출합니다. 모델이 대신 호출하지 마세요.
             """
+            registration_gate.consume(confirmation_token, source.relative_path, request_key)
             try:
                 result = await anyio.to_thread.run_sync(
                     lambda: services.ingestion.add_local_pdf(source.relative_path, request_key))

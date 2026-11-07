@@ -23,7 +23,9 @@ stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사�
 
 | 도구 | 필수 입력 | 선택 입력 | 출력 |
 |---|---|---|---|
-| add_paper | source, request_key | 없음 | paper_id, version_id, job_id, status |
+| prepare_paper_registration | source, request_key | 없음 | status, notice, source, request_key (카드 전용 메타데이터: confirmation_token) |
+| cancel_paper_registration (카드) | confirmation_token | 없음 | status |
+| add_paper (카드) | source, request_key, confirmation_token | 없음 | paper_id, version_id, job_id, status |
 | list_paper_jobs | 없음 | query, limit, cursor | jobs, next_cursor |
 | get_paper_status | job_id | 없음 | job_id, version_id, status, stage, capabilities, limitations, result_available |
 | start_learning | version_id | goal, known_concepts | context_id, version_id, goal, known_concepts, status, capabilities |
@@ -82,6 +84,8 @@ MCP는 제출당 최대 64문항, 단답당 5,000자, 전체 입력 65,536바이
 
 | 도구 | readOnlyHint | idempotentHint | openWorldHint |
 |---|---|---|---|
+| prepare_paper_registration | true | false | false |
+| cancel_paper_registration | false | true | false |
 | add_paper | false | true | true |
 | list_paper_jobs | true | true | false |
 | get_paper_status | true | true | false |
