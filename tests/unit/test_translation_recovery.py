@@ -41,6 +41,10 @@ def emb(set_id, rev_id):
     return EmbeddingSet(set_id, rev_id, 'model', 4)
 
 
+def chunk_ids(*excluded):
+    return [f'c{i}' for i in range(N) if i not in excluded]
+
+
 @pytest.fixture
 def db(tmp_path):
     path = str(tmp_path / 'a.db')
@@ -51,7 +55,7 @@ def db(tmp_path):
     repo.insert_chunks(path, [Chunk(f'c{i}', 'p1', i, f'original {i}') for i in range(N)])
     repo.insert_job(path, ProcessingJob('j1', 'v1', JobStatus.PROCESSING, JobStage.TRANSLATE))
     repo.save_translation_batch(path, batch('t1', [fail(i) if i in FAILED else ok(i) for i in range(N)]))
-    repo.publish_search_index(path, 'v1', 'p1', emb('e1', 't1'), 'j1', N - len(FAILED), ['partial'])
+    repo.publish_search_index(path, 'v1', 'p1', emb('e1', 't1'), 'j1', chunk_ids(*FAILED), ['partial'])
     return path
 
 
@@ -80,7 +84,7 @@ def test_first_translation_keeps_chunks_text_and_adds_translated_text(db):
 
 def test_recovery_creates_new_revision_and_publishes_atomically(db):
     run_recovery(db)
-    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), N, [])
+    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(), [])
     chunks = repo.get_translated_chunks(db, 'p1', 't2')
     assert len(chunks) == N
     assert {c.chunk_id: c.text for c in chunks}['c3'] == '복구 3'
@@ -97,7 +101,7 @@ def test_recovery_creates_new_revision_and_publishes_atomically(db):
 
 def test_metadata_for_initial_resume_and_pinned_revision(db):
     run_recovery(db)
-    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), N, [])
+    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(), [])
     assert repo.get_translation_metadata(db, 'p1')['translation_revision_id'] == 't1'
     assert repo.get_translation_metadata(db, 'p1', 't2')['translation_revision_id'] == 't2'
     assert repo.get_translation_metadata(db, 'different-parse', 't2') is None
@@ -105,7 +109,7 @@ def test_metadata_for_initial_resume_and_pinned_revision(db):
 
 def test_pinned_index_rejects_mismatched_revision(db):
     run_recovery(db)
-    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), N, [])
+    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(), [])
     assert repo.get_search_index(db, 'v1', 'p1', 't1') is None  # 기본 색인은 t2
     assert repo.get_search_index(db, 'v1', 'p1', 't1', 'e1')['embedding_set_id'] == 'e1'
     assert repo.get_search_index(db, 'v1', 'p1', 't1', 'e2') is None
@@ -113,14 +117,36 @@ def test_pinned_index_rejects_mismatched_revision(db):
 
 def test_partial_recovery_publishes_when_more_chunks_succeed(db):
     run_recovery(db, items=[ok(3, '복구'), fail(7)])
-    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), N - 1, ['partial'])
+    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(7), ['partial'])
     assert repo.get_search_index(db, 'v1')['chunk_count'] == N - 1
+
+
+def test_recovery_records_exact_ids_when_result_has_null_text(db):
+    run_recovery(db)
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute("UPDATE translation_results SET translated_text=NULL WHERE translation_revision_id='t2' "
+                     "AND chunk_id='c7'")
+    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(7), ['partial'])
+    assert [r['chunk_id'] for r in rows(
+        db, "SELECT chunk_id FROM search_index_chunks WHERE embedding_set_id='e2' ORDER BY chunk_id")] == sorted(
+            chunk_ids(7))
+
+
+def test_recovery_rejects_same_count_different_ids_atomically(db):
+    run_recovery(db, items=[ok(3, '복구'), fail(7)])
+    wrong_ids = [chunk_id for chunk_id in chunk_ids(7) if chunk_id != 'c9'] + ['c7']
+    with pytest.raises(ValueError, match='id set does not match'):
+        repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), wrong_ids, ['partial'])
+    assert repo.get_search_index(db, 'v1')['embedding_set_id'] == 'e1'
+    assert rows(db, "SELECT * FROM embedding_sets WHERE embedding_set_id='e2'") == []
+    assert rows(db, "SELECT * FROM search_indexes WHERE embedding_set_id='e2'") == []
+    assert rows(db, "SELECT * FROM search_index_chunks WHERE embedding_set_id='e2'") == []
 
 
 def test_publish_rejected_when_nothing_recovered(db):
     run_recovery(db, items=[fail(3), fail(7)])
     with pytest.raises(ValueError):
-        repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), N - 2, [])
+        repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(*FAILED), [])
     assert repo.get_search_index(db, 'v1')['embedding_set_id'] == 'e1'
     assert repo.get_job(db, 'j2').status == JobStatus.PROCESSING
 
@@ -128,7 +154,7 @@ def test_publish_rejected_when_nothing_recovered(db):
 def test_publish_rejects_wrong_count_and_leaves_everything_unchanged(db):
     run_recovery(db)
     with pytest.raises(ValueError):
-        repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), N - 1, [])
+        repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(7), [])
     assert repo.get_search_index(db, 'v1')['embedding_set_id'] == 'e1'
     assert rows(db, 'SELECT * FROM embedding_sets WHERE embedding_set_id=?', 'e2') == []
     assert len(rows(db, 'SELECT * FROM translation_recovery_locks')) == 1
@@ -137,7 +163,7 @@ def test_publish_rejects_wrong_count_and_leaves_everything_unchanged(db):
 def test_publish_rejects_embedding_set_of_other_revision(db):
     run_recovery(db)
     with pytest.raises(ValueError):
-        repo.publish_recovered_index(db, 'j2', emb('e2', 't1'), N, [])
+        repo.publish_recovered_index(db, 'j2', emb('e2', 't1'), chunk_ids(), [])
 
 
 def test_duplicate_recovery_is_rejected_and_lock_is_unique(db):
@@ -171,7 +197,7 @@ def test_claim_requires_default_index_base_with_failures(db):
     with pytest.raises(ValueError):
         repo.claim_translation_recovery(db, recovery_job(), 'nope')
     run_recovery(db)
-    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), N, [])
+    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(), [])
     with pytest.raises(ValueError):  # t1은 더 이상 기본 색인이 아니다
         repo.claim_translation_recovery(db, recovery_job('j3'), 't1')
     with pytest.raises(ValueError):  # t2에는 실패가 없다
@@ -198,7 +224,7 @@ def test_save_and_publish_require_active_recovery(db):
     with pytest.raises(ValueError):
         repo.save_recovery_translation(db, 'j2', batch('t2', [ok(3), ok(7)]))
     with pytest.raises(ValueError):
-        repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), N, [])
+        repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(), [])
     with pytest.raises(ValueError):
         repo.fail_translation_recovery(db, 'j2', [])
 
@@ -257,7 +283,7 @@ def test_old_shape_database_is_migrated_without_losing_rows(db):
         {'embedding_set_id': 'e1', 'is_default': 1, 'chunk_count': 8}]
     assert rows(db, 'PRAGMA foreign_key_check') == []
     run_recovery(db)
-    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), N, [])
+    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(), [])
     assert repo.get_search_index(db, 'v1')['embedding_set_id'] == 'e2'
 
 
@@ -270,10 +296,11 @@ def test_scaled_96_of_98_scenario(tmp_path):
     repo.insert_chunks(path, [Chunk(f'c{i}', 'p1', i, f'original {i}') for i in range(98)])
     repo.insert_job(path, ProcessingJob('j1', 'v1', JobStatus.PROCESSING, JobStage.TRANSLATE))
     repo.save_translation_batch(path, batch('t1', [fail(i) if i in (40, 41) else ok(i) for i in range(98)]))
-    repo.publish_search_index(path, 'v1', 'p1', emb('e1', 't1'), 'j1', 96, ['partial'])
+    repo.publish_search_index(path, 'v1', 'p1', emb('e1', 't1'), 'j1',
+                              [f'c{i}' for i in range(98) if i not in (40, 41)], ['partial'])
     repo.claim_translation_recovery(path, recovery_job(), 't1')
     repo.save_recovery_translation(path, 'j2', batch('t2', [ok(40, '복구'), ok(41, '복구')]))
-    repo.publish_recovered_index(path, 'j2', emb('e2', 't2'), 98, [])
+    repo.publish_recovered_index(path, 'j2', emb('e2', 't2'), [f'c{i}' for i in range(98)], [])
     assert repo.get_search_index(path, 'v1')['chunk_count'] == 98
     assert len(repo.get_translated_chunks(path, 'p1', 't2')) == 98
     assert len(repo.get_translated_chunks(path, 'p1', 't1')) == 96
@@ -283,7 +310,7 @@ def test_status_and_registration_after_recovery(db):
     from solo_leveling.workers.ingestion import get_ingestion_status
     repo.update_job_status(db, 'j1', JobStatus.READY)
     run_recovery(db)
-    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), N, [])
+    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(), [])
     old = get_ingestion_status(db, 'j1')
     new = get_ingestion_status(db, 'j2')
     assert old['result']['embedding_set_id'] == 'e1' and new['result']['embedding_set_id'] == 'e2'

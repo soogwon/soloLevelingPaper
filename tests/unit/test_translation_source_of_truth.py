@@ -95,9 +95,19 @@ def test_publish_counts_successes_from_translation_results(db):
     sql(db, 'UPDATE chunks SET text=NULL, translation_revision_id=NULL')  # 사본 없이도 게시 검증이 된다
     emb = EmbeddingSet('e1', 't1', 'model', 4)
     with pytest.raises(ValueError, match='does not match'):
-        repo.publish_search_index(db, 'v1', 'p1', emb, 'j1', 3, [])  # 성공 수와 다르면 거부
-    repo.publish_search_index(db, 'v1', 'p1', emb, 'j1', 2, ['partial'])
+        repo.publish_search_index(db, 'v1', 'p1', emb, 'j1', ['c0', 'c1', 'c2'], [])
+    repo.publish_search_index(db, 'v1', 'p1', emb, 'j1', ['c0', 'c1'], ['partial'])
     assert repo.get_search_index(db, 'v1')['chunk_count'] == 2
+
+
+def test_publish_rejects_same_count_different_id_set_without_partial_rows(db):
+    repo.save_translation_batch(db, batch([ok(0), ok(1), fail(2), fail(3)]))
+    with pytest.raises(ValueError, match='id set does not match'):
+        repo.publish_search_index(
+            db, 'v1', 'p1', EmbeddingSet('e1', 't1', 'model', 4), 'j1', ['c0', 'c2'], [])
+    assert sql(db, "SELECT * FROM embedding_sets WHERE embedding_set_id='e1'") == []
+    assert sql(db, "SELECT * FROM search_indexes WHERE embedding_set_id='e1'") == []
+    assert sql(db, "SELECT * FROM search_index_chunks WHERE embedding_set_id='e1'") == []
 
 
 def test_migration_backfills_legacy_success_without_result_row(db):
@@ -129,7 +139,8 @@ def published(db):
     """c0, c1 성공 / c2, c3 실패로 게시된 색인(chunk_count=2)과 학습 맥락."""
     from solo_leveling.domain.models import LearningContext
     repo.save_translation_batch(db, batch([ok(0), ok(1), fail(2), fail(3)]))
-    repo.publish_search_index(db, 'v1', 'p1', EmbeddingSet('idx', 't1', 'fake', 2), 'j1', 2, ['partial'])
+    repo.publish_search_index(db, 'v1', 'p1', EmbeddingSet('idx', 't1', 'fake', 2), 'j1',
+                              ['c0', 'c1'], ['partial'])
     repo.create_learning_context(db, LearningContext('ctx', 'v1', 'p1', 't1', known_concepts=[], embedding_set_id='idx'))
     return db
 
@@ -155,6 +166,23 @@ def history(*chunk_ids, run='r1'):
         run_id=run, context_id='ctx', version_id='v1', parse_revision_id='p1', translation_revision_id='t1',
         embedding_set_id='idx', model='fake', instruction_version='i1', elapsed_ms=1, level='model_checked',
         failure=None, claims=(HistoryClaim('k1', '주장', 'supported', 'full_support', True, refs),))
+
+
+def test_null_translation_is_not_published_or_accepted_as_a_reference(db):
+    """#155 재현: failure_code와 translated_text가 모두 NULL인 c3를 게시 집합에서 제외한다."""
+    from solo_leveling.domain.models import LearningContext
+
+    repo.save_translation_batch(db, batch([ok(0), ok(1), fail(2), fail(3)]))
+    sql(db, "UPDATE translation_results SET failure_code=NULL, translated_text=NULL WHERE chunk_id='c3'")
+    repo.publish_search_index(
+        db, 'v1', 'p1', EmbeddingSet('idx', 't1', 'fake', 2), 'j1', ['c0', 'c1'], ['partial'])
+    repo.create_learning_context(
+        db, LearningContext('ctx', 'v1', 'p1', 't1', known_concepts=[], embedding_set_id='idx'))
+
+    assert members(db) == ['c0', 'c1']
+    assert vh.save_verification_history(db, history('c3')).outcome is HistoryOutcome.REFERENCE_MISMATCH
+    for table in ('verification_runs', 'verification_claims', 'verification_claim_refs'):
+        assert sql(db, f'SELECT * FROM {table}') == []
 
 
 @pytest.mark.parametrize('keep', [[], ['c0']])

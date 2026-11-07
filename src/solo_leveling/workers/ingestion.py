@@ -272,7 +272,8 @@ def _ingest_pages(
                     paper_id, version_id, dim, collection_name=collection,
                 )
                 repo.publish_search_index(db_path, version_id, parse_revision.parse_revision_id,
-                                          embedding_set, job.job_id, len(translated), limitations)
+                                          embedding_set, job.job_id,
+                                          [chunk.chunk_id for chunk in translated], limitations)
                 published = True
                 return _published_result(repo.get_search_index(db_path, version_id), reused, db_path)
             limitations = ['translation_failed', *limitations]

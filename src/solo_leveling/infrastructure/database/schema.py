@@ -273,16 +273,9 @@ CREATE TABLE IF NOT EXISTS search_index_chunks (
     chunk_id TEXT NOT NULL,
     PRIMARY KEY (embedding_set_id, chunk_id)
 );
--- 임베딩 세트를 만드는 순간(색인 게시와 같은 트랜잭션) 그 번역 리비전의 성공 청크 집합을 기록한다.
-CREATE TRIGGER IF NOT EXISTS trg_embedding_set_chunks AFTER INSERT ON embedding_sets
-BEGIN
-    INSERT OR IGNORE INTO search_index_chunks (embedding_set_id, chunk_id)
-    SELECT NEW.embedding_set_id, r.chunk_id
-    FROM translation_results r
-    JOIN translation_revisions t ON t.translation_revision_id = r.translation_revision_id
-    JOIN chunks c ON c.chunk_id = r.chunk_id AND c.parse_revision_id = t.parse_revision_id
-    WHERE r.translation_revision_id = NEW.translation_revision_id AND r.failure_code IS NULL;
-END;
+-- 게시 함수가 벡터 저장소에서 검증한 정확한 ID 집합을 게시 트랜잭션 안에서 기록한다.
+-- 이전 버전의 자동 추론 트리거는 translated_text가 없는 행까지 포함할 수 있으므로 제거한다.
+DROP TRIGGER IF EXISTS trg_embedding_set_chunks;
 -- 이 기능 이전에 만든 임베딩 세트의 집합은 init_db가 번역 결과 이관 뒤에 게시 기록과 맞는지 확인하고 채운다(_migrate_search_index_chunks).
 CREATE TABLE IF NOT EXISTS verification_runs (
     run_id TEXT PRIMARY KEY,

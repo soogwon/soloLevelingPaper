@@ -56,7 +56,8 @@
 - `get_translation_metadata`, `get_translation_failures`: 설정·실패 구간 조회.
 - `get_search_index`: 게시 완료된 색인 조회. 선택적으로 정확한 리비전 요구.
 - `publish_search_index`: 벡터 검증 이후 호출하는 내부 함수.
-  embedding set·색인 참조 저장과 job ready 전환을 한 SQLite 트랜잭션으로 처리.
+  검증된 청크 ID 집합이 현재 성공 번역 집합과 정확히 같은지 확인하고, embedding set·색인 참조·
+  `search_index_chunks` 저장과 job ready 전환을 한 SQLite 트랜잭션으로 처리.
 - `create_learning_context`, `get_learning_context`: context 영속 저장·조회.
   기존 LearningContext에 선택적 embedding_set_id를 추가했으며 저장 시에는 필수다.
 - `get_or_create_default_context`: 게시 완료된 논문 버전의 기본 context를 원자적으로 생성·재사용.
