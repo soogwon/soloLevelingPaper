@@ -20,6 +20,10 @@ class PaperInsightValidationError(ValueError):
     """키워드·중요 문장 형식 또는 출처 연결이 올바르지 않다."""
 
 
+class PaperInsightConflictError(PaperInsightValidationError):
+    """확인했던 항목 묶음이 바뀌었다. 기존 결과를 교체하지 않았다."""
+
+
 @dataclass(frozen=True)
 class PaperInsightInput:
     kind: str
