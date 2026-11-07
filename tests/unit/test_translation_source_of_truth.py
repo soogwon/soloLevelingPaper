@@ -11,6 +11,7 @@ from solo_leveling.domain.translation import (
 )
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.database.schema import get_connection, init_db
+from solo_leveling.infrastructure.storage.vector_store import restore_legacy_index_memberships
 
 SETTINGS = TranslationSettings('p', 'm', 'v1')
 
@@ -98,6 +99,8 @@ def test_publish_counts_successes_from_translation_results(db):
         repo.publish_search_index(db, 'v1', 'p1', emb, 'j1', ['c0', 'c1', 'c2'], [])
     repo.publish_search_index(db, 'v1', 'p1', emb, 'j1', ['c0', 'c1'], ['partial'])
     assert repo.get_search_index(db, 'v1')['chunk_count'] == 2
+    assert sql(db, 'SELECT * FROM search_index_chunk_snapshots') == [
+        {'embedding_set_id': 'e1', 'source': 'publish'}]
 
 
 def test_publish_rejects_same_count_different_id_set_without_partial_rows(db):
@@ -153,6 +156,7 @@ def members(db, embedding_set='idx'):
 def legacy_state(db, keep):
     """이전 DB를 모사한다: 스냅샷을 keep만 남기고, c1의 번역은 chunks.text에만 남긴다(결과 행 없음)."""
     sql(db, 'DROP TRIGGER IF EXISTS trg_embedding_set_chunks')
+    sql(db, 'DELETE FROM search_index_chunk_snapshots')
     sql(db, 'DELETE FROM search_index_chunks')
     for chunk_id in keep:
         sql(db, 'INSERT INTO search_index_chunks VALUES (?, ?)', 'idx', chunk_id)
@@ -186,22 +190,22 @@ def test_null_translation_is_not_published_or_accepted_as_a_reference(db):
 
 
 @pytest.mark.parametrize('keep', [[], ['c0']])
-def test_published_snapshot_is_restored_to_exactly_the_success_chunks(published, keep):
+def test_init_does_not_guess_legacy_snapshot_from_current_successes(published, keep):
     legacy_state(published, keep)
-    for _ in range(2):                                   # 첫 번째·두 번째 초기화 모두
+    for _ in range(2):
         init_db(published)
-        assert members(published) == ['c0', 'c1']
-    assert vh.save_verification_history(published, history('c0', 'c1')).outcome is HistoryOutcome.SAVED
+        assert members(published) == []
+    assert vh.save_verification_history(published, history('c0', 'c1')).outcome is HistoryOutcome.REFERENCE_MISMATCH
     assert vh.save_verification_history(published, history('c2', run='r2')).outcome is HistoryOutcome.REFERENCE_MISMATCH
     assert vh.save_verification_history(published, history('c0', 'c3', run='r3')).outcome is HistoryOutcome.REFERENCE_MISMATCH
 
 
-def test_snapshot_is_replaced_when_candidate_set_matches_published_count(published):
-    # 구버전 트리거가 후보 밖 멤버를 기록했어도 게시 개수와 후보 수가 맞으면 정확한 집합으로 교정한다.
+def test_unconfirmed_snapshot_is_cleared_even_when_candidate_count_matches(published):
+    # 같은 개수의 현재 성공 집합은 게시 당시 집합의 증거가 아니다.
     legacy_state(published, ['c0', 'c2'])
     init_db(published)
     init_db(published)
-    assert members(published) == ['c0', 'c1']
+    assert members(published) == []
 
 
 def test_snapshot_is_not_replaced_when_the_restoration_basis_does_not_match(published):
@@ -221,17 +225,19 @@ def test_snapshot_is_not_replaced_when_the_restoration_basis_does_not_match(publ
 
 def test_upgrade_removes_legacy_null_translation_member_and_rejects_reference(published):
     # 구버전 트리거는 failure_code만 보고 c3을 멤버로 넣었다.
+    sql(published, 'DELETE FROM search_index_chunk_snapshots')
     sql(published, "UPDATE translation_results SET failure_code=NULL, translated_text=NULL WHERE chunk_id='c3'")
     sql(published, "INSERT INTO search_index_chunks VALUES ('idx', 'c3')")
     assert members(published) == ['c0', 'c1', 'c3']
 
     for _ in range(2):
         init_db(published)
-        assert members(published) == ['c0', 'c1']
+        assert members(published) == []
     assert vh.save_verification_history(published, history('c3')).outcome is HistoryOutcome.REFERENCE_MISMATCH
     for table in ('verification_runs', 'verification_claims', 'verification_claim_refs'):
         assert sql(published, f'SELECT * FROM {table}') == []
-    assert vh.save_verification_history(published, history('c0', 'c1', run='r2')).outcome is HistoryOutcome.SAVED
+    assert vh.save_verification_history(
+        published, history('c0', 'c1', run='r2')).outcome is HistoryOutcome.REFERENCE_MISMATCH
 
 
 def test_other_published_indexes_are_not_touched(published):
@@ -279,5 +285,81 @@ def test_mismatched_copy_never_becomes_a_published_snapshot_member(published):
     legacy_state(published, [])
     for _ in range(2):
         init_db(published)
-        assert members(published) == ['c0', 'c1']
+        assert members(published) == []
     assert 'x0' not in members(published)
+
+
+class _LegacyCollection:
+    def __init__(self, ids, metadatas):
+        self.ids = ids
+        self.metadatas = metadatas
+
+    def get(self, *, include):
+        assert include == ['metadatas']
+        return {'ids': self.ids, 'metadatas': self.metadatas}
+
+
+class _LegacyClient:
+    def __init__(self, collection=None):
+        self.collection = collection
+
+    def get_collection(self, name):
+        assert name == 'chunks-idx'
+        if self.collection is None:
+            raise RuntimeError('missing collection')
+        return self.collection
+
+
+def legacy_client(ids=('c0', 'c1'), **metadata):
+    values = {'embedding_set_id': 'idx', 'paper_id': 'paper', 'version_id': 'v1', **metadata}
+    return _LegacyClient(_LegacyCollection(list(ids), [values.copy() for _ in ids]))
+
+
+def test_actual_vector_ids_restore_legacy_snapshot_idempotently(published):
+    legacy_state(published, ['c0', 'c2'])
+    init_db(published)
+
+    assert restore_legacy_index_memberships(published, legacy_client()) == 1
+    assert members(published) == ['c0', 'c1']
+    assert sql(published, 'SELECT * FROM search_index_chunk_snapshots') == [
+        {'embedding_set_id': 'idx', 'source': 'vector_store'}]
+    assert restore_legacy_index_memberships(published, legacy_client()) == 0
+    assert repo.confirm_search_index_chunks(published, 'idx', ['c0', 'c2']) is False
+    assert members(published) == ['c0', 'c1']
+    assert vh.save_verification_history(published, history('c0', 'c1')).outcome is HistoryOutcome.SAVED
+
+
+def test_actual_vector_ids_win_over_same_count_current_translation_set(published):
+    legacy_state(published, [])
+    # 게시 뒤 현재 성공 집합이 c0,c1에서 같은 개수의 c0,c2로 바뀐 상황을 재현한다.
+    sql(published, "UPDATE translation_results SET translated_text=NULL, failure_code='provider_unavailable' "
+                   "WHERE chunk_id='c1'")
+    sql(published, "UPDATE translation_results SET translated_text='번역 2', failure_code=NULL WHERE chunk_id='c2'")
+    init_db(published)
+
+    assert restore_legacy_index_memberships(published, legacy_client()) == 1
+    assert members(published) == ['c0', 'c1']
+    assert vh.save_verification_history(published, history('c2')).outcome is HistoryOutcome.REFERENCE_MISMATCH
+    assert sql(published, 'SELECT * FROM verification_runs') == []
+
+
+@pytest.mark.parametrize('client', [
+    _LegacyClient(),
+    legacy_client(ids=('c0',)),
+    legacy_client(ids=('c0', 'outside')),
+    legacy_client(ids=('c0', 'c0')),
+    legacy_client(paper_id='other'),
+])
+def test_unverifiable_vector_snapshot_stays_unknown_and_preserves_existing_data(published, client):
+    sql(published, "INSERT INTO evidences VALUES ('ev', 'ctx', 'c0', '번역 0', 'original 0', 'now')")
+    legacy_state(published, ['c0', 'c2'])
+    for _ in range(2):
+        init_db(published)
+        assert restore_legacy_index_memberships(published, client) == 0
+
+    assert members(published) == []
+    assert sql(published, "SELECT evidence_id, chunk_id FROM evidences") == [
+        {'evidence_id': 'ev', 'chunk_id': 'c0'}]
+    assert vh.save_verification_history(published, history('c0')).outcome is HistoryOutcome.REFERENCE_MISMATCH
+    for table in ('verification_runs', 'verification_claims', 'verification_claim_refs'):
+        assert sql(published, f'SELECT * FROM {table}') == []

@@ -195,5 +195,37 @@ def verify_chunk_embeddings(client, chunk_ids, documents, embedding_set_id,
             raise ValueError('invalid stored vector')
 
 
+def restore_legacy_index_memberships(db_path: str, client) -> int:
+    """실제 Chroma 컬렉션으로 확인한 구버전 색인의 청크 소속만 복원한다.
+
+    컬렉션 누락·개수 불일치·중복 ID·메타데이터 불일치는 미확인 상태로 남긴다. 현재 번역 결과는 게시 당시
+    집합의 증거로 사용하지 않는다. 한 색인의 실패가 다른 정상 색인의 복원을 막지 않는다.
+    """
+    from solo_leveling.infrastructure.database import repository as repo
+
+    restored = 0
+    for index in repo.list_unconfirmed_search_indexes(db_path):
+        try:
+            collection = client.get_collection(f"chunks-{index['embedding_set_id']}")
+            stored = collection.get(include=['metadatas'])
+            ids = stored.get('ids')
+            metadatas = stored.get('metadatas')
+            if (not isinstance(ids, list) or not isinstance(metadatas, list)
+                    or len(ids) != index['chunk_count'] or len(metadatas) != len(ids)
+                    or len(set(ids)) != len(ids)
+                    or any(type(chunk_id) is not str or not chunk_id.strip() for chunk_id in ids)):
+                continue
+            expected = {key: index[key] for key in ('embedding_set_id', 'paper_id', 'version_id')}
+            if any(not isinstance(meta, dict) or any(meta.get(key) != value for key, value in expected.items())
+                   for meta in metadatas):
+                continue
+            if not repo.confirm_search_index_chunks(db_path, index['embedding_set_id'], ids):
+                continue
+        except Exception:
+            continue
+        restored += 1
+    return restored
+
+
 def delete_by_embedding_set(client, embedding_set_id, collection_name=None) -> None:
     get_collection(client, collection_name or f'chunks-{embedding_set_id}').delete(where={'embedding_set_id': embedding_set_id})

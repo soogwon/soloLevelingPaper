@@ -85,6 +85,12 @@ def test_first_translation_keeps_chunks_text_and_adds_translated_text(db):
 def test_recovery_creates_new_revision_and_publishes_atomically(db):
     run_recovery(db)
     repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(), [])
+    assert rows(db, "SELECT * FROM search_index_chunk_snapshots WHERE embedding_set_id='e2'") == [
+        {'embedding_set_id': 'e2', 'source': 'publish'}]
+    init_db(db)
+    assert [r['chunk_id'] for r in rows(
+        db, "SELECT chunk_id FROM search_index_chunks WHERE embedding_set_id='e2' ORDER BY chunk_id")] == sorted(
+            chunk_ids())
     chunks = repo.get_translated_chunks(db, 'p1', 't2')
     assert len(chunks) == N
     assert {c.chunk_id: c.text for c in chunks}['c3'] == '복구 3'

@@ -266,7 +266,7 @@ def test_same_count_replacement_cannot_make_an_unpublished_chunk_evidence(env):
     assert vh.save_verification_history(env, record('r2')).outcome is HistoryOutcome.SAVED
 
 
-def test_published_set_is_recorded_at_publication_and_backfilled_for_old_databases(env):
+def test_published_set_is_recorded_at_publication_but_not_guessed_for_old_databases(env):
     def members():
         with closing(get_connection(env)) as conn:
             return sorted(r[0] for r in conn.execute(
@@ -274,10 +274,11 @@ def test_published_set_is_recorded_at_publication_and_backfilled_for_old_databas
     assert members() == ['c1', 'c2']
     with closing(get_connection(env)) as conn, conn:  # 이 기능 이전의 DB를 흉내
         conn.execute('DROP TRIGGER IF EXISTS trg_embedding_set_chunks')
+        conn.execute('DELETE FROM search_index_chunk_snapshots')
         conn.execute('DELETE FROM search_index_chunks')
     init_db(env)
     init_db(env)
-    assert members() == ['c1', 'c2']
+    assert members() == []
 
 
 def test_chunk_recovered_by_translation_recovery_can_be_cited_only_after_the_new_index(tmp_path):
@@ -309,6 +310,11 @@ def test_chunk_recovered_by_translation_recovery_can_be_cited_only_after_the_new
     repo.claim_translation_recovery(db, ProcessingJob('j2', 'v1', JobStatus.PROCESSING, JobStage.TRANSLATE), 't1')
     repo.save_recovery_translation(db, 'j2', batch('t2', [ChunkTranslationResult(req('c2', 'Second.'), '둘째.')]))
     repo.publish_recovered_index(db, 'j2', EmbeddingSet('e2', 't2', 'm', 2), ['c1', 'c2'], [])
+    init_db(db)
+    with closing(get_connection(db)) as conn:
+        assert [row[0] for row in conn.execute(
+            "SELECT chunk_id FROM search_index_chunks WHERE embedding_set_id='e2' ORDER BY chunk_id")] == [
+                'c1', 'c2']
     repo.create_learning_context(db, LearningContext('new', 'v1', 'p1', 't2', known_concepts=[], embedding_set_id='e2'))
     new = record('r2', context_id='new', translation_revision_id='t2', embedding_set_id='e2',
                  claims=[claim(refs=[ref('c1', 'First.'), ref('c2', 'Second.')])])

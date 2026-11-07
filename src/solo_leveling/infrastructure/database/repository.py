@@ -450,6 +450,51 @@ def _insert_search_index_chunks(conn, embedding_set_id: str, chunk_ids: tuple[st
     )
 
 
+def list_unconfirmed_search_indexes(db_path: str) -> list[dict]:
+    """게시 청크 소속의 신뢰 가능한 출처가 아직 없는 구버전 색인을 돌려준다."""
+    with closing(get_connection(db_path)) as conn:
+        return [dict(row) for row in conn.execute(
+            'SELECT s.embedding_set_id, s.version_id, s.parse_revision_id, s.chunk_count, v.paper_id '
+            'FROM search_indexes s JOIN paper_versions v ON v.version_id=s.version_id '
+            'LEFT JOIN search_index_chunk_snapshots m ON m.embedding_set_id=s.embedding_set_id '
+            'WHERE m.embedding_set_id IS NULL ORDER BY s.embedding_set_id')]
+
+
+def confirm_search_index_chunks(db_path: str, embedding_set_id: str,
+                                chunk_ids: Collection[str]) -> bool:
+    """실제 벡터 컬렉션에서 확인한 구버전 게시 집합을 원자적으로 기록한다.
+
+    다른 런타임이 먼저 출처를 확정했다면 그 스냅샷을 덮어쓰지 않고 False를 돌려준다.
+    """
+    if isinstance(chunk_ids, (str, bytes)) or not isinstance(chunk_ids, Collection):
+        raise ValueError('confirmed chunk ids must be a collection')
+    confirmed = tuple(chunk_ids)
+    if (not confirmed or len(set(confirmed)) != len(confirmed)
+            or any(type(chunk_id) is not str or not chunk_id.strip() for chunk_id in confirmed)):
+        raise ValueError('confirmed chunk ids must be unique non-empty strings')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        if conn.execute(
+                'SELECT 1 FROM search_index_chunk_snapshots WHERE embedding_set_id=?',
+                (embedding_set_id,)).fetchone():
+            return False
+        index = conn.execute(
+            'SELECT parse_revision_id, chunk_count FROM search_indexes WHERE embedding_set_id=?',
+            (embedding_set_id,)).fetchone()
+        if index is None or index['chunk_count'] != len(confirmed):
+            raise ValueError('confirmed chunk ids do not match the published index')
+        known = {row['chunk_id'] for row in conn.execute(
+            'SELECT chunk_id FROM chunks WHERE parse_revision_id=?', (index['parse_revision_id'],))}
+        if set(confirmed) - known:
+            raise ValueError('confirmed chunk ids do not belong to the published parse revision')
+        conn.execute('DELETE FROM search_index_chunks WHERE embedding_set_id=?', (embedding_set_id,))
+        _insert_search_index_chunks(conn, embedding_set_id, tuple(sorted(confirmed)))
+        conn.execute(
+            "INSERT INTO search_index_chunk_snapshots (embedding_set_id, source) VALUES (?, 'vector_store')",
+            (embedding_set_id,))
+        return True
+
+
 def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
                          embedding_set: EmbeddingSet, job_id: str, chunk_ids: Collection[str],
                          limitations: list[str]) -> None:
@@ -479,6 +524,8 @@ def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
                      (embedding_set.embedding_set_id, version_id, parse_revision_id,
                       embedding_set.translation_revision_id, job_id, chunk_count))
         _insert_search_index_chunks(conn, embedding_set.embedding_set_id, published_chunk_ids)
+        conn.execute('INSERT INTO search_index_chunk_snapshots (embedding_set_id, source) VALUES (?, ?)',
+                     (embedding_set.embedding_set_id, 'publish'))
         conn.execute("UPDATE processing_jobs SET status='ready', stage='index', limitations=?, updated_at=? WHERE job_id=?",
                      (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
 
@@ -608,6 +655,8 @@ def publish_recovered_index(db_path: str, job_id: str, embedding_set: EmbeddingS
                      (embedding_set.embedding_set_id, lock['version_id'], old['parse_revision_id'],
                       embedding_set.translation_revision_id, job_id, chunk_count))
         _insert_search_index_chunks(conn, embedding_set.embedding_set_id, published_chunk_ids)
+        conn.execute('INSERT INTO search_index_chunk_snapshots (embedding_set_id, source) VALUES (?, ?)',
+                     (embedding_set.embedding_set_id, 'publish'))
         conn.execute("UPDATE processing_jobs SET status='ready', stage='index', limitations=?, updated_at=? "
                      'WHERE job_id=?', (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
         conn.execute('DELETE FROM translation_recovery_locks WHERE job_id=?', (job_id,))
