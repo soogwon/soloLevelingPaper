@@ -56,6 +56,11 @@ class QuizScoreOutput(TypedDict):
     best_score: float | None
 
 
+class NoteSummaryOutput(TypedDict):
+    count: int
+    previews: list[str]
+
+
 class DashboardOutput(TypedDict):
     context_id: str
     version_id: str
@@ -66,6 +71,7 @@ class DashboardOutput(TypedDict):
     processing: ProcessingOutput
     progress: ProgressOutput
     summary: SummaryOutput | None
+    notes: NoteSummaryOutput
     quiz_scores: list[QuizScoreOutput]
 
 
@@ -90,7 +96,7 @@ def register_dashboard(server, reader: DashboardService):
         진행률은 완료한 학습 단계 비율이며 논문 처리율이나 이해도 평가가 아닙니다.
         요약 미생성·진행 기록 없음·퀴즈 기록 없음은 정상 상태입니다.
         조회는 생성·채점·단계 완료를 수행하지 않습니다. 카드의 논문 상세 보기로 저장 근거를 조회할 수 있습니다.
-        메모 요약과 퀴즈 풀이 화면 연결은 후속 기능입니다.
+        현재 학습 맥락의 메모 수와 최근 수정한 메모 최대 3건의 앞 120자를 표시합니다.
         화면 미지원 시에도 같은 정보를 structuredContent와 text로 제공합니다.
         """
         try:
