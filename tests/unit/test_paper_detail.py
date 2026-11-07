@@ -102,3 +102,28 @@ def test_saved_summary_through_mcp_has_nested_contract(detail):
     assert data['summary']['items'][0]['evidence_ids']==['e1']
     assert data['evidence'][0]['section_id']=='s1'
     assert data['evidence'][0]['quote_original']=='First.'
+
+
+def test_catalog_uses_context_revision_even_after_reparse(detail):
+    from solo_leveling.domain.models import PaperSection, ParseRevision
+    db, service = detail
+    repo.insert_parse_revision(db, ParseRevision('new', 'v1', 2))
+    repo.insert_sections(db, [PaperSection('s1', 'new', '새 제목', 1, 1, 1, 2)])
+    assert service.get('ctx')['section_catalog'] == []
+    repo.insert_sections(db, [PaperSection('s2', 'p1', '하위 제목', 2, 2, 2, 2, 's1'),
+                              PaperSection('s1', 'p1', '기존 제목', 1, 1, 1, 2)])
+    before = Path(db).read_bytes()
+    toc = service.get('ctx')['section_catalog']
+    assert [(s['title'], s['parent_section_id']) for s in toc] == [('기존 제목', None), ('하위 제목', 's1')]
+    assert Path(db).read_bytes() == before
+
+
+def test_legacy_detail_without_catalog_table_is_read_only(detail):
+    db, service = detail
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute('DROP TABLE sections')
+    before = Path(db).read_bytes()
+    result = service.get('ctx')
+    assert result['section_catalog'] == []
+    assert result['section_ids'] == ['s1', 's2']
+    assert Path(db).read_bytes() == before

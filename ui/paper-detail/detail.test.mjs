@@ -95,3 +95,16 @@ test('빈 답변의 실제 검증 수준은 유지하고 빈 주장 영역만 �
  assert.equal(el('verification').hidden,false);
  assert.match(el('verification').textContent,/structural_only/);
 });
+
+test('저장된 목차만 표시하고 다른 파싱 리비전의 제목은 거부한다',()=>{
+ const {app,el}=setup();
+ const row={section_id:'s1',parse_revision_id:'p',title:'Methods',ordinal:1,level:1,parent_section_id:null,start_pdf_page:5,end_pdf_page:7};
+ app.ontoolresult(detailPayload({section_catalog:[row]}));
+ assert.match(el('toc-items').textContent,/Methods · PDF 5–7페이지/);
+ assert.match(el('location').textContent,/Methods/);
+ app.ontoolresult(detailPayload({section_catalog:[{...row,parse_revision_id:'other'}]}));
+ assert.equal(el('content').hidden,true);
+ assert.equal(el('toc-items').children.length,0);
+ app.ontoolresult(detailPayload({section_catalog:[]}));
+ assert.match(el('toc-status').textContent,/저장된 목차가 없습니다/);
+});

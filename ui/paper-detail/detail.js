@@ -7,6 +7,9 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
   function clear(message, busy = false) {
     clearTimeout(timer);
     el('content').hidden = true;
+    el('toc').hidden = true;
+    el('toc-items').replaceChildren();
+    el('toc-status').textContent = '';
     el('claims').replaceChildren();
     el('claims-section').hidden = true;
     el('verification').hidden = true;
@@ -37,9 +40,16 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
     const detailed = Object.hasOwn(data, 'summary');
     const kinds = {claim:'핵심 주장',method:'방법',result:'결과',limitation:'한계'};
     const claims = answering ? data.claims : detailed ? (data.summary?.items ?? []) : [];
+    const catalog = data.section_catalog === undefined ? [] : data.section_catalog;
+    const validCatalog = Array.isArray(catalog) && catalog.every(s => s
+      && s.parse_revision_id === data.parse_revision_id && nonempty(s.section_id) && nonempty(s.title)
+      && (s.parent_section_id === null || nonempty(s.parent_section_id))
+      && Number.isSafeInteger(s.level) && s.level > 0 && Number.isSafeInteger(s.ordinal) && s.ordinal > 0
+      && Number.isSafeInteger(s.start_pdf_page) && s.start_pdf_page > 0
+      && Number.isSafeInteger(s.end_pdf_page) && s.end_pdf_page >= s.start_pdf_page);
     const validDetail = !detailed || (
       ['context_id','paper_id','version_id','parse_revision_id','translation_revision_id','scope','file_display_name'].every(k=>nonempty(data[k]))
-      && optional(data.title) && Array.isArray(data.section_ids) && data.section_ids.every(nonempty)
+      && validCatalog && optional(data.title) && Array.isArray(data.section_ids) && data.section_ids.every(nonempty)
       && evidence.every(e=>['version_id','parse_revision_id','translation_revision_id'].every(k=>e?.[k]===data[k]))
       && (data.summary === null || (nonempty(data.summary?.summary_id)
         && data.summary.verification_level === 'structural_only'
@@ -63,7 +73,19 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
     el('claims-heading').textContent = detailed ? '요약 항목별 근거로 이동' : '주장별 근거로 이동';
     el('verification').hidden = !(answering || (detailed && claims.length));
     el('answer-heading').textContent = detailed ? '저장된 요약' : '반환된 답변';
+    const titles = new Map();
     if (detailed) {
+      for (const section of catalog) titles.set(section.section_id, section.title);
+      el('toc').hidden = false;
+      el('toc-status').textContent = catalog.length ? '' : '이 파싱 리비전에 저장된 목차가 없습니다.';
+      for (const section of catalog) {
+        const item = doc.createElement('li');
+        const parent = titles.get(section.parent_section_id);
+        const pages = section.start_pdf_page === section.end_pdf_page
+          ? section.start_pdf_page : `${section.start_pdf_page}–${section.end_pdf_page}`;
+        item.textContent = `${section.title} · PDF ${pages}페이지` + (parent ? ` · 상위 섹션: ${parent}` : '');
+        el('toc-items').append(item);
+      }
       el('metadata').textContent = `${data.title || data.file_display_name} · 범위: ${data.scope} · 섹션 ID: ${data.section_ids.join(', ') || '없음'}`;
       el('availability').textContent = '별도로 저장된 키워드·중요 문장은 제공되지 않습니다. 섹션 ID는 제목이 아닙니다.';
       if (claims.length) el('verification').textContent = 'structural_only — 저장 요약의 근거 연결을 확인합니다. 의미 일치 검증은 아닙니다.';
@@ -80,7 +102,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
     el('content').hidden = false;
     el('detail').hidden = !evidence.length;
     function select(e, focus = false) {
-      el('location').textContent = `PDF 기준 ${e.pdf_page}페이지${e.section_id ? ` · 섹션 ID ${e.section_id}` : ''}${e.printed_page_label ? ` · 인쇄 표기 ${e.printed_page_label}` : ''}`;
+      el('location').textContent = `PDF 기준 ${e.pdf_page}페이지${titles.has(e.section_id) ? ` · ${titles.get(e.section_id)}` : e.section_id ? ` · 섹션 ID ${e.section_id}` : ''}${e.printed_page_label ? ` · 인쇄 표기 ${e.printed_page_label}` : ''}`;
       el('file').textContent = e.file_display_name ?? '파일명은 이 응답에서 제공되지 않았습니다.';
       el('original').textContent = e.quote_original;
       el('translation').textContent = e.quote_ko?.trim() ? e.quote_ko : '이 근거에 저장된 한국어 번역이 없습니다.';

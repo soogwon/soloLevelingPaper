@@ -206,6 +206,17 @@ class SavedSummaryOutput(TypedDict):
     verification_level: Literal['structural_only']
 
 
+class DetailSectionOutput(TypedDict):
+    section_id: str
+    parse_revision_id: str
+    title: str
+    ordinal: int
+    level: int
+    parent_section_id: str | None
+    start_pdf_page: int
+    end_pdf_page: int
+
+
 class PaperDetailOutput(TypedDict):
     context_id: str
     paper_id: str
@@ -216,6 +227,7 @@ class PaperDetailOutput(TypedDict):
     translation_revision_id: str
     scope: str
     section_ids: list[str]
+    section_catalog: list[DetailSectionOutput]
     summary: SavedSummaryOutput | None
     evidence: list[DetailEvidenceOutput]
     keywords: list[str]
@@ -306,8 +318,9 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             저장 요약의 structural_only는 근거 연결 검사이며 모델 의미 검증을 뜻하지 않습니다.
             """
             try:
-                return await anyio.to_thread.run_sync(lambda: services.detail.get(
+                detail = await anyio.to_thread.run_sync(lambda: services.detail.get(
                     context_id, scope=scope, offset=offset, limit=limit, summary_id=summary_id))
+                return {'section_catalog': [], **detail}
             except Exception as error:
                 raise to_tool_error(error) from None
     if services.dashboard is not None:
