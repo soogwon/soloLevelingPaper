@@ -399,7 +399,7 @@ def test_same_html_url_without_paper_id_is_reused(tmp_path, monkeypatch):
     from solo_leveling.workers.ingestion import register_and_ingest_url
 
     page = SimpleNamespace(text="<html><body><p>Attention based models are parallelizable.</p></body></html>")
-    monkeypatch.setattr(url_ingest, "fetch_and_classify", lambda url: ("html", page))
+    monkeypatch.setattr(url_ingest, "fetch_and_classify", lambda url, **kwargs: ("html", page))
     db_path, chroma_dir = str(tmp_path / "db.sqlite"), str(tmp_path / "chroma")
     kwargs = dict(
         translation_service=TranslationService(FixtureProvider()),
@@ -419,7 +419,7 @@ def _stub_pdf_url(monkeypatch, content, url_kind='pdf'):
     from solo_leveling.infrastructure.parsing import url_ingest
 
     response = SimpleNamespace(content=content, text='')
-    monkeypatch.setattr(url_ingest, 'fetch_and_classify', lambda url: (url_kind, response))
+    monkeypatch.setattr(url_ingest, 'fetch_and_classify', lambda url, **kwargs: (url_kind, response))
 
 
 def _url_kwargs():
@@ -490,3 +490,26 @@ def test_url_pdf_rejects_oversize_and_bad_header_without_leftovers(tmp_path, mon
             register_and_ingest_url(db_path, chroma_dir, 'https://example.org/a.pdf',
                                     str(pdf_dir), max_pdf_bytes=limit, **_url_kwargs())
     assert not pdf_dir.exists() or list(pdf_dir.iterdir()) == []
+
+
+def test_url_receive_limit_rejects_before_database_or_pdf_store(tmp_path, monkeypatch):
+    from solo_leveling.infrastructure.parsing import url_ingest
+    from solo_leveling.workers.ingestion import register_and_ingest_url
+
+    db_path = str(tmp_path / 'db.sqlite')
+    pdf_dir = tmp_path / 'pdfs'
+    received = {}
+
+    def reject(url, **kwargs):
+        received.update(kwargs)
+        raise url_ingest.ResponseTooLargeError()
+
+    monkeypatch.setattr(url_ingest, 'fetch_and_classify', reject)
+    with pytest.raises(url_ingest.ResponseTooLargeError) as raised:
+        register_and_ingest_url(
+            db_path, str(tmp_path / 'chroma'), 'https://example.org/a.pdf', str(pdf_dir),
+            max_pdf_bytes=1234, **_url_kwargs())
+
+    assert raised.value.code == 'URL_RESPONSE_TOO_LARGE'
+    assert received == {'pdf_max_bytes': 1234}
+    assert not Path(db_path).exists() and not pdf_dir.exists()
