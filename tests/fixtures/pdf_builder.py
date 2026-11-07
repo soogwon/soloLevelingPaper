@@ -11,7 +11,7 @@ def _escape(line: str) -> str:
     return line.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
 
 
-def _page_content_stream(text: str, footer: "str | None" = None) -> bytes:
+def _page_content_stream(text: str, footer: "str | None" = None, rotated_text: "str | None" = None) -> bytes:
     lines = text.split("\n")
     ops = ["BT", "/F1 12 Tf", "50 700 Td"]
     for i, line in enumerate(lines):
@@ -22,10 +22,14 @@ def _page_content_stream(text: str, footer: "str | None" = None) -> bytes:
     if footer is not None:
         # 페이지 아래 여백(PDF 좌표 y=40, 위에서 752/792 지점)에 가운데 정렬 근처로 놓는다.
         ops += ["BT", "/F1 12 Tf", "300 40 Td", f"({_escape(footer)}) Tj", "ET"]
+    if rotated_text is not None:
+        # PDF 문자 행렬을 90도 회전시킨 고유 표 헤더/축 레이블 재현용.
+        ops += ["BT", "/F1 12 Tf", "0 1 -1 0 400 300 Tm", f"({_escape(rotated_text)}) Tj", "ET"]
     return "\n".join(ops).encode("latin-1", errors="replace")
 
 
-def build_minimal_pdf(page_texts: list[str], footers: "list[str | None] | None" = None) -> bytes:
+def build_minimal_pdf(page_texts: list[str], footers: "list[str | None] | None" = None,
+                      rotated_texts: "list[str | None] | None" = None) -> bytes:
     """page_texts 개수만큼 페이지를 가진 최소 유효 PDF 바이트를 반환.
 
     footers[i]가 있으면 i번째 페이지 아래 여백에 그 문구를 따로 놓는다(페이지 번호 재현용).
@@ -46,8 +50,11 @@ def build_minimal_pdf(page_texts: list[str], footers: "list[str | None] | None" 
         )
 
     footers = list(footers or [None] * n_pages)
-    for text, footer in zip(page_texts, footers):
-        stream = _page_content_stream(text, footer)
+    rotated_texts = list(rotated_texts or [None] * n_pages)
+    if len(footers) != n_pages or len(rotated_texts) != n_pages:
+        raise ValueError('page fixture lengths must match')
+    for text, footer, rotated_text in zip(page_texts, footers, rotated_texts):
+        stream = _page_content_stream(text, footer, rotated_text)
         objects.append(
             b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream"
         )

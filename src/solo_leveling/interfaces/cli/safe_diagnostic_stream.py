@@ -64,6 +64,11 @@ class SafeDiagnosticStream:
             record = json.loads(line)
         except (ValueError, RecursionError):
             return
+        if isinstance(record, dict) and record.get('event') == 'pdf_rotation':
+            from solo_leveling.parsing_diagnostics import valid_rotation_record
+            if valid_rotation_record(record):
+                self.output.write(json.dumps(record) + '\n')
+            return
         if isinstance(record, dict) and record.get('event') == 'runtime_cleanup':
             if (set(record) == {'event', 'code'} and isinstance(record['code'], str)
                     and record['code'] in {'INGESTION_CANCEL_STATE_FAILED', 'RUNTIME_DRAIN_FAILED', 'EMBEDDER_CLOSE_FAILED',
