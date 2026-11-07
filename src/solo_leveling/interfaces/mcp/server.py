@@ -24,6 +24,7 @@ from .registration_consent import (
 )
 from .errors import to_tool_error
 from .detail_app import DETAIL_APP_URI, register_detail_app
+from .question_card import QuestionKeys, register_question_card
 from .status_app import STATUS_APP_URI, register_status_app
 from .dashboard import DashboardService, register_dashboard
 from .reflection import ReflectionInputServer, ReflectionService, register_reflection
@@ -34,6 +35,7 @@ from .quiz_tools import QuizContractAdapter, register_quiz
 
 HOST_INSTRUCTIONS = '''등록된 논문에서 한국어 근거 답변과 원문 근거를 조회합니다.
 prepare_paper_registration → 사용자 카드 확인 → get_paper_status → start_learning → ask_paper → get_evidence 순서로 사용합니다.
+Desktop에서 복원 가능한 새 질문이나 이전 질문 조회를 요청하면 open_paper_question_card에 기존 context_id를 전달하세요.
 등록·질문을 시작하기 전에 각 도구 설명에 있는 OpenAI 전송 데이터와 시점을 사용자에게 안내하세요.
 등록 요청에는 prepare_paper_registration으로 안내 카드를 표시하세요. 이 단계는 등록 완료가 아닙니다.
 사용자가 카드에서 동의하고 등록해야 작업이 시작됩니다. add_paper는 카드 전용이며 대신 호출하지 마세요.
@@ -103,6 +105,7 @@ class MCPServices:
     quiz: QuizContractAdapter | None = None
     executions: AskExecutionService | None = None
     annotations: AnnotationService | None = None
+    question_keys: QuestionKeys | None = None
 
 
 class Focus(BaseModel):
@@ -457,6 +460,9 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                 raise to_tool_error(error) from None
 
     if services.executions is not None:
+        if services.question_keys is not None:
+            register_question_card(server, services.question_keys)
+
         @server.tool(structured_output=True, annotations=ToolAnnotations(
             readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
         async def submit_paper_question(context_id: str, request_key: str, question: str,
