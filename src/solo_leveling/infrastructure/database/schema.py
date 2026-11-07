@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS paper_insights (
     start_offset INTEGER NOT NULL,
     end_offset INTEGER NOT NULL,
     quote_original TEXT NOT NULL,
+    producer_version TEXT,
     PRIMARY KEY (collection_id, position),
     CHECK (start_offset >= 0 AND end_offset > start_offset),
     CHECK ((content_kind = 'extracted' AND producer = 'extractor') OR
@@ -417,6 +418,8 @@ def init_db(db_path: str) -> None:
         # 기존 생성된 DB에 컬럼을 추가하는 형식.
         # 초기값은 NULL로 번역 설정을 임의로 채우지 않는다.
         with conn:
+            if 'producer_version' not in {r['name'] for r in conn.execute('PRAGMA table_info(paper_insights)')}:
+                conn.execute('ALTER TABLE paper_insights ADD COLUMN producer_version TEXT')
             columns = {row['name'] for row in conn.execute('PRAGMA table_info(translation_revisions)')}
             for name in ('prompt_version', 'target_language'):
                 if name not in columns:

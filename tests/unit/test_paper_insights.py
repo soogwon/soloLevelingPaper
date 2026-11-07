@@ -78,3 +78,15 @@ def test_getter_fails_closed_when_saved_source_no_longer_matches(setup_db):
         conn.execute("UPDATE chunks SET original_text='Changed.' WHERE chunk_id='c1'")
     with pytest.raises(DataIntegrityError):
         repo.get_paper_insights(db, 'ctx')
+
+
+def test_previous_schema_keeps_sources_and_unknown_version(setup_db):
+    from solo_leveling.infrastructure.database.schema import init_db
+    db, chunks = setup_db
+    publish(db, chunks)
+    saved = repo.save_paper_insights(db, 'ctx', 'paper', [item()])
+    with sqlite3.connect(db) as conn:
+        conn.execute('ALTER TABLE paper_insights DROP COLUMN producer_version')
+    assert repo.get_paper_insights(db, 'ctx') == saved
+    init_db(db)
+    assert repo.get_paper_insights(db, 'ctx') == saved

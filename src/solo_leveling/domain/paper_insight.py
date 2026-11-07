@@ -31,8 +31,13 @@ class PaperInsightInput:
     end_offset: int
     quote_original: str
     translation_revision_id: Optional[str] = None
+    # 작성자가 제공한 모델·생성 설정 또는 추출 규칙의 버전. 과거 기록은 미상으로 둔다.
+    producer_version: Optional[str] = None
 
     def __post_init__(self):
+        if self.producer_version is not None and (
+                not isinstance(self.producer_version, str) or not self.producer_version.strip()):
+            raise PaperInsightValidationError('작성 설정 버전이 올바르지 않습니다.')
         if self.kind not in KINDS:
             raise PaperInsightValidationError('지원하지 않는 항목 종류입니다.')
         if not isinstance(self.text, str) or not self.text.strip():

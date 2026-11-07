@@ -208,6 +208,8 @@ class PaperInsightOutput(TypedDict):
     text: str
     content_kind: Literal['extracted', 'generated']
     producer: Literal['extractor', 'model', 'user']
+    producer_version: str | None
+    collection_created_at: str
     chunk_id: str
     parse_revision_id: str
     translation_revision_id: str | None

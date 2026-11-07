@@ -1090,11 +1090,11 @@ def save_paper_insights(db_path: str, context_id: str, scope: str,
             insight = PaperInsight(str(uuid4()), position, item, context['parse_revision_id'])
             conn.execute('''INSERT INTO paper_insights
                 (collection_id, position, insight_id, kind, text, content_kind, producer,
-                 chunk_id, parse_revision_id, translation_revision_id, start_offset, end_offset, quote_original)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                 chunk_id, parse_revision_id, translation_revision_id, start_offset, end_offset, quote_original, producer_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (collection_id, position, insight.insight_id, item.kind, item.text, item.content_kind,
                  item.producer, item.chunk_id, insight.parse_revision_id, item.translation_revision_id,
-                 item.start_offset, item.end_offset, item.quote_original))
+                 item.start_offset, item.end_offset, item.quote_original, item.producer_version))
             saved.append(insight)
         return PaperInsightCollection(collection_id, context_id, scope, tuple(saved), created_at)
 
@@ -1103,6 +1103,7 @@ def get_paper_insights(db_path: str, context_id: str,
                        scope: str = PAPER_SCOPE) -> Optional[PaperInsightCollection]:
     """저장된 묶음만 조회한다. 조회는 생성·번역·저장을 실행하지 않는다."""
     with closing(get_connection(db_path)) as conn:
+        conn.execute('BEGIN')
         context = conn.execute('''SELECT parse_revision_id, translation_revision_id
             FROM learning_contexts WHERE context_id=?''', (context_id,)).fetchone()
         if context is None:
@@ -1115,33 +1116,37 @@ def get_paper_insights(db_path: str, context_id: str,
                                   'WHERE context_id=? AND scope=?', (context_id, scope)).fetchone()
         if collection is None:
             return None
-        rows = conn.execute('''SELECT i.*, c.parse_revision_id AS chunk_parse_revision_id,
-                c.original_text, c.section_id
-            FROM paper_insights i JOIN chunks c ON c.chunk_id=i.chunk_id
-            WHERE i.collection_id=? ORDER BY i.position''', (collection['collection_id'],)).fetchall()
-        if not rows or [row['position'] for row in rows] != list(range(len(rows))):
-            raise DataIntegrityError('paper insight collection is incomplete')
-        items = []
-        for row in rows:
-            item = PaperInsightInput(row['kind'], row['text'], row['content_kind'], row['producer'],
-                row['chunk_id'], row['start_offset'], row['end_offset'], row['quote_original'],
-                row['translation_revision_id'])
-            if (row['parse_revision_id'] != context['parse_revision_id']
-                    or row['chunk_parse_revision_id'] != context['parse_revision_id']
-                    or (scope != PAPER_SCOPE and row['section_id'] != scope)
-                    or row['end_offset'] > len(row['original_text'])
-                    or row['original_text'][row['start_offset']:row['end_offset']] != row['quote_original']):
-                raise DataIntegrityError('paper insight source does not match context')
-            if item.translation_revision_id is not None:
-                translated = conn.execute('''SELECT 1 FROM translation_results
-                    WHERE translation_revision_id=? AND chunk_id=?
-                        AND failure_code IS NULL AND translated_text IS NOT NULL''',
-                    (item.translation_revision_id, item.chunk_id)).fetchone()
-                if item.translation_revision_id != context['translation_revision_id'] or translated is None:
-                    raise DataIntegrityError('paper insight translation does not match context')
-            items.append(PaperInsight(row['insight_id'], row['position'], item, row['parse_revision_id']))
+        items = [PaperInsight(row['insight_id'], row['position'], item, row['parse_revision_id'])
+                 for row, item in read_insight_sources(conn, context, collection, scope)]
         return PaperInsightCollection(collection['collection_id'], context_id, scope,
                                       tuple(items), collection['created_at'])
+
+def read_insight_sources(conn, context, collection, scope):
+    """같은 읽기 트랜잭션에서 묶음의 모든 원문·번역 출처를 검증한다."""
+    rows = conn.execute('''SELECT i.*, c.parse_revision_id AS chunk_parse_revision_id,
+            c.original_text, c.section_id, c.pdf_page, c.printed_page_label
+        FROM paper_insights i LEFT JOIN chunks c ON c.chunk_id=i.chunk_id
+        WHERE i.collection_id=? ORDER BY i.position''', (collection['collection_id'],)).fetchall()
+    if not rows or [row['position'] for row in rows] != list(range(len(rows))):
+        raise DataIntegrityError('paper insight collection is incomplete')
+    for row in rows:
+        item = PaperInsightInput(row['kind'], row['text'], row['content_kind'], row['producer'],
+            row['chunk_id'], row['start_offset'], row['end_offset'], row['quote_original'],
+            row['translation_revision_id'], row['producer_version'] if 'producer_version' in row.keys() else None)
+        if (row['parse_revision_id'] != context['parse_revision_id']
+                or row['chunk_parse_revision_id'] != context['parse_revision_id']
+                or (scope != PAPER_SCOPE and row['section_id'] != scope)
+                or row['end_offset'] > len(row['original_text'])
+                or row['original_text'][row['start_offset']:row['end_offset']] != row['quote_original']):
+            raise DataIntegrityError('paper insight source does not match context')
+        if item.translation_revision_id is not None:
+            translated = conn.execute('''SELECT 1 FROM translation_results
+                WHERE translation_revision_id=? AND chunk_id=?
+                    AND failure_code IS NULL AND translated_text IS NOT NULL''',
+                (item.translation_revision_id, item.chunk_id)).fetchone()
+            if item.translation_revision_id != context['translation_revision_id'] or translated is None:
+                raise DataIntegrityError('paper insight translation does not match context')
+        yield row, item
 
 # ── 근거 기반 단계별 퀴즈 (M1-09) ───────────────────────────────
 def save_quiz(db_path: str, context_id: str, step: str, questions: List[QuizQuestion]) -> Quiz:

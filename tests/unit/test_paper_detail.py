@@ -41,9 +41,9 @@ def test_missing_summary_does_not_generate_or_write(detail):
 
 def test_saved_keywords_and_important_sentences_include_exact_provenance_without_writes(detail):
     db, service = detail
-    repo.save_paper_insights(db, 'ctx', 'paper', [
+    saved = repo.save_paper_insights(db, 'ctx', 'paper', [
         PaperInsightInput(KIND_KEYWORD, 'First', CONTENT_EXTRACTED, PRODUCER_EXTRACTOR,
-                          'c1', 0, 5, 'First'),
+                          'c1', 0, 5, 'First', producer_version='rules-v2'),
         PaperInsightInput(KIND_IMPORTANT_SENTENCE, 'Second.', CONTENT_EXTRACTED, PRODUCER_EXTRACTOR,
                           'c2', 0, 7, 'Second.'),
     ])
@@ -55,7 +55,10 @@ def test_saved_keywords_and_important_sentences_include_exact_provenance_without
         'parse_revision_id': 'p1', 'translation_revision_id': None,
         'start_offset': 0, 'end_offset': 5, 'quote_original': 'First',
         'pdf_page': 1, 'printed_page_label': None, 'section_id': 's1',
+        'producer_version': 'rules-v2', 'collection_created_at': saved.created_at,
     }
+    assert repo.get_paper_insights(db, 'ctx') == saved
+    assert result['important_sentences'][0]['producer_version'] is None
     assert result['important_sentences'][0]['text'] == 'Second.'
     assert 'keywords_not_available' not in result['limitations']
     assert 'important_sentences_not_available' not in result['limitations']
@@ -70,6 +73,7 @@ def test_partial_insights_keep_only_missing_kind_limitation(detail):
                           'c1', 0, 5, 'First'),
     ])
     result = service.get('ctx')
+    assert [i.input.kind for i in repo.get_paper_insights(db, 'ctx').items] == [KIND_KEYWORD]
     assert result['keywords'] and result['important_sentences'] == []
     assert 'keywords_not_available' not in result['limitations']
     assert 'important_sentences_not_available' in result['limitations']
@@ -154,3 +158,31 @@ def test_saved_summary_through_mcp_has_nested_contract(detail):
     assert data['summary']['items'][0]['evidence_ids']==['e1']
     assert data['evidence'][0]['section_id']=='s1'
     assert data['evidence'][0]['quote_original']=='First.'
+
+
+@pytest.mark.parametrize('corruption', [
+    "UPDATE chunks SET parse_revision_id='other' WHERE chunk_id='c2'",
+    "UPDATE paper_insights SET chunk_id='missing' WHERE position=1",
+])
+def test_broken_last_source_rejected_in_both_readers_and_mcp(detail, corruption):
+    import asyncio
+    from unittest.mock import Mock
+    from mcp.server.fastmcp.exceptions import ToolError
+    from solo_leveling.interfaces.mcp.server import MCPServices, create_server
+    db, service = detail
+    repo.save_paper_insights(db, 'ctx', 'paper', [
+        PaperInsightInput(KIND_KEYWORD, 'First', CONTENT_EXTRACTED, PRODUCER_EXTRACTOR,
+                          'c1', 0, 5, 'First'),
+        PaperInsightInput(KIND_IMPORTANT_SENTENCE, 'Second.', CONTENT_EXTRACTED, PRODUCER_EXTRACTOR,
+                          'c2', 0, 7, 'Second.'),
+    ])
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute(corruption)
+    with pytest.raises(DataIntegrityError):
+        repo.get_paper_insights(db, 'ctx')
+    with pytest.raises(DataIntegrityError):
+        service.get('ctx')
+    server = create_server(MCPServices(Mock(), Mock(), detail=service))
+    with pytest.raises(ToolError) as error:
+        asyncio.run(server.call_tool('get_paper_detail', {'context_id': 'ctx'}))
+    assert str(error.value).removeprefix('Error executing tool get_paper_detail: ') == 'INTERNAL_ERROR: 저장된 데이터의 연결을 확인하지 못했습니다.'
