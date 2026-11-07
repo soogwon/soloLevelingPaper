@@ -94,23 +94,34 @@ class PosixLease:
         if self.role != 'writer' or self.published or not self.valid():
             raise ValueError('INVALID_LOG_LEASE')
         name = log_name(self.bundle_id, kind)
+        if name in self.files:
+            raise ValueError('LOG_ALREADY_OPENED')
         fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                      0o600, dir_fd=self.root_fd)
+        reference = None
         try:
-            identity = _identity(os.fstat(fd))
+            # 쓰기 스트림 종료 후에도 원본 inode가 재사용되지 않도록 읽기 핸들을 보관한다.
+            reference = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.root_fd)
+            opened = os.fstat(reference)
+            if not _regular(opened) or _identity(opened) != _identity(os.fstat(fd)):
+                raise ValueError('LOG_FILE_CHANGED')
             stream = os.fdopen(fd, 'w', encoding='utf-8')
         except BaseException:
+            if reference is not None:
+                os.close(reference)
             os.close(fd)
             raise
-        self.files[name] = (kind, identity, stream)
+        self.files[name] = (kind, reference, stream)
         return self.root / name, stream
 
     def release(self):
         # fork 자식에서 LOCK_UN을 호출하면 부모 잠금도 풀리므로 설명자만 닫는다.
         failure = None
-        for field in ('lock_fd', 'root_fd'):
-            fd = getattr(self, field)
-            setattr(self, field, None)
+        descriptors = [reference for _, reference, _ in self.files.values()]
+        self.files.clear()
+        descriptors.extend((self.lock_fd, self.root_fd))
+        self.lock_fd = self.root_fd = None
+        for fd in descriptors:
             if fd is not None:
                 try:
                     os.close(fd)
@@ -169,13 +180,14 @@ class PosixBundleStore:
                 return 'invalid_state'
             rows = []
             for item in files:
-                kind, identity, stream = lease.files[item.name]
+                kind, reference, stream = lease.files[item.name]
                 if not stream.closed or kind != item.kind:
                     return 'invalid_state'
                 fd = os.open(item.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=lease.root_fd)
                 try:
                     info = os.fstat(fd)
-                    if (not _regular(info) or _identity(info) != identity or info.st_size != item.size_bytes):
+                    if (not _regular(info) or _identity(info) != _identity(os.fstat(reference))
+                            or info.st_size != item.size_bytes):
                         return 'invalid_state'
                 finally:
                     os.close(fd)
