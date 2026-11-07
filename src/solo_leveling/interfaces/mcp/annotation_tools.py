@@ -1,6 +1,7 @@
 """메모 서비스의 저장·조회 계약을 민감정보 없는 MCP 오류로 연결한다."""
 from dataclasses import asdict
 from functools import partial
+from importlib.resources import files
 from typing import Literal
 
 import anyio
@@ -9,6 +10,7 @@ from mcp.types import ToolAnnotations
 from typing_extensions import TypedDict
 from pydantic import BaseModel, ConfigDict, Field
 
+from solo_leveling.application.annotations.service import AnnotationSource
 from solo_leveling.domain.annotation import (
     Annotation, AnnotationResult, AnnotationOutcome, AnnotationValidationError, SegmentInput,
 )
@@ -22,6 +24,7 @@ class MutationOutput(TypedDict):
 
 
 class DetailOutput(TypedDict):
+    source: AnnotationSource | None
     annotation: Annotation
     segment_available: list[bool]
     location_status: Literal['available', 'unavailable', 'not_applicable']
@@ -58,6 +61,10 @@ class GetInput(Input):
     annotation_id: str
 
 
+class DetailInput(GetInput):
+    source_position: int | None = Field(default=None, ge=0)
+
+
 class ListInput(Input):
     step: str | None = None
     kind: str | None = None
@@ -76,7 +83,7 @@ class UpdateInput(DeleteInput):
 
 
 ANNOTATION_INPUTS = {
-    'create_annotation': CreateInput, 'get_annotation': GetInput,
+    'create_annotation': CreateInput, 'get_annotation': DetailInput,
     'list_annotations': ListInput, 'update_annotation': UpdateInput,
     'delete_annotation': DeleteInput,
 }
@@ -118,7 +125,16 @@ async def invoke(method, *args, **kwargs):
     return asdict(value)
 
 
+ANNOTATION_URI = 'ui://solo-leveling/annotation.html'
+
+
 def register_annotations(server, service):
+    @server.resource(ANNOTATION_URI, name='annotation', title='메모와 원문 위치',
+                     mime_type='text/html;profile=mcp-app',
+                     meta={'ui': {'csp': {'connectDomains': [], 'resourceDomains': []}}})
+    def annotation_html() -> str:
+        return files('solo_leveling.interfaces.mcp').joinpath('assets/annotation.html').read_text(encoding='utf-8')
+
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
     async def create_annotation(request: CreateInput) -> MutationOutput:
@@ -129,12 +145,14 @@ def register_annotations(server, service):
         return await invoke(service.create, request.context_id, request.kind, request.body,
                             segments=segments, step=request.step)
 
-    @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
-    async def get_annotation(request: GetInput) -> DetailOutput:
+    @server.tool(meta={'ui': {'resourceUri': ANNOTATION_URI}},
+                 annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
+    async def get_annotation(request: DetailInput) -> DetailOutput:
         """저장 기록과 구간별 위치 확인 결과를 조회합니다.
+        원문을 열려면 source_position에 저장된 구간의 position을 전달하세요.
         segment_available이 참인 구간만 원문 이동에 사용하세요. 거짓이면 이동 불가로 안내하세요.
         """
-        detail = await invoke(service.get, request.context_id, request.annotation_id)
+        detail = await invoke(service.get, request.context_id, request.annotation_id, source_position=request.source_position)
         available = detail['segment_available']
         detail['location_status'] = ('not_applicable' if not available else
                                      'available' if all(available) else 'unavailable')
