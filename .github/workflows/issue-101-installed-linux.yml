@@ -65,3 +65,11 @@ jobs:
           assert len(cases) == 1
           assert not root.findall('.//skipped')
           PY
+      - name: "#99 POSIX 로그 잠금·종료 및 오류 처리 회귀"
+        if: ${{ !cancelled() }}
+        run: |
+          "$SOLO_INSTALLED_PYTHON" -m pytest -q -rs \
+            tests/unit/test_posix_log_retention.py tests/integration/test_mcp_log_bundle.py \
+            tests/unit/test_log_retention_policy.py tests/unit/test_log_inventory.py \
+            tests/unit/test_safe_diagnostic_stream.py tests/unit/test_mcp_diagnostic_runner.py \
+            tests/integration/test_chroma_close_safe_logging.py

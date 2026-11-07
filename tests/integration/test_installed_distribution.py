@@ -1,5 +1,6 @@
 """별도 가상환경에 설치한 wheel을 저장소 밖에서 검증한다."""
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -111,3 +112,20 @@ asyncio.run(asyncio.wait_for(run(), timeout=60))
     logs = list((tmp_path / 'data/diagnostics').glob('*.log'))
     assert logs
     assert all('test-only' not in path.read_text(encoding='utf-8') for path in logs)
+    if os.name == 'posix':
+        # 설치본의 실제 stdio 서버가 정상 종료된 뒤에만 같은 로그의 종료 기록이 남는다.
+        directory = tmp_path / 'data/diagnostics'
+        records = list(directory.glob('slp-log-v1-mcp-*.closed.json'))
+        assert len(records) == 1
+        record = json.loads(records[0].read_text(encoding='utf-8'))
+        assert record['owner'] == 'mcp'
+        run_id = record['run_id']
+        assert records[0].name == f'slp-log-v1-mcp-{run_id}.closed.json'
+        entry, = record['files']
+        assert entry['kind'] == 'safe'
+        assert entry['name'] == f'slp-log-v1-mcp-safe-{run_id}.log'
+        info = (directory / entry['name']).stat()
+        assert entry['size_bytes'] == info.st_size
+        assert entry['identity'] == {
+            'platform': 'posix', 'st_dev': info.st_dev, 'st_ino': info.st_ino, 'st_size': info.st_size,
+        }
