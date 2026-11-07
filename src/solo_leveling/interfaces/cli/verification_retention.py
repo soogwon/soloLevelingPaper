@@ -3,6 +3,10 @@
   plan    정리 대상 건수·기간만 보여 준다(데이터 변경 없음).
   run     보존 기간이 지난 검증 이력만 지운다. --yes가 있어야 실행된다.
   reclaim 행 삭제로 비어 있는 파일 공간을 회수한다(VACUUM). --yes가 있어야 실행된다.
+          WAL이 남아 디스크에 공간이 돌아가지 않으면 wal_not_truncated로 알리고 성공으로 보고하지 않는다.
+
+변경 전에 대상이 필수 검증 이력 스키마를 가진 SQLite 파일인지 읽기 전용으로 확인한다(아니면 failed).
+백업 중 원본이 잠겨 있으면 --backup-lock-timeout초(기본 30) 뒤에 멈춘다(locked).
 
 보존 기간(--older-than-days)은 기본값이 없다. 출력에는 건수·기간·결과 코드만 쓴다.
 """
@@ -12,7 +16,7 @@ import sys
 from pathlib import Path
 
 from solo_leveling.domain.verification_retention import (
-    CleanupOutcome, RetentionPolicy, RetentionValidationError, SpaceOutcome, DEFAULT_BATCH_SIZE)
+    CleanupOutcome, RetentionPolicy, RetentionValidationError, SpaceOutcome, TargetCheck, DEFAULT_BATCH_SIZE)
 from solo_leveling.infrastructure.database import verification_retention as store
 
 
@@ -28,6 +32,8 @@ def main(argv=None) -> int:
     parser.add_argument('--batch-size', type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument('--yes', action='store_true', help='실제로 변경한다(run·reclaim에 필요)')
     parser.add_argument('--backup-to', type=Path, help='변경 전에 이 경로로 DB 백업. 이미 있으면 중단')
+    parser.add_argument('--backup-lock-timeout', type=float, default=store.DEFAULT_BACKUP_LOCK_TIMEOUT,
+                        help='백업 중 원본이 잠겨 있을 때 기다리는 최대 초(기본 30). 넘으면 백업을 멈추고 아무것도 바꾸지 않는다')
     args = parser.parse_args(argv)
     db = str(args.db)
     if not args.db.is_file():
@@ -36,6 +42,13 @@ def main(argv=None) -> int:
     if args.command in ('run', 'reclaim') and not args.yes:
         _out(result='confirmation_required')
         return 2
+    target = store.check_target(db)   # 변경(백업 포함) 전에 대상이 검증 이력을 가진 SQLite 파일인지 확인한다.
+    if target is TargetCheck.LOCKED:
+        _out(result='locked')
+        return 1
+    if target is not TargetCheck.OK:
+        _out(result='failed')
+        return 1
     try:
         if args.command in ('plan', 'run'):
             if args.older_than_days is None:
@@ -43,7 +56,7 @@ def main(argv=None) -> int:
                 return 2
             policy = RetentionPolicy(args.older_than_days, args.batch_size)
         if args.backup_to is not None and args.command != 'plan':
-            store.backup_database(db, str(args.backup_to))
+            store.backup_database(db, str(args.backup_to), args.backup_lock_timeout)
             _out(backup='created')
         if args.command == 'plan':
             plan = store.plan_verification_cleanup(db, policy)
@@ -59,14 +72,21 @@ def main(argv=None) -> int:
                  reclaimable_bytes=store.space_report(db).free_bytes_in_file)
             return 0 if result.outcome is CleanupOutcome.COMPLETED else 1
         space = store.reclaim_space(db)
-        _out(result=space.outcome.value, before_bytes=space.before_bytes, after_bytes=space.after_bytes)
+        _out(result=space.outcome.value, before_bytes=space.before_bytes, after_bytes=space.after_bytes,
+             wal_bytes_after=space.wal_bytes_after)
         return 0 if space.outcome is SpaceOutcome.COMPLETED else 1
     except RetentionValidationError as error:
         _out(result='invalid_setting', field=error)
         return 2
+    except ValueError:
+        _out(result='invalid_setting', field='backup_lock_timeout')
+        return 2
     except FileExistsError:
         _out(result='backup_exists')
         return 2
+    except store.BackupLockTimeout:
+        _out(result='locked')
+        return 1
     except sqlite3.Error as error:
         # 원본 예외 문구·경로는 출력하지 않는다. 실제 잠금만 재시도할 수 있는 상황(locked)이고 나머지는 failed다.
         _out(result='locked' if store.is_lock_error(error) else 'failed')

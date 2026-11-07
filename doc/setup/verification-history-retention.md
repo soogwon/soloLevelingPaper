@@ -32,6 +32,10 @@ solo-leveling-verification-retention reclaim --db <DB경로> --yes [--backup-to 
 
 `--backup-to`는 SQLite 백업 API로 변경 전에 일관된 사본을 만들고, 백업 경로는 배타적으로 확보한다. 이미 있거나 다른 실행이 먼저 만들었으면 아무것도 바꾸지 않고 `backup_exists`로 중단하며 먼저 만든 사본은 보존된다. 백업이 실패하면 이 실행이 만든 파일만 지운다.
 
+**대상 DB 확인(#178)**: 어떤 명령이든 변경(백업 포함) 전에 대상이 검증 이력 테이블의 필수 컬럼·타입·PK·FK를 가진 SQLite 파일인지 읽기 전용으로 확인한다. SQLite 파일이 아니거나 필수 스키마가 다르면 `result=failed`(종료 코드 1)로 멈추고 백업도 만들지 않는다. 확인 중 다른 쓰기가 잠그고 있으면 `locked`(종료 코드 1)다.
+
+**백업 잠금 대기 상한(#178)**: 백업 중 원본이 다른 쓰기에 잠겨 있으면 `--backup-lock-timeout`초(기본 30, 0 초과 3600 이하)까지만 기다린다. 넘으면 `result=locked`(종료 코드 1)로 멈추고, 이 실행이 만든 백업 파일은 지우며 원본은 바꾸지 않는다. 잠기지 않고 진행되는 시간은 제한하지 않는다.
+
 ## 실행 순서(수동)
 
 1. 앱(MCP 서버)을 쓰지 않는 시간에 한다. 정리는 짧은 쓰기 트랜잭션을 반복하므로 동시에 저장해도 깨지지 않지만,
@@ -54,6 +58,7 @@ solo-leveling-verification-retention reclaim --db <DB경로> --yes [--backup-to 
 
 - 행을 지워도 SQLite 파일 크기는 줄지 않는다. 비워진 공간은 파일 안에서 재사용된다(`reclaimable_bytes`).
 - `reclaim`(VACUUM)은 전체 쓰기 잠금이 걸리고, 임시로 DB 크기만큼 더 필요하다. 여유 공간은 본체 파일이 아니라 WAL에 커밋된 페이지까지 포함한 논리 크기(`page_count × page_size`)의 2배로 판단하며, 2배 미만이면 VACUUM을 실행하지 않고 `insufficient_disk`로 멈춘다.
+- **WAL 실제 회수 결과(#178)**: WAL 모드에서는 VACUUM 결과도 WAL에 먼저 쓰이므로, 끝난 뒤 체크포인트(TRUNCATE)하고 연결을 닫은 다음 본체와 WAL의 실제 디스크 크기를 보고한다(`after_bytes`는 본체+WAL, `wal_bytes_after`는 남은 WAL). 다른 연결이 WAL을 붙들어 남아 있으면 `result=wal_not_truncated`(종료 코드 1)이며 성공으로 보고하지 않는다. `before_bytes`는 시작 시점의 논리 크기다.
 - VACUUM은 `INTEGER PRIMARY KEY`가 없는 테이블의 rowid를 다시 매길 수 있다. 실제로는 기존 순서대로 다시 넣지만
   SQLite가 보장하는 동작은 아니므로, rowid를 동률 정렬 보조키로 쓰는 조회(#145 퀴즈 이력 등)는 같은 시각의 기록 순서가
   바뀔 수 있다. 그래서 공간 회수는 정리와 분리해 수동으로만 한다.

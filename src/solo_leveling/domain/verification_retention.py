@@ -25,6 +25,7 @@ class CleanupOutcome(str, Enum):
 
 class SpaceOutcome(str, Enum):
     COMPLETED = 'completed'
+    WAL_NOT_TRUNCATED = 'wal_not_truncated'   # VACUUM은 끝났지만 WAL이 남아 있어 운영체제에 공간이 돌아가지 않았다.
     INSUFFICIENT_DISK = 'insufficient_disk'
     LOCKED = 'locked'
     FAILED = 'failed'
@@ -64,9 +65,19 @@ class SpaceReport:
 
 @dataclass(frozen=True)
 class SpaceResult:
+    """before_bytes는 시작 시점의 논리 크기(WAL에 커밋된 페이지 포함), after_bytes는 끝난 뒤 디스크에 남은 본체+WAL 크기다."""
     outcome: SpaceOutcome
     before_bytes: int
     after_bytes: int
+    wal_bytes_after: int = 0
+
+
+class TargetCheck(str, Enum):
+    OK = 'ok'
+    NOT_A_DATABASE = 'not_a_database'     # SQLite 파일이 아니다.
+    MISSING_TABLES = 'missing_tables'     # 검증 이력 테이블이 없다(다른 데이터베이스일 수 있다).
+    INVALID_SCHEMA = 'invalid_schema'     # 이름은 같아도 필수 컬럼·PK·FK 계약이 다르다.
+    LOCKED = 'locked'
 
 
 def validate_policy(policy: RetentionPolicy) -> None:

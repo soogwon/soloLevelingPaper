@@ -1,6 +1,8 @@
 """검증 이력 보존·정리(#82)를 임시 SQLite로 검증한다: dry-run 무변경, 기한 경계, 범위 제한, 배치·중단·재실행, 동시 저장, 공간 회수."""
 import os
+import shutil
 import sqlite3
+import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
@@ -325,14 +327,13 @@ def test_cli_locked_versus_failed_for_all_three_commands(env, tmp_path, capsys):
         conn.execute('CREATE TABLE other (x)')
     garbage = tmp_path / 'garbage.db'
     garbage.write_bytes(b'this is not a sqlite database' * 200)
+    # 대상이 이 프로젝트의 검증 이력 DB가 아니면(#178) 변경 전에 failed로 멈춘다. 잠금이 아니므로 locked가 아니다.
     for target in (missing, str(garbage)):
-        for args in (('plan', '--older-than-days', '30'), ('run', '--older-than-days', '30', '--yes')):
+        for args in (('plan', '--older-than-days', '30'), ('run', '--older-than-days', '30', '--yes'),
+                     ('reclaim', '--yes')):
             code, out = run_cli(capsys, args[0], '--db', target, *args[1:])
-            assert code == 1 and out.startswith('result=failed'), (args, out)
+            assert (code, out.strip()) == (1, 'result=failed'), (args, out)
             assert str(tmp_path) not in out and 'no such table' not in out and 'not a database' not in out
-    code, out = run_cli(capsys, 'reclaim', '--db', str(garbage), '--yes')
-    assert (code, out.strip().split()[0]) == (1, 'result=failed')
-    assert str(tmp_path) not in out and 'no such table' not in out
 
     blocker = sqlite3.connect(env, isolation_level=None)
     blocker.execute('BEGIN EXCLUSIVE')
@@ -389,3 +390,215 @@ def test_failed_backup_removes_only_its_own_reservation(env, tmp_path):
     assert not target.exists()                                        # 재시도할 수 있다
     vr.backup_database(env, str(target))
     assert target.exists()
+
+
+# ── #178: 대상 DB 확인·WAL 실제 회수 결과·백업 잠금 대기 상한 ──────────────────────────
+from solo_leveling.domain.verification_retention import TargetCheck  # noqa: E402
+
+
+def test_check_target_accepts_project_db_and_rejects_others_without_creating_files(env, tmp_path):
+    assert vr.check_target(env) is TargetCheck.OK
+    other = str(tmp_path / 'other.db')
+    with closing(sqlite3.connect(other)) as conn, conn:
+        conn.execute('CREATE TABLE verification_runs (run_id TEXT)')      # 테이블 일부만 있다
+    garbage = tmp_path / 'garbage.db'
+    garbage.write_bytes(b'not sqlite' * 100)
+    empty = tmp_path / 'empty.db'
+    empty.write_bytes(b'')
+    assert vr.check_target(other) is TargetCheck.MISSING_TABLES
+    assert vr.check_target(str(garbage)) is TargetCheck.NOT_A_DATABASE
+    assert vr.check_target(str(empty)) is TargetCheck.MISSING_TABLES      # 빈 파일은 SQLite로 열리지만 테이블이 없다
+    missing = tmp_path / 'absent.db'
+    assert vr.check_target(str(missing)) is TargetCheck.NOT_A_DATABASE
+    assert not missing.exists() and sorted(p.name for p in tmp_path.glob('*.db-*')) == []
+
+
+def test_check_target_rejects_matching_table_names_with_unrelated_columns(tmp_path):
+    wrong = str(tmp_path / 'wrong-schema.db')
+    with closing(sqlite3.connect(wrong)) as conn, conn:
+        for table in vr.REQUIRED_PARENT_TABLES:
+            conn.execute(f'CREATE TABLE {table} (x TEXT)')
+        for table in HISTORY:
+            conn.execute(f'CREATE TABLE {table} (x TEXT)')
+    assert vr.check_target(wrong) is TargetCheck.INVALID_SCHEMA
+
+
+def test_check_target_rejects_history_schema_without_project_parent_tables(env, tmp_path):
+    target = str(tmp_path / 'history-only.db')
+    with closing(sqlite3.connect(env)) as source:
+        definitions = [source.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0]
+            for table in HISTORY]
+    with closing(sqlite3.connect(target)) as conn, conn:
+        for definition in definitions:
+            conn.execute(definition)
+    assert vr.check_target(target) is TargetCheck.MISSING_TABLES
+
+
+@pytest.mark.parametrize('defect', ['missing_column', 'wrong_type', 'missing_primary_key', 'missing_foreign_key'])
+def test_check_target_rejects_incomplete_required_schema(env, tmp_path, defect):
+    target = tmp_path / f'{defect}.db'
+    shutil.copyfile(env, target)
+    with closing(sqlite3.connect(target)) as conn, conn:
+        conn.execute('PRAGMA foreign_keys = OFF')
+        if defect == 'missing_column':
+            conn.execute('ALTER TABLE verification_runs DROP COLUMN model')
+        elif defect in ('wrong_type', 'missing_primary_key'):
+            conn.execute('DROP TABLE verification_claim_refs')
+            conn.execute('''CREATE TABLE verification_claim_refs (
+                run_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                ref_position INTEGER NOT NULL,
+                chunk_id TEXT NOT NULL REFERENCES chunks(chunk_id) ON DELETE RESTRICT,
+                content_hash {content_type} NOT NULL,
+                {primary_key}
+                FOREIGN KEY (run_id, position)
+                    REFERENCES verification_claims(run_id, position) ON DELETE CASCADE
+            )'''.format(
+                content_type='BLOB' if defect == 'wrong_type' else 'TEXT',
+                primary_key='PRIMARY KEY (run_id, position, ref_position),' if defect == 'wrong_type' else '',
+            ))
+        else:
+            conn.execute('DROP TABLE verification_claims')
+            conn.execute('''CREATE TABLE verification_claims (
+                run_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                claim_id TEXT NOT NULL,
+                claim_text TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                retained INTEGER NOT NULL,
+                PRIMARY KEY (run_id, position),
+                UNIQUE (run_id, claim_id)
+            )''')
+    assert vr.check_target(str(target)) is TargetCheck.INVALID_SCHEMA
+
+
+def test_check_target_reports_locked_not_invalid_when_a_writer_holds_the_database(env):
+    blocker = sqlite3.connect(env, isolation_level=None)
+    blocker.execute('BEGIN EXCLUSIVE')
+    try:
+        with short_lock_timeout():
+            assert vr.check_target(env) is TargetCheck.LOCKED
+    finally:
+        blocker.execute('ROLLBACK')
+        blocker.close()
+
+
+@pytest.mark.parametrize('command', [('run', '--older-than-days', '30', '--yes'), ('reclaim', '--yes')])
+def test_cli_stops_on_a_wrong_target_before_backup_or_any_change(tmp_path, capsys, command):
+    wrong = str(tmp_path / 'wrong.db')
+    with closing(sqlite3.connect(wrong)) as conn, conn:
+        for table in HISTORY:
+            conn.execute(f'CREATE TABLE {table} (x TEXT)')
+        conn.execute("INSERT INTO verification_runs VALUES ('keep')")
+    backup = tmp_path / 'backup.db'
+    before = open(wrong, 'rb').read()
+    code, out = run_cli(capsys, command[0], '--db', wrong, *command[1:], '--backup-to', str(backup))
+    assert (code, out.strip()) == (1, 'result=failed')
+    assert not backup.exists() and open(wrong, 'rb').read() == before
+
+
+def _wal_db(tmp_path, name='w.db'):
+    db = str(tmp_path / name)
+    conn = sqlite3.connect(db, isolation_level=None)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA wal_autocheckpoint=0')
+    conn.execute('CREATE TABLE filler (x TEXT)')
+    conn.execute('BEGIN')
+    conn.executemany('INSERT INTO filler VALUES (?)', [('x' * 1000,)] * 3000)
+    conn.execute('COMMIT')
+    conn.execute('DROP TABLE filler')
+    return db, conn
+
+
+def test_reclaim_reports_the_real_disk_size_including_the_wal(tmp_path):
+    db, holder = _wal_db(tmp_path)
+    holder.close()                    # 마지막 연결이 닫혀야 WAL이 합쳐진다
+    result = vr.reclaim_space(db)
+    assert result.outcome is SpaceOutcome.COMPLETED and result.wal_bytes_after == 0
+    assert result.after_bytes == os.path.getsize(db) and not os.path.exists(db + '-wal')
+    assert result.after_bytes < result.before_bytes
+
+
+def test_reclaim_does_not_claim_success_while_another_connection_keeps_the_wal(tmp_path):
+    db, holder = _wal_db(tmp_path)
+    reader = sqlite3.connect(db, isolation_level=None)
+    reader.execute('BEGIN')
+    reader.execute('SELECT COUNT(*) FROM sqlite_master').fetchone()   # 읽기 트랜잭션이 체크포인트를 막는다
+    try:
+        with short_lock_timeout():
+            result = vr.reclaim_space(db)
+        wal = os.path.getsize(db + '-wal')
+        assert wal > 0
+        # VACUUM은 끝났지만 읽기 연결이 WAL을 붙들어 디스크에는 공간이 돌아가지 않았다. 성공이 아니라고 알려야 한다.
+        assert result.outcome is SpaceOutcome.WAL_NOT_TRUNCATED
+        assert result.wal_bytes_after == wal and result.after_bytes == os.path.getsize(db) + wal
+    finally:
+        reader.execute('ROLLBACK')
+        reader.close()
+        holder.close()
+
+
+def test_cli_reclaim_prints_wal_bytes_and_exits_nonzero_when_the_wal_remains(env, capsys, monkeypatch):
+    db = env
+    from solo_leveling.domain.verification_retention import SpaceResult
+    monkeypatch.setattr(vr, 'reclaim_space', lambda path: SpaceResult(SpaceOutcome.WAL_NOT_TRUNCATED, 10, 30, 20))
+    code, out = run_cli(capsys, 'reclaim', '--db', db, '--yes')
+    assert code == 1 and out.strip() == 'result=wal_not_truncated before_bytes=10 after_bytes=30 wal_bytes_after=20'
+
+
+def test_backup_stops_after_the_lock_wait_limit_and_removes_its_reservation(env, tmp_path):
+    seed(env, [('old', 90)])
+    target = tmp_path / 'backup.db'
+    blocker = sqlite3.connect(env, isolation_level=None)
+    blocker.execute('BEGIN EXCLUSIVE')
+    try:
+        started = time.monotonic()
+        with pytest.raises(vr.BackupLockTimeout):
+            vr.backup_database(env, str(target), lock_timeout=0.5)
+        assert time.monotonic() - started < 10            # 끝없이 기다리지 않는다
+    finally:
+        blocker.execute('ROLLBACK')
+        blocker.close()
+    assert not target.exists()                            # 재시도할 수 있다
+    vr.backup_database(env, str(target), lock_timeout=5)
+    assert table_counts(str(target), 'verification_runs') == (1,)
+
+
+@pytest.mark.parametrize('bad', [0, -1, 3601, True, None, 'x'])
+def test_backup_rejects_an_invalid_lock_wait_limit_before_creating_anything(env, tmp_path, bad):
+    target = tmp_path / 'backup.db'
+    with pytest.raises(ValueError):
+        vr.backup_database(env, str(target), lock_timeout=bad)
+    assert not target.exists()
+
+
+def test_cli_backup_lock_timeout_reports_locked_and_changes_nothing(env, tmp_path, capsys):
+    seed(env, [('old', 90)])
+    backup = tmp_path / 'backup.db'
+    blocker = sqlite3.connect(env, isolation_level=None)
+    blocker.execute('BEGIN EXCLUSIVE')
+    try:
+        started = time.monotonic()
+        # 대상 확인은 잠금 때문에 locked로 끝나므로, 확인은 통과시키고 백업 단계의 대기만 검증한다.
+        original = vr.check_target
+        vr.check_target = lambda path: TargetCheck.OK
+        try:
+            code, out = run_cli(capsys, 'run', '--db', env, '--older-than-days', '30', '--yes',
+                                '--backup-to', str(backup), '--backup-lock-timeout', '0.5')
+        finally:
+            vr.check_target = original
+        assert time.monotonic() - started < 10
+    finally:
+        blocker.execute('ROLLBACK')
+        blocker.close()
+    assert (code, out.strip()) == (1, 'result=locked')
+    assert not backup.exists() and table_counts(env, 'verification_runs') == (1,)
+
+
+def test_cli_rejects_an_invalid_backup_lock_timeout(env, tmp_path, capsys):
+    code, out = run_cli(capsys, 'run', '--db', env, '--older-than-days', '30', '--yes',
+                        '--backup-to', str(tmp_path / 'b.db'), '--backup-lock-timeout', '0')
+    assert code == 2 and out.strip() == 'result=invalid_setting field=backup_lock_timeout'
+    assert not (tmp_path / 'b.db').exists()

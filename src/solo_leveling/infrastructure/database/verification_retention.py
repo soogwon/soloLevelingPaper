@@ -11,13 +11,15 @@
 import os
 import shutil
 import sqlite3
+import time
+from pathlib import Path
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from solo_leveling.domain.verification_retention import (
     CleanupOutcome, CleanupPlan, CleanupResult, RetentionPolicy, SpaceOutcome, SpaceReport, SpaceResult,
-    validate_policy)
+    TargetCheck, validate_policy)
 from solo_leveling.infrastructure.database.schema import get_connection
 
 
@@ -28,6 +30,102 @@ def is_lock_error(error: sqlite3.Error) -> bool:
     """실제 잠금(SQLITE_BUSY·SQLITE_LOCKED 계열)만 True다. 테이블 누락 같은 일반 DB 오류는 재시도할 상황이 아니다(#82)."""
     code = getattr(error, 'sqlite_errorcode', None)
     return isinstance(code, int) and (code & 0xFF) in _LOCK_CODES
+
+
+REQUIRED_TABLES = ('verification_runs', 'verification_claims', 'verification_claim_refs')
+REQUIRED_COLUMNS = {
+    'verification_runs': {
+        'run_id': ('TEXT', 0, 1),
+        'context_id': ('TEXT', 1, 0),
+        'version_id': ('TEXT', 1, 0),
+        'parse_revision_id': ('TEXT', 1, 0),
+        'translation_revision_id': ('TEXT', 1, 0),
+        'embedding_set_id': ('TEXT', 1, 0),
+        'model': ('TEXT', 1, 0),
+        'instruction_version': ('TEXT', 1, 0),
+        'elapsed_ms': ('INTEGER', 1, 0),
+        'level': ('TEXT', 1, 0),
+        'failure_code': ('TEXT', 0, 0),
+        'created_at': ('TEXT', 1, 0),
+    },
+    'verification_claims': {
+        'run_id': ('TEXT', 1, 1),
+        'position': ('INTEGER', 1, 2),
+        'claim_id': ('TEXT', 1, 0),
+        'claim_text': ('TEXT', 1, 0),
+        'verdict': ('TEXT', 1, 0),
+        'reason': ('TEXT', 1, 0),
+        'retained': ('INTEGER', 1, 0),
+    },
+    'verification_claim_refs': {
+        'run_id': ('TEXT', 1, 1),
+        'position': ('INTEGER', 1, 2),
+        'ref_position': ('INTEGER', 1, 3),
+        'chunk_id': ('TEXT', 1, 0),
+        'content_hash': ('TEXT', 1, 0),
+    },
+}
+REQUIRED_FOREIGN_KEYS = {
+    'verification_runs': {
+        ('learning_contexts', (('context_id', 'context_id'),), 'CASCADE'),
+        ('paper_versions', (('version_id', 'version_id'),), 'NO ACTION'),
+        ('parse_revisions', (('parse_revision_id', 'parse_revision_id'),), 'NO ACTION'),
+        ('translation_revisions', (('translation_revision_id', 'translation_revision_id'),), 'NO ACTION'),
+        ('embedding_sets', (('embedding_set_id', 'embedding_set_id'),), 'NO ACTION'),
+    },
+    'verification_claims': {
+        ('verification_runs', (('run_id', 'run_id'),), 'CASCADE'),
+    },
+    'verification_claim_refs': {
+        ('verification_claims', (('run_id', 'run_id'), ('position', 'position')), 'CASCADE'),
+        ('chunks', (('chunk_id', 'chunk_id'),), 'RESTRICT'),
+    },
+}
+REQUIRED_PARENT_TABLES = frozenset(
+    foreign_table
+    for contracts in REQUIRED_FOREIGN_KEYS.values()
+    for foreign_table, _columns, _on_delete in contracts
+) - frozenset(REQUIRED_TABLES)
+DEFAULT_BACKUP_LOCK_TIMEOUT = 30.0
+
+
+class BackupLockTimeout(Exception):
+    """원본이 다른 쓰기로 잠겨 있어 정해진 시간 안에 백업하지 못했다. 만든 사본은 지운다."""
+
+
+def check_target(db_path: str) -> TargetCheck:
+    """필수 테이블·컬럼·PK·FK를 읽기 전용으로 확인한다. 파일을 만들거나 바꾸지 않는다."""
+    uri = Path(db_path).resolve().as_uri() + '?mode=ro'
+    try:
+        with closing(sqlite3.connect(uri, uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not set(REQUIRED_TABLES).union(REQUIRED_PARENT_TABLES).issubset(names):
+                return TargetCheck.MISSING_TABLES
+            for table in REQUIRED_TABLES:
+                columns = {
+                    row['name']: (str(row['type']).upper(), row['notnull'], row['pk'])
+                    for row in conn.execute(f'PRAGMA table_info("{table}")')
+                }
+                if any(columns.get(name) != contract
+                       for name, contract in REQUIRED_COLUMNS[table].items()):
+                    return TargetCheck.INVALID_SCHEMA
+                foreign_keys = {}
+                for row in conn.execute(f'PRAGMA foreign_key_list("{table}")'):
+                    foreign_keys.setdefault(row['id'], []).append(row)
+                actual_foreign_keys = {
+                    (rows[0]['table'], tuple((row['from'], row['to'])
+                                             for row in sorted(rows, key=lambda item: item['seq'])),
+                     rows[0]['on_delete'].upper())
+                    for rows in foreign_keys.values()
+                }
+                if not REQUIRED_FOREIGN_KEYS[table].issubset(actual_foreign_keys):
+                    return TargetCheck.INVALID_SCHEMA
+    except sqlite3.Error as error:
+        if is_lock_error(error):
+            return TargetCheck.LOCKED
+        return TargetCheck.NOT_A_DATABASE
+    return TargetCheck.OK
 
 
 def _cutoff(policy: RetentionPolicy, now: Optional[datetime]) -> str:
@@ -98,18 +196,35 @@ def space_report(db_path: str) -> SpaceReport:
     return SpaceReport(os.path.getsize(db_path), page_size * free)
 
 
-def backup_database(db_path: str, backup_path: str) -> None:
+def backup_database(db_path: str, backup_path: str, lock_timeout: float = DEFAULT_BACKUP_LOCK_TIMEOUT) -> None:
     """SQLite 백업 API로 일관된 사본을 만든다. 이미 있는 파일은 덮어쓰지 않는다.
 
     목적지는 O_EXCL로 먼저 배타적으로 확보한다. 존재 확인과 연결 사이에 다른 실행이 같은 경로를 만들어도
     한쪽만 확보하고 나머지는 FileExistsError로 멈추며, 먼저 만든 사본은 그대로 남는다. 백업이 실패하면 이 호출이
     만든 파일만 지워 재시도할 수 있게 한다.
+
+    원본이 잠겨 있으면 백업 API는 끝없이 다시 시도하므로, 잠김이 lock_timeout초 넘게 이어지면 BackupLockTimeout으로
+    멈춘다(#178). 잠기지 않고 진행되는 시간은 제한하지 않는다.
     """
+    if isinstance(lock_timeout, bool) or not isinstance(lock_timeout, (int, float)) or not 0 < lock_timeout <= 3600:
+        raise ValueError('lock_timeout')
     fd = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     os.close(fd)
+    waiting = {'since': None}
+
+    def progress(status, remaining, total):
+        if status in _LOCK_CODES:
+            now = time.monotonic()
+            waiting['since'] = now if waiting['since'] is None else waiting['since']
+            if now - waiting['since'] > lock_timeout:
+                raise BackupLockTimeout()
+        else:
+            waiting['since'] = None
+
     try:
-        with closing(sqlite3.connect(db_path)) as src, closing(sqlite3.connect(backup_path)) as dst:
-            src.backup(dst)
+        with closing(sqlite3.connect(db_path, timeout=min(lock_timeout, 1.0))) as src, \
+                closing(sqlite3.connect(backup_path)) as dst:
+            src.backup(dst, progress=progress)
     except BaseException:
         try:
             os.unlink(backup_path)
@@ -124,15 +239,24 @@ def logical_size(db_path: str) -> int:
         return conn.execute('PRAGMA page_count').fetchone()[0] * conn.execute('PRAGMA page_size').fetchone()[0]
 
 
+def _wal_bytes(db_path: str) -> int:
+    try:
+        return os.path.getsize(db_path + '-wal')
+    except OSError:
+        return 0
+
+
 def reclaim_space(db_path: str, free_bytes: Optional[Callable[[str], int]] = None) -> SpaceResult:
     """VACUUM으로 파일 공간을 회수한다. 전체 쓰기 잠금이 걸리고 임시 공간으로 DB 크기만큼 더 필요하다.
 
     여유 공간은 본체 파일이 아니라 WAL의 커밋된 페이지를 포함한 논리 크기의 2배로 판단한다(#82).
+    WAL 모드에서는 VACUUM 결과도 WAL에 먼저 기록되므로, 끝난 뒤 한 번 더 체크포인트(TRUNCATE)하고 연결을 닫은 다음
+    본체와 WAL의 실제 디스크 크기를 보고한다. WAL이 남아 있으면 WAL_NOT_TRUNCATED이며 성공으로 보고하지 않는다(#178).
     """
     try:
         before = logical_size(db_path)
     except sqlite3.Error as error:
-        size = os.path.getsize(db_path)
+        size = os.path.getsize(db_path) + _wal_bytes(db_path)
         return SpaceResult(SpaceOutcome.LOCKED if is_lock_error(error) else SpaceOutcome.FAILED, size, size)
     available = (free_bytes or (lambda path: shutil.disk_usage(path).free))(os.path.dirname(os.path.abspath(db_path)))
     if available < before * 2:
@@ -141,7 +265,10 @@ def reclaim_space(db_path: str, free_bytes: Optional[Callable[[str], int]] = Non
         with closing(sqlite3.connect(db_path, isolation_level=None)) as conn:
             conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
             conn.execute('VACUUM')
+            conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
     except sqlite3.Error as error:
         outcome = SpaceOutcome.LOCKED if is_lock_error(error) else SpaceOutcome.FAILED
-        return SpaceResult(outcome, before, os.path.getsize(db_path))
-    return SpaceResult(SpaceOutcome.COMPLETED, before, os.path.getsize(db_path))
+        return SpaceResult(outcome, before, os.path.getsize(db_path) + _wal_bytes(db_path), _wal_bytes(db_path))
+    wal = _wal_bytes(db_path)   # 마지막 연결이 닫히면 WAL 파일은 사라진다. 남아 있으면 다른 연결이 붙들고 있다.
+    outcome = SpaceOutcome.COMPLETED if wal == 0 else SpaceOutcome.WAL_NOT_TRUNCATED
+    return SpaceResult(outcome, before, os.path.getsize(db_path) + wal, wal)
