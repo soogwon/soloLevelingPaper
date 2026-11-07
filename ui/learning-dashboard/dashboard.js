@@ -148,7 +148,16 @@ export function mountDashboard(app, doc, timeoutMs = 15000) {
     el('detail-view').hidden = false;
     if (!detailApp) {
       // 기존 상세 렌더러의 DOM을 별도 영역에 연결해 호스트 이벤트와 분리한다.
-      detailApp = { connect: async () => {} };
+      detailApp = {
+        connect: async () => {},
+        callServerTool: (call) => {
+          if (call.name !== 'list_annotations' || el('detail-view').hidden ||
+              !snapshot || call.arguments?.request?.context_id !== snapshot.context_id) {
+            throw new Error('invalid-detail-request');
+          }
+          return app.callServerTool(call);
+        },
+      };
       mountDetailApp(detailApp, {
         getElementById: (id) => el(`paper-detail-${id}`),
         querySelector: () => el('detail-view'),

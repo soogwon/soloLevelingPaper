@@ -90,3 +90,47 @@ def test_previous_schema_keeps_sources_and_unknown_version(setup_db):
     assert repo.get_paper_insights(db, 'ctx') == saved
     init_db(db)
     assert repo.get_paper_insights(db, 'ctx') == saved
+
+
+def test_conditional_save_is_atomic_and_legacy_replacement_still_works(setup_db):
+    from pathlib import Path
+    from solo_leveling.domain.paper_insight import PaperInsightConflictError
+    db, chunks = setup_db
+    publish(db, chunks)
+    first = repo.save_paper_insights(db, 'ctx', 'paper', [item()], expected_collection_id=None,
+                                   expected_context=('v1', 'p1', 't1', 'idx'))
+    before = Path(db).read_bytes()
+    for expected in (None, 'stale-collection'):
+        with pytest.raises(PaperInsightConflictError):
+            repo.save_paper_insights(db, 'ctx', 'paper', [item()], expected_collection_id=expected)
+        assert Path(db).read_bytes() == before
+    with pytest.raises(DataIntegrityError):
+        repo.save_paper_insights(db, 'ctx', 'paper', [item()], expected_collection_id=first.collection_id,
+                                expected_context=('wrong', 'p1', 't1', 'idx'))
+    assert Path(db).read_bytes() == before
+    updated = repo.save_paper_insights(db, 'ctx', 'paper', [item()], expected_collection_id=first.collection_id)
+    assert updated.collection_id != first.collection_id
+    legacy = repo.save_paper_insights(db, 'ctx', 'paper', [item()])
+    assert repo.get_paper_insights(db, 'ctx') == legacy
+
+
+def test_concurrent_create_only_saves_preserve_one_complete_collection(setup_db):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from solo_leveling.domain.paper_insight import PaperInsightConflictError
+    db, chunks = setup_db
+    publish(db, chunks)
+    barrier = Barrier(2)
+
+    def save_once():
+        barrier.wait(timeout=5)
+        try:
+            return repo.save_paper_insights(db, 'ctx', 'paper', [item()], expected_collection_id=None)
+        except PaperInsightConflictError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: save_once(), range(2)))
+    saved = [result for result in results if result is not None]
+    assert len(saved) == 1
+    assert repo.get_paper_insights(db, 'ctx') == saved[0]
