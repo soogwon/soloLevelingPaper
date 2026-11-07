@@ -28,6 +28,7 @@ REQUEST_TIMEOUT = (5, 30)  # (connect, read) per request
 MAX_REDIRECTS = 5
 MAX_RESPONSE_BYTES = 50 * 1024 * 1024  # 50MB
 MAX_TOTAL_SECONDS = 60  # 리다이렉트 포함 전체 다운로드 시간 상한
+URL_RESPONSE_TOO_LARGE = "URL_RESPONSE_TOO_LARGE"
 
 _PRIVATE_HOSTNAMES = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 
@@ -38,6 +39,12 @@ class UnsafeUrlError(ValueError):
 
 class ResponseTooLargeError(ValueError):
     """허용된 응답 크기를 초과한 경우"""
+
+    code = URL_RESPONSE_TOO_LARGE
+
+    def __init__(self):
+        # URL·쿼리·서버 헤더는 사용자 데이터나 비밀값을 포함할 수 있으므로 메시지에 넣지 않는다.
+        super().__init__(URL_RESPONSE_TOO_LARGE)
 
 
 def _is_private_ip(host: str) -> bool:
@@ -66,43 +73,66 @@ def validate_public_url(url: str) -> None:
         raise UnsafeUrlError(f"사설 IP 대상은 등록할 수 없습니다: {url}")
 
 
-def _consume_with_limits(response: requests.Response, max_bytes: int, deadline: float) -> bytes:
+def _positive_limit(value, name: str) -> int:
+    if type(value) is not int or value < 1:
+        raise ValueError(f'{name}는 양의 정수여야 합니다.')
+    return value
+
+
+def _looks_like_pdf(response: requests.Response, url: str) -> bool:
+    return ('application/pdf' in response.headers.get('Content-Type', '').lower()
+            or urlparse(url).path.lower().endswith('.pdf'))
+
+
+def _consume_with_limits(response: requests.Response, pdf_max_bytes: int,
+                         other_max_bytes: int, deadline: float, url: str) -> bytes:
     """스트리밍으로 읽으며 크기·시간 제한을 강제한다.
 
     Content-Length 헤더가 없거나 실제 응답보다 작게 위조된 경우에도, 실제로
     수신한 바이트 수를 누적해서 판단하므로 우회되지 않는다.
     """
+    pdf_response = _looks_like_pdf(response, url)
+    max_bytes = pdf_max_bytes if pdf_response else other_max_bytes
     content_length = response.headers.get("Content-Length")
     if content_length is not None:
         try:
-            if int(content_length) > max_bytes:
-                raise ResponseTooLargeError(
-                    f"응답 크기가 허용 범위를 초과합니다(Content-Length={content_length}): {response.url}"
-                )
+            declared_length = int(content_length)
         except ValueError:
-            pass  # 헤더 형식이 이상하면 무시하고 실제 크기로 판단
+            declared_length = None  # 헤더 형식이 이상하면 무시하고 실제 크기로 판단
+        if declared_length is not None and declared_length > max_bytes:
+            raise ResponseTooLargeError()
 
     chunks = []
     total = 0
-    for chunk in response.iter_content(chunk_size=65536):
+    # PDF 여부를 magic bytes로 뒤늦게 알게 되는 응답도 PDF 상한+1 이상을 한 번에 읽지 않는다.
+    chunk_size = min(65536, pdf_max_bytes + 1, other_max_bytes + 1)
+    prefix = b''
+    for chunk in response.iter_content(chunk_size=chunk_size):
         if time.monotonic() > deadline:
             raise TimeoutError(f"응답 다운로드 시간이 허용 범위를 초과했습니다: {response.url}")
+        if not chunk:
+            continue
+        prefix = (prefix + chunk)[:5]
+        if not pdf_response and prefix.startswith(b'%PDF-'):
+            pdf_response = True
+            max_bytes = pdf_max_bytes
         total += len(chunk)
         if total > max_bytes:
-            raise ResponseTooLargeError(
-                f"응답 크기가 허용 범위를 초과합니다({total} bytes): {response.url}"
-            )
+            raise ResponseTooLargeError()
         chunks.append(chunk)
     return b"".join(chunks)
 
 
-def fetch_url(url: str) -> requests.Response:
+def fetch_url(url: str, *, pdf_max_bytes: int = MAX_RESPONSE_BYTES,
+              other_max_bytes: int = MAX_RESPONSE_BYTES) -> requests.Response:
     """URL을 안전하게 가져온다.
 
     리다이렉트를 requests의 allow_redirects에 맡기지 않고 직접 한 홉씩 따라간다 —
     그렇지 않으면 최초 URL만 검증하고 최종 목적지(사설망 등)는 그대로 따라가게
     되는 구멍이 생긴다. 응답 본문은 크기·시간 제한을 강제하며 스트리밍으로 읽는다.
     """
+    pdf_max_bytes = _positive_limit(pdf_max_bytes, 'pdf_max_bytes')
+    other_max_bytes = _positive_limit(other_max_bytes, 'other_max_bytes')
     deadline = time.monotonic() + MAX_TOTAL_SECONDS
     current_url = url
     session = requests.Session()
@@ -124,8 +154,13 @@ def fetch_url(url: str) -> requests.Response:
                 current_url = urljoin(current_url, location)
                 continue
 
-            response.raise_for_status()
-            body = _consume_with_limits(response, MAX_RESPONSE_BYTES, deadline)
+            try:
+                response.raise_for_status()
+                body = _consume_with_limits(
+                    response, pdf_max_bytes, other_max_bytes, deadline, current_url)
+            except Exception:
+                response.close()
+                raise
             # 이미 스트리밍으로 다 읽었으니 response.content/.text가 그 바이트를
             # 재사용하도록 내부 캐시를 채워둔다(다시 네트워크를 읽지 않음).
             response._content = body
@@ -170,8 +205,9 @@ def extract_html_text(html: str) -> str:
     return text.strip()
 
 
-def fetch_and_classify(url: str) -> Tuple[str, requests.Response]:
+def fetch_and_classify(url: str, *, pdf_max_bytes: int = MAX_RESPONSE_BYTES,
+                       other_max_bytes: int = MAX_RESPONSE_BYTES) -> Tuple[str, requests.Response]:
     """URL을 가져와 (kind, response) 반환. kind: "pdf" | "html" | "other" """
-    response = fetch_url(url)
+    response = fetch_url(url, pdf_max_bytes=pdf_max_bytes, other_max_bytes=other_max_bytes)
     kind = classify_content(response, url)
     return kind, response

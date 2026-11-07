@@ -348,7 +348,9 @@ def register_and_ingest_url(
     """
     from solo_leveling.infrastructure.parsing.url_ingest import fetch_and_classify, extract_html_text
 
-    kind, response = fetch_and_classify(url)
+    # HTML/기타 응답은 URL 수집 계층의 별도 50 MiB 안전 상한을 유지한다. PDF 후보와
+    # magic bytes로 PDF임이 확인된 응답에만 저장 설정 max_pdf_bytes를 수신 단계부터 적용한다.
+    kind, response = fetch_and_classify(url, pdf_max_bytes=max_pdf_bytes)
 
     if kind == 'pdf':
         stored = PdfStore(Path(pdf_dir), max_pdf_bytes).save_bytes(response.content)
