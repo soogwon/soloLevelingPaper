@@ -14,6 +14,8 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
       el('note-body').value = '';
       el('records').replaceChildren();
     }
+    el('context-records').hidden = true;
+    el('context-record-page').replaceChildren();
     el('content').hidden = true;
     el('toc').hidden = true;
     el('toc-items').replaceChildren();
@@ -81,6 +83,8 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
     el('claims-heading').textContent = detailed ? '요약 항목별 근거로 이동' : '주장별 근거로 이동';
     el('verification').hidden = !(answering || (detailed && claims.length));
     el('answer-heading').textContent = detailed ? '저장된 요약' : '반환된 답변';
+    const updateContextRecords = detailed && data.annotation_page != null
+      ? showContextRecords(app, doc, data.context_id, data.annotation_page) : null;
     const titles = new Map();
     if (detailed) {
       for (const section of catalog) titles.set(section.section_id, section.title);
@@ -175,6 +179,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
             || record.kind !== kind || record.body !== body || !nonempty(record.annotation_id)) throw new Error();
         e.annotation_count = (e.annotation_count ?? e.annotations.length) + 1;
         e.annotations.unshift(record);
+        updateContextRecords?.(record);
         if (selected === e && kind === 'note') el('note-body').value = '';
       } catch {
         uncertain.add(e);
@@ -226,4 +231,65 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
   app.ontoolcancelled = () => clear('조회가 취소되었습니다. 채팅에서 다시 조회할 수 있습니다.');
   wait();
   Promise.resolve().then(()=>app.connect()).catch(()=>clear('화면 연결에 실패했습니다. 채팅의 도구 응답을 확인하세요.'));
+}
+
+function showContextRecords(app, doc, contextId, firstPage) {
+  const panel = doc.getElementById('context-records');
+  const list = doc.createElement('ul');
+  const more = doc.createElement('button');
+  const status = doc.createElement('p');
+  const seen = new Set();
+  let cursor;
+  more.type = 'button';
+  more.textContent = '전체 기록 더 보기';
+  more.hidden = true;
+  status.setAttribute('role', 'status');
+  doc.getElementById('context-record-page').append(list, more, status);
+  panel.hidden = false;
+
+  function append(record) {
+    if (seen.has(record.annotation_id)) return;
+    const item = doc.createElement('li');
+    const linked = record.segments?.length > 0;
+    const label = record.kind === 'note' ? '메모' : '하이라이트';
+    const body = record.body || (record.segments ?? []).map(s => s.quote_snapshot).join(' … ');
+    item.textContent = `${label} · ${linked ? '원문 구간 연결' : '학습 맥락에만 저장'} · ${body}`;
+    list.append(item);
+    seen.add(record.annotation_id);
+    status.textContent = '';
+  }
+
+  function showPage(page) {
+    if (!Array.isArray(page?.items) || !page.items.every(record =>
+      record?.context_id === contextId && typeof record.annotation_id === 'string' &&
+      ['note', 'highlight'].includes(record.kind) && typeof record.body === 'string' &&
+      Array.isArray(record.segments)) ||
+      !(page.next_cursor === null || (typeof page.next_cursor === 'string' && page.next_cursor && page.next_cursor !== cursor))) return false;
+    page.items.forEach(append);
+    cursor = page.next_cursor;
+    more.hidden = !cursor;
+    status.textContent = seen.size ? '' : '저장된 기록이 없습니다.';
+    return true;
+  }
+
+  if (firstPage.context_id !== contextId || !showPage(firstPage)) {
+    status.textContent = '전체 기록을 확인할 수 없습니다. 상세 카드를 다시 조회하세요.';
+    return null;
+  }
+  more.onclick = async () => {
+    if (!cursor || more.disabled) return;
+    more.disabled = true;
+    try {
+      const result = await app.callServerTool({name: 'list_annotations', arguments: {
+        request: {context_id: contextId, cursor},
+      }});
+      if (result?.isError || !showPage(result?.structuredContent)) throw new Error();
+    } catch {
+      status.textContent = '전체 기록을 불러오지 못했습니다. 다시 시도하세요.';
+    } finally {
+      more.disabled = false;
+    }
+  };
+  // 아직 읽지 않은 페이지가 있으면 새 기록도 저장 순서대로 그 페이지에서 표시한다.
+  return record => { if (!cursor) append(record); };
 }

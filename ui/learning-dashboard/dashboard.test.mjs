@@ -211,3 +211,37 @@ test('메모 미리보기는 텍스트로 표시하고 빈 목록에서는 이�
   assert.equal(get('note-count').textContent, '저장된 메모가 없습니다.');
   assert.equal(get('note-previews').children.length, 0);
 });
+
+test('상세에서 맥락 기록 20건과 다음 페이지를 순서대로 읽고 대시보드로 돌아간다', async () => {
+  const notes = Array.from({ length: 21 }, (_, i) => ({
+    annotation_id: String(i + 1), context_id: 'ctx', kind: 'note', body: `메모 ${i + 1}`, segments: [],
+  }));
+  const requests = [];
+  const { app, get } = await setup({ callServerTool: async call => {
+    requests.push(call);
+    if (call.name === 'get_paper_detail') {
+      return detailResult({ annotation_page: { context_id: 'ctx', items: notes.slice(0, 20), next_cursor: 'next' } });
+    }
+    return { structuredContent: { items: notes.slice(20), next_cursor: null } };
+  }});
+  app.ontoolresult(result());
+  get('open-detail').click();
+  await tick();
+  const panel = get('paper-detail-context-records');
+  const rows = () => Array.from(panel.querySelectorAll('li'), li => li.textContent);
+  const expected = notes.map(note => `메모 · 학습 맥락에만 저장 · ${note.body}`);
+  assert.equal(panel.hidden, false);
+  assert.deepEqual(rows(), expected.slice(0, 20));
+  assert.deepEqual(requests.map(call => call.name), ['get_paper_detail']);
+  const more = panel.querySelector('button');
+  assert.equal(more.hidden, false);
+  more.click();
+  await tick();
+  assert.deepEqual(requests.slice(1), [{ name: 'list_annotations', arguments: { request: { context_id: 'ctx', cursor: 'next' } } }]);
+  assert.deepEqual(rows(), expected);
+  assert.equal(more.hidden, true);
+  get('back-dashboard').click();
+  assert.equal(get('detail-view').hidden, true);
+  assert.equal(get('details').hidden, false);
+  assert.match(get('identity').textContent, /^ctx/);
+});
