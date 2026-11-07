@@ -107,6 +107,66 @@ def test_saved_summary_through_mcp_has_nested_contract(detail):
     assert data['evidence'][0]['quote_original']=='First.'
 
 
+def test_annotations_follow_context_and_exact_original_range(detail):
+    from solo_leveling.domain.annotation import SegmentInput
+    from solo_leveling.domain.models import LearningContext
+    from solo_leveling.infrastructure.database.annotations import create_annotation
+
+    db, service = detail
+    save(db)
+    repo.create_learning_context(db, LearningContext('other', 'v1', 'p1', 't1', embedding_set_id='idx'))
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute("UPDATE chunks SET original_text='😀 First.' WHERE chunk_id='c1'")
+    segment = SegmentInput('c1', 2, 8, 'First.')
+    for context, kind, body in [('ctx', 'note', '메모'), ('ctx', 'highlight', ''), ('other', 'note', '다른 맥락')]:
+        create_annotation(db, context, kind, body, [segment])
+    first, second = service.get('ctx')['evidence']
+    assert first['annotation_start'] == 2
+    assert first['annotation_count'] == 2
+    rest = service.annotation_page('ctx', 'e1', first['annotation_cursor'])
+    assert {(item['kind'], item['body']) for item in first['annotations'] + rest['annotations']} == {('note', '메모'), ('highlight', '')}
+    assert second['annotations'] == []
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute("UPDATE chunks SET original_text='😀 First. First.' WHERE chunk_id='c1'")
+    ambiguous = service.get('ctx')['evidence'][0]
+    assert ambiguous['annotation_start'] is None
+    assert ambiguous['annotations'] == []
+
+
+def test_many_long_notes_keep_detail_small_and_pages_complete(detail):
+    import json
+    db, service = detail
+    save(db)
+    with sqlite3.connect(db) as conn:
+        for i in range(100):
+            key = f'long-{i:03}'
+            conn.execute("INSERT INTO annotations VALUES (?, 'ctx','note',?,NULL,1,'2026','2026')", (key, 'x'*5000))
+            conn.execute("INSERT INTO annotation_segments VALUES (?,0,'c1','p1','original',NULL,0,6,'First.')", (key,))
+    result = service.get('ctx', limit=1)
+    assert len(json.dumps(result).encode()) < 8000
+    first = result['evidence'][0]
+    assert first['annotation_count'] == 100 and len(first['annotations']) == 1
+    records = list(first['annotations'])
+    cursor = first['annotation_cursor']
+    while cursor:
+        page = service.annotation_page('ctx', 'e1', cursor)
+        assert 1 <= len(page['annotations']) <= 3
+        records.extend(page['annotations'])
+        cursor = page['annotation_cursor']
+    assert [r['annotation_id'] for r in records] == [f'long-{i:03}' for i in reversed(range(100))]
+    assert all(r['body'] == 'x'*5000 for r in records)
+    assert service.annotation_page('ctx', 'e2')['annotations'] == []
+    from solo_leveling.domain.annotation import encode_cursor
+    for context, evidence, token in [
+        ('other', 'e1', first['annotation_cursor']),
+        ('ctx', 'e2', first['annotation_cursor']),
+        ('ctx', 'e1', '_w'),
+        ('ctx', 'e1', encode_cursor('ctx', 'evidence', 'e1', '\ud800', 'a')),
+    ]:
+        with pytest.raises(InvalidArgumentError):
+            service.annotation_page(context, evidence, token)
+
+
 def test_detail_annotations_are_context_scoped_readonly_and_independently_paged(detail, monkeypatch):
     db, _ = detail
     annotations = AnnotationService(db)
@@ -127,7 +187,7 @@ def test_detail_annotations_are_context_scoped_readonly_and_independently_paged(
     page = result['annotation_page']
     assert page['context_id'] == 'ctx'
     assert len(page['items']) == 20  # 요약 limit=1과 무관한 기본 20건
-    assert 'annotations_not_connected' in result['limitations']  # C 카드 연결은 아직 별도
+    assert 'annotations_not_connected' not in result['limitations']
     tail = annotations.list('ctx', cursor=page['next_cursor'])
     ids = [x['annotation_id'] for x in page['items']] + [x.annotation_id for x in tail.items]
     assert len(ids) == len(set(ids)) == 22
@@ -273,3 +333,16 @@ def test_detail_annotations_over_mcp_preserve_cursor_errors_and_recovery(detail)
             reader.list.assert_called_with('ctx', limit=20)
     asyncio.run(scenario())
     assert Path(db).read_bytes() == before
+
+
+def test_evidence_page_mcp_rejects_invalid_cursor(detail):
+    import asyncio
+    from unittest.mock import Mock
+    from mcp.server.fastmcp.exceptions import ToolError
+    from solo_leveling.domain.annotation import encode_cursor
+    from solo_leveling.interfaces.mcp.server import MCPServices, create_server
+    server = create_server(MCPServices(Mock(), Mock(), detail=detail[1]))
+    token = encode_cursor('ctx', 'evidence', 'e1', '\ud800', 'a')
+    with pytest.raises(ToolError, match='INVALID_ARGUMENT'):
+        asyncio.run(server.call_tool('list_evidence_annotations',
+                                     {'context_id': 'ctx', 'evidence_id': 'e1', 'cursor': token}))

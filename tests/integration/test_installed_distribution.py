@@ -61,7 +61,7 @@ async def run():
                 'start_learning', 'ask_paper', 'get_evidence', 'get_learning_dashboard',
                 'submit_paper_question', 'get_paper_question_status',
                 'open_paper_question_card', 'reserve_card_question_key', 'list_card_question_keys',
-                'get_paper_detail', 'get_reading_questions', 'save_reading_answer', 'get_reading_comparison',
+                'get_paper_detail', 'list_evidence_annotations', 'get_reading_questions', 'save_reading_answer', 'get_reading_comparison',
                 'get_quiz', 'submit_quiz', 'get_quiz_attempt', 'list_quiz_attempts',
                 'create_annotation', 'get_annotation', 'list_annotations',
                         'update_annotation', 'delete_annotation',

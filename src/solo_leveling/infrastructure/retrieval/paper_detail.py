@@ -8,6 +8,9 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from solo_leveling.application.evidence_qa.errors import (
     DataIntegrityError, InvalidArgumentError, ResourceNotFoundError,
 )
+from solo_leveling.domain.annotation import (
+    MAX_QUOTE_LENGTH, AnnotationValidationError, decode_cursor, encode_cursor,
+)
 from solo_leveling.domain.evidence_qa import EvidenceDetail
 from solo_leveling.domain.paper_summary import SummaryItem
 
@@ -28,6 +31,50 @@ class SQLitePaperDetailReader:
                 raise
             except (ValueError, TypeError, KeyError):
                 raise DataIntegrityError('저장된 요약 또는 근거의 연결을 확인하지 못했습니다.') from None
+
+    def annotation_page(self, context_id, evidence_id, cursor):
+        try:
+            position = decode_cursor(cursor, context_id, 'evidence', evidence_id) if cursor is not None else None
+        except AnnotationValidationError as exc:
+            raise InvalidArgumentError('근거 기록 커서가 올바르지 않습니다.') from exc
+        uri = Path(self.db_path).resolve().as_uri() + '?mode=ro'
+        with closing(sqlite3.connect(uri, uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute('BEGIN')
+            evidence = conn.execute('''SELECT e.evidence_id, e.quote_original, c.chunk_id, c.original_text, c.parse_revision_id
+                FROM evidences e JOIN learning_contexts l ON l.context_id=e.context_id
+                JOIN chunks c ON c.chunk_id=e.chunk_id AND c.parse_revision_id=l.parse_revision_id
+                WHERE e.context_id=? AND e.evidence_id=?''', (context_id, evidence_id)).fetchone()
+            if evidence is None:
+                raise ResourceNotFoundError('해당 학습 맥락의 근거를 찾을 수 없습니다.')
+            page = self._annotation_fields(conn, context_id, evidence, limit=3, position=position)
+            return {'context_id': context_id, 'evidence_id': evidence_id, **page}
+
+    @staticmethod
+    def _annotation_fields(conn, context_id, evidence, limit=1, position=None):
+        quote = evidence['quote_original']
+        original = evidence['original_text']
+        start = original.find(quote)
+        if start < 0 or len(quote) > MAX_QUOTE_LENGTH or original.find(quote, start + 1) != -1:
+            return {'annotation_start': None, 'annotations': [], 'annotation_count': 0, 'annotation_cursor': None}
+        source = ''' FROM annotations a JOIN annotation_segments s ON s.annotation_id=a.annotation_id
+            WHERE a.context_id=? AND s.chunk_id=? AND s.parse_revision_id=? AND s.target='original'
+                AND s.start_offset=? AND s.end_offset=? AND s.quote_snapshot=?'''
+        args = (context_id, evidence['chunk_id'], evidence['parse_revision_id'], start, start + len(quote), quote)
+        count = conn.execute('SELECT COUNT(*)' + source, args).fetchone()[0]
+        if position is not None:
+            source += ' AND (a.created_at, a.annotation_id) < (?, ?)'
+            args += position
+        rows = conn.execute('SELECT a.annotation_id, a.kind, a.body, a.created_at' + source +
+                            ' ORDER BY a.created_at DESC, a.annotation_id DESC LIMIT ?', (*args, limit + 1)).fetchall()
+        page = rows[:limit]
+        next_cursor = None
+        if len(rows) > limit:
+            last = page[-1]
+            next_cursor = encode_cursor(context_id, 'evidence', evidence['evidence_id'],
+                                        last['created_at'], last['annotation_id'])
+        return {'annotation_start': start, 'annotation_count': count, 'annotation_cursor': next_cursor,
+                'annotations': [{key: row[key] for key in ('annotation_id', 'kind', 'body')} for row in page]}
 
     def _read(self, conn, context_id, scope, offset, limit, expected_summary_id):
         context = conn.execute('SELECT * FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone()
@@ -61,7 +108,7 @@ class SQLitePaperDetailReader:
             'translation_revision_id': context['translation_revision_id'], 'scope': scope,
             'section_ids': sections, 'summary': None, 'evidence': [],
             'keywords': [], 'important_sentences': [],
-            'limitations': ['keywords_not_available', 'important_sentences_not_available', 'annotations_not_connected'],
+            'limitations': ['keywords_not_available', 'important_sentences_not_available'],
         }
         if saved is None:
             result['limitations'].append('summary_not_available')
@@ -97,7 +144,8 @@ class SQLitePaperDetailReader:
                 if (detail.quote_original not in e['original_text'] or
                         (detail.quote_ko is not None and (e['text'] is None or detail.quote_ko not in e['text']))):
                     raise ValueError('invalid quote')
-                known[eid] = {**asdict(detail), 'section_id': e['section_id']}
+                known[eid] = {**asdict(detail), 'section_id': e['section_id'],
+                              **self._annotation_fields(conn, context_id, e)}
         result['summary'] = {
             'summary_id': saved['summary_id'], 'created_at': saved['created_at'],
             'items': items, 'total_items': count,
