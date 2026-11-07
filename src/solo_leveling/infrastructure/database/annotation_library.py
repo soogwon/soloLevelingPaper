@@ -25,11 +25,11 @@ def _validate_date(value, name: str) -> Optional[str]:
         raise AnnotationValidationError(f'{name} 형식이 올바르지 않음')
     try:
         parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
-    except ValueError:
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(timezone.utc).isoformat()
+    except (ValueError, OverflowError):
         raise AnnotationValidationError(f'{name} 형식이 올바르지 않음') from None
-    if parsed.tzinfo is None:
-        raise AnnotationValidationError(f'{name}에는 시간대가 필요함')
-    return parsed.astimezone(timezone.utc).isoformat()
+    raise AnnotationValidationError(f'{name}에는 시간대가 필요함')
 
 
 def _normalize_filters(kind, query, created_from, created_before):

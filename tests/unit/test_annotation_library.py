@@ -135,6 +135,8 @@ def test_saved_quote_survives_while_current_location_status_changes(env):
 
 
 @pytest.mark.parametrize('kwargs', [
+    {'created_from': '0001-01-01T00:00:00+23:59'},
+    {'created_before': '9999-12-31T23:59:59-23:59'},
     {'created_from': 'not-a-date'},
     {'created_before': '2026-01-01'},
     {'created_from': '2026-01-02T00:00:00+00:00', 'created_before': '2026-01-01T00:00:00+00:00'},
