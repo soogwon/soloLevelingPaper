@@ -108,3 +108,93 @@ test('저장된 목차만 표시하고 다른 파싱 리비전의 제목은 거�
  app.ontoolresult(detailPayload({section_catalog:[]}));
  assert.match(el('toc-status').textContent,/저장된 목차가 없습니다/);
 });
+
+test('목차 제목과 메모 저장을 함께 유지하고 출처 항목의 카드 미지원과 데이터 부재를 구분한다', async () => {
+  const {app, el} = setup();
+  const row = {section_id:'s1',parse_revision_id:'p',title:'Methods',ordinal:1,level:1,
+    parent_section_id:null,start_pdf_page:5,end_pdf_page:7};
+  const first = evidence('e1', {section_id:'s1',annotation_start:0,annotations:[]});
+  let request;
+  app.callServerTool = async call => {
+    request = call;
+    return {structuredContent:{outcome:'saved',annotation:{annotation_id:'a',context_id:'ctx',kind:'note',body:'내 메모'}}};
+  };
+  app.ontoolresult(detailPayload({section_catalog:[row],evidence:[first],keywords:[{text:'Methods'}]}));
+  assert.match(el('toc-items').textContent,/Methods/);
+  assert.match(el('location').textContent,/Methods/);
+  assert.match(el('availability').textContent,/화면 표시는 아직 지원하지 않습니다/);
+  assert.doesNotMatch(el('availability').textContent,/제공되지 않습니다/);
+  el('note-body').value = '내 메모';
+  await el('save-note').onclick();
+  assert.equal(request.name,'create_annotation');
+  assert.equal(request.arguments.request.context_id,'ctx');
+  assert.equal(request.arguments.request.segments[0].chunk_id,first.chunk_id);
+  assert.match(el('records').textContent,/내 메모/);
+  assert.match(el('location').textContent,/Methods/);
+  assert.match(el('toc-items').textContent,/Methods/);
+});
+
+test('저장 중 근거를 전환해도 요청 위치와 표시 목록은 섞이지 않는다', async () => {
+  const {app, el} = setup();
+  const first = evidence('e1', {annotation_start: 3, annotations: [], quote_original: '😀가'});
+  const second = evidence('e2', {annotation_start: 0, annotations: []});
+  let finish;
+  let request;
+  app.callServerTool = call => {
+    request = call.arguments.request;
+    return new Promise(resolve => { finish = resolve; });
+  };
+  app.ontoolresult(detailPayload({evidence: [first, second]}));
+  el('note-body').value = '첫 근거의 메모';
+  el('save-note').click();
+  assert.equal(request.context_id, 'ctx');
+  assert.deepEqual(request.segments, [{chunk_id:'c-e1', start_offset:3, end_offset:5, quote_snapshot:'😀가'}]);
+  el('evidence-list').lastChild.click();
+  finish({structuredContent: {outcome:'saved', annotation: {...request, annotation_id:'a1'}}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(el('records').children.length, 0);
+  el('evidence-list').firstChild.click();
+  assert.match(el('records').textContent, /첫 근거의 메모/);
+});
+
+test('더 보기는 선택한 근거의 커서로만 조회하고 실패 후 다시 시도할 수 있다', async () => {
+  const {app, el} = setup();
+  const cursor = 'opaque-next-page';
+  const first = evidence('e1', {annotation_start:0, annotation_count:2, annotation_cursor:cursor,
+    annotations:[{annotation_id:'a2', kind:'note', body:'최신 기록'}]});
+  const calls = [];
+  app.callServerTool = async call => {
+    calls.push(call);
+    if (calls.length === 1) throw Error();
+    return {structuredContent:{context_id:'ctx', evidence_id:'e1', annotation_start:0,
+      annotation_count:2, annotation_cursor:null, annotations:[{annotation_id:'a1', kind:'note', body:'이전 기록'}]}};
+  };
+  app.ontoolresult(detailPayload({evidence:[first]}));
+  assert.equal(calls.length, 0);
+  await el('more-records').onclick();
+  assert.equal(el('more-records').disabled, false);
+  assert.match(el('record-status').textContent, /다시 시도/);
+  await el('more-records').onclick();
+  assert.deepEqual(calls[1], {name:'list_evidence_annotations', arguments:{context_id:'ctx', evidence_id:'e1', cursor}});
+  assert.match(el('records').textContent, /최신 기록.*이전 기록/);
+  assert.equal(el('more-records').hidden, true);
+});
+
+test('저장 결과 미확정 뒤에는 근거 재선택으로 재시도할 수 없고 상세 재조회로 복구한다', async () => {
+  const {app, el} = setup();
+  const first = evidence('e1', {annotation_start:0, annotations:[]});
+  const second = evidence('e2', {annotation_start:0, annotations:[]});
+  let calls = 0;
+  app.callServerTool = async () => { calls++; return {isError:true}; };
+  app.ontoolresult(detailPayload({evidence:[first,second]}));
+  await el('save-highlight').onclick();
+  el('evidence-list').lastChild.click();
+  assert.equal(el('editor').disabled,false);
+  el('evidence-list').firstChild.click();
+  assert.equal(el('editor').disabled,true);
+  await el('save-highlight').onclick();
+  assert.equal(calls,1);
+  app.ontoolresult(detailPayload({evidence:[{...first,annotations:[{kind:'highlight',body:''}]}]}));
+  assert.equal(el('editor').disabled,false);
+  assert.match(el('records').textContent,/하이라이트/);
+});

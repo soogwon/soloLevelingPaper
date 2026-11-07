@@ -10,6 +10,8 @@ class DetailReader(Protocol):
     def get(self, context_id: str, scope: str, offset: int, limit: int,
             summary_id: str | None) -> dict: ...
 
+    def annotation_page(self, context_id: str, evidence_id: str, cursor: str | None) -> dict: ...
+
 
 class AnnotationReader(Protocol):
     def list(self, context_id: str, *, limit: int) -> AnnotationPage: ...
@@ -44,3 +46,6 @@ class PaperDetailService:
                 'context_id': context_id, **asdict(page),
             }}
         return result
+
+    def annotation_page(self, context_id: str, evidence_id: str, cursor: str | None = None) -> dict:
+        return self.reader.annotation_page(context_id, evidence_id, cursor)

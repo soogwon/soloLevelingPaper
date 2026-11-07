@@ -187,7 +187,26 @@ class GetEvidenceOutput(TypedDict):
     evidence: list[EvidenceOutput]
 
 
+class EvidenceAnnotationOutput(TypedDict):
+    annotation_id: str
+    kind: Literal['note', 'highlight']
+    body: str
+
+
+class EvidenceAnnotationPage(TypedDict):
+    context_id: str
+    evidence_id: str
+    annotation_start: int | None
+    annotation_count: int
+    annotation_cursor: str | None
+    annotations: list[EvidenceAnnotationOutput]
+
+
 class DetailEvidenceOutput(EvidenceOutput):
+    annotation_count: int
+    annotation_cursor: str | None
+    annotation_start: int | None
+    annotations: list[EvidenceAnnotationOutput]
     section_id: str | None
 
 
@@ -218,6 +237,24 @@ class DetailSectionOutput(TypedDict):
     end_pdf_page: int
 
 
+class PaperInsightOutput(TypedDict):
+    insight_id: str
+    text: str
+    content_kind: Literal['extracted', 'generated']
+    producer: Literal['extractor', 'model', 'user']
+    producer_version: str | None
+    collection_created_at: str
+    chunk_id: str
+    parse_revision_id: str
+    translation_revision_id: str | None
+    start_offset: int
+    end_offset: int
+    quote_original: str
+    pdf_page: int
+    printed_page_label: str | None
+    section_id: str | None
+
+
 class DetailAnnotationPageOutput(TypedDict):
     context_id: str
     items: list[Annotation]
@@ -237,8 +274,8 @@ class PaperDetailOutput(TypedDict):
     section_catalog: list[DetailSectionOutput]
     summary: SavedSummaryOutput | None
     evidence: list[DetailEvidenceOutput]
-    keywords: list[str]
-    important_sentences: list[str]
+    keywords: list[PaperInsightOutput]
+    important_sentences: list[PaperInsightOutput]
     limitations: list[str]
     annotation_page: NotRequired[DetailAnnotationPageOutput | None]
 
@@ -333,6 +370,15 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                     context_id, scope=scope, offset=offset, limit=limit, summary_id=summary_id))
                 # 구버전 서비스도 text/structuredContent에 같은 기본값을 반환한다.
                 return {'annotation_page': None, 'section_catalog': [], **detail}
+            except Exception as error:
+                raise to_tool_error(error) from None
+
+        @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
+        async def list_evidence_annotations(context_id: str, evidence_id: str,
+                                            cursor: str | None = None) -> EvidenceAnnotationPage:
+            """같은 맥락·원문 인용 구간의 기록을 3건씩 조회합니다. 다음 조회에는 annotation_cursor를 전달하세요."""
+            try:
+                return await anyio.to_thread.run_sync(services.detail.annotation_page, context_id, evidence_id, cursor)
             except Exception as error:
                 raise to_tool_error(error) from None
     if services.dashboard is not None:
