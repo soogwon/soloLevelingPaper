@@ -196,12 +196,15 @@ def test_published_snapshot_is_restored_to_exactly_the_success_chunks(published,
     assert vh.save_verification_history(published, history('c0', 'c3', run='r3')).outcome is HistoryOutcome.REFERENCE_MISMATCH
 
 
-def test_snapshot_is_not_filled_when_the_restoration_basis_does_not_match(published):
-    # 기록된 멤버 중 성공 후보가 아닌 것이 있으면 아무것도 추가하지 않는다.
+def test_snapshot_is_replaced_when_candidate_set_matches_published_count(published):
+    # 구버전 트리거가 후보 밖 멤버를 기록했어도 게시 개수와 후보 수가 맞으면 정확한 집합으로 교정한다.
     legacy_state(published, ['c0', 'c2'])
     init_db(published)
     init_db(published)
-    assert members(published) == ['c0', 'c2']
+    assert members(published) == ['c0', 'c1']
+
+
+def test_snapshot_is_not_replaced_when_the_restoration_basis_does_not_match(published):
     # 게시 당시 개수와 후보 수가 다르면 추가하지 않는다.
     legacy_state(published, [])
     sql(published, 'UPDATE search_indexes SET chunk_count=3')
@@ -214,6 +217,21 @@ def test_snapshot_is_not_filled_when_the_restoration_basis_does_not_match(publis
     sql(published, "UPDATE search_indexes SET translation_revision_id='t9'")
     init_db(published)
     assert members(published) == []
+
+
+def test_upgrade_removes_legacy_null_translation_member_and_rejects_reference(published):
+    # 구버전 트리거는 failure_code만 보고 c3을 멤버로 넣었다.
+    sql(published, "UPDATE translation_results SET failure_code=NULL, translated_text=NULL WHERE chunk_id='c3'")
+    sql(published, "INSERT INTO search_index_chunks VALUES ('idx', 'c3')")
+    assert members(published) == ['c0', 'c1', 'c3']
+
+    for _ in range(2):
+        init_db(published)
+        assert members(published) == ['c0', 'c1']
+    assert vh.save_verification_history(published, history('c3')).outcome is HistoryOutcome.REFERENCE_MISMATCH
+    for table in ('verification_runs', 'verification_claims', 'verification_claim_refs'):
+        assert sql(published, f'SELECT * FROM {table}') == []
+    assert vh.save_verification_history(published, history('c0', 'c1', run='r2')).outcome is HistoryOutcome.SAVED
 
 
 def test_other_published_indexes_are_not_touched(published):
