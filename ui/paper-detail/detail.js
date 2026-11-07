@@ -1,3 +1,5 @@
+import { mountRecordEditor } from './record-editor.js';
+
 // 호스트가 제공한 근거 스냅샷만 표시한다. 본문은 HTML로 해석하지 않는다.
 export function mountDetailApp(app, doc, timeoutMs = 15000) {
   const el = (id) => doc.getElementById(id);
@@ -84,7 +86,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
     el('verification').hidden = !(answering || (detailed && claims.length));
     el('answer-heading').textContent = detailed ? '저장된 요약' : '반환된 답변';
     const updateContextRecords = detailed && data.annotation_page != null
-      ? showContextRecords(app, doc, data.context_id, data.annotation_page) : null;
+      ? showContextRecords(app, doc, data.context_id, data.annotation_page, annotationPanel ? syncEvidence : null) : null;
     const titles = new Map();
     if (detailed) {
       for (const section of catalog) titles.set(section.section_id, section.title);
@@ -130,16 +132,41 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
       el('editor').disabled = uncertain.has(e) || e.annotation_start == null || pending.has(e) || loading.has(e);
       el('record-status').textContent = uncertain.has(e) ? '저장 결과가 확인되지 않았습니다. 상세 카드를 다시 조회해 기록을 확인하세요.'
         : e.annotation_start == null ? '원문 위치를 확정할 수 없어 작성할 수 없습니다.'
-        : pending.has(e) ? '저장 중입니다.' : records.children.length ? `기록 ${records.children.length}건 표시 · 전체 ${e.annotation_count ?? records.children.length}건` : '저장된 기록이 없습니다.';
+        : pending.has(e) ? '저장 중입니다.' : records.children.length ? `기록 ${records.children.length}건 표시 · 전체 ${e.annotation_count ?? records.children.length}건` : e.annotation_cursor ? '더 보기를 눌러 나머지 기록을 확인하세요.' : '저장된 기록이 없습니다.';
+    }
+    const recordVersions = new Map();
+    function syncEvidence(previous, record) {
+      for (const e of evidence) {
+        const index = e.annotations?.findIndex(entry => entry.annotation_id === previous.annotation_id) ?? -1;
+        const linked = previous.segments?.some(segment => segment.target === 'original' &&
+          segment.chunk_id === e.chunk_id && segment.parse_revision_id === e.parse_revision_id &&
+          segment.start_offset === e.annotation_start && segment.quote_snapshot === e.quote_original &&
+          segment.end_offset === e.annotation_start + Array.from(e.quote_original).length);
+        if (index < 0 && !linked) continue;
+        recordVersions.set(e, (recordVersions.get(e) ?? 0) + 1);
+        if (record) {
+          if (index >= 0) e.annotations[index] = record;
+        } else {
+          if (index >= 0) e.annotations.splice(index, 1);
+          if (e.annotation_count != null) {
+            e.annotation_count = Math.max(e.annotations.length, e.annotation_count - 1);
+            if (e.annotation_count === e.annotations.length) e.annotation_cursor = null;
+          }
+        }
+        if (selected === e) showRecords(e);
+      }
     }
     async function loadMore(e) {
       if (selected !== e || loading.has(e) || !e.annotation_cursor) return;
+      const version = recordVersions.get(e);
       loading.add(e);
       showRecords(e);
       try {
         const result = await app.callServerTool({name: 'list_evidence_annotations', arguments: {
           context_id: data.context_id, evidence_id: e.evidence_id, cursor: e.annotation_cursor,
         }});
+        // 수정 전 스냅샷은 버리고 같은 커서로 다시 읽을 수 있게 한다.
+        if (version !== recordVersions.get(e)) return;
         const page = result?.structuredContent;
         if (result?.isError || page?.context_id !== data.context_id || page.evidence_id !== e.evidence_id
             || page.annotation_start !== e.annotation_start || !Array.isArray(page.annotations)) throw new Error();
@@ -233,7 +260,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
   Promise.resolve().then(()=>app.connect()).catch(()=>clear('화면 연결에 실패했습니다. 채팅의 도구 응답을 확인하세요.'));
 }
 
-function showContextRecords(app, doc, contextId, firstPage) {
+function showContextRecords(app, doc, contextId, firstPage, syncEvidence) {
   const panel = doc.getElementById('context-records');
   const list = doc.createElement('ul');
   const more = doc.createElement('button');
@@ -250,10 +277,24 @@ function showContextRecords(app, doc, contextId, firstPage) {
   function append(record) {
     if (seen.has(record.annotation_id)) return;
     const item = doc.createElement('li');
-    const linked = record.segments?.length > 0;
-    const label = record.kind === 'note' ? '메모' : '하이라이트';
-    const body = record.body || (record.segments ?? []).map(s => s.quote_snapshot).join(' … ');
-    item.textContent = `${label} · ${linked ? '원문 구간 연결' : '학습 맥락에만 저장'} · ${body}`;
+    const summary = doc.createElement('span');
+    item.append(summary);
+    function describe(current) {
+      const label = current.kind === 'note' ? '메모' : '하이라이트';
+      const body = current.body || (current.segments ?? []).map(s => s.quote_snapshot).join(' … ');
+      summary.textContent = `${label} · ${current.segments?.length ? '원문 구간 연결' : '학습 맥락에만 저장'} · ${body}`;
+    }
+    describe(record);
+    if (syncEvidence && Number.isSafeInteger(record.revision) && record.revision > 0) {
+      mountRecordEditor(app, doc, item, record, next => {
+        syncEvidence(record, next);
+        if (next) describe(next);
+        else {
+          item.remove();
+          status.textContent = list.childElementCount || cursor ? '목록에서 기록을 제거했습니다.' : '저장된 기록이 없습니다.';
+        }
+      });
+    }
     list.append(item);
     seen.add(record.annotation_id);
     status.textContent = '';

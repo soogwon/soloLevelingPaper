@@ -220,3 +220,68 @@ test('근거 없는 맥락 메모를 표시하고 같은 맥락의 다음 페이
   assert.equal(panel.hidden, true);
   assert.equal(panel.querySelectorAll('li').length, 0);
 });
+
+for (const kind of ['note', 'highlight']) {
+  test(`${kind} 수정 충돌 후 명시적으로 재조회하고 새 리비전으로 수정·삭제한다`, async () => {
+    const {app, el} = setup();
+    let record = {annotation_id:'a', context_id:'ctx', kind, revision:1, body:'처음', segments:[]};
+    app.ontoolresult(detailPayload({summary:null, evidence:[], annotation_page:{
+      context_id:'ctx', items:[record], next_cursor:null,
+    }}));
+    const panel = el('context-records');
+    const press = label => [...panel.querySelectorAll('button')].find(b => b.textContent === label).onclick();
+    const requests = [];
+    app.callServerTool = async ({name, arguments:{request}}) => {
+      requests.push(name);
+      assert.equal(request.context_id,'ctx');
+      assert.equal(request.annotation_id,'a');
+      if (name === 'get_annotation') return {structuredContent:{annotation:record}};
+      if (request.expected_revision !== record.revision) return {isError:true, content:[{type:'text',text:'CONFLICT: 충돌'}]};
+      if (name === 'delete_annotation') return {structuredContent:{outcome:'deleted',annotation:null}};
+      record = {...record, body:request.body, revision:record.revision+1};
+      return {structuredContent:{outcome:'saved',annotation:record}};
+    };
+    press('편집');
+    record = {...record, body:'다른 변경', revision:2};
+    await press('수정 저장');
+    assert.match(panel.textContent,/다른 변경이 먼저/);
+    assert.deepEqual(requests,['update_annotation']);
+    await press('최신 기록 다시 조회');
+    press('편집');
+    assert.equal(panel.querySelector('textarea').value,'다른 변경');
+    panel.querySelector('textarea').value='내 변경';
+    await press('수정 저장');
+    assert.equal(record.revision,3);
+    assert.match(panel.textContent,/내 변경/);
+    press('편집'); press('삭제'); press('취소');
+    assert.equal(requests.includes('delete_annotation'),false);
+    press('편집'); press('삭제'); await press('삭제 확인');
+    assert.equal(panel.querySelectorAll('li').length,0);
+    assert.deepEqual(requests,['update_annotation','get_annotation','update_annotation','delete_annotation']);
+  });
+}
+
+test('다음 근거 페이지의 기록을 삭제하면 건수가 줄고 늦은 조회가 기록을 복원하지 않는다', async () => {
+  const {app, el} = setup();
+  const e = evidence('e1', {annotation_start:0, annotation_cursor:'next', annotation_count:2,
+    annotations:[{annotation_id:'kept', kind:'note', body:'유지'}]});
+  const record = {annotation_id:'old', context_id:'ctx', kind:'note', body:'삭제 대상', revision:1,
+    segments:[{target:'original', chunk_id:e.chunk_id, parse_revision_id:'p', start_offset:0,
+      end_offset:e.quote_original.length, quote_snapshot:e.quote_original}]};
+  let finish;
+  app.callServerTool = async call => {
+    if (call.name === 'list_evidence_annotations') return new Promise(resolve => { finish = resolve; });
+    assert.equal(call.name, 'delete_annotation');
+    return {structuredContent:{outcome:'deleted', annotation:null}};
+  };
+  app.ontoolresult(detailPayload({evidence:[e], annotation_page:{context_id:'ctx', items:[record], next_cursor:null}}));
+  const pending = el('more-records').onclick();
+  const press = label => [...el('context-records').querySelectorAll('button')].find(b => b.textContent === label).onclick();
+  press('편집'); press('삭제'); await press('삭제 확인');
+  finish({structuredContent:{context_id:'ctx', evidence_id:'e1', annotation_start:0,
+    annotation_cursor:null, annotation_count:2, annotations:[record]}});
+  await pending;
+  assert.match(el('record-status').textContent,/전체 1건/);
+  assert.doesNotMatch(el('records').textContent,/삭제 대상/);
+  assert.equal(el('more-records').disabled,false);
+});
