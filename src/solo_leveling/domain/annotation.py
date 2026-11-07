@@ -172,6 +172,31 @@ class AnnotationPage:
     next_cursor: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class AnnotationLibraryItem:
+    """전체 기록함의 한 항목. 저장 당시 스냅샷과 현재 위치 상태를 분리한다."""
+    annotation: Annotation
+    paper_id: str
+    paper_title: Optional[str]
+    version_id: str
+    file_display_name: str
+    pdf_pages: Tuple[int, ...]
+    segment_available: Tuple[bool, ...]
+
+    @property
+    def location_status(self) -> str:
+        if not self.segment_available:
+            return 'not_applicable'
+        return 'available' if all(self.segment_available) else 'unavailable'
+
+
+@dataclass(frozen=True)
+class AnnotationLibraryPage:
+    """로컬 DB 전체 학습 맥락에서 찾은 기록 한 페이지."""
+    items: Tuple[AnnotationLibraryItem, ...]
+    next_cursor: Optional[str] = None
+
+
 def validate_page_limit(limit) -> int:
     """None이면 기본값. 정수 1..MAX_PAGE_SIZE만 허용한다(bool 제외)."""
     if limit is None:
@@ -235,3 +260,16 @@ def decode_cursor(cursor, context_id: str, step: Optional[str], kind: Optional[s
     except UnicodeEncodeError:
         raise invalid() from None
     return created_at, annotation_id
+
+
+def encode_library_cursor(scope, created_at: str, annotation_id: str) -> str:
+    """전체 기록함 커서. 모든 검색 조건을 고정 길이 해시로 묶는다."""
+    serialized = json.dumps(scope, ensure_ascii=True, separators=(',', ':'))
+    return encode_cursor(serialized, None, None, created_at, annotation_id)
+
+
+def decode_library_cursor(cursor, scope) -> Tuple[str, str]:
+    """전체 기록함 커서를 푼다. 다른 검색 조건에서 발급한 커서는 거부한다."""
+    # 기존의 엄격한 Base64/UTF-8/위치 검증을 재사용한다.
+    serialized = json.dumps(scope, ensure_ascii=True, separators=(',', ':'))
+    return decode_cursor(cursor, serialized, None, None)
