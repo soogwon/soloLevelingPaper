@@ -175,16 +175,19 @@ class QuizAttemptService:
 
     def step_scores(self, context_id: str) -> Tuple[StepScore, ...]:
         """단계별 시도 횟수, 가장 최근 점수, 최고 점수. 시도가 없는 단계도 포함한다."""
-        attempts = self.history(context_id)
+        if repo.get_learning_context(self.db_path, context_id) is None:
+            raise ResourceNotFoundError('context not found')
+        summaries = {summary.step: summary
+                     for summary in repo.list_quiz_step_score_summaries(self.db_path, context_id)}
         scores = []
         for step in LEARNING_STEPS:
-            mine = [a for a in attempts if a.step == step]
-            if not mine:
+            summary = summaries.get(step)
+            if summary is None:
                 scores.append(StepScore(step, 0, None, None, None, None, None))
                 continue
-            latest = mine[-1]
-            scores.append(StepScore(step, len(mine), latest.attempt_id, latest.correct_count,
-                                    latest.total_count, latest.score, max(a.score for a in mine)))
+            scores.append(StepScore(step, summary.attempt_count, summary.latest_attempt_id,
+                                    summary.latest_correct, summary.latest_total,
+                                    summary.latest_score, summary.best_score))
         return tuple(scores)
 
     def review(self, attempt_id: str) -> Tuple[ReviewItem, ...]:
