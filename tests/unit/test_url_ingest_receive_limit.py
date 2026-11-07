@@ -1,7 +1,10 @@
 """#199 URL PDF 수신 단계의 설정 상한을 검증한다."""
 from collections import deque
+import io
 
 import pytest
+import requests
+from requests.adapters import BaseAdapter
 
 from solo_leveling.infrastructure.parsing import url_ingest
 
@@ -52,8 +55,17 @@ class Session:
         self.urls = []
         self.closed = False
 
-    def get(self, url, **kwargs):
-        self.urls.append(url)
+    def prepare_request(self, request):
+        return request.prepare()
+
+    def merge_environment_settings(self, url, proxies, stream, verify, cert):
+        return {'proxies': {}, 'verify': True, 'cert': None}
+
+    def get_adapter(self, url):
+        return self
+
+    def send(self, request, **kwargs):
+        self.urls.append(request.url)
         return self.responses.popleft()
 
     def close(self):
@@ -71,6 +83,47 @@ class SmallPieceResponse(Response):
             self.offset += len(block)
             self.yielded += len(block)
             yield block
+
+
+class TrackingRaw:
+    def __init__(self, body):
+        self.body = io.BytesIO(body)
+        self.read_bytes = 0
+        self.closed = False
+
+    def stream(self, amount, decode_content=True):
+        while True:
+            block = self.body.read(amount)
+            if not block:
+                return
+            self.read_bytes += len(block)
+            yield block
+
+    def close(self):
+        self.closed = True
+
+    def release_conn(self):
+        pass
+
+
+class QueueAdapter(BaseAdapter):
+    def __init__(self, specs):
+        self.specs = deque(specs)
+        self.responses = []
+
+    def send(self, request, **kwargs):
+        status, headers, body = self.specs.popleft()
+        response = requests.Response()
+        response.status_code = status
+        response.headers.update(headers)
+        response.url = request.url
+        response.request = request
+        response.raw = TrackingRaw(body)
+        self.responses.append(response)
+        return response
+
+    def close(self):
+        pass
 
 
 def install(monkeypatch, *responses):
@@ -170,7 +223,7 @@ def test_pdf_path_with_query_is_rejected_from_content_length_before_body(monkeyp
     install(monkeypatch, response)
     with pytest.raises(url_ingest.ResponseTooLargeError):
         url_ingest.fetch_url(response.url, pdf_max_bytes=10, other_max_bytes=100)
-    assert response.yielded == 0 and response.closed
+    assert response.yielded == 5 and response.closed
 
 
 def test_redirect_final_response_uses_same_pdf_limit(monkeypatch):
@@ -180,7 +233,42 @@ def test_redirect_final_response_uses_same_pdf_limit(monkeypatch):
     with pytest.raises(url_ingest.ResponseTooLargeError):
         url_ingest.fetch_url(redirect.url, pdf_max_bytes=10)
     assert session.urls == ['https://example.org/start', 'https://example.org/final.pdf']
-    assert redirect.closed and final.closed and final.yielded == 0
+    assert redirect.closed and final.closed and final.yielded == 5
+
+
+def test_real_session_does_not_consume_redirect_body(monkeypatch):
+    adapter = QueueAdapter([
+        (302, {'Location': '/final.pdf'}, b'x' * 1_000_000),
+        (200, {'Content-Type': 'application/pdf'}, b'%PDF-12345'),
+    ])
+    session = requests.Session()
+    session.mount('https://', adapter)
+    monkeypatch.setattr(url_ingest.requests, 'Session', lambda: session)
+
+    fetched = url_ingest.fetch_url(
+        'https://example.org/start', pdf_max_bytes=10, other_max_bytes=20)
+    assert fetched.content == b'%PDF-12345'
+    assert adapter.responses[0].raw.read_bytes == 0
+    assert adapter.responses[0].raw.closed
+
+
+def test_pdf_path_with_html_body_uses_other_limit(monkeypatch):
+    response = Response(
+        b'<html>' + b'a' * 74, url='https://example.org/a.pdf',
+        headers={'Content-Type': 'text/html'})
+    install(monkeypatch, response)
+    with pytest.raises(url_ingest.ResponseTooLargeError):
+        url_ingest.fetch_url(response.url, pdf_max_bytes=100, other_max_bytes=20)
+    assert response.yielded == 21 and response.closed
+
+
+def test_each_read_stops_at_one_byte_over_remaining_limit(monkeypatch):
+    response = Response(
+        b'%PDF-' + b'a' * 200_000, headers={'Content-Type': 'application/pdf'})
+    install(monkeypatch, response)
+    with pytest.raises(url_ingest.ResponseTooLargeError):
+        url_ingest.fetch_url(response.url, pdf_max_bytes=65_536)
+    assert response.yielded == 65_537 and response.closed
 
 
 def test_streaming_response_is_closed_on_http_error(monkeypatch):

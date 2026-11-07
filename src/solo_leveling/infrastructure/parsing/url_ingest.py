@@ -22,6 +22,7 @@ from typing import Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import requests
+from requests.cookies import extract_cookies_to_jar
 
 USER_AGENT = "solo-leveling-paper/0.1 (URL registration)"
 REQUEST_TIMEOUT = (5, 30)  # (connect, read) per request
@@ -79,9 +80,10 @@ def _positive_limit(value, name: str) -> int:
     return value
 
 
-def _looks_like_pdf(response: requests.Response, url: str) -> bool:
-    return ('application/pdf' in response.headers.get('Content-Type', '').lower()
-            or urlparse(url).path.lower().endswith('.pdf'))
+def _looks_like_pdf(response: requests.Response) -> bool:
+    # URL 확장자는 힌트일 뿐이다. 본문과 다를 수 있으므로 Content-Type으로
+    # 확정된 PDF만 prefix 확인 없이 PDF 상한을 선택한다.
+    return 'application/pdf' in response.headers.get('Content-Type', '').lower()
 
 
 def _has_pdf_magic(content: bytes) -> bool:
@@ -104,14 +106,34 @@ def _check_deadline(deadline: float, response: requests.Response) -> None:
         raise TimeoutError(f"응답 다운로드 시간이 허용 범위를 초과했습니다: {response.url}")
 
 
+def _next_content_chunk(response: requests.Response, chunk_size: int) -> Optional[bytes]:
+    """현재 스트림 위치에서 비어 있지 않은 다음 조각 하나만 읽는다."""
+    for chunk in response.iter_content(chunk_size=chunk_size):
+        if chunk:
+            return chunk
+    return None
+
+
+def _streaming_get(session: requests.Session, url: str) -> requests.Response:
+    """Requests의 redirect 준비가 중간 응답 본문을 소비하지 않도록 adapter를 직접 호출한다."""
+    request = requests.Request('GET', url, headers={"User-Agent": USER_AGENT})
+    prepared = session.prepare_request(request)
+    settings = session.merge_environment_settings(prepared.url, {}, None, None, None)
+    settings['stream'] = True
+    response = session.get_adapter(prepared.url).send(prepared, timeout=REQUEST_TIMEOUT, **settings)
+    if getattr(response, 'raw', None) is not None:
+        extract_cookies_to_jar(session.cookies, prepared, response.raw)
+    return response
+
+
 def _consume_with_limits(response: requests.Response, pdf_max_bytes: int,
-                         other_max_bytes: int, deadline: float, url: str) -> bytes:
+                         other_max_bytes: int, deadline: float) -> bytes:
     """스트리밍으로 읽으며 크기·시간 제한을 강제한다.
 
     Content-Length 헤더가 없거나 실제 응답보다 작게 위조된 경우에도, 실제로
     수신한 바이트 수를 누적해서 판단하므로 우회되지 않는다.
     """
-    pdf_response = _looks_like_pdf(response, url)
+    pdf_response = _looks_like_pdf(response)
     declared_length = _declared_length(response)
     chunks, total = [], 0
 
@@ -124,36 +146,34 @@ def _consume_with_limits(response: requests.Response, pdf_max_bytes: int,
         # 초과하는 선언값만 즉시 거부하고, 최대 5바이트를 읽어 magic을 확인한다.
         if declared_length is not None and declared_length > max(pdf_max_bytes, other_max_bytes):
             raise ResponseTooLargeError()
-        prefix_size = min(5, max(pdf_max_bytes, other_max_bytes) + 1)
-        prefix_iter = response.iter_content(chunk_size=prefix_size)
         prefix = b''
-        prefix_exhausted = False
-        for chunk in prefix_iter:
+        while len(prefix) < 5:
+            prefix_size = min(5 - len(prefix), max(pdf_max_bytes, other_max_bytes) - total + 1)
+            chunk = _next_content_chunk(response, prefix_size)
+            if chunk is None:
+                break
             _check_deadline(deadline, response)
-            if not chunk:
-                continue
             chunks.append(chunk)
             total += len(chunk)
-            prefix = (prefix + chunk)[:5]
-            if total > max(pdf_max_bytes, other_max_bytes) or len(prefix) >= 5:
+            prefix += chunk
+            if total > max(pdf_max_bytes, other_max_bytes):
                 break
-        else:
-            prefix_exhausted = True
         pdf_response = _has_pdf_magic(prefix)
         max_bytes = pdf_max_bytes if pdf_response else other_max_bytes
         if declared_length is not None and declared_length > max_bytes:
             raise ResponseTooLargeError()
         if total > max_bytes:
             raise ResponseTooLargeError()
-        if prefix_exhausted:
+        if len(prefix) < 5:
             return b"".join(chunks)
 
-    # 판정 뒤에는 남은 허용량+1만 요청해 실제 수신도 최대 한 바이트 초과에서 멈춘다.
-    chunk_size = min(65536, max_bytes - total + 1)
-    for chunk in response.iter_content(chunk_size=chunk_size):
+    # 매 읽기마다 남은 허용량+1만 요청해 정확히 한 바이트 초과에서 멈춘다.
+    while True:
+        chunk_size = min(65536, max_bytes - total + 1)
+        chunk = _next_content_chunk(response, chunk_size)
+        if chunk is None:
+            break
         _check_deadline(deadline, response)
-        if not chunk:
-            continue
         total += len(chunk)
         if total > max_bytes:
             raise ResponseTooLargeError()
@@ -177,13 +197,7 @@ def fetch_url(url: str, *, pdf_max_bytes: int = MAX_RESPONSE_BYTES,
     try:
         for _ in range(MAX_REDIRECTS + 1):
             validate_public_url(current_url)
-            response = session.get(
-                current_url,
-                headers={"User-Agent": USER_AGENT},
-                timeout=REQUEST_TIMEOUT,
-                allow_redirects=False,
-                stream=True,
-            )
+            response = _streaming_get(session, current_url)
             if response.is_redirect or response.is_permanent_redirect:
                 location = response.headers.get("Location")
                 response.close()
@@ -195,7 +209,7 @@ def fetch_url(url: str, *, pdf_max_bytes: int = MAX_RESPONSE_BYTES,
             try:
                 response.raise_for_status()
                 body = _consume_with_limits(
-                    response, pdf_max_bytes, other_max_bytes, deadline, current_url)
+                    response, pdf_max_bytes, other_max_bytes, deadline)
             except Exception:
                 response.close()
                 raise
