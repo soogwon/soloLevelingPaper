@@ -22,6 +22,7 @@ from typing import Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import requests
+from urllib3.exceptions import DecodeError, ProtocolError, ReadTimeoutError, SSLError
 from requests.cookies import extract_cookies_to_jar
 
 USER_AGENT = "solo-leveling-paper/0.1 (URL registration)"
@@ -106,12 +107,18 @@ def _check_deadline(deadline: float, response: requests.Response) -> None:
         raise TimeoutError(f"응답 다운로드 시간이 허용 범위를 초과했습니다: {response.url}")
 
 
-def _next_content_chunk(response: requests.Response, chunk_size: int) -> Optional[bytes]:
-    """현재 스트림 위치에서 비어 있지 않은 다음 조각 하나만 읽는다."""
-    for chunk in response.iter_content(chunk_size=chunk_size):
-        if chunk:
-            return chunk
-    return None
+def _read_content(response: requests.Response, size: int) -> bytes:
+    # 같은 디코더를 유지하면서 압축 해제된 본문을 남은 허용량만큼 읽는다.
+    try:
+        return response.raw.read(size, decode_content=True)
+    except ProtocolError as error:
+        raise requests.exceptions.ChunkedEncodingError(error) from error
+    except DecodeError as error:
+        raise requests.exceptions.ContentDecodingError(error) from error
+    except ReadTimeoutError as error:
+        raise requests.exceptions.ConnectionError(error) from error
+    except SSLError as error:
+        raise requests.exceptions.SSLError(error) from error
 
 
 def _streaming_get(session: requests.Session, url: str) -> requests.Response:
@@ -149,8 +156,8 @@ def _consume_with_limits(response: requests.Response, pdf_max_bytes: int,
         prefix = b''
         while len(prefix) < 5:
             prefix_size = min(5 - len(prefix), max(pdf_max_bytes, other_max_bytes) - total + 1)
-            chunk = _next_content_chunk(response, prefix_size)
-            if chunk is None:
+            chunk = _read_content(response, prefix_size)
+            if not chunk:
                 break
             _check_deadline(deadline, response)
             chunks.append(chunk)
@@ -170,8 +177,8 @@ def _consume_with_limits(response: requests.Response, pdf_max_bytes: int,
     # 매 읽기마다 남은 허용량+1만 요청해 정확히 한 바이트 초과에서 멈춘다.
     while True:
         chunk_size = min(65536, max_bytes - total + 1)
-        chunk = _next_content_chunk(response, chunk_size)
-        if chunk is None:
+        chunk = _read_content(response, chunk_size)
+        if not chunk:
             break
         _check_deadline(deadline, response)
         total += len(chunk)

@@ -1,15 +1,20 @@
 """#199 URL PDF 수신 단계의 설정 상한을 검증한다."""
 from collections import deque
+from http.client import HTTPResponse
 import io
+from unittest.mock import Mock
 
 import pytest
 import requests
 from requests.adapters import BaseAdapter
+from urllib3.response import HTTPResponse as Urllib3Response
 
 from solo_leveling.infrastructure.parsing import url_ingest
 
 
 class Response:
+    max_piece_size = None
+
     def __init__(self, body=b'', *, url='https://example.org/paper.pdf', headers=None,
                  redirect=False, location=None, status_error=None):
         self.body = body
@@ -21,6 +26,7 @@ class Response:
         self.is_permanent_redirect = False
         self.closed = False
         self.yielded = 0
+        self.raw = self
         self.offset = 0
         self.chunk_sizes = []
         self.status_error = status_error
@@ -40,18 +46,20 @@ class Response:
     def close(self):
         self.closed = True
 
-    def iter_content(self, chunk_size):
-        self.chunk_sizes.append(chunk_size)
-        while self.offset < len(self.body):
-            block = self.body[self.offset:self.offset + chunk_size]
-            self.offset += len(block)
-            self.yielded += len(block)
-            yield block
+    def read(self, size, *, decode_content):
+        self.chunk_sizes.append(size)
+        if self.max_piece_size is not None:
+            size = min(size, self.max_piece_size)
+        block = self.body[self.offset:self.offset + size]
+        self.offset += len(block)
+        self.yielded += len(block)
+        return block
 
 
 class Session:
     def __init__(self, responses):
         self.responses = deque(responses)
+        self.cookies = requests.cookies.RequestsCookieJar()
         self.urls = []
         self.closed = False
 
@@ -75,14 +83,7 @@ class Session:
 class SmallPieceResponse(Response):
     """서버가 요청한 chunk_size보다 작은 조각을 반복해서 주는 경우를 흉내 낸다."""
 
-    def iter_content(self, chunk_size):
-        self.chunk_sizes.append(chunk_size)
-        while self.offset < len(self.body):
-            size = min(2, chunk_size)
-            block = self.body[self.offset:self.offset + size]
-            self.offset += len(block)
-            self.yielded += len(block)
-            yield block
+    max_piece_size = 2
 
 
 class TrackingRaw:
@@ -91,13 +92,10 @@ class TrackingRaw:
         self.read_bytes = 0
         self.closed = False
 
-    def stream(self, amount, decode_content=True):
-        while True:
-            block = self.body.read(amount)
-            if not block:
-                return
-            self.read_bytes += len(block)
-            yield block
+    def read(self, amount, *, decode_content):
+        block = self.body.read(amount)
+        self.read_bytes += len(block)
+        return block
 
     def close(self):
         self.closed = True
@@ -291,3 +289,36 @@ def test_limits_must_be_positive_integers(monkeypatch, name, value):
     monkeypatch.setattr(url_ingest.requests, 'Session', lambda: pytest.fail('invalid limit must fail before session'))
     with pytest.raises(ValueError):
         url_ingest.fetch_url('https://example.org/a.pdf', **{name: value})
+
+@pytest.mark.parametrize('body, content_type, pdf_limit, other_limit, expected_kind', [
+    (b'%PDF-12345', '', 10, 20, 'pdf'),
+    (b'<html>' + b'a' * 74, '', 100, 20, None),
+    (b'%PDF-' + b'a' * 140_000, 'application/pdf', 65_536, 20, None),
+], ids=['exact-pdf', 'oversize-html', 'oversize-pdf'])
+def test_http_chunked_response_is_consumed_to_the_limit(
+        monkeypatch, body, content_type, pdf_limit, other_limit, expected_kind):
+    # 실제 HTTP 디코더에 첫 5바이트와 나머지를 별도 청크로 전달한다.
+    wire = b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n'
+    for part in (body[:5], body[5:]):
+        wire += f'{len(part):x}\r\n'.encode() + part + b'\r\n'
+    sock = Mock()
+    sock.makefile.return_value = io.BytesIO(wire + b'0\r\n\r\n')
+    http = HTTPResponse(sock, method='GET')
+    http.begin()
+    response = requests.Response()
+    response.status_code = 200
+    response.url = 'https://example.org/a.pdf'
+    response.headers.update(http.getheaders())
+    if content_type:
+        response.headers['Content-Type'] = content_type
+    response.raw = Urllib3Response(body=http, original_response=http, headers=response.headers,
+                                   preload_content=False, request_method='GET')
+    install(monkeypatch, response)
+    limits = dict(pdf_max_bytes=pdf_limit, other_max_bytes=other_limit)
+    if expected_kind is None:
+        with pytest.raises(url_ingest.ResponseTooLargeError, match='^URL_RESPONSE_TOO_LARGE$'):
+            url_ingest.fetch_and_classify(response.url, **limits)
+        assert response.raw.closed
+    else:
+        kind, fetched = url_ingest.fetch_and_classify(response.url, **limits)
+        assert (kind, fetched.content) == (expected_kind, body)
