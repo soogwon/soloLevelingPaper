@@ -27,7 +27,7 @@ from solo_leveling.infrastructure.embeddings.embedder import (
     DEFAULT_MODEL_NAME, embed_texts, embedding_dimension,
 )
 from solo_leveling.infrastructure.embeddings.process_embedder import EmbeddingProcessError
-from solo_leveling.infrastructure.parsing.chunker import chunk_pages
+from solo_leveling.infrastructure.parsing.chunker import chunk_pages_with_sections
 from solo_leveling.infrastructure.storage.pdf_store import PdfStore
 from solo_leveling.infrastructure.parsing.pdf_extractor import (
     extract_pages, ExtractedPage, PdfExtractionError,
@@ -213,7 +213,7 @@ def _ingest_pages(
         if not chunks:
             pages = pages_provider()
             parse_revision = ParseRevision(str(uuid.uuid4()), version_id, len(pages))
-            chunks = chunk_pages(parse_revision.parse_revision_id, pages)
+            chunks, sections = chunk_pages_with_sections(parse_revision.parse_revision_id, pages)
             # 파싱 결과 전체를 원자적으로 저장해 중단 시 절반만 남는 것을 막는다.
             with closing(repo.get_connection(db_path)) as conn, conn:
                 conn.execute('INSERT INTO parse_revisions VALUES (?, ?, ?, ?)',
@@ -224,6 +224,7 @@ def _ingest_pages(
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                     [(c.chunk_id, c.parse_revision_id, c.chunk_index, c.original_text, c.text,
                       c.translation_revision_id, c.printed_page_label, c.pdf_page, c.section_id) for c in chunks])
+                repo.insert_sections_in_transaction(conn, sections)
         if not chunks:
             limitations = ['extraction_empty']
         else:

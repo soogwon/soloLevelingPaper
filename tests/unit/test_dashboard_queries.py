@@ -107,3 +107,24 @@ def test_summary_cannot_reference_another_context(setup_db):
                      ('s', 0, 'claim', '잘못 연결된 요약', '["other-e"]'))
     with pytest.raises(DataIntegrityError):
         DashboardReader(db).get('ctx')
+
+
+def test_note_summary_filters_context_and_kind_and_limits_previews(setup_db):
+    db, chunks = setup_db
+    context = publish(db, chunks)
+    repo.create_learning_context(db, replace(context, context_id='other', goal='skim'))
+    assert DashboardReader(db).get('ctx')['notes'] == {'count': 0, 'previews': []}
+    with closing(get_connection(db)) as conn, conn:
+        conn.executemany(
+            'INSERT INTO annotations (annotation_id, context_id, kind, body, created_at, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, ?)',
+            [(key, ctx, kind, body, '2026-01-01', updated) for key, ctx, kind, body, updated in [
+                ('a', 'ctx', 'note', '가' * 121, '2026-01-04'),
+                ('b', 'ctx', 'note', '둘', '2026-01-03'),
+                ('c', 'ctx', 'note', '셋', '2026-01-02'),
+                ('d', 'ctx', 'note', '넷', '2026-01-01'),
+                ('h', 'ctx', 'highlight', '강조', '2026-01-05'),
+                ('x', 'other', 'note', '다른 맥락', '2026-01-06'),
+            ]])
+    assert DashboardReader(db).get('ctx')['notes'] == {
+        'count': 4, 'previews': ['가' * 120 + '…', '둘', '셋']}

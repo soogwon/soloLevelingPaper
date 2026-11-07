@@ -18,9 +18,9 @@ infrastructure/parsing — 페이지 경계를 넘지 않는 청킹
 """
 import re
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from solo_leveling.domain.models import Chunk
+from solo_leveling.domain.models import Chunk, PaperSection
 from solo_leveling.infrastructure.parsing.pdf_extractor import ExtractedPage
 from solo_leveling.infrastructure.parsing.sections import make_section_id
 
@@ -140,14 +140,43 @@ def chunk_pages(
 
     id_factory: 테스트에서 결정론적 ID를 주입하기 위한 것. 기본은 uuid4.
     """
+    chunks, _ = chunk_pages_with_sections(
+        parse_revision_id, pages, chunk_size=chunk_size, overlap=overlap, id_factory=id_factory,
+    )
+    return chunks
+
+
+def chunk_pages_with_sections(
+    parse_revision_id: str,
+    pages: List[ExtractedPage],
+    chunk_size: int = CHUNK_SIZE,
+    overlap: int = CHUNK_OVERLAP,
+    id_factory: Optional[callable] = None,
+) -> Tuple[List[Chunk], List[PaperSection]]:
+    """청크와 그 청크가 참조하는 섹션 카탈로그를 같은 순회에서 만든다.
+
+    현재 제목 감지기는 큰 섹션만 지원하므로 level은 1, parent는 None이다.
+    세부 제목 감지가 추가되기 전까지 추측으로 계층을 만들지 않는다.
+    """
     make_id = id_factory or (lambda: str(uuid.uuid4()))
     chunks: List[Chunk] = []
+    section_starts: List[tuple[str, str, int]] = []
     global_index = 0
     current_section: Optional[str] = None  # 앞 페이지에서 이어지는 섹션
     section_order = 0
 
     for page in pages:
+        before_order = section_order
         segments, current_section, section_order = _segment_page(page, current_section, section_order)
+        # _segment_page와 동일하게 범위 밖/중복/역순 offset을 제외한다.
+        valid_headings = []
+        last_offset = -1
+        for heading in page.headings:
+            if isinstance(heading.offset, int) and last_offset < heading.offset < len(page.text):
+                valid_headings.append(heading)
+                last_offset = heading.offset
+        for index, heading in enumerate(valid_headings, start=before_order + 1):
+            section_starts.append((make_section_id(index, heading.title), heading.title.strip(), page.pdf_page))
         for section_id, segment_text in segments:
             for piece in _split_within_page(segment_text, chunk_size, overlap):
                 chunks.append(
@@ -165,4 +194,23 @@ def chunk_pages(
                 )
                 global_index += 1
 
-    return chunks
+    chunk_ranges = {}
+    chunk_end_pages = {}
+    for chunk in chunks:
+        if chunk.section_id is not None:
+            start, _ = chunk_ranges.get(chunk.section_id, (chunk.chunk_index, chunk.chunk_index))
+            chunk_ranges[chunk.section_id] = (start, chunk.chunk_index)
+            chunk_end_pages[chunk.section_id] = chunk.pdf_page
+    sections = []
+    for ordinal, (section_id, title, start_page) in enumerate(section_starts, start=1):
+        # 다음 제목이 페이지 중간에 있으면 그 앞 청크는 이전 섹션이다. 따라서
+        # 제목 페이지만으로 추정하지 않고 실제 마지막 청크의 페이지를 사용한다.
+        end_page = chunk_end_pages.get(section_id, start_page)
+        start_chunk, end_chunk = chunk_ranges.get(section_id, (None, None))
+        sections.append(PaperSection(
+            section_id=section_id, parse_revision_id=parse_revision_id, title=title,
+            ordinal=ordinal, level=1, parent_section_id=None,
+            start_pdf_page=start_page, end_pdf_page=end_page,
+            start_chunk_index=start_chunk, end_chunk_index=end_chunk,
+        ))
+    return chunks, sections
