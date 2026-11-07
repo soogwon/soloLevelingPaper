@@ -69,9 +69,12 @@ class _BestEffortLog:
 def run_safe_bundle(args):
     """안전 로그의 모든 writer가 종료된 뒤에만 종료 기록을 게시한다."""
     from solo_leveling.infrastructure.log_retention.contracts import BundleId, ClosedFile
-    from solo_leveling.infrastructure.log_retention.posix import PosixBundleStore
-
-    store = PosixBundleStore()
+    if os.name == 'nt':
+        from solo_leveling.infrastructure.log_retention.windows import WindowsBundleStore
+        store = WindowsBundleStore()
+    else:
+        from solo_leveling.infrastructure.log_retention.posix import PosixBundleStore
+        store = PosixBundleStore()
     bundle = BundleId('mcp', uuid4().hex)
     acquired = store.try_acquire_writer(args.log_dir, bundle)
     lease = acquired.lease
@@ -135,7 +138,7 @@ def main(argv=None):
         if args.log_dir is None:
             from solo_leveling.interfaces.mcp.runtime import load_environment, runtime_paths
             args.log_dir = runtime_paths(load_environment()).data_root / 'diagnostics'
-        if os.name == 'posix' and not args.collect_raw_logs:
+        if os.name in ('posix', 'nt') and not args.collect_raw_logs:
             return run_safe_bundle(args)
         args.log_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
