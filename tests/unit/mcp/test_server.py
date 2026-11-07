@@ -269,12 +269,12 @@ def test_registration_tools_and_status_contract():
     tools = {tool.name: tool for tool in run(server.list_tools())}
     assert set(tools) == {
         'add_paper', 'get_paper_status', 'start_learning', 'ask_paper', 'get_evidence',
-        'list_paper_jobs',
+        'list_paper_jobs', 'prepare_paper_registration', 'cancel_paper_registration',
     }
     assert tools['add_paper'].annotations.idempotentHint is True
     assert tools['start_learning'].annotations.idempotentHint is True
     assert tools['start_learning'].annotations.openWorldHint is False
-    added = payload(run(server.call_tool('add_paper', {
+    added = payload(run(confirmed_registration(server, {
         'source': {'kind': 'local_file', 'relative_path': 'paper.pdf'},
         'request_key': 'request-1',
     })))
@@ -360,7 +360,7 @@ def test_sdk_rejects_out_of_range_top_k(top_k):
 @pytest.mark.parametrize(('name', 'required', 'optional', 'outputs', 'hints'), [
     ('list_paper_jobs', set(), {'query', 'limit', 'cursor'},
      {'jobs', 'next_cursor'}, (True, True, False)),
-    ('add_paper', {'source', 'request_key'}, set(),
+    ('add_paper', {'source', 'request_key', 'confirmation_token'}, set(),
      {'paper_id', 'version_id', 'job_id', 'status'}, (False, True, True)),
     ('get_paper_status', {'job_id'}, set(),
      {'job_id', 'version_id', 'status', 'stage', 'capabilities', 'limitations',
@@ -534,3 +534,10 @@ def test_list_cursor_error_is_safe():
         run(server.call_tool('list_paper_jobs', {'cursor': 'bad'}))
     assert 'INVALID_ARGUMENT' in str(error.value)
     assert 'private-data' not in str(error.value)
+
+
+async def confirmed_registration(server, arguments):
+    prepared = await server.call_tool('prepare_paper_registration', arguments)
+    return await server.call_tool('add_paper', {
+        **arguments, 'confirmation_token': prepared.meta['confirmation_token'],
+    })

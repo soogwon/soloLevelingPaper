@@ -306,7 +306,12 @@ VERIFICATION_MAX_INPUT_CHARS=60000
 
 DB가 비어 있으면 빈 목록이 정상이다. 커서 형식과 응답 필드는 MCP 인터페이스 명세를 참고한다.
 
-### add_paper
+### 등록 안내 카드와 add_paper
+
+등록 요청은 `prepare_paper_registration`으로 시작한다. 안내 카드는 파일을 읽거나 작업을 만들지 않는다.
+[외부 전송 안내](external-data-transfer.md)를 확인한 사용자가 카드에서 동의하고 등록하면
+카드가 대상 파일과 요청 키에 묶인 일회성 `confirmation_token`을 `add_paper`에 전달한다.
+취소·만료·잘못된 토큰으로는 등록할 수 없다. 카드 미지원 호스트는 등록을 진행하지 않는다.
 
 `source={"kind":"local_file","relative_path":"paper.pdf"}`와 `request_key`를 받는다.
 파일은 `DATA_ROOT/IMPORT_SUBDIR` 아래의 상대 경로여야 한다. 절대 경로, `..`, 루트

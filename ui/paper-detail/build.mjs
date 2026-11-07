@@ -5,6 +5,7 @@ import path from 'node:path';
 
 for (const [name, entry, templateName] of [
   ['paper-detail', 'main', 'template'],
+  ['registration', 'registration-main', 'registration-template'],
   ['annotation', 'annotation-main', 'annotation-template'],
 ]) {
   // 외부 CDN 없이 실행되도록 SDK와 화면 코드를 하나의 HTML로 묶는다.

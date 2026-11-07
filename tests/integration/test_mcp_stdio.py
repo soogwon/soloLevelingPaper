@@ -30,6 +30,7 @@ def test_stdio_server_lists_tools(tmp_path):
                     await session.initialize()
                     tools = await session.list_tools()
                     assert {tool.name for tool in tools.tools} == {
+                        'prepare_paper_registration', 'cancel_paper_registration',
                         'add_paper', 'get_paper_status', 'start_learning',
                         'ask_paper', 'get_evidence', 'submit_paper_question', 'get_paper_question_status',
                         'list_paper_jobs', 'get_paper_detail',
@@ -107,10 +108,13 @@ create_server(MCPServices(
                         assert json.loads(result.content[0].text) == result.structuredContent
                         return result.structuredContent
 
-                    added = await call('add_paper', {
+                    args = {
                         'source': {'kind': 'local_file', 'relative_path': 'paper.pdf'},
                         'request_key': 'request-1',
-                    })
+                    }
+                    prepared = await session.call_tool('prepare_paper_registration', args)
+                    assert prepared.structuredContent['status'] == 'confirmation_required'
+                    added = await call('add_paper', {**args, 'confirmation_token': prepared.meta['confirmation_token']})
                     listing = await call('list_paper_jobs', {})
                     assert listing['jobs'][0]['job_id'] == added['job_id']
                     status = await call('get_paper_status', {'job_id': listing['jobs'][0]['job_id']})

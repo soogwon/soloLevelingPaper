@@ -132,7 +132,7 @@ def test_paper_registration_to_evidence_lookup_flow():
         answer, evidence, WorkflowIngestion(), WorkflowContexts(),
     ))
 
-    added = payload(run(server.call_tool('add_paper', {
+    added = payload(run(confirmed_registration(server, {
         'source': {'kind': 'local_file', 'relative_path': 'paper.pdf'},
         'request_key': 'request-1',
     })))
@@ -179,3 +179,10 @@ def test_processing_paper_cannot_start_learning():
     assert 'PAPER_NOT_READY' in message
     assert 'job_id=job-1' in message
     assert 'status=processing' in message
+
+
+async def confirmed_registration(server, arguments):
+    prepared = await server.call_tool('prepare_paper_registration', arguments)
+    return await server.call_tool('add_paper', {
+        **arguments, 'confirmation_token': prepared.meta['confirmation_token'],
+    })
