@@ -38,7 +38,7 @@ def test_published_recovery_preserves_each_context(db, tmp_path, chroma_client_f
     index('t2', 'e2')
     original_ids = {f'c{i}' for i in range(N) if i not in FAILED}
     recovered_ids = original_ids | {f'c{i}' for i in recovered_indices}
-    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), len(recovered_ids), ['partial'] if partial else [])
+    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), recovered_ids, ['partial'] if partial else [])
     new = repo.get_or_create_default_context(db, 'v1').context_id
     assert new != old
     for ctx, expected_job, expected_ids in [(old, 'j1', original_ids), (new, 'j2', recovered_ids)]:

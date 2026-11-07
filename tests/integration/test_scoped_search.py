@@ -37,7 +37,8 @@ def setup_search(tmp_path, chroma_client_factory):
     upsert_chunk_embeddings(client, ['a', 'b', 'c'], [[1., 0.], [0., 1.], [0., 1.]], 'idx', 'paper', 'v', docs)
     verify_chunk_embeddings(client, ['a', 'b', 'c'], docs, 'idx', 'paper', 'v', 2)
     repo.claim_ingestion_job(db, ProcessingJob('job', 'v'))
-    repo.publish_search_index(db, 'v', 'p', EmbeddingSet('idx', 't', 'saved-model', 2), 'job', 3, [])
+    repo.publish_search_index(db, 'v', 'p', EmbeddingSet('idx', 't', 'saved-model', 2), 'job',
+                              ['a', 'b', 'c'], [])
     repo.create_learning_context(db, LearningContext('ctx', 'v', 'p', 't', embedding_set_id='idx'))
     calls = []
 

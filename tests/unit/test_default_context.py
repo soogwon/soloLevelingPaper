@@ -92,7 +92,7 @@ def test_default_contexts_are_separate_for_different_versions(setup_db):
     repo.insert_chunks(db, other)
     repo.save_translation_batch(db, make_batch(other, revision='t2'))
     repo.claim_ingestion_job(db, ProcessingJob('job2', 'v2'))
-    repo.publish_search_index(db, 'v2', 'p2', EmbeddingSet('idx2', 't2', 'fake', 2), 'job2', 1, [])
+    repo.publish_search_index(db, 'v2', 'p2', EmbeddingSet('idx2', 't2', 'fake', 2), 'job2', ['c3'], [])
     second = repo.get_or_create_default_context(db, 'v2')
     assert second.context_id != first.context_id
     assert second.embedding_set_id == 'idx2'

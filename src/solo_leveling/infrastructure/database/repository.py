@@ -5,6 +5,7 @@ infrastructure/database — 리포지토리
 processing_jobs.limitations는 JSON 문자열로 저장한다(SQLite에 배열 타입이 없어서).
 """
 import json
+from collections.abc import Collection
 from uuid import uuid4
 from contextlib import closing
 from pathlib import PureWindowsPath, PurePosixPath
@@ -421,12 +422,40 @@ def get_search_index_for_job(db_path: str, job_id: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
+def _validated_published_chunk_ids(conn, parse_revision_id: str, translation_revision_id: str,
+                                   chunk_ids: Collection[str]) -> tuple[str, ...]:
+    """검증을 마친 색인 ID가 현재 게시 가능한 번역 집합과 정확히 같은지 확인한다."""
+    if isinstance(chunk_ids, (str, bytes)) or not isinstance(chunk_ids, Collection) or not chunk_ids:
+        raise ValueError('published chunk ids must be a non-empty collection')
+    published = tuple(sorted(chunk_ids)) if isinstance(chunk_ids, (set, frozenset)) else tuple(chunk_ids)
+    if any(type(chunk_id) is not str or not chunk_id.strip() for chunk_id in published):
+        raise ValueError('published chunk ids must contain non-empty strings')
+    if len(set(published)) != len(published):
+        raise ValueError('published chunk ids must be unique')
+    eligible = {row['chunk_id'] for row in conn.execute(
+        'SELECT r.chunk_id FROM translation_results r JOIN chunks c ON c.chunk_id=r.chunk_id '
+        'WHERE c.parse_revision_id=? AND r.translation_revision_id=? '
+        'AND r.failure_code IS NULL AND r.translated_text IS NOT NULL',
+        (parse_revision_id, translation_revision_id),
+    )}
+    if set(published) != eligible:
+        raise ValueError('index chunk id set does not match translated chunks')
+    return published
+
+
+def _insert_search_index_chunks(conn, embedding_set_id: str, chunk_ids: tuple[str, ...]) -> None:
+    conn.executemany(
+        'INSERT INTO search_index_chunks (embedding_set_id, chunk_id) VALUES (?, ?)',
+        ((embedding_set_id, chunk_id) for chunk_id in chunk_ids),
+    )
+
+
 def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
-                         embedding_set: EmbeddingSet, job_id: str, chunk_count: int,
+                         embedding_set: EmbeddingSet, job_id: str, chunk_ids: Collection[str],
                          limitations: list[str]) -> None:
     """벡터 검증 후 색인 게시와 READY 상태 전환을 하나의 트랜잭션으로 처리한다."""
-    if type(chunk_count) is not int or chunk_count < 1 or type(embedding_set.dimension) is not int or embedding_set.dimension < 1:
-        raise ValueError('positive chunk count and embedding dimension required')
+    if type(embedding_set.dimension) is not int or embedding_set.dimension < 1:
+        raise ValueError('positive embedding dimension required')
     require_text(embedding_set.embedding_set_id, 'embedding_set_id')
     require_text(embedding_set.model_name, 'model_name')
     with closing(get_connection(db_path)) as conn, conn:
@@ -437,12 +466,11 @@ def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
                                 WHERE t.translation_revision_id=? AND p.parse_revision_id=?
                                 AND p.version_id=? AND j.job_id=? AND j.status='processing' ''',
                              (embedding_set.translation_revision_id, parse_revision_id, version_id, job_id)).fetchone()
-        actual = conn.execute('SELECT COUNT(*) FROM chunks c JOIN translation_results r ON r.chunk_id=c.chunk_id '
-                              'WHERE c.parse_revision_id=? AND r.translation_revision_id=? '
-                              'AND r.failure_code IS NULL AND r.translated_text IS NOT NULL',
-                              (parse_revision_id, embedding_set.translation_revision_id)).fetchone()[0]
-        if not valid or actual != chunk_count:
+        if not valid:
             raise ValueError('index does not match the job and translated chunks')
+        published_chunk_ids = _validated_published_chunk_ids(
+            conn, parse_revision_id, embedding_set.translation_revision_id, chunk_ids)
+        chunk_count = len(published_chunk_ids)
         conn.execute('INSERT INTO embedding_sets VALUES (?, ?, ?, ?, ?)',
                      (embedding_set.embedding_set_id, embedding_set.translation_revision_id,
                       embedding_set.model_name, embedding_set.dimension, embedding_set.created_at))
@@ -450,6 +478,7 @@ def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
                      'translation_revision_id, job_id, chunk_count, is_default) VALUES (?, ?, ?, ?, ?, ?, 1)',
                      (embedding_set.embedding_set_id, version_id, parse_revision_id,
                       embedding_set.translation_revision_id, job_id, chunk_count))
+        _insert_search_index_chunks(conn, embedding_set.embedding_set_id, published_chunk_ids)
         conn.execute("UPDATE processing_jobs SET status='ready', stage='index', limitations=?, updated_at=? WHERE job_id=?",
                      (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
 
@@ -545,15 +574,15 @@ def save_recovery_translation(db_path: str, job_id: str, batch: TranslationBatch
                      (rev.translation_revision_id, job_id))
 
 
-def publish_recovered_index(db_path: str, job_id: str, embedding_set: EmbeddingSet, chunk_count: int,
+def publish_recovered_index(db_path: str, job_id: str, embedding_set: EmbeddingSet, chunk_ids: Collection[str],
                             limitations: list[str]) -> None:
     """복구한 번역의 새 색인을 게시하고 기본 색인을 바꾸고 복구 작업을 완료한다. 모두 한 트랜잭션이다.
 
     하나라도 맞지 않으면 아무것도 바꾸지 않아 기존 색인이 계속 기본으로 남는다. 새 색인이 기존 색인보다
     청크가 늘지 않았다면(복구가 모두 실패했다면) 게시하지 않는다.
     """
-    if type(chunk_count) is not int or chunk_count < 1 or type(embedding_set.dimension) is not int or embedding_set.dimension < 1:
-        raise ValueError('positive chunk count and embedding dimension required')
+    if type(embedding_set.dimension) is not int or embedding_set.dimension < 1:
+        raise ValueError('positive embedding dimension required')
     require_text(embedding_set.embedding_set_id, 'embedding_set_id')
     require_text(embedding_set.model_name, 'model_name')
     with closing(get_connection(db_path)) as conn, conn:
@@ -565,12 +594,10 @@ def publish_recovered_index(db_path: str, job_id: str, embedding_set: EmbeddingS
                            (lock['version_id'],)).fetchone()
         if old is None or old['translation_revision_id'] != lock['base_translation_revision_id']:
             raise ValueError('default index changed during recovery')
-        actual = conn.execute(
-            'SELECT COUNT(*) FROM translation_results r JOIN chunks c ON c.chunk_id=r.chunk_id '
-            'WHERE r.translation_revision_id=? AND c.parse_revision_id=? AND r.failure_code IS NULL '
-            'AND r.translated_text IS NOT NULL',
-            (embedding_set.translation_revision_id, old['parse_revision_id'])).fetchone()[0]
-        if actual != chunk_count or actual <= old['chunk_count']:
+        published_chunk_ids = _validated_published_chunk_ids(
+            conn, old['parse_revision_id'], embedding_set.translation_revision_id, chunk_ids)
+        chunk_count = len(published_chunk_ids)
+        if chunk_count <= old['chunk_count']:
             raise ValueError('recovered index must cover more translated chunks than the current one')
         conn.execute('INSERT INTO embedding_sets VALUES (?, ?, ?, ?, ?)',
                      (embedding_set.embedding_set_id, embedding_set.translation_revision_id,
@@ -580,6 +607,7 @@ def publish_recovered_index(db_path: str, job_id: str, embedding_set: EmbeddingS
                      'translation_revision_id, job_id, chunk_count, is_default) VALUES (?, ?, ?, ?, ?, ?, 1)',
                      (embedding_set.embedding_set_id, lock['version_id'], old['parse_revision_id'],
                       embedding_set.translation_revision_id, job_id, chunk_count))
+        _insert_search_index_chunks(conn, embedding_set.embedding_set_id, published_chunk_ids)
         conn.execute("UPDATE processing_jobs SET status='ready', stage='index', limitations=?, updated_at=? "
                      'WHERE job_id=?', (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
         conn.execute('DELETE FROM translation_recovery_locks WHERE job_id=?', (job_id,))

@@ -275,16 +275,9 @@ CREATE TABLE IF NOT EXISTS search_index_chunks (
     chunk_id TEXT NOT NULL,
     PRIMARY KEY (embedding_set_id, chunk_id)
 );
--- 임베딩 세트를 만드는 순간(색인 게시와 같은 트랜잭션) 그 번역 리비전의 성공 청크 집합을 기록한다.
-CREATE TRIGGER IF NOT EXISTS trg_embedding_set_chunks AFTER INSERT ON embedding_sets
-BEGIN
-    INSERT OR IGNORE INTO search_index_chunks (embedding_set_id, chunk_id)
-    SELECT NEW.embedding_set_id, r.chunk_id
-    FROM translation_results r
-    JOIN translation_revisions t ON t.translation_revision_id = r.translation_revision_id
-    JOIN chunks c ON c.chunk_id = r.chunk_id AND c.parse_revision_id = t.parse_revision_id
-    WHERE r.translation_revision_id = NEW.translation_revision_id AND r.failure_code IS NULL;
-END;
+-- 게시 함수가 벡터 저장소에서 검증한 정확한 ID 집합을 게시 트랜잭션 안에서 기록한다.
+-- 이전 버전의 자동 추론 트리거는 translated_text가 없는 행까지 포함할 수 있으므로 제거한다.
+DROP TRIGGER IF EXISTS trg_embedding_set_chunks;
 -- 이 기능 이전에 만든 임베딩 세트의 집합은 init_db가 번역 결과 이관 뒤에 게시 기록과 맞는지 확인하고 채운다(_migrate_search_index_chunks).
 CREATE TABLE IF NOT EXISTS verification_runs (
     run_id TEXT PRIMARY KEY,
@@ -453,11 +446,11 @@ def _migrate_quiz_attempt_seq(conn: sqlite3.Connection) -> None:
 def _migrate_search_index_chunks(conn: sqlite3.Connection) -> None:
     """게시된 색인의 성공 청크 집합(search_index_chunks)을 채운다. 반복 실행해도 같은 결과다.
 
-    번역 결과 이관이 끝난 뒤에 실행한다. 일부만 기록된 집합도 처리하되, 복원 근거가 게시 기록에 맞을 때만 채운다:
+    번역 결과 이관이 끝난 뒤에 실행한다. 복원 근거가 게시 기록에 맞을 때만 정확한 집합으로 교정한다:
     - 임베딩 세트의 번역 리비전·파싱 리비전이 게시 기록(search_indexes)과 같고,
-    - 그 번역 리비전의 성공 청크(같은 파싱 리비전 소속) 수가 게시 당시 chunk_count와 같고,
-    - 이미 기록된 멤버가 모두 그 후보 안에 있다.
-    하나라도 맞지 않으면 임의로 멤버를 추가하지 않고 그대로 둔다.
+    - 그 번역 리비전의 성공 청크(같은 파싱 리비전 소속) 수가 게시 당시 chunk_count와 같다.
+    두 근거가 맞으면 구버전 트리거가 넣은 translated_text 없는 멤버를 포함해 기존 행을 후보 집합으로 교체한다.
+    하나라도 맞지 않으면 과거 집합을 추측하지 않고 그대로 둔다.
     """
     with conn:
         published = conn.execute(
@@ -474,12 +467,15 @@ def _migrate_search_index_chunks(conn: sqlite3.Connection) -> None:
                 'SELECT r.chunk_id FROM translation_results r JOIN chunks c ON c.chunk_id=r.chunk_id '
                 'AND c.parse_revision_id=? WHERE r.translation_revision_id=? AND r.failure_code IS NULL '
                 'AND r.translated_text IS NOT NULL', (row['index_parse'], row['index_translation']))}
+            if len(candidates) != row['chunk_count']:
+                continue
             members = {r[0] for r in conn.execute(
                 'SELECT chunk_id FROM search_index_chunks WHERE embedding_set_id=?', (row['embedding_set_id'],))}
-            if len(candidates) != row['chunk_count'] or not members <= candidates:
+            if members == candidates:
                 continue
-            conn.executemany('INSERT OR IGNORE INTO search_index_chunks (embedding_set_id, chunk_id) VALUES (?, ?)',
-                             [(row['embedding_set_id'], chunk_id) for chunk_id in sorted(candidates - members)])
+            conn.execute('DELETE FROM search_index_chunks WHERE embedding_set_id=?', (row['embedding_set_id'],))
+            conn.executemany('INSERT INTO search_index_chunks (embedding_set_id, chunk_id) VALUES (?, ?)',
+                             [(row['embedding_set_id'], chunk_id) for chunk_id in sorted(candidates)])
 
 
 def _migrate_search_indexes(conn: sqlite3.Connection) -> None:

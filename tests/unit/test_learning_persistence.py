@@ -40,7 +40,8 @@ def make_batch(chunks, revision='t1', translations=None, failures=()):
 def publish(db, chunks):
     repo.save_translation_batch(db, make_batch(chunks))
     repo.claim_ingestion_job(db, ProcessingJob('job', 'v1'))
-    repo.publish_search_index(db, 'v1', 'p1', EmbeddingSet('idx', 't1', 'fake', 2), 'job', 2, [])
+    repo.publish_search_index(db, 'v1', 'p1', EmbeddingSet('idx', 't1', 'fake', 2), 'job',
+                              [chunk.chunk_id for chunk in chunks], [])
     context = LearningContext('ctx', 'v1', 'p1', 't1', known_concepts=['어텐션'], embedding_set_id='idx')
     repo.create_learning_context(db, context)
     return context
@@ -146,7 +147,7 @@ def test_published_translation_cannot_fill_new_gaps(setup_db):
     db, chunks = setup_db
     repo.save_translation_batch(db, make_batch(chunks, failures=('c2',)))
     repo.claim_ingestion_job(db, ProcessingJob('job', 'v1'))
-    repo.publish_search_index(db, 'v1', 'p1', EmbeddingSet('idx', 't1', 'fake', 2), 'job', 1, [])
+    repo.publish_search_index(db, 'v1', 'p1', EmbeddingSet('idx', 't1', 'fake', 2), 'job', ['c1'], [])
     with pytest.raises(ValueError):
         repo.save_translation_batch(db, make_batch([chunks[1]]))
     assert repo.get_chunk(db, 'c2').text is None
@@ -159,6 +160,6 @@ def test_publish_count_and_job_mismatch_roll_back(setup_db):
     with pytest.raises(ValueError):
         repo.claim_ingestion_job(db, ProcessingJob('parallel', 'v1'))
     with pytest.raises(ValueError):
-        repo.publish_search_index(db, 'v1', 'p1', EmbeddingSet('idx', 't1', 'fake', 2), 'job', 1, [])
+        repo.publish_search_index(db, 'v1', 'p1', EmbeddingSet('idx', 't1', 'fake', 2), 'job', ['a'], [])
     assert repo.get_search_index(db, 'v1') is None
     assert repo.get_job(db, 'job').status.value == 'processing'

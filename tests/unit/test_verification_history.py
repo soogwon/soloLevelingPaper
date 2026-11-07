@@ -273,7 +273,7 @@ def test_published_set_is_recorded_at_publication_and_backfilled_for_old_databas
                 "SELECT chunk_id FROM search_index_chunks WHERE embedding_set_id='idx'"))
     assert members() == ['c1', 'c2']
     with closing(get_connection(env)) as conn, conn:  # 이 기능 이전의 DB를 흉내
-        conn.execute('DROP TRIGGER trg_embedding_set_chunks')
+        conn.execute('DROP TRIGGER IF EXISTS trg_embedding_set_chunks')
         conn.execute('DELETE FROM search_index_chunks')
     init_db(env)
     init_db(env)
@@ -302,13 +302,13 @@ def test_chunk_recovered_by_translation_recovery_can_be_cited_only_after_the_new
     repo.save_translation_batch(db, batch('t1', [
         ChunkTranslationResult(req('c1', 'First.'), '첫째.'),
         ChunkTranslationResult(req('c2', 'Second.'), None, TranslationFailureCode.PROVIDER_UNAVAILABLE)]))
-    repo.publish_search_index(db, 'v1', 'p1', EmbeddingSet('e1', 't1', 'm', 2), 'j1', 1, [])
+    repo.publish_search_index(db, 'v1', 'p1', EmbeddingSet('e1', 't1', 'm', 2), 'j1', ['c1'], [])
     repo.create_learning_context(db, LearningContext('old', 'v1', 'p1', 't1', known_concepts=[], embedding_set_id='e1'))
     old = record(context_id='old', embedding_set_id='e1', claims=[claim(refs=[ref('c2', 'Second.')])])
     assert vh.save_verification_history(db, old).outcome is HistoryOutcome.REFERENCE_MISMATCH  # 게시되지 않은 청크
     repo.claim_translation_recovery(db, ProcessingJob('j2', 'v1', JobStatus.PROCESSING, JobStage.TRANSLATE), 't1')
     repo.save_recovery_translation(db, 'j2', batch('t2', [ChunkTranslationResult(req('c2', 'Second.'), '둘째.')]))
-    repo.publish_recovered_index(db, 'j2', EmbeddingSet('e2', 't2', 'm', 2), 2, [])
+    repo.publish_recovered_index(db, 'j2', EmbeddingSet('e2', 't2', 'm', 2), ['c1', 'c2'], [])
     repo.create_learning_context(db, LearningContext('new', 'v1', 'p1', 't2', known_concepts=[], embedding_set_id='e2'))
     new = record('r2', context_id='new', translation_revision_id='t2', embedding_set_id='e2',
                  claims=[claim(refs=[ref('c1', 'First.'), ref('c2', 'Second.')])])
