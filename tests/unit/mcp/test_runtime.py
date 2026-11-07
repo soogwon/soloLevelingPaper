@@ -118,6 +118,7 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
     assert connected.contexts.target is services.search.contexts
     assert isinstance(connected.detail.target, runtime.PaperDetailService)
     assert isinstance(connected.detail.reader, runtime.SQLitePaperDetailReader)
+    assert connected.detail.target.annotations is connected.annotations.target
     assert isinstance(connected.dashboard.target, runtime.DashboardReader)
     assert isinstance(connected.reflection.target, runtime.ReflectionService)
     assert connected.reflection.db_path == str(runtime.runtime_paths(values).db_path)

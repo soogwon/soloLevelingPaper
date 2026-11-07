@@ -11,6 +11,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from solo_leveling.infrastructure.database import repository as repo
+from solo_leveling.application.annotations.service import AnnotationService
 from tests.unit.test_learning_persistence import setup_db, publish
 
 
@@ -19,6 +20,7 @@ def test_dashboard_reads_saved_context_over_stdio(setup_db, tmp_path):
     context = publish(db, chunks)
     repo.complete_step(db, context.context_id, 'preview')
     repo.create_learning_context(db, replace(context, context_id='other', goal='skim'))
+    note = AnnotationService(db).create('ctx', 'note', '상세 조회 연결 확인').annotation
     root = Path(__file__).resolve().parents[2]
     environment = dict(os.environ, PYTHONPATH=str(root / 'src'), DATA_ROOT=str(tmp_path),
         SQLITE_FILENAME=Path(db).name, LOCAL_ONLY='true', ALLOW_EXTERNAL_API='false',
@@ -46,6 +48,8 @@ def test_dashboard_reads_saved_context_over_stdio(setup_db, tmp_path):
                     for key in ('context_id', 'version_id', 'paper_id'):
                         assert detail.structuredContent[key] == data.structuredContent[key]
                     assert detail.structuredContent['summary'] is None
+                    assert detail.structuredContent['annotation_page']['context_id'] == 'ctx'
+                    assert [item['annotation_id'] for item in detail.structuredContent['annotation_page']['items']] == [note.annotation_id]
                     assert json.loads(detail.content[0].text) == detail.structuredContent
                     other = await session.call_tool('get_learning_dashboard', {'context_id': 'other'})
                     assert not other.isError
