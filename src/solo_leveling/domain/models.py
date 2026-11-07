@@ -113,6 +113,21 @@ class Chunk:
     section_id: Optional[str] = None  # 모르면 None
 
 
+@dataclass(frozen=True)
+class PaperSection:
+    """한 파싱 리비전에 고정된 섹션 카탈로그 항목."""
+    section_id: str
+    parse_revision_id: str
+    title: str
+    ordinal: int
+    level: int
+    start_pdf_page: int
+    end_pdf_page: int
+    parent_section_id: Optional[str] = None
+    start_chunk_index: Optional[int] = None
+    end_chunk_index: Optional[int] = None
+
+
 @dataclass
 class EmbeddingSet:
     """모델·차원·전처리 설정 단위. 바뀌면 새 embedding_set_id."""

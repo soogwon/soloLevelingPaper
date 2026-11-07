@@ -57,6 +57,26 @@ CREATE TABLE IF NOT EXISTS chunks (
     section_id TEXT
 );
 
+CREATE TABLE IF NOT EXISTS sections (
+    parse_revision_id TEXT NOT NULL REFERENCES parse_revisions(parse_revision_id),
+    section_id TEXT NOT NULL,
+    title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+    parent_section_id TEXT,
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 1),
+    level INTEGER NOT NULL CHECK (level >= 1),
+    start_pdf_page INTEGER NOT NULL CHECK (start_pdf_page >= 1),
+    end_pdf_page INTEGER NOT NULL CHECK (end_pdf_page >= start_pdf_page),
+    start_chunk_index INTEGER,
+    end_chunk_index INTEGER,
+    PRIMARY KEY (parse_revision_id, section_id),
+    UNIQUE (parse_revision_id, ordinal),
+    FOREIGN KEY (parse_revision_id, parent_section_id)
+        REFERENCES sections(parse_revision_id, section_id),
+    CHECK (start_chunk_index IS NULL OR start_chunk_index >= 0),
+    CHECK ((start_chunk_index IS NULL) = (end_chunk_index IS NULL)),
+    CHECK (end_chunk_index IS NULL OR end_chunk_index >= start_chunk_index)
+);
+
 CREATE TABLE IF NOT EXISTS embedding_sets (
     embedding_set_id TEXT PRIMARY KEY,
     translation_revision_id TEXT NOT NULL REFERENCES translation_revisions(translation_revision_id),
@@ -76,6 +96,7 @@ CREATE TABLE IF NOT EXISTS processing_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_parse_revision ON chunks(parse_revision_id);
+CREATE INDEX IF NOT EXISTS idx_sections_revision_order ON sections(parse_revision_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_versions_paper ON paper_versions(paper_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_versions_paper_hash ON paper_versions(paper_id, file_hash);
 CREATE INDEX IF NOT EXISTS idx_jobs_version ON processing_jobs(version_id);
