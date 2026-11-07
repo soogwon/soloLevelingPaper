@@ -24,6 +24,7 @@ from solo_leveling.application.paper_detail.service import PaperDetailService
 from solo_leveling.application.reflection.service import ReflectionService
 from solo_leveling.infrastructure.retrieval.paper_detail import SQLitePaperDetailReader
 from solo_leveling.application.annotations.service import AnnotationService
+from .question_card import QuestionKeys
 from .server import MCPServices, create_server
 from .quiz_tools import QuizContractAdapter, StoredQuizService
 from .ingestion import IngestionServices, LocalIngestionManager
@@ -156,6 +157,7 @@ def build_runtime_server(values: Mapping[str, str]):
                         report('RUNTIME_SHUTDOWN_DEFERRED')
 
         server = create_server(MCPServices(
+            question_keys=gate.wrap(QuestionKeys(paths.data_root.resolve() / 'card-question-keys.sqlite3')),
             executions=gate.wrap(services.executions),
             answer=gate.wrap(services.answer), evidence=gate.wrap(services.evidence),
             ingestion=gate.wrap(ingestion), contexts=gate.wrap(services.search.contexts),
