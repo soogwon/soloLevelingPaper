@@ -15,6 +15,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
       el('records').replaceChildren();
     }
     el('content').hidden = true;
+    el('insights')?.replaceChildren();
     el('toc').hidden = true;
     el('toc-items').replaceChildren();
     el('toc-status').textContent = '';
@@ -37,6 +38,65 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
       && Number.isInteger(e.pdf_page) && e.pdf_page > 0
       && (e.section_id === undefined || optional(e.section_id))
       && (e.file_display_name === undefined || typeof e.file_display_name === 'string');
+  }
+  function validInsight(record, data, key) {
+    if (!record || record.parse_revision_id !== data.parse_revision_id
+      || (record.translation_revision_id !== null && record.translation_revision_id !== data.translation_revision_id)
+      || ![record.insight_id, record.text, record.chunk_id, record.quote_original].every(nonempty)
+      || (data.scope !== 'paper' && record.section_id !== data.scope)
+      || !Number.isSafeInteger(record.pdf_page) || record.pdf_page < 1
+      || !Number.isSafeInteger(record.start_offset) || record.start_offset < 0
+      || !Number.isSafeInteger(record.end_offset)
+      || record.end_offset - record.start_offset !== Array.from(record.quote_original).length) return false;
+    if (record.content_kind === 'generated') return ['model','user'].includes(record.producer);
+    return record.content_kind === 'extracted' && record.producer === 'extractor'
+      && (key === 'keywords' ? record.quote_original.includes(record.text) : record.quote_original === record.text);
+  }
+  function showInsights(data, panel) {
+    const groups = [['keywords', '키워드'], ['important_sentences', '중요 문장']];
+    const unavailable = [];
+    for (const [key, label] of groups) {
+      const records = data[key] === undefined ? [] : data[key];
+      if (!Array.isArray(records)) {
+        unavailable.push(label + '의 출처를 확인할 수 없습니다.');
+        continue;
+      }
+      if (!records.length) {
+        unavailable.push('저장된 ' + label + ' 없음');
+        continue;
+      }
+      const heading = doc.createElement('h2');
+      heading.textContent = label;
+      const list = doc.createElement('ul');
+      for (const record of records) {
+        if (!validInsight(record, data, key)) {
+          unavailable.push(label + '의 일부 출처를 확인할 수 없습니다.');
+          continue;
+        }
+        const item = doc.createElement('li');
+        const source = doc.createElement('blockquote');
+        source.textContent = record.quote_original;
+        const kind = record.content_kind === 'extracted' ? '원문 추출'
+          : record.producer === 'model' ? 'AI 생성' : '사용자 작성';
+        item.textContent = `${kind} · ${record.text} · PDF ${record.pdf_page}페이지`;
+        const provenance = doc.createElement('details');
+        const summary = doc.createElement('summary');
+        summary.textContent = '원문 출처 정보';
+        const info = doc.createElement('p');
+        info.textContent = [
+          `청크 ${record.chunk_id} · 원문 구간 [${record.start_offset}, ${record.end_offset})`,
+          `파싱 리비전 ${record.parse_revision_id}`,
+          record.translation_revision_id && `번역 리비전 ${record.translation_revision_id}`,
+          record.producer_version && `작성 버전 ${record.producer_version}`,
+          record.collection_created_at && `저장 시각 ${record.collection_created_at}`,
+        ].filter(Boolean).join(' · ');
+        provenance.append(summary, info);
+        item.append(source, provenance);
+        list.append(item);
+      }
+      if (list.children.length) panel.append(heading, list);
+    }
+    return [...new Set(unavailable)].join(' · ');
   }
   function display(result) {
     clear('표시할 근거가 없습니다. 채팅의 응답을 확인하세요.');
@@ -95,7 +155,9 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
         el('toc-items').append(item);
       }
       el('metadata').textContent = `${data.title || data.file_display_name} · 범위: ${data.scope} · 섹션 ID: ${data.section_ids.join(', ') || '없음'}`;
-      el('availability').textContent = '키워드·중요 문장의 화면 표시는 아직 지원하지 않습니다. 채팅의 도구 응답을 확인하세요. 섹션 ID는 제목이 아닙니다.';
+      const insights = el('insights');
+      el('availability').textContent = insights ? showInsights(data, insights)
+        : '키워드·중요 문장은 논문 상세 카드를 열어 확인하세요.';
       if (claims.length) el('verification').textContent = 'structural_only — 저장 요약의 근거 연결을 확인합니다. 의미 일치 검증은 아닙니다.';
       el('answer').textContent = data.summary ? `저장 요약 총 ${data.summary.total_items}개 항목 중 ${claims.length}개 표시` : '저장된 요약이 없습니다. 자동 생성하지 않습니다.';
       if (data.summary?.next_offset != null) {
