@@ -47,3 +47,31 @@ def test_catalog_rejects_invalid_page_range_and_cross_revision_parent(tmp_path):
         insert_sections(db, [PaperSection("s1", "revision", "Too far", 1, 1, 1, 5)])
     with pytest.raises(ValueError):
         insert_sections(db, [PaperSection("s1", "revision", "Child", 1, 2, 1, 1, "unknown")])
+
+
+@pytest.mark.parametrize("parents", [
+    {"a": "a"},
+    {"a": "b", "b": "a"},
+    {"a": "b", "b": "c", "c": "a"},
+])
+def test_cycle_rejects_entire_batch(tmp_path, parents):
+    db = _database(tmp_path)
+    insert_sections(db, [PaperSection("existing", "revision", "Existing", 1, 1, 1, 1)])
+    batch = [PaperSection("root", "revision", "Root", 2, 1, 1, 1)]
+    batch.extend(PaperSection(key, "revision", key, ordinal, 2, 1, 1, parent)
+                 for ordinal, (key, parent) in enumerate(parents.items(), 3))
+    with pytest.raises(ValueError, match="cycle"):
+        insert_sections(db, batch)
+    assert [s.section_id for s in get_section_catalog(db, "version", "revision")] == ["existing"]
+
+
+def test_valid_tree_accepts_children_before_parents(tmp_path):
+    db = _database(tmp_path)
+    sections = [
+        PaperSection("root", "revision", "Root", 1, 1, 1, 4),
+        PaperSection("branch", "revision", "Branch", 2, 2, 1, 3, "root"),
+        PaperSection("leaf", "revision", "Leaf", 3, 3, 1, 2, "branch"),
+        PaperSection("sibling", "revision", "Sibling", 4, 2, 4, 4, "root"),
+    ]
+    insert_sections(db, sections[::-1])
+    assert get_section_catalog(db, "version", "revision") == sections

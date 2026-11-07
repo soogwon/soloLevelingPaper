@@ -224,12 +224,7 @@ def _ingest_pages(
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                     [(c.chunk_id, c.parse_revision_id, c.chunk_index, c.original_text, c.text,
                       c.translation_revision_id, c.printed_page_label, c.pdf_page, c.section_id) for c in chunks])
-                conn.executemany('''INSERT INTO sections
-                    (parse_revision_id, section_id, title, parent_section_id, ordinal, level,
-                     start_pdf_page, end_pdf_page, start_chunk_index, end_chunk_index)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                    [(s.parse_revision_id, s.section_id, s.title, s.parent_section_id, s.ordinal, s.level,
-                      s.start_pdf_page, s.end_pdf_page, s.start_chunk_index, s.end_chunk_index) for s in sections])
+                repo.insert_sections_in_transaction(conn, sections)
         if not chunks:
             limitations = ['extraction_empty']
         else:
