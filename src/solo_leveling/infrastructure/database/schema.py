@@ -239,6 +239,8 @@ CREATE TABLE IF NOT EXISTS annotations (
 );
 CREATE INDEX IF NOT EXISTS idx_annotations_context ON annotations(context_id, step, created_at);
 CREATE INDEX IF NOT EXISTS idx_annotations_page ON annotations(context_id, created_at, annotation_id);
+-- 전체 기록함(#206)은 모든 학습 맥락을 최신순 키셋으로 훑는다.
+CREATE INDEX IF NOT EXISTS idx_annotations_library_page ON annotations(created_at DESC, annotation_id DESC);
 CREATE TABLE IF NOT EXISTS annotation_segments (
     annotation_id TEXT NOT NULL REFERENCES annotations(annotation_id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
