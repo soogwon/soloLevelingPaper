@@ -44,6 +44,78 @@ def preload_embedding_library():
     load()
 
 
+class _BestEffortLog:
+    """파일 쓰기 실패를 기억하고 요청 처리는 계속한다. 다른 출력으로 우회하지 않는다."""
+    def __init__(self, output):
+        self.output = output
+        self.failed = False
+
+    def write(self, text):
+        if not self.failed:
+            try:
+                return self.output.write(text)
+            except OSError:
+                self.failed = True
+        return len(text)
+
+    def flush(self):
+        if not self.failed:
+            try:
+                self.output.flush()
+            except OSError:
+                self.failed = True
+
+
+def run_safe_bundle(args):
+    """안전 로그의 모든 writer가 종료된 뒤에만 종료 기록을 게시한다."""
+    from solo_leveling.infrastructure.log_retention.contracts import BundleId, ClosedFile
+    from solo_leveling.infrastructure.log_retention.posix import PosixBundleStore
+
+    store = PosixBundleStore()
+    bundle = BundleId('mcp', uuid4().hex)
+    acquired = store.try_acquire_writer(args.log_dir, bundle)
+    lease = acquired.lease
+    output = None
+    path = None
+    kind = 'detail' if args.detailed_diagnostics else 'safe'
+    try:
+        if lease is not None:
+            try:
+                path, output = lease.open_log(kind)
+            except (OSError, ValueError):
+                pass
+        if output is None:
+            # 새 규약 파일 생성에 실패해도 원문을 다른 경로에 기록하지 않는다.
+            with open(os.devnull, 'w', encoding='utf-8') as discarded:
+                with diagnostic_stderr(discarded, raw=False, detailed=args.detailed_diagnostics):
+                    return run_diagnostics(args, None, discarded)
+        sink = _BestEffortLog(output)
+        with diagnostic_stderr(sink, raw=False, detailed=args.detailed_diagnostics):
+            result = run_diagnostics(args, path, sink)
+        sink.flush()
+        try:
+            os.fsync(output.fileno())
+            size = os.fstat(output.fileno()).st_size
+            output.close()
+        except OSError:
+            sink.failed = True
+        # run_diagnostics의 cleanup_scope, stderr 복원과 파일 닫기가 끝난 시점이다.
+        if not sink.failed:
+            store.publish_closed(lease, (ClosedFile(kind, path.name, size),), datetime.now(timezone.utc))
+        return result
+    finally:
+        if output is not None:
+            try:
+                output.close()
+            except OSError:
+                pass
+        if lease is not None:
+            try:
+                lease.release()
+            except OSError:
+                pass
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='MCP stderr 파일 수집 실행기')
     parser.add_argument('--log-dir', type=Path)
@@ -63,6 +135,8 @@ def main(argv=None):
         if args.log_dir is None:
             from solo_leveling.interfaces.mcp.runtime import load_environment, runtime_paths
             args.log_dir = runtime_paths(load_environment()).data_root / 'diagnostics'
+        if os.name == 'posix' and not args.collect_raw_logs:
+            return run_safe_bundle(args)
         args.log_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
         path = args.log_dir.resolve() / f'mcp-{stamp}-{uuid4().hex}.log'

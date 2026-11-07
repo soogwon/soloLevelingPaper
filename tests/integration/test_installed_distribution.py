@@ -108,6 +108,6 @@ asyncio.run(asyncio.wait_for(run(), timeout=60))
                             text=True, encoding='utf-8', timeout=90)
     assert result.returncode == 0, result.stderr
     assert (tmp_path / 'data/solo_leveling.sqlite3').is_file()
-    logs = list((tmp_path / 'data/diagnostics').glob('mcp-*.log'))
+    logs = list((tmp_path / 'data/diagnostics').glob('*.log'))
     assert logs
     assert all('test-only' not in path.read_text(encoding='utf-8') for path in logs)

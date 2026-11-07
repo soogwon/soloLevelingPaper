@@ -109,7 +109,7 @@ def test_close_failure_logs_preserve_real_mcp_stdio(tmp_path, entry, detailed):
                         assert json.loads(result.content[0].text) == {'ok': True, 'mode': mode}
 
     asyncio.run(asyncio.wait_for(scenario(), timeout=25))
-    text = next((data / 'diagnostics').glob('mcp-*.log')).read_text(encoding='utf-8')
+    text = next((data / 'diagnostics').glob('*.log')).read_text(encoding='utf-8')
     rows = [json.loads(line) for line in text.splitlines()]
     assert [row for row in rows if row['event'] == 'chroma_close'] == [
         {'event': 'chroma_close', 'code': 'CHROMA_CLOSE_FAILED'},
