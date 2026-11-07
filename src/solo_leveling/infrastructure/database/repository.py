@@ -38,7 +38,7 @@ from solo_leveling.domain.paper_summary import (
     PAPER_SCOPE, PaperSummary, SummaryItem, SummaryValidationError,
 )
 from solo_leveling.domain.paper_insight import (
-    PaperInsight, PaperInsightCollection, PaperInsightInput, PaperInsightValidationError,
+    PaperInsight, PaperInsightCollection, PaperInsightInput, PaperInsightValidationError, PaperInsightConflictError,
 )
 from solo_leveling.domain.quiz import Quiz, QuizQuestion, QuizValidationError
 from solo_leveling.domain.quiz_attempt import (
@@ -1134,18 +1134,36 @@ def get_summary_evidence(db_path: str, summary: PaperSummary) -> GetEvidenceResu
 
 
 # ── 출처 연결형 키워드·중요 문장 (#229) ───────────────────────
+_UNCHECKED_INSIGHT_COLLECTION = object()
+
+
 def save_paper_insights(db_path: str, context_id: str, scope: str,
-                        items: List[PaperInsightInput]) -> PaperInsightCollection:
-    """검증한 항목 묶음을 저장하며 같은 맥락·범위의 기존 묶음을 원자적으로 교체한다."""
+                        items: List[PaperInsightInput], *,
+                        expected_collection_id=_UNCHECKED_INSIGHT_COLLECTION,
+                        expected_context=None) -> PaperInsightCollection:
+    """검증 후 원자 교체. 선택한 예상 묶음/맥락은 같은 쓰기 트랜잭션에서 확인한다.
+
+    expected_collection_id 생략은 기존 교체 계약, None은 신규 저장만 허용,
+    문자열은 해당 묶음일 때만 교체한다. expected_context는 version/parse/translation/index 순이다.
+    """
     items = tuple(items)
     if not items:
         raise PaperInsightValidationError('저장할 항목이 없습니다.')
+    if (expected_collection_id is not _UNCHECKED_INSIGHT_COLLECTION and expected_collection_id is not None
+            and (not isinstance(expected_collection_id, str) or not expected_collection_id.strip())):
+        raise PaperInsightValidationError('예상 항목 묶음 ID가 올바르지 않습니다.')
+    if expected_context is not None and (not isinstance(expected_context, tuple) or len(expected_context) != 4
+            or any(not isinstance(value, str) or not value.strip() for value in expected_context)):
+        raise PaperInsightValidationError('예상 학습 맥락 연결이 올바르지 않습니다.')
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
-        context = conn.execute('''SELECT version_id, parse_revision_id, translation_revision_id
+        context = conn.execute('''SELECT version_id, parse_revision_id, translation_revision_id, embedding_set_id
             FROM learning_contexts WHERE context_id=?''', (context_id,)).fetchone()
         if context is None:
             raise ResourceNotFoundError('context not found')
+        if expected_context is not None and tuple(context[key] for key in (
+                'version_id', 'parse_revision_id', 'translation_revision_id', 'embedding_set_id')) != expected_context:
+            raise DataIntegrityError('paper insight context changed')
         if scope != PAPER_SCOPE and not conn.execute(
                 'SELECT 1 FROM chunks WHERE parse_revision_id=? AND section_id=? LIMIT 1',
                 (context['parse_revision_id'], scope)).fetchone():
@@ -1168,6 +1186,9 @@ def save_paper_insights(db_path: str, context_id: str, scope: str,
                 raise PaperInsightValidationError('항목의 번역 출처를 확인할 수 없습니다.')
         old = conn.execute('SELECT collection_id FROM paper_insight_collections '
                            'WHERE context_id=? AND scope=?', (context_id, scope)).fetchone()
+        if (expected_collection_id is not _UNCHECKED_INSIGHT_COLLECTION
+                and (old['collection_id'] if old else None) != expected_collection_id):
+            raise PaperInsightConflictError('항목 묶음이 변경되었습니다. 다시 조회해주세요.')
         if old:
             conn.execute('DELETE FROM paper_insights WHERE collection_id=?', (old['collection_id'],))
             conn.execute('DELETE FROM paper_insight_collections WHERE collection_id=?', (old['collection_id'],))
