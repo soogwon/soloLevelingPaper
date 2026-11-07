@@ -76,6 +76,7 @@ class TargetCheck(str, Enum):
     OK = 'ok'
     NOT_A_DATABASE = 'not_a_database'     # SQLite 파일이 아니다.
     MISSING_TABLES = 'missing_tables'     # 검증 이력 테이블이 없다(다른 데이터베이스일 수 있다).
+    INVALID_SCHEMA = 'invalid_schema'     # 이름은 같아도 필수 컬럼·PK·FK 계약이 다르다.
     LOCKED = 'locked'
 
 

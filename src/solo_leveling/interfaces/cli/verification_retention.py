@@ -5,8 +5,8 @@
   reclaim 행 삭제로 비어 있는 파일 공간을 회수한다(VACUUM). --yes가 있어야 실행된다.
           WAL이 남아 디스크에 공간이 돌아가지 않으면 wal_not_truncated로 알리고 성공으로 보고하지 않는다.
 
-변경 전에 대상이 검증 이력 테이블을 가진 SQLite 파일인지 읽기 전용으로 확인한다(아니면 invalid_target).
-백업 중 원본이 잠겨 있으면 --backup-lock-timeout초(기본 30) 뒤에 멈춘다(backup_locked).
+변경 전에 대상이 필수 검증 이력 스키마를 가진 SQLite 파일인지 읽기 전용으로 확인한다(아니면 failed).
+백업 중 원본이 잠겨 있으면 --backup-lock-timeout초(기본 30) 뒤에 멈춘다(locked).
 
 보존 기간(--older-than-days)은 기본값이 없다. 출력에는 건수·기간·결과 코드만 쓴다.
 """
@@ -47,8 +47,8 @@ def main(argv=None) -> int:
         _out(result='locked')
         return 1
     if target is not TargetCheck.OK:
-        _out(result='invalid_target', reason=target.value)
-        return 2
+        _out(result='failed')
+        return 1
     try:
         if args.command in ('plan', 'run'):
             if args.older_than_days is None:
@@ -85,7 +85,7 @@ def main(argv=None) -> int:
         _out(result='backup_exists')
         return 2
     except store.BackupLockTimeout:
-        _out(result='backup_locked')
+        _out(result='locked')
         return 1
     except sqlite3.Error as error:
         # 원본 예외 문구·경로는 출력하지 않는다. 실제 잠금만 재시도할 수 있는 상황(locked)이고 나머지는 failed다.
