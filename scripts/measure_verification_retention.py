@@ -6,6 +6,7 @@ from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
+import os
 import platform
 from pathlib import Path
 import sqlite3
@@ -49,7 +50,11 @@ def source_fingerprint(source):
 def copy_offline_source(source, destination):
     expected = source_fingerprint(source)
     digest = sha256()
-    with source.open('rb') as src, destination.open('xb') as dst:
+
+    def private_opener(path, flags):
+        return os.open(path, flags, 0o600)
+
+    with source.open('rb') as src, open(destination, 'xb', opener=private_opener) as dst:
         for block in iter(lambda: src.read(1024*1024), b''):
             digest.update(block)
             dst.write(block)
@@ -108,7 +113,7 @@ def measure(source, output, copies=100):
     if not source.is_file() or type(copies) is not int or not 1 <= copies <= 10000:
         raise ValueError('INVALID_INPUT')
     # 기존 디렉터리는 재사용하지 않는다. 복사 대상 혼동과 덮어쓰기를 방지한다.
-    output.mkdir(parents=True, exist_ok=False)
+    output.mkdir(mode=0o700, parents=True, exist_ok=False)
     db = output/'measurement.sqlite3'
     # 원본은 파일 읽기만 한다. 운영 앱이 닫힌 오프라인 사본을 사용해야 한다.
     source_before = copy_offline_source(source, db)

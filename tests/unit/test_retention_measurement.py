@@ -1,6 +1,8 @@
 """측정 실행기는 원본 대신 새 복사본에서만 쓰기·정리한다."""
 
 from hashlib import sha256
+import os
+import stat
 import sqlite3
 
 import pytest
@@ -152,3 +154,27 @@ def test_digest_distinguishes_blob_from_text(tmp_path):
     with sqlite3.connect(db) as conn:
         conn.execute("UPDATE payload SET value='ff'")
     assert measurement.protected_digest(db) != before
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX 파일 권한 검증')
+@pytest.mark.parametrize('has_samples', [False, True], ids=['after-copy-failure', 'success'])
+def test_private_measurement_files_under_shared_umask(env, tmp_path, has_samples):
+    if has_samples:
+        seed(env, [('sample', 1)])
+    source = Path(env)
+    source.chmod(0o600)
+    output = tmp_path / 'measurement'
+    previous = os.umask(0o022)
+    try:
+        if has_samples:
+            measure(source, output, copies=1)
+        else:
+            with pytest.raises(ValueError, match='NO_SAMPLES'):
+                measure(source, output, copies=1)
+    finally:
+        os.umask(previous)
+    assert stat.S_IMODE(output.stat().st_mode) == 0o700
+    assert stat.S_IMODE((output / 'measurement.sqlite3').stat().st_mode) == 0o600
+    assert stat.S_IMODE(source.stat().st_mode) == 0o600
+    if has_samples:
+        assert stat.S_IMODE((output / 'before-cleanup.sqlite3').stat().st_mode) == 0o600
