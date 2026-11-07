@@ -198,3 +198,25 @@ test('저장 결과 미확정 뒤에는 근거 재선택으로 재시도할 수 
   assert.equal(el('editor').disabled,false);
   assert.match(el('records').textContent,/하이라이트/);
 });
+
+test('근거 없는 맥락 메모를 표시하고 같은 맥락의 다음 페이지를 이어 읽는다', async () => {
+  const {app, el} = setup();
+  const note = {annotation_id:'a', context_id:'ctx', kind:'note', body:'맥락 메모', segments:[]};
+  app.ontoolresult(detailPayload({summary:null, evidence:[], annotation_page:{
+    context_id:'ctx', items:[note], next_cursor:'next',
+  }}));
+  const panel = el('context-records');
+  assert.equal(panel.hidden, false);
+  assert.match(panel.textContent, /학습 맥락에만 저장 · 맥락 메모/);
+  app.callServerTool = async request => {
+    assert.deepEqual(request, {name:'list_annotations', arguments:{request:{context_id:'ctx', cursor:'next'}}});
+    return {structuredContent:{items:[{...note, annotation_id:'b', body:'', kind:'highlight', segments:[{quote_snapshot:'인용'}]}], next_cursor:null}};
+  };
+  await panel.querySelector('button').onclick();
+  assert.equal(panel.querySelectorAll('li').length, 2);
+  assert.match(panel.textContent, /원문 구간 연결 · 인용/);
+  assert.equal(panel.querySelector('button').hidden, true);
+  app.ontoolcancelled();
+  assert.equal(panel.hidden, true);
+  assert.equal(panel.querySelectorAll('li').length, 0);
+});
