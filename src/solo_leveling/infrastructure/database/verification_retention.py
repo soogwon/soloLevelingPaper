@@ -33,6 +33,59 @@ def is_lock_error(error: sqlite3.Error) -> bool:
 
 
 REQUIRED_TABLES = ('verification_runs', 'verification_claims', 'verification_claim_refs')
+REQUIRED_COLUMNS = {
+    'verification_runs': {
+        'run_id': ('TEXT', 0, 1),
+        'context_id': ('TEXT', 1, 0),
+        'version_id': ('TEXT', 1, 0),
+        'parse_revision_id': ('TEXT', 1, 0),
+        'translation_revision_id': ('TEXT', 1, 0),
+        'embedding_set_id': ('TEXT', 1, 0),
+        'model': ('TEXT', 1, 0),
+        'instruction_version': ('TEXT', 1, 0),
+        'elapsed_ms': ('INTEGER', 1, 0),
+        'level': ('TEXT', 1, 0),
+        'failure_code': ('TEXT', 0, 0),
+        'created_at': ('TEXT', 1, 0),
+    },
+    'verification_claims': {
+        'run_id': ('TEXT', 1, 1),
+        'position': ('INTEGER', 1, 2),
+        'claim_id': ('TEXT', 1, 0),
+        'claim_text': ('TEXT', 1, 0),
+        'verdict': ('TEXT', 1, 0),
+        'reason': ('TEXT', 1, 0),
+        'retained': ('INTEGER', 1, 0),
+    },
+    'verification_claim_refs': {
+        'run_id': ('TEXT', 1, 1),
+        'position': ('INTEGER', 1, 2),
+        'ref_position': ('INTEGER', 1, 3),
+        'chunk_id': ('TEXT', 1, 0),
+        'content_hash': ('TEXT', 1, 0),
+    },
+}
+REQUIRED_FOREIGN_KEYS = {
+    'verification_runs': {
+        ('learning_contexts', (('context_id', 'context_id'),), 'CASCADE'),
+        ('paper_versions', (('version_id', 'version_id'),), 'NO ACTION'),
+        ('parse_revisions', (('parse_revision_id', 'parse_revision_id'),), 'NO ACTION'),
+        ('translation_revisions', (('translation_revision_id', 'translation_revision_id'),), 'NO ACTION'),
+        ('embedding_sets', (('embedding_set_id', 'embedding_set_id'),), 'NO ACTION'),
+    },
+    'verification_claims': {
+        ('verification_runs', (('run_id', 'run_id'),), 'CASCADE'),
+    },
+    'verification_claim_refs': {
+        ('verification_claims', (('run_id', 'run_id'), ('position', 'position')), 'CASCADE'),
+        ('chunks', (('chunk_id', 'chunk_id'),), 'RESTRICT'),
+    },
+}
+REQUIRED_PARENT_TABLES = frozenset(
+    foreign_table
+    for contracts in REQUIRED_FOREIGN_KEYS.values()
+    for foreign_table, _columns, _on_delete in contracts
+) - frozenset(REQUIRED_TABLES)
 DEFAULT_BACKUP_LOCK_TIMEOUT = 30.0
 
 
@@ -41,16 +94,38 @@ class BackupLockTimeout(Exception):
 
 
 def check_target(db_path: str) -> TargetCheck:
-    """변경 전에 대상이 이 프로젝트의 검증 이력을 가진 SQLite 파일인지 읽기 전용으로 확인한다. 파일을 만들거나 바꾸지 않는다."""
+    """필수 테이블·컬럼·PK·FK를 읽기 전용으로 확인한다. 파일을 만들거나 바꾸지 않는다."""
     uri = Path(db_path).resolve().as_uri() + '?mode=ro'
     try:
         with closing(sqlite3.connect(uri, uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
             names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not set(REQUIRED_TABLES).union(REQUIRED_PARENT_TABLES).issubset(names):
+                return TargetCheck.MISSING_TABLES
+            for table in REQUIRED_TABLES:
+                columns = {
+                    row['name']: (str(row['type']).upper(), row['notnull'], row['pk'])
+                    for row in conn.execute(f'PRAGMA table_info("{table}")')
+                }
+                if any(columns.get(name) != contract
+                       for name, contract in REQUIRED_COLUMNS[table].items()):
+                    return TargetCheck.INVALID_SCHEMA
+                foreign_keys = {}
+                for row in conn.execute(f'PRAGMA foreign_key_list("{table}")'):
+                    foreign_keys.setdefault(row['id'], []).append(row)
+                actual_foreign_keys = {
+                    (rows[0]['table'], tuple((row['from'], row['to'])
+                                             for row in sorted(rows, key=lambda item: item['seq'])),
+                     rows[0]['on_delete'].upper())
+                    for rows in foreign_keys.values()
+                }
+                if not REQUIRED_FOREIGN_KEYS[table].issubset(actual_foreign_keys):
+                    return TargetCheck.INVALID_SCHEMA
     except sqlite3.Error as error:
         if is_lock_error(error):
             return TargetCheck.LOCKED
         return TargetCheck.NOT_A_DATABASE
-    return TargetCheck.OK if all(name in names for name in REQUIRED_TABLES) else TargetCheck.MISSING_TABLES
+    return TargetCheck.OK
 
 
 def _cutoff(policy: RetentionPolicy, now: Optional[datetime]) -> str:
