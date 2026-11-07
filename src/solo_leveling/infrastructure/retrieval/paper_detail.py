@@ -13,6 +13,7 @@ from solo_leveling.domain.annotation import (
 )
 from solo_leveling.domain.evidence_qa import EvidenceDetail
 from solo_leveling.domain.paper_summary import SummaryItem
+from solo_leveling.infrastructure.database.repository import read_insight_sources
 
 
 class SQLitePaperDetailReader:
@@ -110,6 +111,7 @@ class SQLitePaperDetailReader:
             'keywords': [], 'important_sentences': [],
             'limitations': ['keywords_not_available', 'important_sentences_not_available'],
         }
+        self._read_insights(conn, context, scope, result)
         if saved is None:
             result['limitations'].append('summary_not_available')
             return result
@@ -154,3 +156,27 @@ class SQLitePaperDetailReader:
         }
         result['evidence'] = list(known.values())
         return result
+
+    @staticmethod
+    def _read_insights(conn, context, scope, result):
+        collection = conn.execute('''SELECT * FROM paper_insight_collections
+            WHERE context_id=? AND scope=?''', (context['context_id'], scope)).fetchone()
+        if collection is None:
+            return
+        for row, item in read_insight_sources(conn, context, collection, scope):
+            output = {
+                'insight_id': row['insight_id'], 'text': item.text,
+                'content_kind': item.content_kind, 'producer': item.producer,
+                'producer_version': item.producer_version, 'collection_created_at': collection['created_at'],
+                'chunk_id': item.chunk_id, 'parse_revision_id': row['parse_revision_id'],
+                'translation_revision_id': item.translation_revision_id,
+                'start_offset': item.start_offset, 'end_offset': item.end_offset,
+                'quote_original': item.quote_original, 'pdf_page': row['pdf_page'],
+                'printed_page_label': row['printed_page_label'], 'section_id': row['section_id'],
+            }
+            target = 'keywords' if item.kind == 'keyword' else 'important_sentences'
+            result[target].append(output)
+        if result['keywords']:
+            result['limitations'].remove('keywords_not_available')
+        if result['important_sentences']:
+            result['limitations'].remove('important_sentences_not_available')

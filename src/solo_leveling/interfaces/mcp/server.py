@@ -226,6 +226,24 @@ class SavedSummaryOutput(TypedDict):
     verification_level: Literal['structural_only']
 
 
+class PaperInsightOutput(TypedDict):
+    insight_id: str
+    text: str
+    content_kind: Literal['extracted', 'generated']
+    producer: Literal['extractor', 'model', 'user']
+    producer_version: str | None
+    collection_created_at: str
+    chunk_id: str
+    parse_revision_id: str
+    translation_revision_id: str | None
+    start_offset: int
+    end_offset: int
+    quote_original: str
+    pdf_page: int
+    printed_page_label: str | None
+    section_id: str | None
+
+
 class DetailAnnotationPageOutput(TypedDict):
     context_id: str
     items: list[Annotation]
@@ -244,8 +262,8 @@ class PaperDetailOutput(TypedDict):
     section_ids: list[str]
     summary: SavedSummaryOutput | None
     evidence: list[DetailEvidenceOutput]
-    keywords: list[str]
-    important_sentences: list[str]
+    keywords: list[PaperInsightOutput]
+    important_sentences: list[PaperInsightOutput]
     limitations: list[str]
     annotation_page: NotRequired[DetailAnnotationPageOutput | None]
 
