@@ -45,8 +45,10 @@ class LocalPdfStore:
                     directory = child
                 descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                                      dir_fd=directory)
+            elif os.name == 'nt':
+                from .windows_pdf import open_pdf_descriptor
+                descriptor = open_pdf_descriptor(source, self.import_root)
             else:
-                # Windows의 재분석 지점 경쟁 방어는 별도 핸들 기반 구현이 필요하다.
                 descriptor = os.open(source, os.O_RDONLY | getattr(os, 'O_BINARY', 0))
             opened = os.fstat(descriptor)
             if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:

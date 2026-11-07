@@ -3,6 +3,7 @@
 import errno
 import os
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -204,6 +205,66 @@ def test_internal_symlink_still_imports_resolved_file(tmp_path):
     (imports / 'original.pdf').write_bytes(b'%PDF-original')
     symlink_or_skip(imports / 'alias.pdf', imports / 'original.pdf')
     assert pdfs.import_pdf('alias.pdf').path.read_bytes() == b'%PDF-original'
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows 정션 검증')
+@pytest.mark.parametrize('after_validation', [False, True], ids=['existing', 'after_validation'])
+def test_windows_external_junction_creates_no_copy(tmp_path, monkeypatch, after_validation):
+    pdfs, imports = store(tmp_path)
+    slot, outside = imports / 'slot', tmp_path / 'outside'
+    slot.mkdir()
+    outside.mkdir()
+    (slot / 'sample.pdf').write_bytes(b'%PDF-inside!')
+    (outside / 'sample.pdf').write_bytes(b'%PDF-outside')
+    original = pdfs._open_source
+
+    def swap():
+        slot.rename(imports / 'saved')
+        subprocess.run(['cmd.exe', '/c', 'mklink', '/J', str(slot), str(outside)],
+                       check=True, capture_output=True, timeout=10)
+        assert slot.resolve() == outside.resolve()
+
+    def swap_then_open(source):
+        swap()
+        return original(source)
+
+    try:
+        if after_validation:
+            monkeypatch.setattr(pdfs, '_open_source', swap_then_open)
+        else:
+            swap()
+        with pytest.raises(InvalidArgumentError):
+            pdfs.import_pdf('slot/sample.pdf')
+        assert slot.resolve() == outside.resolve()
+        assert not list((tmp_path / 'pdfs').rglob('*'))
+    finally:
+        if slot.exists() and slot.resolve() == outside.resolve():
+            slot.rmdir()
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows 디렉터리 핸들 검증')
+def test_windows_parent_cannot_be_replaced_at_final_open(tmp_path, monkeypatch):
+    from solo_leveling.interfaces.mcp import windows_pdf
+
+    pdfs, imports = store(tmp_path)
+    slot = imports / 'slot'
+    slot.mkdir()
+    (slot / 'sample.pdf').write_bytes(b'%PDF-inside!')
+    original = windows_pdf._open_component
+    attempts = []
+
+    def attempt_rename(path, *, directory):
+        if not directory:
+            with pytest.raises(PermissionError) as denied:
+                slot.rename(imports / 'saved')
+            attempts.append(denied.value.winerror)
+        return original(path, directory=directory)
+
+    monkeypatch.setattr(windows_pdf, '_open_component', attempt_rename)
+    result = pdfs.import_pdf('slot/sample.pdf')
+    assert len(attempts) == 1 and attempts[0] in (5, 32)
+    assert result.path.read_bytes() == b'%PDF-inside!'
+    slot.rename(imports / 'saved')
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='POSIX 디렉터리 핸들 검증')

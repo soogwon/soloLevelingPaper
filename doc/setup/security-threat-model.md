@@ -18,7 +18,7 @@ MCP 호스트에 반환하는 정상 근거·본문과 진단 로그는 구분�
 
 | 위험 / 경계 | 현재 방어 | 검증 파일 | 남은 제한 |
 |---|---|---|---|
-| 입력 경로 → 로컬 파일: 허용 폴더 밖 접근 | 절대·상위·Windows 특수 경로와 루트 밖 심볼릭 링크 거부, 열린 파일의 단일 링크·종류·크기 검사, POSIX 디렉터리 핸들 기준 열기 | `tests/unit/mcp/test_local_files.py`, `tests/unit/mcp/test_runtime.py` | Windows 재분석 지점 경쟁, 루트 상위 폴더·관리 저장소 교체는 별도 범위 |
+| 입력 경로 → 로컬 파일: 허용 폴더 밖 접근 | 절대·상위·Windows 특수 경로 거부, 열린 파일의 단일 링크·종류·크기 검사, POSIX 디렉터리 기준 열기, Windows 상위 디렉터리 핸들 유지와 재분석 지점 거부 | `tests/unit/mcp/test_local_files.py`, `tests/unit/mcp/test_runtime.py` | 관리 저장소 자체의 교체는 별도 범위 |
 | 입력 PDF → 관리 저장소: 위장·과대 파일과 덮어쓰기 | 확장자·헤더·스트림 크기 검사, 해시 기반 저장·기존 내용 확인 | `tests/unit/mcp/test_local_files.py`, `tests/unit/test_pdf_store.py` | 헤더 검사는 악성 PDF 검사나 파서 격리가 아님 |
 | 설정 → 번역·생성 제공자: 의도하지 않은 전송 | 외부 호출 허용이 참이고 로컬 전용이 거짓일 때만 호출 | `tests/unit/mcp/test_external_api_policy.py`, `tests/unit/mcp/test_runtime.py`, `tests/unit/translation/test_openai_provider.py` | 호스트 통신·모델 다운로드까지 차단하는 설정이 아님 |
 | 제공자·내부 예외 → MCP 응답: 키·경로 노출 | 원본 예외 대신 고정 오류 응답으로 변환 | `tests/unit/mcp/test_server.py`, `tests/unit/translation/test_openai_provider.py`, `tests/unit/test_openai_generator.py` | 정상 도구 결과에는 요청한 원문 근거가 포함될 수 있음 |
@@ -89,8 +89,10 @@ macOS/Linux에서는 해석된 상대 경로를 import 루트의 디렉터리 �
 각 단계의 심볼릭 링크 추적을 거부한다. FIFO로 교체돼도 비차단 열기 후 일반 파일 검사에서 거부한다.
 열기 전에 해석된 루트 내부 심볼릭 링크는 기존처럼 사용할 수 있다.
 
-Windows는 열린 파일 검사까지 적용하며 재분석 지점 교체 경쟁은 별도 핸들 기반 구현·검증이 필요하다.
-import 루트 상위 폴더의 교체, 관리 저장소 자체의 교체, 열린 동일 파일에 대한 동시 쓰기는
+Windows에서는 해석된 경로의 상위 디렉터리를 순서대로 열어 PDF 핸들을 얻을 때까지
+유지한다. 각 핸들은 쓰기·삭제 공유를 허용하지 않으며, 열 때 이미 정션 등 재분석
+지점으로 바뀌었다면 거부한다. 파일 내용을 읽을 때는 같은 PDF 핸들을 사용한다.
+관리 저장소 자체의 교체, POSIX에서 import 루트 상위 폴더의 교체와 열린 동일 파일에 대한 동시 쓰기는
 이번 보완으로 격리하지 않는다. 단일 링크 검사는 검사 시점의 링크 수를 기준으로 하며
 파일의 과거 원본 위치나 이후 링크 생성을 증명하지 않는다. 데이터 폴더의 쓰기 권한을
 신뢰할 수 있는 사용자로 제한하는 전제는 계속 필요하다. PDF·모델 출력의 지시문에 의한 프롬프트 주입,
