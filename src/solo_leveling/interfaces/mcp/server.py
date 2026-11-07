@@ -24,6 +24,8 @@ from .detail_app import DETAIL_APP_URI, register_detail_app
 from .status_app import STATUS_APP_URI, register_status_app
 from .dashboard import DashboardService, register_dashboard
 from .reflection import ReflectionInputServer, ReflectionService, register_reflection
+from solo_leveling.application.annotations.service import AnnotationService
+from .annotation_tools import register_annotations
 from .quiz_tools import QuizContractAdapter, register_quiz
 
 
@@ -94,6 +96,7 @@ class MCPServices:
     reflection: ReflectionService | None = None
     quiz: QuizContractAdapter | None = None
     executions: AskExecutionService | None = None
+    annotations: AnnotationService | None = None
 
 
 class Focus(BaseModel):
@@ -266,6 +269,8 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         log_level='ERROR', lifespan=lifespan)
 
     register_detail_app(server)
+    if services.annotations is not None:
+        register_annotations(server, services.annotations)
     if services.detail is not None:
         @server.tool(name='get_paper_detail', structured_output=True,
             meta={'ui': {'resourceUri': DETAIL_APP_URI}},

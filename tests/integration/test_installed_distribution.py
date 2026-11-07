@@ -60,7 +60,9 @@ async def run():
                 'submit_paper_question', 'get_paper_question_status',
                 'get_paper_detail', 'get_reading_questions', 'save_reading_answer', 'get_reading_comparison',
                 'get_quiz', 'submit_quiz', 'get_quiz_attempt', 'list_quiz_attempts',
-                'get_quiz_scores', 'review_quiz_attempt'}
+                'create_annotation', 'get_annotation', 'list_annotations',
+                        'update_annotation', 'delete_annotation',
+                        'get_quiz_scores', 'review_quiz_attempt'}
             # 설치본에서도 목록 조회 계약과 빈 DB·오류 응답을 실제 stdio로 확인한다.
             listing = next(t for t in tools.tools if t.name == 'list_paper_jobs')
             assert set(listing.inputSchema['properties']) == {'query', 'limit', 'cursor'}

@@ -15,6 +15,7 @@ from typing_extensions import TypedDict
 from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
 from solo_leveling.application.reflection.service import ReflectionService, ReflectionSession
 from solo_leveling.domain.reflection import MAX_ANSWER_LENGTH, ReflectionValidationError
+from .annotation_tools import ANNOTATION_INPUTS
 from .errors import to_tool_error
 from .input_privacy import SafeInputServer
 from .quiz_contracts import AttemptInput, HistoryInput, QuizInput, ScoresInput, SubmitInput
@@ -29,12 +30,12 @@ _QUIZ_INPUTS = {'get_quiz': QuizInput, 'submit_quiz': SubmitInput,
 
 
 class ReflectionInputServer(SafeInputServer):
-    """읽기 질문과 퀴즈 도구의 입력을 SDK 오류 직렬화 전에 검증한다."""
+    """읽기 질문·퀴즈·메모 도구의 입력을 SDK 오류 직렬화 전에 검증한다."""
 
     async def list_tools(self):
         tools = await super().list_tools()
         for tool in tools:
-            if tool.name in _READING_TOOLS:
+            if tool.name in _READING_TOOLS or tool.name in ANNOTATION_INPUTS:
                 # 함수 서명에서 만든 스키마를 그대로 사용해 검증 기준의 중복을 피한다.
                 tool.inputSchema = {**tool.inputSchema, 'additionalProperties': False}
             elif tool.name in _QUIZ_INPUTS:
@@ -42,6 +43,14 @@ class ReflectionInputServer(SafeInputServer):
         return tools
 
     async def call_tool(self, name, arguments):
+        if name in ANNOTATION_INPUTS:
+            try:
+                model = ANNOTATION_INPUTS[name]
+                if not isinstance(arguments, dict) or set(arguments) != {'request'}:
+                    raise ValueError('invalid request')
+                model.model_validate(arguments['request'])
+            except ValueError:
+                raise to_tool_error(InvalidArgumentError('입력값을 확인해주세요.')) from None
         if name in _QUIZ_INPUTS:
             try:
                 _QUIZ_INPUTS[name].model_validate(arguments)
