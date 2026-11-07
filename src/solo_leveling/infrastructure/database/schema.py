@@ -168,6 +168,36 @@ CREATE TABLE IF NOT EXISTS summary_items (
     PRIMARY KEY (summary_id, position)
 );
 
+-- 원문 출처 연결형 키워드·중요 문장(#229). summary claim과 별도 수명주기를 갖는다.
+-- collection이 없으면 미작성 상태다. 일부 kind만 저장된 collection은 부분 작성 상태다.
+CREATE TABLE IF NOT EXISTS paper_insight_collections (
+    collection_id TEXT PRIMARY KEY,
+    context_id TEXT NOT NULL REFERENCES learning_contexts(context_id),
+    scope TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (context_id, scope)
+);
+CREATE TABLE IF NOT EXISTS paper_insights (
+    collection_id TEXT NOT NULL REFERENCES paper_insight_collections(collection_id),
+    position INTEGER NOT NULL CHECK (position >= 0),
+    insight_id TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL CHECK (kind IN ('keyword', 'important_sentence')),
+    text TEXT NOT NULL CHECK (length(trim(text)) > 0),
+    content_kind TEXT NOT NULL CHECK (content_kind IN ('extracted', 'generated')),
+    producer TEXT NOT NULL CHECK (producer IN ('extractor', 'model', 'user')),
+    chunk_id TEXT NOT NULL REFERENCES chunks(chunk_id),
+    parse_revision_id TEXT NOT NULL REFERENCES parse_revisions(parse_revision_id),
+    translation_revision_id TEXT REFERENCES translation_revisions(translation_revision_id),
+    start_offset INTEGER NOT NULL,
+    end_offset INTEGER NOT NULL,
+    quote_original TEXT NOT NULL,
+    PRIMARY KEY (collection_id, position),
+    CHECK (start_offset >= 0 AND end_offset > start_offset),
+    CHECK ((content_kind = 'extracted' AND producer = 'extractor') OR
+           (content_kind = 'generated' AND producer IN ('model', 'user')))
+);
+CREATE INDEX IF NOT EXISTS idx_paper_insights_chunk ON paper_insights(chunk_id);
+
 -- 근거 기반 단계별 퀴즈(M1-09). 맥락(context)마다 학습 단계별 퀴즈를 하나씩 둔다.
 -- 문항의 evidence_ids는 같은 맥락의 evidences를 가리키며, 저장할 때 리포지토리가 확인한다.
 -- 객관식은 choices(JSON 배열)와 correct_index, 단답형은 answer와 grading_criteria를 가진다.

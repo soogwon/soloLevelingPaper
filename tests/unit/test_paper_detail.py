@@ -6,6 +6,10 @@ import pytest
 from tests.unit.test_learning_persistence import setup_db, publish
 from solo_leveling.domain.models import Evidence
 from solo_leveling.domain.paper_summary import SummaryItem
+from solo_leveling.domain.paper_insight import (
+    PaperInsightInput, KIND_KEYWORD, KIND_IMPORTANT_SENTENCE,
+    CONTENT_EXTRACTED, PRODUCER_EXTRACTOR,
+)
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.retrieval.paper_detail import SQLitePaperDetailReader
 from solo_leveling.application.paper_detail.service import PaperDetailService
@@ -33,6 +37,54 @@ def test_missing_summary_does_not_generate_or_write(detail):
     assert result['section_ids']==['s1','s2']
     assert result['file_display_name']=='paper.pdf'
     assert Path(db).read_bytes()==before
+
+
+def test_saved_keywords_and_important_sentences_include_exact_provenance_without_writes(detail):
+    db, service = detail
+    repo.save_paper_insights(db, 'ctx', 'paper', [
+        PaperInsightInput(KIND_KEYWORD, 'First', CONTENT_EXTRACTED, PRODUCER_EXTRACTOR,
+                          'c1', 0, 5, 'First'),
+        PaperInsightInput(KIND_IMPORTANT_SENTENCE, 'Second.', CONTENT_EXTRACTED, PRODUCER_EXTRACTOR,
+                          'c2', 0, 7, 'Second.'),
+    ])
+    before = Path(db).read_bytes()
+    result = service.get('ctx')
+    assert result['keywords'][0] == {
+        'insight_id': result['keywords'][0]['insight_id'], 'text': 'First',
+        'content_kind': 'extracted', 'producer': 'extractor', 'chunk_id': 'c1',
+        'parse_revision_id': 'p1', 'translation_revision_id': None,
+        'start_offset': 0, 'end_offset': 5, 'quote_original': 'First',
+        'pdf_page': 1, 'printed_page_label': None, 'section_id': 's1',
+    }
+    assert result['important_sentences'][0]['text'] == 'Second.'
+    assert 'keywords_not_available' not in result['limitations']
+    assert 'important_sentences_not_available' not in result['limitations']
+    assert result['summary'] is None
+    assert Path(db).read_bytes() == before
+
+
+def test_partial_insights_keep_only_missing_kind_limitation(detail):
+    db, service = detail
+    repo.save_paper_insights(db, 'ctx', 'paper', [
+        PaperInsightInput(KIND_KEYWORD, 'First', CONTENT_EXTRACTED, PRODUCER_EXTRACTOR,
+                          'c1', 0, 5, 'First'),
+    ])
+    result = service.get('ctx')
+    assert result['keywords'] and result['important_sentences'] == []
+    assert 'keywords_not_available' not in result['limitations']
+    assert 'important_sentences_not_available' in result['limitations']
+
+
+def test_corrupted_insight_source_fails_closed(detail):
+    db, service = detail
+    repo.save_paper_insights(db, 'ctx', 'paper', [
+        PaperInsightInput(KIND_KEYWORD, 'First', CONTENT_EXTRACTED, PRODUCER_EXTRACTOR,
+                          'c1', 0, 5, 'First'),
+    ])
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute("UPDATE chunks SET original_text='Changed.' WHERE chunk_id='c1'")
+    with pytest.raises(DataIntegrityError):
+        service.get('ctx')
 
 def test_pagination_preserves_summary_and_quotes_without_writes(detail):
     db, service=detail

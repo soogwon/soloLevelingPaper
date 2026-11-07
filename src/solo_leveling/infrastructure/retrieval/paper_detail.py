@@ -10,6 +10,7 @@ from solo_leveling.application.evidence_qa.errors import (
 )
 from solo_leveling.domain.evidence_qa import EvidenceDetail
 from solo_leveling.domain.paper_summary import SummaryItem
+from solo_leveling.domain.paper_insight import PaperInsightInput
 
 
 class SQLitePaperDetailReader:
@@ -63,6 +64,7 @@ class SQLitePaperDetailReader:
             'keywords': [], 'important_sentences': [],
             'limitations': ['keywords_not_available', 'important_sentences_not_available', 'annotations_not_connected'],
         }
+        self._read_insights(conn, context, scope, result)
         if saved is None:
             result['limitations'].append('summary_not_available')
             return result
@@ -106,3 +108,49 @@ class SQLitePaperDetailReader:
         }
         result['evidence'] = list(known.values())
         return result
+
+    @staticmethod
+    def _read_insights(conn, context, scope, result):
+        collection = conn.execute('''SELECT * FROM paper_insight_collections
+            WHERE context_id=? AND scope=?''', (context['context_id'], scope)).fetchone()
+        if collection is None:
+            return
+        rows = conn.execute('''SELECT i.*, c.original_text, c.pdf_page,
+                c.printed_page_label, c.section_id
+            FROM paper_insights i JOIN chunks c ON c.chunk_id=i.chunk_id
+            WHERE i.collection_id=? ORDER BY i.position''', (collection['collection_id'],)).fetchall()
+        if not rows:
+            raise DataIntegrityError('저장된 키워드·중요 문장 묶음이 비어 있습니다.')
+        if [row['position'] for row in rows] != list(range(len(rows))):
+            raise DataIntegrityError('저장된 키워드·중요 문장 순서가 연속적이지 않습니다.')
+        for row in rows:
+            item = PaperInsightInput(row['kind'], row['text'], row['content_kind'], row['producer'],
+                row['chunk_id'], row['start_offset'], row['end_offset'], row['quote_original'],
+                row['translation_revision_id'])
+            if (row['parse_revision_id'] != context['parse_revision_id']
+                    or row['end_offset'] > len(row['original_text'])
+                    or row['original_text'][row['start_offset']:row['end_offset']] != row['quote_original']
+                    or (scope != 'paper' and row['section_id'] != scope)):
+                raise DataIntegrityError('키워드·중요 문장의 원문 출처 연결이 일치하지 않습니다.')
+            if item.translation_revision_id is not None:
+                translated = conn.execute('''SELECT 1 FROM translation_results
+                    WHERE translation_revision_id=? AND chunk_id=?
+                        AND failure_code IS NULL AND translated_text IS NOT NULL''',
+                    (item.translation_revision_id, item.chunk_id)).fetchone()
+                if item.translation_revision_id != context['translation_revision_id'] or translated is None:
+                    raise DataIntegrityError('키워드·중요 문장의 번역 출처 연결이 일치하지 않습니다.')
+            output = {
+                'insight_id': row['insight_id'], 'text': item.text,
+                'content_kind': item.content_kind, 'producer': item.producer,
+                'chunk_id': item.chunk_id, 'parse_revision_id': row['parse_revision_id'],
+                'translation_revision_id': item.translation_revision_id,
+                'start_offset': item.start_offset, 'end_offset': item.end_offset,
+                'quote_original': item.quote_original, 'pdf_page': row['pdf_page'],
+                'printed_page_label': row['printed_page_label'], 'section_id': row['section_id'],
+            }
+            target = 'keywords' if item.kind == 'keyword' else 'important_sentences'
+            result[target].append(output)
+        if result['keywords']:
+            result['limitations'].remove('keywords_not_available')
+        if result['important_sentences']:
+            result['limitations'].remove('important_sentences_not_available')
