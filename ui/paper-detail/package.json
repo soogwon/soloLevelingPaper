@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test detail.test.mjs"
+    "test": "node --test detail.test.mjs annotation.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "2.0.3"

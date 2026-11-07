@@ -219,6 +219,22 @@ def list_annotation_page(db_path: str, context_id: str, step: Optional[str] = No
     return AnnotationPage(items, next_cursor)
 
 
+def get_annotation_with_originals(db_path: str, context_id: str, annotation_id: str):
+    """메모와 현재 원문을 같은 읽기 시점·학습 맥락·파싱 리비전으로 제한한다."""
+    with closing(get_connection(db_path)) as conn:
+        conn.execute('BEGIN')
+        record = _load(conn, annotation_id, context_id)
+        if record is None:
+            raise ResourceNotFoundError('annotation not found')
+        rows = conn.execute("""
+            SELECT s.position, c.original_text, c.pdf_page FROM annotation_segments s
+            JOIN chunks c ON c.chunk_id=s.chunk_id AND c.parse_revision_id=s.parse_revision_id
+            JOIN learning_contexts l ON l.context_id=? AND l.parse_revision_id=c.parse_revision_id
+            WHERE s.annotation_id=? AND s.target='original'
+        """, (context_id, annotation_id))
+        return record, {row['position']: (row['original_text'], row['pdf_page']) for row in rows}
+
+
 def get_segment_texts(db_path: str, context_id: str, annotation_id: str) -> Dict[int, Optional[str]]:
     """구간별 '지금' 청크 텍스트(구간 위치 → 문자열). 서비스가 저장된 위치·인용문과 비교해 위치 확인 불가를 판정한다.
 

@@ -191,3 +191,36 @@ def test_public_schema_and_unknown_field_do_not_expose_input(environment, caplog
     asyncio.run(scenario())
     captured = capsys.readouterr()
     assert 'PRIVATE_MARKER' not in caplog.text + captured.out + captured.err
+
+
+def test_source_click_revalidates_each_segment_in_its_context(environment):
+    db, context = environment
+
+    async def scenario():
+        async with create_connected_server_and_client_session(server(db)) as client:
+            saved = await call(client, 'create_annotation', {
+                'context_id': context, 'kind': 'highlight', 'body': '',
+                'segments': [
+                    {'chunk_id': 'c1', 'start_offset': 1, 'end_offset': 4, 'quote_snapshot': 'irs'},
+                    {'chunk_id': 'c2', 'start_offset': 0, 'end_offset': 6, 'quote_snapshot': 'Second'},
+                ],
+            })
+            target = {'context_id': context, 'annotation_id': saved['annotation']['annotation_id']}
+            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+            resource = await client.read_resource(tools['get_annotation'].meta['ui']['resourceUri'])
+            assert '<title>메모와 원문</title>' in resource.contents[0].text
+            assert (await call(client, 'get_annotation', target))['source'] is None
+            selected = {**target, 'source_position': 0}
+            assert (await call(client, 'get_annotation', selected))['source'] == {
+                'position': 0, 'pdf_page': 1, 'before': 'F', 'quote': 'irs', 'after': 't.',
+            }
+            wrong = await client.call_tool('get_annotation', {'request': {**selected, 'context_id': 'other'}})
+            assert wrong.isError and 'NOT_FOUND' in wrong.content[0].text
+            with closing(get_connection(db)) as conn, conn:
+                conn.execute("UPDATE chunks SET original_text='private replacement' WHERE chunk_id='c1'")
+            refreshed = await call(client, 'get_annotation', selected)
+            assert refreshed['source'] is None and refreshed['segment_available'] == [False, True]
+            assert 'private replacement' not in str(refreshed)
+            other = await call(client, 'get_annotation', {**target, 'source_position': 1})
+            assert other['source']['quote'] == 'Second' and other['source']['pdf_page'] == 2
+    asyncio.run(scenario())

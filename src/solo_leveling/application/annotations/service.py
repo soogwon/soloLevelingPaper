@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Literal
 
-from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
 from solo_leveling.domain.annotation import (
     Annotation, AnnotationOutcome, AnnotationPage, AnnotationResult, AnnotationValidationError,
     KINDS, SegmentInput, TARGET_ORIGINAL,
@@ -18,10 +17,20 @@ class _Omitted(Enum):
 
 
 @dataclass(frozen=True)
+class AnnotationSource:
+    position: int
+    pdf_page: int | None
+    before: str
+    quote: str
+    after: str
+
+
+@dataclass(frozen=True)
 class AnnotationDetail:
     annotation: Annotation
     # annotation.segments와 같은 순서이며, 여러 구간 중 일부만 유효할 수도 있다.
     segment_available: tuple[bool, ...]
+    source: AnnotationSource | None = None
 
     @property
     def location_status(self) -> Literal['available', 'unavailable', 'not_applicable']:
@@ -60,23 +69,22 @@ class AnnotationService:
         segments = _original_segments(segments)
         return store.create_annotation(self.db_path, context_id, kind, body, segments, step)
 
-    def get(self, context_id: str, annotation_id: str) -> AnnotationDetail:
+    def get(self, context_id: str, annotation_id: str, *, source_position: int | None = None) -> AnnotationDetail:
         _require_context(context_id)
-        record = store.get_annotation(self.db_path, context_id, annotation_id)
-        if record is None:
-            raise ResourceNotFoundError('annotation not found')
-        if not record.segments:
-            return AnnotationDetail(record, ())
-        texts = store.get_segment_texts(self.db_path, context_id, annotation_id)
+        record, originals = store.get_annotation_with_originals(self.db_path, context_id, annotation_id)
         available = []
+        source = None
         for segment in record.segments:
-            text = texts.get(segment.position)
-            available.append(
-                segment.target == TARGET_ORIGINAL and text is not None
-                and 0 <= segment.start_offset < segment.end_offset <= len(text)
-                and text[segment.start_offset:segment.end_offset] == segment.quote_snapshot
-            )
-        return AnnotationDetail(record, tuple(available))
+            text, page = originals.get(segment.position, (None, None))
+            start, end = segment.start_offset, segment.end_offset
+            matches = (text is not None and 0 <= start < end <= len(text)
+                       and text[start:end] == segment.quote_snapshot)
+            available.append(matches)
+            if matches and segment.position == source_position:
+                # 선택 구간 앞뒤로 최대 120자만 제공한다.
+                source = AnnotationSource(segment.position, page, text[max(0, start-120):start],
+                                          text[start:end], text[end:end+120])
+        return AnnotationDetail(record, tuple(available), source)
 
     def list(self, context_id: str, *, step: str | None = None, kind: str | None = None,
              limit: int | None = None, cursor: str | None = None) -> AnnotationPage:
