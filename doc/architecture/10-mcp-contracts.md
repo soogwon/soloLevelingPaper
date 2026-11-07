@@ -5,7 +5,7 @@
 #52 읽기 전 질문 MCP 연결 추가 / 2026-10-31.
 입출력·덮어쓰기 제한·수동 테스트는 [읽기 전 질문 MCP 연결](../setup/reading-questions-mcp.md)을 따른다.
 
-현재 런타임에서 공개하는 16개 도구가 기준이다. 기존 6개 도구에 #61의 읽기 전용
+현재 런타임에서 공개하는 18개 도구가 기준이다. 기존 6개 도구에 #61의 읽기 전용
 `get_learning_dashboard`와 #62의 `get_paper_detail`을 추가한다. 대시보드는
 `interfaces/mcp/dashboard.py`에 분리한다.
 #52의 읽기 전 질문 조회·답변 저장은 `interfaces/mcp/reflection.py`에 분리한다.
