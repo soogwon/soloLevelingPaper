@@ -48,6 +48,7 @@ class DashboardReader:
                                'stage': row['stage'], 'limitations': json.loads(row['limitations'])},
                 'progress': self._progress(conn, context_id),
                 'summary': self._summary(conn, context_id),
+                'notes': self._notes(conn, context_id),
                 'quiz_scores': self._scores(conn, context_id),
             }
 
@@ -84,6 +85,17 @@ class DashboardReader:
         if not items:
             raise DataIntegrityError('저장된 요약이 비어 있습니다.')
         return {'summary_id': row['summary_id'], 'created_at': row['created_at'], 'items': items}
+
+    @staticmethod
+    def _notes(conn, context_id):
+        count = conn.execute(
+            "SELECT COUNT(*) FROM annotations WHERE context_id=? AND kind='note'", (context_id,)
+        ).fetchone()[0]
+        rows = conn.execute(
+            "SELECT body FROM annotations WHERE context_id=? AND kind='note' "
+            "ORDER BY updated_at DESC, annotation_id DESC LIMIT 3", (context_id,))
+        previews = [body[:120] + ('…' if len(body) > 120 else '') for (body,) in rows]
+        return {'count': count, 'previews': previews}
 
     @staticmethod
     def _scores(conn, context_id):

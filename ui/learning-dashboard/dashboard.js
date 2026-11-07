@@ -25,6 +25,10 @@ function valid(data) {
       || !text(data.summary.created_at) || !Array.isArray(data.summary.items) || !data.summary.items.length
       || !data.summary.items.every((i) => i && Object.hasOwn(kinds, i.kind) && text(i.text)
         && strings(i.evidence_ids) && i.evidence_ids.length))) return false;
+  if (data.notes !== undefined && (!data.notes || !Number.isSafeInteger(data.notes.count)
+      || data.notes.count < 0 || !Array.isArray(data.notes.previews)
+      || data.notes.previews.length !== Math.min(3, data.notes.count)
+      || !data.notes.previews.every((value) => typeof value === 'string'))) return false;
   return Array.isArray(data.quiz_scores) && data.quiz_scores.length === 4
     && data.quiz_scores.every((s, i) => s && s.step === Object.keys(steps)[i]
       && Number.isInteger(s.attempt_count) && s.attempt_count >= 0
@@ -99,6 +103,15 @@ export function mountDashboard(app, doc, timeoutMs = 15000) {
       const evidence = doc.createElement('span'); evidence.className = 'evidence';
       evidence.textContent = `근거 ID: ${item.evidence_ids.join(', ')}`;
       li.append(evidence); el('summary-list').append(li);
+    }
+    const notes = data.notes;
+    el('note-count').textContent = !notes ? '메모 정보를 확인하려면 새로고침하세요.'
+      : notes.count ? `전체 ${notes.count}건 · 최근 수정한 메모 ${notes.previews.length}건` : '저장된 메모가 없습니다.';
+    el('note-previews').replaceChildren();
+    for (const preview of notes?.previews ?? []) {
+      const li = doc.createElement('li');
+      li.textContent = preview;
+      el('note-previews').append(li);
     }
     el('quiz').replaceChildren();
     for (const score of data.quiz_scores) {
