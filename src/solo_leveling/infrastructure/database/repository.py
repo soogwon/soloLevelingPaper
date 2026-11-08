@@ -30,6 +30,8 @@ from solo_leveling.domain.models import (
     PaperSection,
     now_iso,
     RequestConflictError,
+    TranslationRecoveryDisposition,
+    TranslationRecoveryRegistration,
 )
 from solo_leveling.domain.translation import TranslationBatchResult
 from solo_leveling.domain.context import ContextNotReadyError
@@ -623,7 +625,8 @@ def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
 
 
 # ── 번역 실패 구간 복구(#30) ─────────────────────────────────────
-def claim_translation_recovery(db_path: str, job: ProcessingJob, base_translation_revision_id: str) -> None:
+def claim_translation_recovery(db_path: str, job: ProcessingJob, base_translation_revision_id: str,
+                               *, base_embedding_set_id: str | None = None) -> None:
     """번역 복구 작업을 시작한다. 논문 버전당 진행 중인 복구는 하나만 허용한다.
 
     기본 색인이 base 번역 리비전을 가리키고 그 리비전에 실패한 청크가 있어야 한다. 같은 버전에 진행 중인 작업이
@@ -633,9 +636,12 @@ def claim_translation_recovery(db_path: str, job: ProcessingJob, base_translatio
     require_text(base_translation_revision_id, 'translation_revision_id')
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
-        index = conn.execute('SELECT translation_revision_id FROM search_indexes WHERE version_id=? AND is_default=1',
+        index = conn.execute('SELECT embedding_set_id, translation_revision_id FROM search_indexes '
+                             'WHERE version_id=? AND is_default=1',
                              (job.version_id,)).fetchone()
-        if index is None or index['translation_revision_id'] != base_translation_revision_id:
+        expected_embedding_set_id = base_embedding_set_id or (index['embedding_set_id'] if index else None)
+        if (index is None or index['translation_revision_id'] != base_translation_revision_id
+                or index['embedding_set_id'] != expected_embedding_set_id):
             raise ValueError('recovery base must be the default published index')
         if not conn.execute('SELECT 1 FROM translation_results WHERE translation_revision_id=? '
                             'AND failure_code IS NOT NULL LIMIT 1', (base_translation_revision_id,)).fetchone():
@@ -650,8 +656,115 @@ def claim_translation_recovery(db_path: str, job: ProcessingJob, base_translatio
                      "updated_at) VALUES (?, ?, 'processing', 'translate', '[]', ?, ?)",
                      (job.job_id, job.version_id, job.created_at, job.updated_at))
         conn.execute('INSERT INTO translation_recovery_locks (version_id, job_id, base_translation_revision_id, '
-                     'created_at) VALUES (?, ?, ?, ?)',
-                     (job.version_id, job.job_id, base_translation_revision_id, now_iso()))
+                     'base_embedding_set_id, created_at) VALUES (?, ?, ?, ?, ?)',
+                     (job.version_id, job.job_id, base_translation_revision_id,
+                      expected_embedding_set_id, now_iso()))
+
+
+def _recovery_registration(conn, request, *, conflict=False):
+    if conflict:
+        disposition = TranslationRecoveryDisposition.REQUEST_CONFLICT
+        return TranslationRecoveryRegistration(disposition, request['request_key'], request['version_id'],
+                                               request['base_embedding_set_id'])
+    job = conn.execute('SELECT status FROM processing_jobs WHERE job_id=?', (request['job_id'],)).fetchone()
+    published = conn.execute('SELECT embedding_set_id FROM search_indexes WHERE job_id=?',
+                             (request['job_id'],)).fetchone()
+    lock = conn.execute('SELECT new_embedding_set_id FROM translation_recovery_locks WHERE job_id=?',
+                        (request['job_id'],)).fetchone()
+    if published:
+        disposition = TranslationRecoveryDisposition.COMPLETED
+        new_embedding_set_id = published['embedding_set_id']
+    elif job and job['status'] in ('queued', 'processing'):
+        disposition = TranslationRecoveryDisposition.IN_PROGRESS
+        new_embedding_set_id = lock['new_embedding_set_id'] if lock else request['new_embedding_set_id']
+    elif job and job['status'] == 'interrupted':
+        disposition = TranslationRecoveryDisposition.INTERRUPTED
+        new_embedding_set_id = lock['new_embedding_set_id'] if lock else request['new_embedding_set_id']
+    else:
+        disposition = TranslationRecoveryDisposition.FAILED
+        new_embedding_set_id = lock['new_embedding_set_id'] if lock else request['new_embedding_set_id']
+    return TranslationRecoveryRegistration(disposition, request['request_key'], request['version_id'],
+                                           request['base_embedding_set_id'], request['job_id'],
+                                           new_embedding_set_id)
+
+
+def prepare_translation_recovery(db_path: str, job: ProcessingJob, request_key: str, input_hash: str,
+                                 base_embedding_set_id: str) -> TranslationRecoveryRegistration:
+    """복구 실행권을 멱등 접수한다. 같은 키는 외부 작업 없이 저장된 작업 상태를 재생한다."""
+    for name, value in (('job_id', job.job_id), ('version_id', job.version_id),
+                        ('request_key', request_key), ('input_hash', input_hash),
+                        ('base_embedding_set_id', base_embedding_set_id)):
+        require_text(value, name)
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        request = conn.execute('SELECT * FROM translation_recovery_requests WHERE request_key=?',
+                               (request_key,)).fetchone()
+        if request:
+            conflict = (request['input_hash'], request['version_id'], request['base_embedding_set_id']) != (
+                input_hash, job.version_id, base_embedding_set_id)
+            return _recovery_registration(conn, request, conflict=conflict)
+        index = conn.execute('SELECT * FROM search_indexes WHERE version_id=? AND is_default=1',
+                             (job.version_id,)).fetchone()
+        if index is None or index['embedding_set_id'] != base_embedding_set_id:
+            return TranslationRecoveryRegistration(TranslationRecoveryDisposition.BASE_CHANGED, request_key,
+                                                   job.version_id, base_embedding_set_id)
+        if not conn.execute('SELECT 1 FROM translation_results WHERE translation_revision_id=? '
+                            'AND failure_code IS NOT NULL LIMIT 1',
+                            (index['translation_revision_id'],)).fetchone():
+            return TranslationRecoveryRegistration(TranslationRecoveryDisposition.NO_TARGET, request_key,
+                                                   job.version_id, base_embedding_set_id)
+        # claim과 요청 기록을 같은 트랜잭션에서 수행한다. 아래 내용을 중복하지 않도록 savepoint 내에서
+        # 저수준 함수를 호출하지 않는다(별도 연결/트랜잭션을 열 수 없음).
+        conn.execute("DELETE FROM translation_recovery_locks WHERE version_id=? AND job_id IN "
+                     "(SELECT job_id FROM processing_jobs WHERE status NOT IN ('queued', 'processing'))",
+                     (job.version_id,))
+        if conn.execute("SELECT 1 FROM processing_jobs WHERE version_id=? AND status IN ('queued', 'processing')",
+                        (job.version_id,)).fetchone():
+            return TranslationRecoveryRegistration(TranslationRecoveryDisposition.IN_PROGRESS, request_key,
+                                                   job.version_id, base_embedding_set_id)
+        conn.execute('INSERT INTO processing_jobs (job_id, version_id, status, stage, limitations, created_at, '
+                     "updated_at) VALUES (?, ?, 'processing', 'translate', '[]', ?, ?)",
+                     (job.job_id, job.version_id, job.created_at, job.updated_at))
+        conn.execute('INSERT INTO translation_recovery_locks (version_id, job_id, base_translation_revision_id, '
+                     'base_embedding_set_id, created_at) VALUES (?, ?, ?, ?, ?)',
+                     (job.version_id, job.job_id, index['translation_revision_id'], base_embedding_set_id, now_iso()))
+        conn.execute('INSERT INTO translation_recovery_requests '
+                     '(request_key, input_hash, version_id, base_embedding_set_id, job_id, created_at) '
+                     'VALUES (?, ?, ?, ?, ?, ?)',
+                     (request_key, input_hash, job.version_id, base_embedding_set_id, job.job_id, now_iso()))
+        return TranslationRecoveryRegistration(TranslationRecoveryDisposition.ACCEPTED, request_key,
+                                               job.version_id, base_embedding_set_id, job.job_id)
+
+
+def reserve_recovery_embedding_set(db_path: str, job_id: str, embedding_set_id: str) -> None:
+    """벡터 쓰기 전에 작업 소유의 새 색인 ID를 한 번만 고정한다."""
+    require_text(embedding_set_id, 'embedding_set_id')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        lock = _active_recovery(conn, job_id)
+        current = lock['new_embedding_set_id']
+        if current is not None and current != embedding_set_id:
+            raise ValueError('recovery embedding set already reserved')
+        if conn.execute('SELECT 1 FROM search_indexes WHERE embedding_set_id=?', (embedding_set_id,)).fetchone():
+            raise ValueError('embedding set is already published')
+        conn.execute('UPDATE translation_recovery_locks SET new_embedding_set_id=? WHERE job_id=?',
+                     (embedding_set_id, job_id))
+        conn.execute('UPDATE translation_recovery_requests SET new_embedding_set_id=? WHERE job_id=?',
+                     (embedding_set_id, job_id))
+
+
+def get_unpublished_recovery_embedding_set(db_path: str, job_id: str) -> str | None:
+    """작업에 연결됐고 아직 게시되지 않은 색인만 정리 후보로 반환한다."""
+    with closing(get_connection(db_path)) as conn:
+        row = conn.execute('''SELECT new_embedding_set_id FROM translation_recovery_locks WHERE job_id=?
+            UNION ALL SELECT new_embedding_set_id FROM translation_recovery_requests WHERE job_id=?
+            LIMIT 1''', (job_id, job_id)).fetchone()
+        if row is None or row['new_embedding_set_id'] is None:
+            return None
+        if conn.execute('SELECT 1 FROM search_indexes WHERE embedding_set_id=?',
+                        (row['new_embedding_set_id'],)).fetchone():
+            return None
+        return row['new_embedding_set_id']
 
 
 def _active_recovery(conn, job_id: str):
@@ -729,9 +842,12 @@ def publish_recovered_index(db_path: str, job_id: str, embedding_set: EmbeddingS
         lock = _active_recovery(conn, job_id)
         if lock['new_translation_revision_id'] != embedding_set.translation_revision_id:
             raise ValueError('index does not match the recovery translation')
+        if lock['new_embedding_set_id'] != embedding_set.embedding_set_id:
+            raise ValueError('index was not reserved by the recovery job')
         old = conn.execute('SELECT * FROM search_indexes WHERE version_id=? AND is_default=1',
                            (lock['version_id'],)).fetchone()
-        if old is None or old['translation_revision_id'] != lock['base_translation_revision_id']:
+        if (old is None or old['translation_revision_id'] != lock['base_translation_revision_id']
+                or old['embedding_set_id'] != lock['base_embedding_set_id']):
             raise ValueError('default index changed during recovery')
         published_chunk_ids = _validated_published_chunk_ids(
             conn, old['parse_revision_id'], embedding_set.translation_revision_id, chunk_ids)

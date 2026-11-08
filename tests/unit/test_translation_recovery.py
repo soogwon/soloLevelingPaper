@@ -1,13 +1,14 @@
 """번역 실패 구간 복구(#30)의 저장·게시·잠금·마이그레이션을 검증한다."""
 
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
 import sqlite3
 
 import pytest
 
 from solo_leveling.domain.models import (
     Chunk, EmbeddingSet, JobStage, JobStatus, Paper, PaperVersion, ParseRevision, ProcessingJob,
-    TranslationRevision,
+    TranslationRecoveryDisposition, TranslationRevision,
 )
 from solo_leveling.domain.translation import (
     ChunkTranslationResult, TranslationBatchResult, TranslationFailureCode, TranslationRequest,
@@ -66,6 +67,7 @@ def recovery_job(job_id='j2'):
 def run_recovery(db, job_id='j2', rev='t2', items=None):
     repo.claim_translation_recovery(db, recovery_job(job_id), 't1')
     repo.save_recovery_translation(db, job_id, batch(rev, items or [ok(i, '복구') for i in FAILED]))
+    repo.reserve_recovery_embedding_set(db, job_id, 'e2')
 
 
 def rows(db, sql, *args):
@@ -103,6 +105,96 @@ def test_recovery_creates_new_revision_and_publishes_atomically(db):
     assert [r['is_default'] for r in rows(db, 'SELECT is_default FROM search_indexes ORDER BY embedding_set_id')] == [0, 1]
     assert repo.get_job(db, 'j2').status == JobStatus.READY
     assert rows(db, 'SELECT * FROM translation_recovery_locks') == []
+
+
+def test_keyed_recovery_replays_status_and_rejects_changed_input(db):
+    accepted = repo.prepare_translation_recovery(db, recovery_job(), 'request-1', 'hash-1', 'e1')
+    assert accepted.disposition == TranslationRecoveryDisposition.ACCEPTED
+    assert accepted.job_id == 'j2'
+    repeated = repo.prepare_translation_recovery(db, recovery_job('unused'), 'request-1', 'hash-1', 'e1')
+    assert repeated.disposition == TranslationRecoveryDisposition.IN_PROGRESS
+    assert repeated.job_id == 'j2'
+    conflict = repo.prepare_translation_recovery(db, recovery_job('unused'), 'request-1', 'different', 'e1')
+    assert conflict.disposition == TranslationRecoveryDisposition.REQUEST_CONFLICT
+    assert conflict.job_id is None
+
+
+def test_concurrent_same_key_starts_only_one_recovery_job(db):
+    def prepare(job_id):
+        return repo.prepare_translation_recovery(db, recovery_job(job_id), 'request-1', 'hash-1', 'e1')
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(prepare, ('j2', 'j3')))
+    assert {result.disposition for result in results} == {
+        TranslationRecoveryDisposition.ACCEPTED,
+        TranslationRecoveryDisposition.IN_PROGRESS,
+    }
+    assert {result.job_id for result in results} in ({'j2'}, {'j3'})
+    assert len(rows(db, "SELECT job_id FROM processing_jobs WHERE job_id IN ('j2', 'j3')")) == 1
+    assert len(rows(db, 'SELECT * FROM translation_recovery_requests')) == 1
+
+
+def test_keyed_recovery_distinguishes_base_change_and_no_target(db):
+    changed = repo.prepare_translation_recovery(db, recovery_job(), 'request-1', 'hash', 'other')
+    assert changed.disposition == TranslationRecoveryDisposition.BASE_CHANGED
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute("UPDATE translation_results SET failure_code=NULL, translated_text='복구' "
+                     "WHERE translation_revision_id='t1'")
+    no_target = repo.prepare_translation_recovery(db, recovery_job(), 'request-2', 'hash', 'e1')
+    assert no_target.disposition == TranslationRecoveryDisposition.NO_TARGET
+    assert rows(db, 'SELECT * FROM translation_recovery_requests') == []
+
+
+def test_keyed_recovery_replays_interrupted_without_automatic_restart(db):
+    repo.prepare_translation_recovery(db, recovery_job(), 'request-1', 'hash', 'e1')
+    assert repo.mark_interrupted_jobs_on_startup(db) == 1
+    replay = repo.prepare_translation_recovery(db, recovery_job('j3'), 'request-1', 'hash', 'e1')
+    assert replay.disposition == TranslationRecoveryDisposition.INTERRUPTED
+    assert replay.job_id == 'j2'
+    assert rows(db, "SELECT job_id FROM processing_jobs WHERE job_id='j3'") == []
+
+
+def test_reserved_embedding_set_limits_publish_and_cleanup_ownership(db):
+    repo.prepare_translation_recovery(db, recovery_job(), 'request-1', 'hash', 'e1')
+    repo.save_recovery_translation(db, 'j2', batch('t2', [ok(i, '복구') for i in FAILED]))
+    repo.reserve_recovery_embedding_set(db, 'j2', 'e2')
+    assert repo.get_unpublished_recovery_embedding_set(db, 'j2') == 'e2'
+    with pytest.raises(ValueError, match='already reserved'):
+        repo.reserve_recovery_embedding_set(db, 'j2', 'other')
+    with pytest.raises(ValueError, match='not reserved'):
+        repo.publish_recovered_index(db, 'j2', emb('other', 't2'), chunk_ids(), [])
+    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(), [])
+    assert repo.get_unpublished_recovery_embedding_set(db, 'j2') is None
+    completed = repo.prepare_translation_recovery(db, recovery_job('ignored'), 'request-1', 'hash', 'e1')
+    assert completed.disposition == TranslationRecoveryDisposition.COMPLETED
+    assert completed.new_embedding_set_id == 'e2'
+
+
+def test_failed_recovery_keeps_only_its_unpublished_cleanup_candidate(db):
+    repo.prepare_translation_recovery(db, recovery_job(), 'request-1', 'hash', 'e1')
+    repo.reserve_recovery_embedding_set(db, 'j2', 'e2')
+    repo.fail_translation_recovery(db, 'j2', ['INDEX_FAILED'])
+    assert rows(db, 'SELECT * FROM translation_recovery_locks') == []
+    assert repo.get_unpublished_recovery_embedding_set(db, 'j2') == 'e2'
+    replay = repo.prepare_translation_recovery(db, recovery_job('j3'), 'request-1', 'hash', 'e1')
+    assert replay.disposition == TranslationRecoveryDisposition.FAILED
+    assert replay.new_embedding_set_id == 'e2'
+    assert repo.get_unpublished_recovery_embedding_set(db, 'unknown') is None
+
+
+def test_publish_rejects_same_translation_revision_with_changed_default_index(db):
+    repo.prepare_translation_recovery(db, recovery_job(), 'request-1', 'hash', 'e1')
+    repo.save_recovery_translation(db, 'j2', batch('t2', [ok(i, '복구') for i in FAILED]))
+    repo.reserve_recovery_embedding_set(db, 'j2', 'e2')
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute("UPDATE search_indexes SET is_default=0 WHERE embedding_set_id='e1'")
+        conn.execute("INSERT INTO embedding_sets VALUES ('replacement', 't1', 'model', 4, 'now')")
+        conn.execute("INSERT INTO search_indexes (embedding_set_id, version_id, parse_revision_id, "
+                     "translation_revision_id, job_id, chunk_count, is_default) "
+                     "VALUES ('replacement', 'v1', 'p1', 't1', 'j1', 8, 1)")
+    with pytest.raises(ValueError, match='default index changed'):
+        repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(), [])
+    assert repo.get_search_index(db, 'v1')['embedding_set_id'] == 'replacement'
 
 
 def test_metadata_for_initial_resume_and_pinned_revision(db):
@@ -306,6 +398,7 @@ def test_scaled_96_of_98_scenario(tmp_path):
                               [f'c{i}' for i in range(98) if i not in (40, 41)], ['partial'])
     repo.claim_translation_recovery(path, recovery_job(), 't1')
     repo.save_recovery_translation(path, 'j2', batch('t2', [ok(40, '복구'), ok(41, '복구')]))
+    repo.reserve_recovery_embedding_set(path, 'j2', 'e2')
     repo.publish_recovered_index(path, 'j2', emb('e2', 't2'), [f'c{i}' for i in range(98)], [])
     assert repo.get_search_index(path, 'v1')['chunk_count'] == 98
     assert len(repo.get_translated_chunks(path, 'p1', 't2')) == 98

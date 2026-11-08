@@ -140,7 +140,21 @@ CREATE TABLE IF NOT EXISTS translation_recovery_locks (
     version_id TEXT PRIMARY KEY REFERENCES paper_versions(version_id),
     job_id TEXT NOT NULL UNIQUE REFERENCES processing_jobs(job_id),
     base_translation_revision_id TEXT NOT NULL REFERENCES translation_revisions(translation_revision_id),
+    base_embedding_set_id TEXT REFERENCES search_indexes(embedding_set_id),
     new_translation_revision_id TEXT REFERENCES translation_revisions(translation_revision_id),
+    new_embedding_set_id TEXT,
+    created_at TEXT NOT NULL
+);
+
+-- 복구 호출의 멱등 접수 기록(#222). 본문·키 원문은 로그로 내보내지 않으며 최종 작업 상태는
+-- processing_jobs/search_indexes에서 복원한다. 완료 전 새 색인 ID는 잠금 행에도 연결한다.
+CREATE TABLE IF NOT EXISTS translation_recovery_requests (
+    request_key TEXT PRIMARY KEY,
+    input_hash TEXT NOT NULL,
+    version_id TEXT NOT NULL REFERENCES paper_versions(version_id),
+    base_embedding_set_id TEXT NOT NULL REFERENCES search_indexes(embedding_set_id),
+    job_id TEXT NOT NULL UNIQUE REFERENCES processing_jobs(job_id),
+    new_embedding_set_id TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -434,6 +448,7 @@ def init_db(db_path: str) -> None:
         conn.executescript(SCHEMA_SQL)
         _migrate_translation_results(conn)
         _migrate_search_indexes(conn)
+        _migrate_translation_recovery(conn)
         _migrate_search_index_chunks(conn)
         _migrate_quiz_attempt_seq(conn)
         # 기존 생성된 DB에 컬럼을 추가하는 형식.
@@ -447,6 +462,19 @@ def init_db(db_path: str) -> None:
                     conn.execute(f'ALTER TABLE translation_revisions ADD COLUMN {name} TEXT')
     finally:
         conn.close()
+
+
+def _migrate_translation_recovery(conn: sqlite3.Connection) -> None:
+    """기존 복구 잠금에 고정 기준·계획 색인 열을 반복 안전하게 추가한다."""
+    with conn:
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(translation_recovery_locks)')}
+        if 'base_embedding_set_id' not in columns:
+            conn.execute('ALTER TABLE translation_recovery_locks ADD COLUMN base_embedding_set_id TEXT')
+        if 'new_embedding_set_id' not in columns:
+            conn.execute('ALTER TABLE translation_recovery_locks ADD COLUMN new_embedding_set_id TEXT')
+        request_columns = {row['name'] for row in conn.execute('PRAGMA table_info(translation_recovery_requests)')}
+        if 'new_embedding_set_id' not in request_columns:
+            conn.execute('ALTER TABLE translation_recovery_requests ADD COLUMN new_embedding_set_id TEXT')
 
 
 _SEARCH_INDEXES_COLUMNS = ('embedding_set_id', 'version_id', 'parse_revision_id', 'translation_revision_id',
