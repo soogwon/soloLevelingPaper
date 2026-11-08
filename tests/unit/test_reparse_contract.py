@@ -90,6 +90,17 @@ def test_active_reparse_does_not_link_a_different_input(db):
     assert replay.job_id == accepted.job_id
 
 
+def test_unrelated_active_job_is_not_exposed_as_reparse_job(db):
+    repo.insert_job(db, ProcessingJob(
+        'other-job', 'v1', JobStatus.PROCESSING, JobStage.TRANSLATE))
+
+    busy = prepare(db)
+
+    assert busy.disposition == ReparseDisposition.IN_PROGRESS
+    assert busy.job_id is None
+    assert repo.get_reparse_request(db, 'request') is None
+
+
 def test_reparse_status_lookup_is_read_only(db):
     assert repo.get_reparse_request(db, 'missing') is None
     assert repo.get_reparse_request(db, 'missing') is None
@@ -136,6 +147,23 @@ def test_new_parse_rejects_sections_from_another_revision_atomically(db):
     repo.save_reparse_result(
         db, 'reparse', ParseRevision('p2', 'v1', 1), new_chunks(), [valid])
     assert [section.title for section in repo.get_section_catalog(db, 'v1', 'p2')] == ['New title']
+
+
+def test_new_parse_rejects_unknown_chunk_section_atomically(db):
+    prepare(db)
+    chunks = new_chunks()
+    chunks[0] = Chunk('new-1', 'p2', 0, 'New first.', section_id='unknown')
+
+    with pytest.raises(ValueError, match='section must exist'):
+        repo.save_reparse_result(db, 'reparse', ParseRevision('p2', 'v1', 1), chunks, [])
+
+    assert repo.get_chunks_by_parse_revision(db, 'p2') == []
+    with repo.get_connection(db) as conn:
+        assert conn.execute("SELECT 1 FROM parse_revisions WHERE parse_revision_id='p2'").fetchone() is None
+
+    repo.save_reparse_result(
+        db, 'reparse', ParseRevision('p2', 'v1', 1), new_chunks(), [])
+    assert [chunk.section_id for chunk in repo.get_chunks_by_parse_revision(db, 'p2')] == [None, None]
 
 
 @pytest.mark.parametrize('bad_chunk', [

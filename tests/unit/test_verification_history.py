@@ -309,6 +309,7 @@ def test_chunk_recovered_by_translation_recovery_can_be_cited_only_after_the_new
     assert vh.save_verification_history(db, old).outcome is HistoryOutcome.REFERENCE_MISMATCH  # 게시되지 않은 청크
     repo.claim_translation_recovery(db, ProcessingJob('j2', 'v1', JobStatus.PROCESSING, JobStage.TRANSLATE), 't1')
     repo.save_recovery_translation(db, 'j2', batch('t2', [ChunkTranslationResult(req('c2', 'Second.'), '둘째.')]))
+    repo.reserve_recovery_embedding_set(db, 'j2', 'e2')
     repo.publish_recovered_index(db, 'j2', EmbeddingSet('e2', 't2', 'm', 2), ['c1', 'c2'], [])
     init_db(db)
     with closing(get_connection(db)) as conn:
