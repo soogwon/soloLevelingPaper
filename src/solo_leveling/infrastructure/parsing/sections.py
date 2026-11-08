@@ -15,6 +15,7 @@ MIN_SIZE_GAP = 0.8
 MAX_HEADING_LENGTH = 80
 MAX_HEADING_WORDS = 12
 MAX_FREEFORM_WORDS = 8
+REPEATED_MARGIN_RATIO = 0.12
 
 
 @dataclass(frozen=True)
@@ -49,7 +50,10 @@ STANDARD_HEADINGS = frozenset({
 # "3.1 Encoder"처럼 세부 번호가 붙은 것은 맞지 않는다.
 _NUMBERED_RE = re.compile(r'^(?:\d{1,2}|[IVX]{1,4})\s*[.)]?\s+(\S.*)$')
 _LETTER_RE = re.compile(r'[A-Za-z가-힣]')
-_CAPTION_RE = re.compile(r'^(?:fig(?:ure)?|table|algorithm|equation|listing)\s*\d+\b', re.IGNORECASE)
+_CAPTION_RE = re.compile(
+    r'^(?:fig(?:ure)?\.?|table|algorithm|equation|listing)\s*(?:\d+|[IVXLCDM]+)\b',
+    re.IGNORECASE,
+)
 _ALNUM_LABEL_RE = re.compile(r'\b[A-Za-z가-힣]+\d+\b')
 
 
@@ -130,7 +134,10 @@ def detect_headings(page_text: str, lines: list, body_size: Optional[float], *,
         text = _clean(line.text)
         numbered = _title_part(text) is not None
         standard = text.rstrip(':.').strip().lower() in STANDARD_HEADINGS
-        if not numbered and not standard and text.casefold() in excluded:
+        in_margin = (line.top_ratio is not None
+                     and (line.top_ratio <= REPEATED_MARGIN_RATIO
+                          or line.top_ratio >= 1 - REPEATED_MARGIN_RATIO))
+        if not numbered and not standard and in_margin and text.casefold() in excluded:
             continue
         if not is_heading_line(line, body_size, allow_unnumbered=allow_unnumbered):
             continue

@@ -37,7 +37,7 @@ import pdfplumber
 from solo_leveling.parsing_diagnostics import RotationMetrics, emit_rotation_metrics
 
 from solo_leveling.infrastructure.parsing.sections import (
-    LineStyle, detect_headings, find_body_size,
+    LineStyle, REPEATED_MARGIN_RATIO, detect_headings, find_body_size,
 )
 
 PDF_ENCRYPTED = "pdf_encrypted"
@@ -86,7 +86,6 @@ TEXT_X_TOLERANCE = 1.5
 # 페이지 아래 여백(맨 아래 10%)에 숫자만 있는 줄은 쪽 번호로 보고 본문에서 뺀다(#15).
 # 본문 안의 수식·표 숫자는 여백에 있지 않거나 다른 글자와 함께 있으므로 건드리지 않는다.
 FOOTER_ZONE_RATIO = 0.90
-REPEATED_MARGIN_RATIO = 0.12
 _PAGE_NUMBER_RE = re.compile(r"\d{1,4}")
 
 

@@ -57,7 +57,9 @@ def test_freeform_unnumbered_heading_requires_explicit_document_context():
 
 @pytest.mark.parametrize('text', [
     'Figure 3: Attention Visualizations',
+    'Fig. 1 Attention weights',
     'Table 2 Results',
+    'Table IV Results',
     'Input-Input Layer5',
     'A large sentence that ends like ordinary prose.',
 ])
@@ -83,6 +85,18 @@ def test_repeated_line_filter_does_not_change_numbered_or_standard_heading_contr
     ], BODY, allow_unnumbered=True, excluded_texts={'1 introduction', 'references'})
     assert headings == [PageHeading('1 Introduction', 0),
                         PageHeading('References', text.index('References'))]
+
+
+def test_repeated_margin_text_is_kept_when_it_is_a_heading_in_the_body():
+    repeated = 'Attention Visualizations'
+    text = _text(repeated, repeated, repeated)
+    second = text.index(repeated, len(repeated))
+    headings = detect_headings(text, [
+        line(repeated, size=12.0, top_ratio=0.05),
+        line(repeated, size=12.0, top_ratio=0.45),
+        line(repeated, size=12.0, top_ratio=0.95),
+    ], BODY, allow_unnumbered=True, excluded_texts={repeated})
+    assert headings == [PageHeading(repeated, second)]
 
 
 def test_extract_pages_excludes_only_repeated_margin_header(tmp_path):
