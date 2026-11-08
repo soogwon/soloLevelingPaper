@@ -220,7 +220,12 @@ test('상세에서 맥락 기록 20건과 다음 페이지를 순서대로 읽�
   const { app, get } = await setup({ callServerTool: async call => {
     requests.push(call);
     if (call.name === 'get_paper_detail') {
-      return detailResult({ annotation_page: { context_id: 'ctx', items: notes.slice(0, 20), next_cursor: 'next' } });
+      return detailResult({
+        annotation_page: { context_id: 'ctx', items: notes.slice(0, 20), next_cursor: 'next' },
+        keywords: [{ insight_id: 'i1', text: '단어', content_kind: 'extracted', producer: 'extractor',
+          chunk_id: 'c', parse_revision_id: 'parse', translation_revision_id: null, start_offset: 0,
+          end_offset: 2, quote_original: '단어', pdf_page: 1, section_id: null }],
+      });
     }
     return { structuredContent: { items: notes.slice(20), next_cursor: null } };
   }});
@@ -239,6 +244,7 @@ test('상세에서 맥락 기록 20건과 다음 페이지를 순서대로 읽�
   await tick();
   assert.deepEqual(requests.slice(1), [{ name: 'list_annotations', arguments: { request: { context_id: 'ctx', cursor: 'next' } } }]);
   assert.deepEqual(rows(), expected);
+  assert.match(get('paper-detail-insights').textContent, /원문 추출 · 단어 · PDF 1페이지/);
   assert.equal(more.hidden, true);
   get('back-dashboard').click();
   assert.equal(get('detail-view').hidden, true);

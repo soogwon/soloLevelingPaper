@@ -109,7 +109,7 @@ test('저장된 목차만 표시하고 다른 파싱 리비전의 제목은 거�
  assert.match(el('toc-status').textContent,/저장된 목차가 없습니다/);
 });
 
-test('목차 제목과 메모 저장을 함께 유지하고 출처 항목의 카드 미지원과 데이터 부재를 구분한다', async () => {
+test('목차 제목과 메모 저장을 함께 유지하고 출처 불일치와 데이터 부재를 구분한다', async () => {
   const {app, el} = setup();
   const row = {section_id:'s1',parse_revision_id:'p',title:'Methods',ordinal:1,level:1,
     parent_section_id:null,start_pdf_page:5,end_pdf_page:7};
@@ -122,8 +122,8 @@ test('목차 제목과 메모 저장을 함께 유지하고 출처 항목의 카
   app.ontoolresult(detailPayload({section_catalog:[row],evidence:[first],keywords:[{text:'Methods'}]}));
   assert.match(el('toc-items').textContent,/Methods/);
   assert.match(el('location').textContent,/Methods/);
-  assert.match(el('availability').textContent,/화면 표시는 아직 지원하지 않습니다/);
-  assert.doesNotMatch(el('availability').textContent,/제공되지 않습니다/);
+  assert.match(el('availability').textContent,/키워드의 일부 출처를 확인할 수 없습니다/);
+  assert.match(el('availability').textContent,/저장된 중요 문장 없음/);
   el('note-body').value = '내 메모';
   await el('save-note').onclick();
   assert.equal(request.name,'create_annotation');
@@ -197,6 +197,21 @@ test('저장 결과 미확정 뒤에는 근거 재선택으로 재시도할 수 
   app.ontoolresult(detailPayload({evidence:[{...first,annotations:[{kind:'highlight',body:''}]}]}));
   assert.equal(el('editor').disabled,false);
   assert.match(el('records').textContent,/하이라이트/);
+});
+
+test('저장된 추출·생성 항목을 구분하고 잘못된 번역 출처의 본문은 숨긴다',()=>{
+ const {app,el}=setup();
+ const source={insight_id:'i1',text:'🧪',content_kind:'extracted',producer:'extractor',chunk_id:'c',parse_revision_id:'p',translation_revision_id:null,start_offset:1,end_offset:2,quote_original:'🧪',pdf_page:6,section_id:null};
+ app.ontoolresult(detailPayload({keywords:[source],important_sentences:[
+   {...source,insight_id:'i2',text:'해석',content_kind:'generated',producer:'model',translation_revision_id:'t'},
+   {...source,translation_revision_id:'other',quote_original:'X',text:'X'}]}));
+ assert.match(el('insights').textContent,/원문 추출 · 🧪/);
+ assert.match(el('insights').textContent,/AI 생성 · 해석/);
+ assert.match(el('insights').textContent,/원문 구간 \[1, 2\)/);
+ assert.doesNotMatch(el('insights').textContent,/X/);
+ assert.match(el('availability').textContent,/일부 출처/);
+ app.ontoolinput({});
+ assert.equal(el('insights').children.length,0);
 });
 
 test('근거 없는 맥락 메모를 표시하고 같은 맥락의 다음 페이지를 이어 읽는다', async () => {
