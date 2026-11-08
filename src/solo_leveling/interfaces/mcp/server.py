@@ -69,7 +69,7 @@ status=ok는 질문 전체의 완전한 답변을 보장하지 않습니다. mod
 지정 범위 밖에서는 같은 섹션의 다음 페이지에서 끊긴 문장의 끝만 보충할 수 있습니다. 사용자가 페이지를 엄격히 제한하면 focus.strict_pages=true로 호출하세요.
 논문 근거 상세 화면은 반환된 인용문만 보여주며 PDF 전체나 정밀 좌표를 표시하지 않습니다.
 화면이 표시되지 않아도 동일한 JSON 응답을 사용하세요.
-printed_page_label이 없으면 pdf_page를 'PDF 기준 N페이지'로 표시하세요.
+pdf_page를 기준으로 'PDF 기준 N페이지'라고 표시하세요. 확인된 printed_page_label은 보조 정보로만 덧붙이세요.
 추출 수식을 배경지식으로 보완하고 검증된 원문처럼 제시하지 마세요.
 MCP 호출 또는 호스트 권한 검사가 실패하면 실패 사실을 안내하고, DB·벡터 저장소·PDF 직접
 조회로 우회해 MCP 결과를 대체하지 마세요. 이전 근거를 사용하면 이전 호출의 결과임을 밝히고,
@@ -645,7 +645,8 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         """같은 context의 답변에 저장된 근거·페이지·파일명을 조회합니다.
 
         답변이 반환한 evidence_ids를 사용합니다. 재검색이나 끊긴 문장의 복구는 하지 않습니다.
-        printed_page_label이 없으면 pdf_page를 'PDF 기준 N페이지'로 안내합니다.
+        pdf_page를 기준으로 'PDF 기준 N페이지'라고 안내합니다.
+        확인된 printed_page_label은 보조 정보로만 덧붙입니다.
         """
         try:
             result = await anyio.to_thread.run_sync(

@@ -171,7 +171,7 @@ status는 ok/partial/insufficient_evidence/needs_clarification이다. claims는 
 
 현재 구조 검증에서 ok·partial은 claims가 필요하고 insufficient_evidence·needs_clarification은 claims가 비어 있다. reason_code는 partial·insufficient_evidence에서 필수이며 ok·needs_clarification에서는 null이다. 상태·사유는 MCP 출력 스키마상 문자열이므로 의미상 허용값과 조합은 서비스 검증 및 테스트로 확인한다.
 
-printed_page_label은 인쇄 번호를 확인한 문자열이며 사용자 표시의 기본이다. 없거나 불확실하면 null로 두고 'PDF 기준 N페이지'로 대체한다. pdf_page는 첫 페이지=1인 실제 파일 위치이며 이동·검증에 사용한다. 인쇄 번호 중복을 허용하고 단독 ID로 사용하지 않는다. focus는 물리 pdf_page 또는 section_id로 해석하며, 인쇄 번호만 받은 호스트는 중복 여부를 확인해 물리 위치로 변환하거나 확인 질문을 한다.
+M1의 인용 위치 표시는 첫 페이지=1인 물리 `pdf_page`를 기준으로 `PDF 기준 N페이지`라고 표현한다. `printed_page_label`은 별도로 확인된 인쇄 번호 문자열이 있을 때만 보조 정보로 표시하며, 없거나 불확실하면 `null`로 둔다. 추출된 쪽 번호 후보를 자동으로 확정값으로 승격하지 않는다. 인쇄 번호는 중복될 수 있으므로 단독 ID나 검색·이동 기준으로 사용하지 않는다. focus는 물리 pdf_page 또는 section_id로 해석하며, 인쇄 번호만 받은 호스트는 중복 여부를 확인해 물리 위치로 변환하거나 확인 질문을 한다.
 
 청크의 text는 한국어 번역문, original_text는 추출 원문이다. 생성에는 번역과 원문 근거를 제공한다. quote_ko는 번역문, quote_original은 추출 원문을 기준으로 연결한다. 원문과 번역문 사이 문자 offset이 같다고 가정하지 않는다. 자세한 필드와 재번역 정책은 [22번 합의](22-local-m1-baseline.md)를 참고하되 미구현 계획과 현재 동작을 구분한다.
 
