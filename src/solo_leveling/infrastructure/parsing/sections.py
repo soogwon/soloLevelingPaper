@@ -1,6 +1,7 @@
 """infrastructure/parsing — 논문 섹션 제목 인식 (M1-05a, #65)
 
-글자 크기·굵기와 제목 모양으로 큰 제목(Abstract, 1 Introduction, 2 Method ...)만 찾는다.
+글자 크기·굵기와 제목 모양으로 큰 제목(Abstract, 1 Introduction, 2 Method ...)을 찾는다.
+첫 페이지·반복 머리말·캡션·그림 라벨을 제외할 수 있을 때만 비표준 무번호 제목도 허용한다.
 세부 제목(3.1 등)은 다루지 않는다. 확실하지 않으면 제목으로 보지 않는다. 못 찾은 구간은
 section_id가 None으로 남고, 그래도 논문 등록은 실패하지 않는다.
 """
@@ -13,6 +14,7 @@ from typing import Iterable, Optional
 MIN_SIZE_GAP = 0.8
 MAX_HEADING_LENGTH = 80
 MAX_HEADING_WORDS = 12
+MAX_FREEFORM_WORDS = 8
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,8 @@ class LineStyle:
     text: str
     size: float
     bold: bool
+    # 페이지 위쪽부터의 상대 위치. 합성/과거 호출처럼 모르면 None이다.
+    top_ratio: Optional[float] = None
 
 
 # 번호 없는 제목으로 인정하는 표준 이름. 소문자로 비교한다.
@@ -45,6 +49,8 @@ STANDARD_HEADINGS = frozenset({
 # "3.1 Encoder"처럼 세부 번호가 붙은 것은 맞지 않는다.
 _NUMBERED_RE = re.compile(r'^(?:\d{1,2}|[IVX]{1,4})\s*[.)]?\s+(\S.*)$')
 _LETTER_RE = re.compile(r'[A-Za-z가-힣]')
+_CAPTION_RE = re.compile(r'^(?:fig(?:ure)?|table|algorithm|equation|listing)\s*\d+\b', re.IGNORECASE)
+_ALNUM_LABEL_RE = re.compile(r'\b[A-Za-z가-힣]+\d+\b')
 
 
 def _clean(text: str) -> str:
@@ -66,7 +72,23 @@ def _looks_like_title(title: str) -> bool:
     return not first.isascii() or first.isupper()
 
 
-def is_heading_line(line: LineStyle, body_size: float) -> bool:
+def _is_freeform_heading(line: LineStyle, body_size: float) -> bool:
+    """표준 목록 밖의 무번호 제목을 보수적으로 판정한다.
+
+    호출자는 첫 페이지·반복 머리말을 별도로 제외해야 한다. 여기서는 본문보다 실제로 큰 짧은
+    제목 모양만 허용하고 캡션과 그림 내부의 숫자 혼합 라벨은 거부한다.
+    """
+    text = _clean(line.text)
+    if line.size < body_size + MIN_SIZE_GAP or len(text.split()) < 2:
+        return False
+    if len(text.split()) > MAX_FREEFORM_WORDS or ':' in text:
+        return False
+    if _CAPTION_RE.match(text) or _ALNUM_LABEL_RE.search(text):
+        return False
+    return _looks_like_title(text)
+
+
+def is_heading_line(line: LineStyle, body_size: float, *, allow_unnumbered: bool = False) -> bool:
     text = _clean(line.text)
     if not text or len(text) > MAX_HEADING_LENGTH:
         return False
@@ -75,7 +97,9 @@ def is_heading_line(line: LineStyle, body_size: float) -> bool:
     numbered = _title_part(text)
     if numbered is not None:
         return _looks_like_title(numbered)
-    return text.rstrip(':.').strip().lower() in STANDARD_HEADINGS
+    if text.rstrip(':.').strip().lower() in STANDARD_HEADINGS:
+        return True
+    return allow_unnumbered and _is_freeform_heading(line, body_size)
 
 
 def find_body_size(sizes: Iterable[tuple[float, int]]) -> Optional[float]:
@@ -86,19 +110,39 @@ def find_body_size(sizes: Iterable[tuple[float, int]]) -> Optional[float]:
     return counts.most_common(1)[0][0] if counts else None
 
 
-def detect_headings(page_text: str, lines: list, body_size: Optional[float]) -> list:
+def detect_headings(page_text: str, lines: list, body_size: Optional[float], *,
+                    allow_unnumbered: bool = False,
+                    excluded_texts: Iterable[str] = ()) -> list:
     """페이지 줄 목록에서 큰 제목을 찾아 page_text 안의 위치와 함께 돌려준다."""
     if body_size is None:
         return []
     headings = []
+    excluded = {_clean(text).casefold() for text in excluded_texts}
     position = 0
+    located = []
     for line in lines:
         offset = page_text.find(line.text, position)
         if offset < 0:
             continue  # 텍스트에서 위치를 못 찾으면 제목으로 쓰지 않는다
         position = offset + len(line.text)
-        if is_heading_line(line, body_size):
-            headings.append(PageHeading(_clean(line.text), offset))
+        located.append((line, offset))
+    for index, (line, offset) in enumerate(located):
+        text = _clean(line.text)
+        numbered = _title_part(text) is not None
+        standard = text.rstrip(':.').strip().lower() in STANDARD_HEADINGS
+        if not numbered and not standard and text.casefold() in excluded:
+            continue
+        if not is_heading_line(line, body_size, allow_unnumbered=allow_unnumbered):
+            continue
+        is_freeform = not numbered and not standard
+        if is_freeform and index > 0 and all(
+                previous.size >= body_size + MIN_SIZE_GAP
+                and _ALNUM_LABEL_RE.search(_clean(previous.text))
+                for previous, _ in located[:index]):
+            # 페이지 첫 제목 앞에 회전 필터 뒤 남은 그림 내부 라벨만 있으면 그 페이지 전체를
+            # 새 섹션에 둔다. 실제 본문이나 반복 머리말 앞에서는 이 보정을 하지 않는다.
+            offset = 0
+        headings.append(PageHeading(text, offset))
     return headings
 
 
