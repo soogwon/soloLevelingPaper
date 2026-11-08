@@ -474,6 +474,10 @@ def init_db(db_path: str) -> None:
 
 def _migrate_translation_recovery(conn: sqlite3.Connection) -> None:
     """기존 복구 잠금에 고정 기준·계획 색인 열을 반복 안전하게 추가한다."""
+    # sqlite3 연결은 첫 DML 전까지 암묵 트랜잭션을 시작하지 않는다. ALTER/DROP도
+    # 이후 소유권 검증과 함께 롤백되도록 첫 스키마 변경 전에 명시적으로 잠근다.
+    conn.commit()
+    conn.execute('BEGIN IMMEDIATE')
     with conn:
         columns = {row['name'] for row in conn.execute('PRAGMA table_info(translation_recovery_locks)')}
         if 'base_embedding_set_id' not in columns:

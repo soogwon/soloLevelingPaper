@@ -442,10 +442,16 @@ def test_recovery_reservation_migration_rejects_same_job_with_different_ids(db):
         conn.execute("UPDATE translation_recovery_locks SET new_embedding_set_id='reserved-b' "
                      "WHERE job_id='j2'")
         conn.execute('DELETE FROM translation_recovery_embedding_set_reservations')
+        conn.execute('CREATE UNIQUE INDEX uq_translation_recovery_embedding_set_owner '
+                     'ON translation_recovery_requests(new_embedding_set_id) '
+                     'WHERE new_embedding_set_id IS NOT NULL')
 
     with pytest.raises(sqlite3.IntegrityError, match='conflicting recovery embedding set owners'):
         init_db(db)
     assert rows(db, 'SELECT * FROM translation_recovery_embedding_set_reservations') == []
+    assert rows(db, "SELECT name FROM sqlite_master WHERE type='index' "
+                    "AND name='uq_translation_recovery_embedding_set_owner'") == [
+        {'name': 'uq_translation_recovery_embedding_set_owner'}]
 
 
 def test_recovery_reservation_migration_is_repeatable_for_matching_legacy_rows(db):
