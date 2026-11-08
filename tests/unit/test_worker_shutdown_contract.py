@@ -180,3 +180,56 @@ def test_quarantined_worker_is_reaped_after_natural_exit(tmp_path, monkeypatch):
     assert process.closed
     assert spawns == ['spawn']
     assert embedder._process is None and not embedder._stop_unconfirmed
+
+
+def test_pid_lookup_failure_blocks_spawn_until_worker_exits(tmp_path, monkeypatch):
+    def fail_pid(process):
+        raise OSError('SYNTHETIC_PRIVATE_PID')
+
+    monkeypatch.setattr(Process, 'pid', property(fail_pid))
+    embedder, process, connection, error = request_failure(tmp_path, 'survivor')
+    spawns = []
+
+    def blocked_context(method):
+        spawns.append(method)
+        raise RuntimeError('SYNTHETIC_SPAWN_BLOCKED')
+
+    monkeypatch.setattr(module.multiprocessing, 'get_context', blocked_context)
+    assert error.code == module.EmbeddingFailure.UNAVAILABLE
+    with pytest.raises(module.EmbeddingProcessError) as followup:
+        embedder(['synthetic'], model_name='synthetic')
+    assert followup.value.code == module.EmbeddingFailure.UNAVAILABLE
+    assert spawns == []
+    assert process.alive and embedder._process is process and connection.closed
+    process.alive = False
+    with pytest.raises(module.EmbeddingProcessError):
+        embedder(['synthetic'], model_name='synthetic')
+    assert process.closed and spawns == ['spawn']
+
+
+@pytest.mark.parametrize('fail_process,fail_ipc', [(True, False), (False, True), (True, True)])
+def test_close_retries_only_unreleased_handles(tmp_path, monkeypatch, fail_process, fail_ipc):
+    def count_closes(cls, fail_first):
+        calls = []
+        original_close = cls.close
+
+        def close(handle):
+            calls.append(handle)
+            if fail_first and len(calls) == 1:
+                raise OSError('SYNTHETIC_PRIVATE_CLOSE')
+            original_close(handle)
+
+        monkeypatch.setattr(cls, 'close', close)
+        return calls
+
+    process_calls = count_closes(Process, fail_process)
+    ipc_calls = count_closes(Connection, fail_ipc)
+    embedder, process, connection, error = request_failure(tmp_path, None)
+    assert error.code == module.EmbeddingFailure.UNAVAILABLE
+    assert process.closed == (not fail_process)
+    assert connection.closed == (not fail_ipc)
+    embedder.close()
+    embedder.close()
+    assert process.closed and connection.closed
+    assert process_calls == [process] * (2 if fail_process else 1)
+    assert ipc_calls == [connection] * (2 if fail_ipc else 1)

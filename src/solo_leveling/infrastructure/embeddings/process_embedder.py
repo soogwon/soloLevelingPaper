@@ -69,6 +69,7 @@ class ProcessEmbedder:
         self._process = None
         self._connection = None
         self._stop_unconfirmed = False
+        self._pending_closes = []
         self._log_dir = str(Path(log_dir or Path(tempfile.gettempdir()) / 'solo-leveling-diagnostics').resolve())
         self._worker_id = None
         # None이면 환경 설정을 따르고, 기본은 원본 로그·스택을 수집하지 않는다.
@@ -82,6 +83,13 @@ class ProcessEmbedder:
         except Exception:
             pass
 
+    def _close_handle(self, handle):
+        try:
+            handle.close()
+        except Exception:
+            # 다음 정리 호출에서 다시 닫을 수 있도록 소유권을 유지한다.
+            self._pending_closes.append(handle)
+
     def _stop(self):
         """상태 잠금을 잡은 호출자만 사용한다. 자신이 생성한 프로세스만 종료한다."""
         process, connection = self._process, self._connection
@@ -93,12 +101,9 @@ class ProcessEmbedder:
             except Exception:
                 return None
 
-        def close_connection():
-            if connection is not None:
-                try:
-                    connection.close()
-                except Exception:
-                    pass
+        pending, self._pending_closes = self._pending_closes, []
+        for handle in pending:
+            self._close_handle(handle)
 
         try:
             if process is None:
@@ -108,10 +113,12 @@ class ProcessEmbedder:
                 pid = process.pid
             except Exception:
                 pid = None
-            if pid is None:
-                self._process = None
-                self._stop_unconfirmed = False
-                return
+            else:
+                if pid is None:
+                    self._close_handle(process)
+                    self._process = None
+                    self._stop_unconfirmed = False
+                    return
 
             # 이전 종료 시도에서 생존 여부를 확정하지 못한 worker에는 종료 API를 반복 호출하지
             # 않는다. 자연 종료 여부만 다시 확인해 회수하거나 계속 격리한다.
@@ -146,11 +153,7 @@ class ProcessEmbedder:
                 except Exception:
                     exit_code = None
                 self._event('worker_stopped', pid=pid, exit_code=exit_code, alive=False)
-                try:
-                    process.close()
-                except Exception:
-                    # 종료는 확인됐으므로 새 worker 생성까지 막지는 않는다.
-                    pass
+                self._close_handle(process)
                 self._process = None
                 self._stop_unconfirmed = False
             else:
@@ -159,7 +162,8 @@ class ProcessEmbedder:
                 self._stop_unconfirmed = True
                 self._event('worker_stop_failed', pid=pid, alive=final_alive)
         finally:
-            close_connection()
+            if connection is not None:
+                self._close_handle(connection)
 
     def close(self):
         with self._state:
@@ -190,6 +194,8 @@ class ProcessEmbedder:
                         raise EmbeddingProcessError(EmbeddingFailure.UNAVAILABLE)
                 if self._process is None or not self._process.is_alive():
                     self._stop()
+                    if self._stop_unconfirmed:
+                        raise EmbeddingProcessError(EmbeddingFailure.UNAVAILABLE)
                     context = multiprocessing.get_context('spawn')
                     self._connection, child = context.Pipe()
                     self._worker_id = uuid4().hex
