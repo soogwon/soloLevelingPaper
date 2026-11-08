@@ -27,6 +27,7 @@ extract_words() 기반 재구성은 오히려 단어 자체를 잘못 묶어 도
 바꾸면 오히려 셀 병합 문제가 생겨 더 나빠지므로 표는 손대지 않았다.
 """
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
@@ -36,7 +37,7 @@ import pdfplumber
 from solo_leveling.parsing_diagnostics import RotationMetrics, emit_rotation_metrics
 
 from solo_leveling.infrastructure.parsing.sections import (
-    LineStyle, detect_headings, find_body_size,
+    LineStyle, REPEATED_MARGIN_RATIO, detect_headings, find_body_size,
 )
 
 PDF_ENCRYPTED = "pdf_encrypted"
@@ -118,10 +119,14 @@ def _line_styles(page) -> list[LineStyle]:
         chars = [c for c in line["chars"] if c["text"].strip()]
         if not chars:
             continue
+        top = line.get("top")
+        top_ratio = (float(top) / float(page.height)
+                     if isinstance(top, (int, float)) and page.height else None)
         styles.append(LineStyle(
             text=line["text"],
             size=max(c["size"] for c in chars),
             bold=all("bold" in str(c.get("fontname", "")).lower() for c in chars),
+            top_ratio=top_ratio,
         ))
     return styles
 
@@ -184,8 +189,23 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
             page_styles.append(styles)
             size_counts.extend((line.size, len(line.text.strip())) for line in styles)
     body_size = find_body_size(size_counts)
+    page_occurrences: Counter = Counter()
+    for styles in page_styles:
+        page_occurrences.update({
+            re.sub(r'\s+', ' ', line.text).strip().casefold()
+            for line in styles
+            if line.top_ratio is not None
+            and (line.top_ratio <= REPEATED_MARGIN_RATIO
+                 or line.top_ratio >= 1 - REPEATED_MARGIN_RATIO)
+        })
+    repeated_lines = {text for text, count in page_occurrences.items() if text and count > 1}
     for extracted, styles in zip(pages, page_styles):
-        extracted.headings = detect_headings(extracted.text, styles, body_size)
+        extracted.headings = detect_headings(
+            extracted.text, styles, body_size,
+            # 첫 페이지의 논문 제목·저자 블록은 섹션으로 추측하지 않는다.
+            allow_unnumbered=extracted.pdf_page > 1,
+            excluded_texts=repeated_lines,
+        )
     return pages
 
 

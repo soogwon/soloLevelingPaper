@@ -12,14 +12,14 @@ from solo_leveling.infrastructure.parsing import pdf_extractor
 from solo_leveling.infrastructure.parsing.chunker import chunk_pages, chunk_pages_with_sections
 from solo_leveling.infrastructure.parsing.pdf_extractor import ExtractedPage, extract_pages
 from solo_leveling.infrastructure.parsing.sections import (
-    LineStyle, PageHeading, is_heading_line, make_section_id,
+    LineStyle, PageHeading, detect_headings, is_heading_line, make_section_id,
 )
 
 BODY = 10.0
 
 
-def line(text, size=BODY, bold=False):
-    return LineStyle(text, size, bold)
+def line(text, size=BODY, bold=False, top_ratio=None):
+    return LineStyle(text, size, bold, top_ratio)
 
 
 @pytest.mark.parametrize("text", [
@@ -47,6 +47,72 @@ def test_non_headings_are_rejected(text):
 def test_body_sized_plain_text_is_not_a_heading_but_bold_is():
     assert not is_heading_line(line("1 Introduction"), BODY)
     assert is_heading_line(line("1 Introduction", bold=True), BODY)
+
+
+def test_freeform_unnumbered_heading_requires_explicit_document_context():
+    candidate = line("Attention Visualizations", size=12.0)
+    assert not is_heading_line(candidate, BODY)
+    assert is_heading_line(candidate, BODY, allow_unnumbered=True)
+
+
+@pytest.mark.parametrize('text', [
+    'Figure 3: Attention Visualizations',
+    'Fig. 1 Attention weights',
+    'Table 2 Results',
+    'Table IV Results',
+    'Input-Input Layer5',
+    'A large sentence that ends like ordinary prose.',
+])
+def test_freeform_heading_rejects_captions_diagram_labels_and_prose(text):
+    assert not is_heading_line(line(text, size=13.0, bold=True), BODY, allow_unnumbered=True)
+
+
+def test_repeated_header_and_preceding_figure_label_are_not_headings():
+    text = _text('Input-Input Layer5', 'Attention Visualizations', 'Figure 3: caption')
+    headings = detect_headings(text, [
+        line('Input-Input Layer5', size=16.0, bold=True),
+        line('Attention Visualizations', size=12.0),
+        line('Figure 3: caption', size=10.0),
+    ], BODY, allow_unnumbered=True, excluded_texts={'Conference 2026'})
+    assert headings == [PageHeading('Attention Visualizations', 0)]
+
+
+def test_repeated_line_filter_does_not_change_numbered_or_standard_heading_contract():
+    text = _text('1 Introduction', 'References')
+    headings = detect_headings(text, [
+        line('1 Introduction', size=12.0),
+        line('References', size=12.0),
+    ], BODY, allow_unnumbered=True, excluded_texts={'1 introduction', 'references'})
+    assert headings == [PageHeading('1 Introduction', 0),
+                        PageHeading('References', text.index('References'))]
+
+
+def test_repeated_margin_text_is_kept_when_it_is_a_heading_in_the_body():
+    repeated = 'Attention Visualizations'
+    text = _text(repeated, repeated, repeated)
+    second = text.index(repeated, len(repeated))
+    headings = detect_headings(text, [
+        line(repeated, size=12.0, top_ratio=0.05),
+        line(repeated, size=12.0, top_ratio=0.45),
+        line(repeated, size=12.0, top_ratio=0.95),
+    ], BODY, allow_unnumbered=True, excluded_texts={repeated})
+    assert headings == [PageHeading(repeated, second)]
+
+
+def test_extract_pages_excludes_only_repeated_margin_header(tmp_path):
+    body = (10.0, False, 'Ordinary body text establishes the body font size.')
+    filler = [body] * 8
+    path = tmp_path / 'headers.pdf'
+    path.write_bytes(build_styled_pdf([
+        [(17.0, False, 'Paper Title'), body, body],
+        [(12.0, True, 'Conference Header')] + filler
+        + [(12.0, False, 'Attention Visualizations'), body],
+        [(12.0, True, 'Conference Header'), body, body],
+    ]))
+    pages = extract_pages(str(path))
+    titles = [heading.title for page in pages for heading in page.headings]
+    assert 'Conference Header' not in titles
+    assert 'Attention Visualizations' in titles
 
 
 def test_section_id_is_ordered_and_readable():
@@ -145,6 +211,21 @@ def test_extract_pages_finds_headings_in_a_real_pdf(tmp_path):
     ids = [c.section_id for c in chunk_pages("p", pages)]
     assert ids[0] is None
     assert set(ids) == {None, "01-abstract", "02-introduction", "03-method", "04-references"}
+
+
+def test_attention_pdf_splits_visualizations_from_references():
+    path = Path(__file__).resolve().parents[2] / 'test_data' / 'tmp_pdfs' / '075b9be9-5944-4e83-af4b-2add5dbdeb94.pdf'
+    pages = extract_pages(str(path))
+    titles = [heading.title for page in pages for heading in page.headings]
+    assert 'Attention Visualizations' in titles
+    assert 'Input-Input Layer5' not in titles
+    chunks, sections = chunk_pages_with_sections('rev', pages)
+    by_title = {section.title: section for section in sections}
+    assert (by_title['References'].start_pdf_page, by_title['References'].end_pdf_page) == (10, 12)
+    assert (by_title['Attention Visualizations'].start_pdf_page,
+            by_title['Attention Visualizations'].end_pdf_page) == (13, 15)
+    assert all(not section.title.lower().startswith(('figure ', 'table ')) for section in sections)
+    assert chunks
 
 
 def test_pdf_without_recognizable_headings_still_extracts(tmp_path):
