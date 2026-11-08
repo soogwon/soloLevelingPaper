@@ -21,14 +21,14 @@ A와 B는 임베딩 검색 품질을 함께 평가한다. B의 가이드 작업�
 
 - local_profile_id는 서버 내부 생성이며 사용자 로그인이나 토큰이 아니다.
 - version_id·parse_revision_id·chunk_id·translation_revision_id를 통일한다. text는 한국어 번역문, original_text는 추출 원문이다.
-- 인쇄 번호 printed_page_label을 우선 표시하며, 없거나 불확실하면 'PDF 기준 N페이지'로 대체한다. pdf_page는 파일 위치용 1-based 물리 페이지로 보관한다.
+- M1 인용은 1-based 물리 `pdf_page`를 기준으로 `PDF 기준 N페이지`라고 표시한다. 확인된 `printed_page_label`이 있으면 보조 정보로만 덧붙인다.
 - 첫 청크는 페이지를 넘기지 않고 section은 null을 허용한다.
 - 원문 기준 데이터는 SQLite, 벡터는 Chroma이며 ID로 대조한다.
 - 답변은 status·answer_ko·claims·citations·reason_code로 전달한다.
 - 입력 경로는 import 루트 상대 경로만 허용한다.
 - 작업은 queued/processing/ready/failed/interrupted로 구분한다.
 
-번역은 A가 원문·페이지 매핑과 작업 상태를 연결하고, B가 번역 모델·프롬프트·수치/용어 품질을 담당한다. C는 '한국어 번역' 표기, 인쇄 번호 우선 표시와 파일 이동의 물리 페이지 사용을 연결한다. 등록 비용·시간에 번역도 포함한다.
+번역은 A가 원문·페이지 매핑과 작업 상태를 연결하고, B가 번역 모델·프롬프트·수치/용어 품질을 담당한다. C는 '한국어 번역' 표기, 물리 PDF 페이지 기준 표시와 확인된 인쇄 번호의 보조 표시를 연결한다. 등록 비용·시간에 번역도 포함한다.
 
 ## 주별 진행
 
