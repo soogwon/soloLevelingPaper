@@ -268,7 +268,8 @@ class Citation:
 - 번역문과 원문의 문자 offset이 같다고 가정하지 않는다.
 - 번역문이 없으면 `quote_ko`는 `null`이다.
 - 한국어 발췌는 사용자 표시에서 한국어 번역임을 구분한다.
-- `printed_page_label`이 없으면 `PDF 기준 N페이지`로 표시한다.
+- 위치는 `pdf_page`를 기준으로 `PDF 기준 N페이지`라고 표시한다. 확인된
+  `printed_page_label`이 있으면 보조 정보로 덧붙일 수 있다.
 
 ### 7.3 `get_evidence` 전용 응답 모델
 
