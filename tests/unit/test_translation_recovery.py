@@ -435,6 +435,35 @@ def test_old_shape_database_is_migrated_without_losing_rows(db):
     assert repo.get_search_index(db, 'v1')['embedding_set_id'] == 'e2'
 
 
+def test_recovery_reservation_migration_rejects_same_job_with_different_ids(db):
+    repo.prepare_translation_recovery(db, recovery_job(), 'request-1', 'hash-1', 'e1')
+    repo.reserve_recovery_embedding_set(db, 'j2', 'reserved-a')
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute("UPDATE translation_recovery_locks SET new_embedding_set_id='reserved-b' "
+                     "WHERE job_id='j2'")
+        conn.execute('DELETE FROM translation_recovery_embedding_set_reservations')
+
+    with pytest.raises(sqlite3.IntegrityError, match='conflicting recovery embedding set owners'):
+        init_db(db)
+    assert rows(db, 'SELECT * FROM translation_recovery_embedding_set_reservations') == []
+
+
+def test_recovery_reservation_migration_is_repeatable_for_matching_legacy_rows(db):
+    repo.prepare_translation_recovery(db, recovery_job(), 'request-1', 'hash-1', 'e1')
+    repo.reserve_recovery_embedding_set(db, 'j2', 'reserved-a')
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute('DELETE FROM translation_recovery_embedding_set_reservations')
+
+    init_db(db)
+    init_db(db)
+    replay = repo.prepare_translation_recovery(db, recovery_job('unused'), 'request-1', 'hash-1', 'e1')
+    assert replay.new_embedding_set_id == 'reserved-a'
+    assert repo.get_unpublished_recovery_embedding_set(db, 'j2') == 'reserved-a'
+    assert rows(db, 'SELECT embedding_set_id, job_id FROM '
+                    'translation_recovery_embedding_set_reservations') == [
+        {'embedding_set_id': 'reserved-a', 'job_id': 'j2'}]
+
+
 def test_scaled_96_of_98_scenario(tmp_path):
     path = str(tmp_path / 'big.db')
     init_db(path)

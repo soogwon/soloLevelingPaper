@@ -499,9 +499,11 @@ def _migrate_translation_recovery(conn: sqlite3.Connection) -> None:
                 UNION
                 SELECT new_embedding_set_id AS embedding_set_id, job_id
                 FROM translation_recovery_locks WHERE new_embedding_set_id IS NOT NULL
-            ) legacy JOIN translation_recovery_embedding_set_reservations owner
-              ON owner.embedding_set_id=legacy.embedding_set_id
-            WHERE owner.job_id<>legacy.job_id LIMIT 1''').fetchone()
+            ) legacy WHERE NOT EXISTS (
+                SELECT 1 FROM translation_recovery_embedding_set_reservations owner
+                WHERE owner.embedding_set_id=legacy.embedding_set_id
+                  AND owner.job_id=legacy.job_id
+            ) LIMIT 1''').fetchone()
         if conflict:
             raise sqlite3.IntegrityError('conflicting recovery embedding set owners')
 
