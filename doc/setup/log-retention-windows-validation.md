@@ -1,5 +1,9 @@
 # #99 Windows 로그 보관 기반 검증
 
+최신 main의 실제 Windows 어댑터·MCP 정상/강제 종료·합성 worker 검증은
+[2026-11-08 추가 결과](issue-99-windows-log-lifecycle.md)를 참고한다.
+아래 내용은 이전 primitive 검증 시점의 범위와 결과다.
+
 2026-11-05, main `65882b5` 기준. Windows 11 (10.0.26300), Python 3.12.14,
 D: NTFS에서 임시 파일과 합성 자식 프로세스만 사용했다. 제품 어댑터, MCP/worker
 생산자 연결, 순환·삭제 기능은 추가하지 않았다. 실제 로그·논문·DB·API는 사용하지 않았다.

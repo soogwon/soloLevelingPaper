@@ -23,9 +23,18 @@ def test_windows_server_lock_and_restart(tmp_path, kind):
             '--log-dir', str(root)]
     if kind == 'detail':
         args.append('--detailed-diagnostics')
-    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2] / 'src'),
+    package = os.environ.get('SOLO_LOG_TEST_INSTALLED_ROOT') or str(Path(__file__).resolve().parents[2] / 'src')
+    # 실제 stdio 자식도 선택한 wheel/소스에서 로딩됐는지 확인한다.
+    program = ("import os,pathlib,runpy,solo_leveling; "
+               "assert pathlib.Path(solo_leveling.__file__).resolve().is_relative_to("
+               "pathlib.Path(os.environ['PYTHONPATH']).resolve()); "
+               "runpy.run_module('solo_leveling.interfaces.cli.mcp_diagnostics',run_name='__main__')")
+    args[3:5] = ['-c', program]
+    env = {key: value for key, value in os.environ.items()
+           if not key.upper().startswith(('SOLO_LEVELING_', 'OPENAI', 'GENERATION_', 'TRANSLATION_'))}
+    env.update({'PYTHONPATH': package,
            'DATA_ROOT': str(tmp_path / 'data'), 'LOCAL_ONLY': 'true', 'ALLOW_EXTERNAL_API': 'false',
-           'OPENAI_API_KEY': 'test-only'}
+           'OPENAI_API_KEY': 'test-only'})
     request = {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
         'protocolVersion': '2025-03-26', 'capabilities': {}, 'clientInfo': {'name': 'test', 'version': '1'}}}
     store = WindowsBundleStore()
@@ -46,10 +55,17 @@ def test_windows_server_lock_and_restart(tmp_path, kind):
                 assert actual_kind == kind
                 assert store.try_acquire_inspector(root, bundle).status == 'busy'
                 assert not list(root.glob('*.closed.json'))
+                if not interrupted:
+                    old_bundle, _ = parse_log_name(original.name)
+                    old_lease = store.try_acquire_inspector(root, old_bundle)
+                    assert old_lease.status == 'acquired'
+                    old_lease.lease.release()
                 if interrupted:
                     server.kill()
                 stdout, stderr = server.communicate(timeout=25)
-                if not interrupted:
+                if interrupted:
+                    assert server.returncode != 0
+                else:
                     assert server.returncode == 0 and stdout == stderr == b''
             finally:
                 if server.poll() is None:
@@ -61,6 +77,7 @@ def test_windows_server_lock_and_restart(tmp_path, kind):
         if interrupted:
             assert not list(root.glob('*.closed.json'))
             original, contents = log, log.read_bytes()
+            original_info = log.stat()
     metadata, = root.glob('*.closed.json')
     record = json.loads(metadata.read_bytes())
     entry, = record['files']
@@ -69,6 +86,11 @@ def test_windows_server_lock_and_restart(tmp_path, kind):
     assert entry['identity'] == dict(platform='windows', st_dev=info.st_dev, st_ino=info.st_ino,
                                      st_size=info.st_size)
     assert original.read_bytes() == contents
+    assert os.path.samestat(original_info, original.stat())
+    from solo_leveling.interfaces.cli.log_inventory import inventory
+    interrupted_row, = [row for row in inventory(root)['files'] if row['name'] == original.name]
+    assert interrupted_row['activity'] == 'unknown'
+    assert not (root / f'slp-log-v1-mcp-{parse_log_name(original.name)[0].run_id}.closed.json').exists()
 
 
 def test_junction_ancestor_cannot_create_bundle(tmp_path):
