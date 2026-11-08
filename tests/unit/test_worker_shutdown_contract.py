@@ -83,8 +83,6 @@ def test_normal_stop_preserves_fixed_request_error_and_releases_resources(tmp_pa
     assert not list(tmp_path.iterdir())
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason='#99 A pending: cleanup OS errors replace the fixed request error')
 @pytest.mark.parametrize('fault', ['terminate', 'join', 'kill'])
 def test_cleanup_failure_preserves_fixed_request_error(tmp_path, fault):
     _, _, _, error = request_failure(tmp_path, fault)
@@ -93,22 +91,23 @@ def test_cleanup_failure_preserves_fixed_request_error(tmp_path, fault):
     assert 'SYNTHETIC_PRIVATE' not in str(error)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason='#99 A pending: cleanup exceptions skip IPC closure')
 @pytest.mark.parametrize('fault', ['terminate', 'join', 'kill'])
 def test_cleanup_failure_closes_parent_ipc(tmp_path, fault):
     _, _, connection, _ = request_failure(tmp_path, fault)
     assert connection.closed, 'PARENT_IPC_LEFT_OPEN'
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason='#99 A pending: failed shutdown loses ownership before exit confirmation')
 @pytest.mark.parametrize('fault', ['terminate', 'kill', 'survivor'])
-def test_unconfirmed_exit_keeps_process_owned_for_later_cleanup(tmp_path, fault):
+def test_process_ownership_matches_confirmed_exit(tmp_path, fault):
     embedder, process, _, _ = request_failure(tmp_path, fault)
-    assert process.alive
-    assert embedder._process is process, 'LIVE_WORKER_OWNERSHIP_LOST'
-    assert not process.closed
+    if process.alive:
+        assert embedder._process is process, 'LIVE_WORKER_OWNERSHIP_LOST'
+        assert embedder._stop_unconfirmed
+        assert not process.closed
+    else:
+        assert process.closed
+        assert embedder._process is None
+        assert not embedder._stop_unconfirmed
 
 
 def test_surviving_worker_is_not_reported_as_stopped(tmp_path, capsys):
@@ -140,13 +139,11 @@ def test_cleanup_failure_is_redacted_at_mcp_error_boundary(tmp_path, capsys, fau
     embedder._serial.release()
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason='#99 A pending: next request attempts spawning with an uncollected live worker')
 @pytest.mark.parametrize('fault', ['terminate', 'kill', 'survivor'])
-def test_live_uncollected_worker_blocks_new_spawn(tmp_path, monkeypatch, fault):
+def test_followup_spawn_matches_worker_cleanup_state(tmp_path, monkeypatch, fault):
     embedder, process, _, _ = request_failure(tmp_path, fault)
-    assert process.alive
     spawns = []
+    cleanup_calls = list(process.calls)
 
     def blocked_context(method):
         # 시도만 관찰하고 실제 새 프로세스는 절대 생성하지 않는다.
@@ -158,4 +155,28 @@ def test_live_uncollected_worker_blocks_new_spawn(tmp_path, monkeypatch, fault):
         embedder(['synthetic'], model_name='synthetic')
     except Exception:
         pass
-    assert not spawns, 'NEW_SPAWN_WITH_UNCOLLECTED_WORKER'
+    if process.alive:
+        assert not spawns, 'NEW_SPAWN_WITH_UNCOLLECTED_WORKER'
+        assert embedder._process is process
+        assert process.calls == cleanup_calls, 'SHUTDOWN_API_RETRIED_WITHOUT_NEW_EVIDENCE'
+    else:
+        assert spawns == ['spawn']
+
+
+def test_quarantined_worker_is_reaped_after_natural_exit(tmp_path, monkeypatch):
+    embedder, process, _, _ = request_failure(tmp_path, 'survivor')
+    assert embedder._process is process and embedder._stop_unconfirmed
+    process.alive = False
+    process.exitcode = -1
+    spawns = []
+
+    def blocked_context(method):
+        spawns.append(method)
+        raise RuntimeError('SYNTHETIC_SPAWN_BLOCKED')
+
+    monkeypatch.setattr(module.multiprocessing, 'get_context', blocked_context)
+    with pytest.raises(module.EmbeddingProcessError):
+        embedder(['synthetic'], model_name='synthetic')
+    assert process.closed
+    assert spawns == ['spawn']
+    assert embedder._process is None and not embedder._stop_unconfirmed

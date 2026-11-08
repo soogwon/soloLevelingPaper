@@ -68,6 +68,7 @@ class ProcessEmbedder:
         self._closed = False
         self._process = None
         self._connection = None
+        self._stop_unconfirmed = False
         self._log_dir = str(Path(log_dir or Path(tempfile.gettempdir()) / 'solo-leveling-diagnostics').resolve())
         self._worker_id = None
         # None이면 환경 설정을 따르고, 기본은 원본 로그·스택을 수집하지 않는다.
@@ -84,21 +85,81 @@ class ProcessEmbedder:
     def _stop(self):
         """상태 잠금을 잡은 호출자만 사용한다. 자신이 생성한 프로세스만 종료한다."""
         process, connection = self._process, self._connection
-        self._process = self._connection = None
-        if process is not None and process.pid is not None:
-            if process.is_alive():
-                process.terminate()
-            process.join(timeout=1)
-            if process.is_alive():
-                process.kill()
-                process.join(timeout=1)
-            if not process.is_alive():
-                self._event('worker_stopped', pid=process.pid, exit_code=process.exitcode, alive=False)
-                process.close()
+        self._connection = None
+
+        def alive():
+            try:
+                return process.is_alive()
+            except Exception:
+                return None
+
+        def close_connection():
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+
+        try:
+            if process is None:
+                self._stop_unconfirmed = False
+                return
+            try:
+                pid = process.pid
+            except Exception:
+                pid = None
+            if pid is None:
+                self._process = None
+                self._stop_unconfirmed = False
+                return
+
+            # 이전 종료 시도에서 생존 여부를 확정하지 못한 worker에는 종료 API를 반복 호출하지
+            # 않는다. 자연 종료 여부만 다시 확인해 회수하거나 계속 격리한다.
+            if self._stop_unconfirmed:
+                final_alive = alive()
             else:
-                self._event('worker_stop_failed', pid=process.pid, alive=True)
-        if connection is not None:
-            connection.close()
+                current_alive = alive()
+                if current_alive is True:
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                try:
+                    process.join(timeout=1)
+                except Exception:
+                    pass
+                current_alive = alive()
+                if current_alive is True:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+                    try:
+                        process.join(timeout=1)
+                    except Exception:
+                        pass
+                final_alive = alive()
+
+            if final_alive is False:
+                try:
+                    exit_code = process.exitcode
+                except Exception:
+                    exit_code = None
+                self._event('worker_stopped', pid=pid, exit_code=exit_code, alive=False)
+                try:
+                    process.close()
+                except Exception:
+                    # 종료는 확인됐으므로 새 worker 생성까지 막지는 않는다.
+                    pass
+                self._process = None
+                self._stop_unconfirmed = False
+            else:
+                # 살아 있거나 상태 확인이 실패한 프로세스의 마지막 소유 참조를 보존한다.
+                self._process = process
+                self._stop_unconfirmed = True
+                self._event('worker_stop_failed', pid=pid, alive=final_alive)
+        finally:
+            close_connection()
 
     def close(self):
         with self._state:
@@ -123,6 +184,10 @@ class ProcessEmbedder:
             with self._state:
                 if self._closed:
                     raise EmbeddingProcessError(EmbeddingFailure.CLOSED)
+                if self._stop_unconfirmed:
+                    self._stop()
+                    if self._stop_unconfirmed:
+                        raise EmbeddingProcessError(EmbeddingFailure.UNAVAILABLE)
                 if self._process is None or not self._process.is_alive():
                     self._stop()
                     context = multiprocessing.get_context('spawn')
