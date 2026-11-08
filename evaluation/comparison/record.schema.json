@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Comparison run record (draft v2)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "mode", "quality_measurement", "run_id", "data", "system", "question_id", "repetition", "scope", "execution", "artifacts", "review"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "mode": {"enum": ["plan", "fixture", "live"]},
+    "quality_measurement": {"type": "boolean"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "question_id": {"type": "string", "pattern": "^q[0-9]{2}$"},
+    "repetition": {"type": "integer", "minimum": 1},
+    "data": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dataset_version", "document_id", "corpus_sha256", "questions_sha256", "answer_key_sha256", "answer_key_review_status"],
+      "properties": {
+        "dataset_version": {"const": "comparison-synthetic-v2"},
+        "document_id": {"const": "d01"},
+        "corpus_sha256": {"$ref": "#/$defs/hash"},
+        "questions_sha256": {"$ref": "#/$defs/hash"},
+        "answer_key_sha256": {"$ref": "#/$defs/hash"},
+        "answer_key_review_status": {"enum": ["draft", "reviewed", "ambiguous"]}
+      }
+    },
+    "system": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "generation_model", "config_artifact_id", "prompt_sha256", "code_commit", "code_dirty"],
+      "properties": {
+        "kind": {"enum": ["llm_direct", "plain_rag", "current_mcp"]},
+        "generation_model": {"type": ["string", "null"], "minLength": 1},
+        "config_artifact_id": {"$ref": "#/$defs/optional_id"},
+        "prompt_sha256": {"$ref": "#/$defs/hash"},
+        "code_commit": {"type": ["string", "null"], "pattern": "^[a-f0-9]{40}$"},
+        "code_dirty": {"type": ["boolean", "null"]}
+      }
+    },
+    "scope": {
+      "type": "object", "additionalProperties": false, "required": ["pdf_pages", "strict_pages"],
+      "properties": {
+        "pdf_pages": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1, "maximum": 5}},
+        "strict_pages": {"type": "boolean"}
+      }
+    },
+    "execution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "error_code", "started_at", "latency_ms", "api_calls", "total_tokens", "cost", "currency", "pricing_as_of"],
+      "properties": {
+        "status": {"enum": ["not_run", "completed", "timeout", "provider_error", "format_error", "cancelled", "unsupported", "input_limit"]},
+        "error_code": {"type": ["string", "null"], "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "started_at": {"type": ["string", "null"], "format": "date-time"},
+        "latency_ms": {"type": ["number", "null"], "minimum": 0},
+        "api_calls": {
+          "type": "object", "additionalProperties": false,
+          "required": ["generation", "verification", "repair", "embedding", "translation", "other", "total"],
+          "properties": {
+            "generation": {"$ref": "#/$defs/count"}, "verification": {"$ref": "#/$defs/count"},
+            "repair": {"$ref": "#/$defs/count"}, "embedding": {"$ref": "#/$defs/count"},
+            "translation": {"$ref": "#/$defs/count"}, "other": {"$ref": "#/$defs/count"},
+            "total": {"$ref": "#/$defs/count"}
+          }
+        },
+        "total_tokens": {"$ref": "#/$defs/count"},
+        "cost": {"type": ["number", "null"], "minimum": 0},
+        "currency": {"type": ["string", "null"], "pattern": "^[A-Z]{3}$"},
+        "pricing_as_of": {"type": ["string", "null"], "format": "date"}
+      }
+    },
+    "artifacts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["answer_artifact_id", "candidate_trace_artifact_id", "source_map_artifact_id"],
+      "properties": {
+        "answer_artifact_id": {"$ref": "#/$defs/optional_id"},
+        "candidate_trace_artifact_id": {"$ref": "#/$defs/optional_id"},
+        "source_map_artifact_id": {"$ref": "#/$defs/optional_id"}
+      }
+    },
+    "review": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "units", "claims", "citations", "behavior_correct", "scope_violation", "document_instruction_exposed", "document_instruction_followed", "candidate_scope_violation"],
+      "properties": {
+        "status": {"enum": ["not_reviewed", "draft", "reviewed", "disputed"]},
+        "units": {"type": "array", "items": {
+          "type": "object", "additionalProperties": false, "required": ["unit_id", "verdict"],
+          "properties": {"unit_id": {"type": "string", "pattern": "^u[0-9]{2}$"}, "verdict": {"enum": ["met", "partial", "missing", "incorrect", "disputed"]}}
+        }},
+        "claims": {"type": "array", "items": {
+          "type": "object", "additionalProperties": false, "required": ["claim_id", "verdict", "evidence_source_ids"],
+          "properties": {
+            "claim_id": {"$ref": "#/$defs/id"},
+            "verdict": {"enum": ["supported", "partially_supported", "contradicted", "undetermined"]},
+            "evidence_source_ids": {"$ref": "#/$defs/sources"}
+          }
+        }},
+        "citations": {"type": "array", "items": {
+          "type": "object", "additionalProperties": false, "required": ["claim_id", "source_ids", "verdict"],
+          "properties": {
+            "claim_id": {"$ref": "#/$defs/id"}, "source_ids": {"$ref": "#/$defs/sources"},
+            "verdict": {"enum": ["supported", "partially_supported", "contradicted", "undetermined", "invalid_reference", "out_of_scope"]}
+          }
+        }},
+        "behavior_correct": {"$ref": "#/$defs/flag"},
+        "scope_violation": {"$ref": "#/$defs/flag"},
+        "document_instruction_exposed": {"$ref": "#/$defs/flag"},
+        "document_instruction_followed": {"$ref": "#/$defs/flag"},
+        "candidate_scope_violation": {"$ref": "#/$defs/flag"}
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"mode": {"enum": ["plan", "fixture"]}}},
+     "then": {"properties": {"quality_measurement": {"const": false}}}},
+    {"if": {"properties": {"quality_measurement": {"const": true}}},
+     "then": {"properties": {
+       "mode": {"const": "live"},
+       "data": {"properties": {"answer_key_review_status": {"const": "reviewed"},
+         "corpus_sha256": {"type": "string"}, "questions_sha256": {"type": "string"}, "answer_key_sha256": {"type": "string"}}},
+       "system": {"properties": {"generation_model": {"type": "string"}, "config_artifact_id": {"$ref": "#/$defs/id"},
+         "prompt_sha256": {"type": "string"}, "code_commit": {"type": "string"}, "code_dirty": {"type": "boolean"}}},
+       "execution": {"properties": {"status": {"const": "completed"}}},
+       "review": {"properties": {"status": {"const": "reviewed"}, "units": {"minItems": 1, "items": {"properties": {"verdict": {"enum": ["met", "partial", "missing", "incorrect"]}}}},
+         "behavior_correct": {"type": "boolean"}, "scope_violation": {"type": "boolean"}, "document_instruction_followed": {"type": "boolean"}}}
+     }}},
+    {"if": {"properties": {"mode": {"const": "plan"}}},
+     "then": {"properties": {"execution": {"properties": {"status": {"const": "not_run"}}}}}},
+    {"if": {"properties": {"execution": {"properties": {"status": {"const": "not_run"}}}}},
+     "then": {"properties": {
+       "quality_measurement": {"const": false},
+       "execution": {"properties": {
+         "error_code": {"type": "null"}, "started_at": {"type": "null"}, "latency_ms": {"type": "null"},
+         "total_tokens": {"type": "null"}, "cost": {"type": "null"}, "currency": {"type": "null"}, "pricing_as_of": {"type": "null"},
+         "api_calls": {"properties": {"generation": {"type": "null"}, "verification": {"type": "null"}, "repair": {"type": "null"}, "embedding": {"type": "null"}, "translation": {"type": "null"}, "other": {"type": "null"}, "total": {"type": "null"}}}
+       }},
+       "review": {"$ref": "#/$defs/unreviewed"},
+       "artifacts": {"properties": {"answer_artifact_id": {"type": "null"}, "candidate_trace_artifact_id": {"type": "null"}, "source_map_artifact_id": {"type": "null"}}}
+     }}},
+    {"if": {"properties": {"execution": {"properties": {"status": {"enum": ["timeout", "provider_error", "format_error", "cancelled", "unsupported", "input_limit"]}}}}},
+     "then": {"properties": {
+       "quality_measurement": {"const": false},
+       "review": {"$ref": "#/$defs/unreviewed"}
+     }}},
+    {"if": {"properties": {"execution": {"properties": {"status": {"enum": ["unsupported", "input_limit"]}}}}},
+     "then": {"properties": {"execution": {"properties": {
+       "error_code": {"type": "string"}, "started_at": {"type": "null"}, "latency_ms": {"type": "null"},
+       "total_tokens": {"type": "null"}, "cost": {"type": "null"},
+       "api_calls": {"properties": {"generation": {"const": 0}, "verification": {"const": 0}, "repair": {"const": 0}, "embedding": {"const": 0}, "translation": {"const": 0}, "other": {"const": 0}, "total": {"const": 0}}}
+     }}}}},
+    {"if": {"properties": {"execution": {"properties": {"status": {"const": "completed"}}}}},
+     "then": {"properties": {
+       "artifacts": {"properties": {"answer_artifact_id": {"$ref": "#/$defs/id"}}},
+       "execution": {"properties": {"started_at": {"type": "string"}, "error_code": {"type": "null"}}}
+     }}},
+    {"if": {"properties": {"review": {"properties": {"status": {"const": "not_reviewed"}}}}},
+     "then": {"properties": {"review": {"$ref": "#/$defs/unreviewed"}}}}
+  ],
+  "$defs": {
+    "unreviewed": {"properties": {
+      "status": {"const": "not_reviewed"}, "units": {"maxItems": 0}, "claims": {"maxItems": 0}, "citations": {"maxItems": 0},
+      "behavior_correct": {"type": "null"}, "scope_violation": {"type": "null"}, "document_instruction_exposed": {"type": "null"}, "document_instruction_followed": {"type": "null"}, "candidate_scope_violation": {"type": "null"}
+    }},
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+    "optional_id": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/id"}]},
+    "count": {"type": ["integer", "null"], "minimum": 0},
+    "hash": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "flag": {"enum": [true, false, "disputed", null]},
+    "sources": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^b[0-9]{2}$"}}
+  }
+}
