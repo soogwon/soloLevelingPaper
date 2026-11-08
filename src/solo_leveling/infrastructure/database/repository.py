@@ -632,7 +632,7 @@ def _reparse_registration(conn, request, *, conflict=False) -> ReparseRegistrati
             request['base_parse_revision_id'], request['base_embedding_set_id'])
     job = conn.execute('SELECT status FROM processing_jobs WHERE job_id=?',
                        (request['job_id'],)).fetchone()
-    published = conn.execute('SELECT parse_revision_id FROM search_indexes WHERE job_id=?',
+    published = conn.execute('SELECT parse_revision_id, embedding_set_id FROM search_indexes WHERE job_id=?',
                              (request['job_id'],)).fetchone()
     new_parse_revision_id = (published['parse_revision_id'] if published
                              else request['new_parse_revision_id'])
@@ -647,7 +647,17 @@ def _reparse_registration(conn, request, *, conflict=False) -> ReparseRegistrati
     return ReparseRegistration(
         disposition, request['request_key'], request['version_id'],
         request['base_parse_revision_id'], request['base_embedding_set_id'],
-        request['job_id'], new_parse_revision_id)
+        request['job_id'], new_parse_revision_id,
+        published['embedding_set_id'] if published else None)
+
+
+def get_reparse_request(db_path: str, request_key: str) -> ReparseRegistration | None:
+    """저장된 재파싱 요청 상태만 조회하며 미등록 키로 작업을 만들지 않는다."""
+    require_text(request_key, 'request_key')
+    with closing(get_connection(db_path)) as conn:
+        request = conn.execute('SELECT * FROM reparse_requests WHERE request_key=?',
+                               (request_key,)).fetchone()
+        return _reparse_registration(conn, request) if request else None
 
 
 def prepare_reparse(db_path: str, job: ProcessingJob, request_key: str, input_hash: str,
@@ -682,6 +692,16 @@ def prepare_reparse(db_path: str, job: ProcessingJob, request_key: str, input_ha
         lock = conn.execute('SELECT * FROM reparse_locks WHERE version_id=?',
                             (job.version_id,)).fetchone()
         if lock:
+            owner = conn.execute('SELECT * FROM reparse_requests WHERE job_id=? ORDER BY created_at LIMIT 1',
+                                 (lock['job_id'],)).fetchone()
+            same_input = owner is not None and (
+                owner['input_hash'], owner['version_id'], owner['base_parse_revision_id'],
+                owner['base_embedding_set_id']) == (
+                    input_hash, job.version_id, base_parse_revision_id, base_embedding_set_id)
+            if not same_input:
+                return ReparseRegistration(
+                    ReparseDisposition.IN_PROGRESS, request_key, job.version_id,
+                    base_parse_revision_id, base_embedding_set_id)
             conn.execute('INSERT INTO reparse_requests '
                          '(request_key, input_hash, version_id, base_parse_revision_id, '
                          'base_embedding_set_id, job_id, new_parse_revision_id, created_at) '
@@ -731,6 +751,8 @@ def save_reparse_result(db_path: str, job_id: str, revision: ParseRevision,
                    or chunk.pdf_page < 1 or chunk.pdf_page > revision.page_count
                    for chunk in chunks)):
         raise ValueError('reparse chunks must uniquely belong to the new revision')
+    if any(section.parse_revision_id != revision.parse_revision_id for section in sections):
+        raise ValueError('reparse sections must belong to the new revision')
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
         lock = conn.execute('SELECT * FROM reparse_locks WHERE job_id=?', (job_id,)).fetchone()

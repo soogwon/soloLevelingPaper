@@ -55,6 +55,7 @@ class ReparseRegistration:
     base_embedding_set_id: str
     job_id: Optional[str] = None
     new_parse_revision_id: Optional[str] = None
+    new_embedding_set_id: Optional[str] = None
 
 
 @dataclass(frozen=True)

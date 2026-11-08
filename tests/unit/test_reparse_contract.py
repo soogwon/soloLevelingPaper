@@ -6,7 +6,7 @@ import pytest
 
 from solo_leveling.domain.models import (
     Chunk, EmbeddingSet, Evidence, JobStage, JobStatus, LearningContext, Paper, PaperVersion,
-    ParseRevision, ProcessingJob, ReparseDisposition, TranslationRevision,
+    PaperSection, ParseRevision, ProcessingJob, ReparseDisposition, TranslationRevision,
 )
 from solo_leveling.domain.translation import (
     ChunkTranslationResult, TranslationBatchResult, TranslationRequest, TranslationSettings,
@@ -78,6 +78,25 @@ def test_concurrent_reparse_requests_share_one_active_job(db):
     assert len({result.job_id for result in results}) == 1
 
 
+def test_active_reparse_does_not_link_a_different_input(db):
+    accepted = prepare(db, 'job-a', 'request-a')
+    busy = repo.prepare_reparse(db, job('job-b'), 'request-b', 'input-v2', 'p1', 'idx1')
+    assert busy.disposition == ReparseDisposition.IN_PROGRESS
+    assert busy.job_id is None
+    assert repo.get_reparse_request(db, 'request-b') is None
+
+    replay = prepare(db, 'job-c', 'request-c')
+    assert replay.disposition == ReparseDisposition.IN_PROGRESS
+    assert replay.job_id == accepted.job_id
+
+
+def test_reparse_status_lookup_is_read_only(db):
+    assert repo.get_reparse_request(db, 'missing') is None
+    assert repo.get_reparse_request(db, 'missing') is None
+    assert prepare(db).disposition == ReparseDisposition.ACCEPTED
+    assert repo.get_reparse_request(db, 'request').job_id == 'reparse'
+
+
 def test_reparse_rejects_changed_or_unpublished_base(db):
     changed = repo.prepare_reparse(db, job(), 'request', 'input', 'p1', 'other')
     assert changed.disposition == ReparseDisposition.BASE_CHANGED
@@ -97,6 +116,26 @@ def test_new_parse_is_atomic_and_preserves_old_chunks(db):
         repo.save_reparse_result(db, 'reparse', ParseRevision('p3', 'v1', 1),
                                  new_chunks('p3'), [])
     assert repo.get_chunks_by_parse_revision(db, 'p3') == []
+
+
+def test_new_parse_rejects_sections_from_another_revision_atomically(db):
+    repo.insert_sections(db, [PaperSection('old-section', 'p1', 'Old title', 1, 1, 1, 1)])
+    prepare(db)
+    wrong = PaperSection('wrong-section', 'p1', 'Wrong title', 2, 1, 1, 1)
+
+    with pytest.raises(ValueError, match='sections must belong'):
+        repo.save_reparse_result(
+            db, 'reparse', ParseRevision('p2', 'v1', 1), new_chunks(), [wrong])
+
+    assert [section.title for section in repo.get_section_catalog(db, 'v1', 'p1')] == ['Old title']
+    assert repo.get_chunks_by_parse_revision(db, 'p2') == []
+    with repo.get_connection(db) as conn:
+        assert conn.execute("SELECT 1 FROM parse_revisions WHERE parse_revision_id='p2'").fetchone() is None
+
+    valid = PaperSection('new-section', 'p2', 'New title', 1, 1, 1, 1)
+    repo.save_reparse_result(
+        db, 'reparse', ParseRevision('p2', 'v1', 1), new_chunks(), [valid])
+    assert [section.title for section in repo.get_section_catalog(db, 'v1', 'p2')] == ['New title']
 
 
 @pytest.mark.parametrize('bad_chunk', [
@@ -142,6 +181,8 @@ def test_publish_switches_only_new_default_and_keeps_old_index(db):
     replay = prepare(db, 'unused')
     assert replay.disposition == ReparseDisposition.COMPLETED
     assert replay.new_parse_revision_id == 'p2'
+    assert replay.new_embedding_set_id == 'idx2'
+    assert repo.get_reparse_request(db, 'request').new_embedding_set_id == 'idx2'
 
 
 def test_publish_rejects_default_index_race(db):
