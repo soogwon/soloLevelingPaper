@@ -75,6 +75,23 @@ def rows(db, sql, *args):
         return [dict(r) for r in conn.execute(sql, args)]
 
 
+def add_second_partial_version(db):
+    repo.insert_paper(db, Paper('paper2'))
+    repo.insert_version(db, PaperVersion('v2', 'paper2', 'h2', 'y.pdf', 'y.pdf'))
+    repo.insert_parse_revision(db, ParseRevision('p2', 'v2', 3))
+    repo.insert_chunks(db, [Chunk(f'd{i}', 'p2', i, f'second original {i}') for i in range(N)])
+    repo.insert_job(db, ProcessingJob('j10', 'v2', JobStatus.PROCESSING, JobStage.TRANSLATE))
+    requests = [TranslationRequest(f'd{i}', 'p2', f'second original {i}') for i in range(N)]
+    results = [ChunkTranslationResult(request, None, TranslationFailureCode.PROVIDER_UNAVAILABLE)
+               if i in FAILED else ChunkTranslationResult(request, f'두번째 번역 {i}')
+               for i, request in enumerate(requests)]
+    second = TranslationBatchResult(
+        TranslationRevision('t10', 'p2', 'p', 'm'), SETTINGS, tuple(results))
+    repo.save_translation_batch(db, second)
+    repo.publish_search_index(db, 'v2', 'p2', emb('e10', 't10'), 'j10',
+                              [f'd{i}' for i in range(N) if i not in FAILED], ['partial'])
+
+
 def test_first_translation_keeps_chunks_text_and_adds_translated_text(db):
     got = rows(db, 'SELECT chunk_id, translated_text FROM translation_results WHERE translation_revision_id=? '
                    'AND failure_code IS NULL ORDER BY chunk_id', 't1')
@@ -197,6 +214,22 @@ def test_failed_recovery_keeps_embedding_set_ownership_from_later_job(db):
     repo.reserve_recovery_embedding_set(db, 'j3', 'e3')
     repo.reserve_recovery_embedding_set(db, 'j3', 'e3')
     assert repo.get_unpublished_recovery_embedding_set(db, 'j3') == 'e3'
+
+
+def test_legacy_claim_reservation_blocks_keyed_job_after_failure(db):
+    add_second_partial_version(db)
+    repo.claim_translation_recovery(db, recovery_job(), 't1')
+    repo.reserve_recovery_embedding_set(db, 'j2', 'shared')
+    repo.fail_translation_recovery(db, 'j2', ['INDEX_FAILED'])
+
+    second_job = ProcessingJob('j3', 'v2', JobStatus.PROCESSING, JobStage.TRANSLATE)
+    accepted = repo.prepare_translation_recovery(db, second_job, 'request-2', 'hash-2', 'e10')
+    assert accepted.disposition == TranslationRecoveryDisposition.ACCEPTED
+    with pytest.raises(ValueError, match='owned by another job'):
+        repo.reserve_recovery_embedding_set(db, 'j3', 'shared')
+
+    assert repo.get_unpublished_recovery_embedding_set(db, 'j2') == 'shared'
+    assert repo.get_unpublished_recovery_embedding_set(db, 'j3') is None
 
 
 def test_publish_rejects_same_translation_revision_with_changed_default_index(db):

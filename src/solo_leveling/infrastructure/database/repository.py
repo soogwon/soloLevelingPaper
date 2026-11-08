@@ -745,12 +745,19 @@ def reserve_recovery_embedding_set(db_path: str, job_id: str, embedding_set_id: 
         current = lock['new_embedding_set_id']
         if current is not None and current != embedding_set_id:
             raise ValueError('recovery embedding set already reserved')
-        owner = conn.execute('SELECT job_id FROM translation_recovery_requests '
-                             'WHERE new_embedding_set_id=?', (embedding_set_id,)).fetchone()
+        reserved = conn.execute('SELECT embedding_set_id FROM translation_recovery_embedding_set_reservations '
+                                'WHERE job_id=?', (job_id,)).fetchone()
+        if reserved is not None and reserved['embedding_set_id'] != embedding_set_id:
+            raise ValueError('recovery job already owns another embedding set')
+        owner = conn.execute('SELECT job_id FROM translation_recovery_embedding_set_reservations '
+                             'WHERE embedding_set_id=?', (embedding_set_id,)).fetchone()
         if owner is not None and owner['job_id'] != job_id:
             raise ValueError('recovery embedding set is owned by another job')
         if conn.execute('SELECT 1 FROM search_indexes WHERE embedding_set_id=?', (embedding_set_id,)).fetchone():
             raise ValueError('embedding set is already published')
+        conn.execute('INSERT OR IGNORE INTO translation_recovery_embedding_set_reservations '
+                     '(embedding_set_id, job_id, created_at) VALUES (?, ?, ?)',
+                     (embedding_set_id, job_id, now_iso()))
         conn.execute('UPDATE translation_recovery_locks SET new_embedding_set_id=? WHERE job_id=?',
                      (embedding_set_id, job_id))
         conn.execute('UPDATE translation_recovery_requests SET new_embedding_set_id=? WHERE job_id=?',
@@ -760,15 +767,14 @@ def reserve_recovery_embedding_set(db_path: str, job_id: str, embedding_set_id: 
 def get_unpublished_recovery_embedding_set(db_path: str, job_id: str) -> str | None:
     """작업에 연결됐고 아직 게시되지 않은 색인만 정리 후보로 반환한다."""
     with closing(get_connection(db_path)) as conn:
-        row = conn.execute('''SELECT new_embedding_set_id FROM translation_recovery_locks WHERE job_id=?
-            UNION ALL SELECT new_embedding_set_id FROM translation_recovery_requests WHERE job_id=?
-            LIMIT 1''', (job_id, job_id)).fetchone()
-        if row is None or row['new_embedding_set_id'] is None:
+        row = conn.execute('SELECT embedding_set_id FROM translation_recovery_embedding_set_reservations '
+                           'WHERE job_id=?', (job_id,)).fetchone()
+        if row is None:
             return None
         if conn.execute('SELECT 1 FROM search_indexes WHERE embedding_set_id=?',
-                        (row['new_embedding_set_id'],)).fetchone():
+                        (row['embedding_set_id'],)).fetchone():
             return None
-        return row['new_embedding_set_id']
+        return row['embedding_set_id']
 
 
 def _active_recovery(conn, job_id: str):

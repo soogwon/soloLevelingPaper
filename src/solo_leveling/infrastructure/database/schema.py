@@ -158,6 +158,14 @@ CREATE TABLE IF NOT EXISTS translation_recovery_requests (
     created_at TEXT NOT NULL
 );
 
+-- 기존 claim 경로와 멱등 요청 경로가 함께 쓰는 복구 색인 예약 소유권 원장.
+-- 실패·중단 뒤 잠금이 지워져도 행을 유지해 지연 정리가 새 작업의 컬렉션을 삭제하지 못하게 한다.
+CREATE TABLE IF NOT EXISTS translation_recovery_embedding_set_reservations (
+    embedding_set_id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL UNIQUE REFERENCES processing_jobs(job_id),
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS learning_contexts (
     context_id TEXT PRIMARY KEY,
     version_id TEXT NOT NULL REFERENCES paper_versions(version_id),
@@ -475,9 +483,27 @@ def _migrate_translation_recovery(conn: sqlite3.Connection) -> None:
         request_columns = {row['name'] for row in conn.execute('PRAGMA table_info(translation_recovery_requests)')}
         if 'new_embedding_set_id' not in request_columns:
             conn.execute('ALTER TABLE translation_recovery_requests ADD COLUMN new_embedding_set_id TEXT')
-        conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS uq_translation_recovery_embedding_set_owner '
-                     'ON translation_recovery_requests(new_embedding_set_id) '
-                     'WHERE new_embedding_set_id IS NOT NULL')
+        conn.execute('DROP INDEX IF EXISTS uq_translation_recovery_embedding_set_owner')
+        conn.execute('''INSERT OR IGNORE INTO translation_recovery_embedding_set_reservations
+            (embedding_set_id, job_id, created_at)
+            SELECT embedding_set_id, job_id, MIN(created_at) FROM (
+                SELECT new_embedding_set_id AS embedding_set_id, job_id, created_at
+                FROM translation_recovery_requests WHERE new_embedding_set_id IS NOT NULL
+                UNION ALL
+                SELECT new_embedding_set_id AS embedding_set_id, job_id, created_at
+                FROM translation_recovery_locks WHERE new_embedding_set_id IS NOT NULL
+            ) GROUP BY embedding_set_id, job_id''')
+        conflict = conn.execute('''SELECT 1 FROM (
+                SELECT new_embedding_set_id AS embedding_set_id, job_id
+                FROM translation_recovery_requests WHERE new_embedding_set_id IS NOT NULL
+                UNION
+                SELECT new_embedding_set_id AS embedding_set_id, job_id
+                FROM translation_recovery_locks WHERE new_embedding_set_id IS NOT NULL
+            ) legacy JOIN translation_recovery_embedding_set_reservations owner
+              ON owner.embedding_set_id=legacy.embedding_set_id
+            WHERE owner.job_id<>legacy.job_id LIMIT 1''').fetchone()
+        if conflict:
+            raise sqlite3.IntegrityError('conflicting recovery embedding set owners')
 
 
 _SEARCH_INDEXES_COLUMNS = ('embedding_set_id', 'version_id', 'parse_revision_id', 'translation_revision_id',
