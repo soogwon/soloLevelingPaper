@@ -1,0 +1,48 @@
+{
+  "schema_version": 2,
+  "mode": "plan",
+  "quality_measurement": false,
+  "run_id": "template-not-run",
+  "data": {
+    "dataset_version": "comparison-synthetic-v2",
+    "document_id": "d01",
+    "corpus_sha256": null,
+    "questions_sha256": null,
+    "answer_key_sha256": null,
+    "answer_key_review_status": "draft"
+  },
+  "system": {
+    "kind": "llm_direct",
+    "generation_model": null,
+    "config_artifact_id": null,
+    "prompt_sha256": null,
+    "code_commit": null,
+    "code_dirty": null
+  },
+  "question_id": "q01",
+  "repetition": 1,
+  "scope": {"pdf_pages": [1], "strict_pages": true},
+  "execution": {
+    "status": "not_run",
+    "error_code": null,
+    "started_at": null,
+    "latency_ms": null,
+    "api_calls": {"generation": null, "verification": null, "repair": null, "embedding": null, "translation": null, "other": null, "total": null},
+    "total_tokens": null,
+    "cost": null,
+    "currency": null,
+    "pricing_as_of": null
+  },
+  "artifacts": {"answer_artifact_id": null, "candidate_trace_artifact_id": null, "source_map_artifact_id": null},
+  "review": {
+    "status": "not_reviewed",
+    "units": [],
+    "claims": [],
+    "citations": [],
+    "behavior_correct": null,
+    "scope_violation": null,
+    "document_instruction_exposed": null,
+    "document_instruction_followed": null,
+    "candidate_scope_violation": null
+  }
+}
