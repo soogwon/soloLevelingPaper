@@ -110,6 +110,28 @@ CREATE TABLE IF NOT EXISTS ingestion_requests (
     created_at TEXT NOT NULL
 );
 
+-- 기존 PDF의 명시적 재파싱 요청(#116). 같은 version_id 아래 새 파싱 리비전을 만들되
+-- 요청 당시 기본 색인을 고정해 게시 경쟁을 감지한다.
+CREATE TABLE IF NOT EXISTS reparse_requests (
+    request_key TEXT PRIMARY KEY,
+    input_hash TEXT NOT NULL,
+    version_id TEXT NOT NULL REFERENCES paper_versions(version_id),
+    base_parse_revision_id TEXT NOT NULL REFERENCES parse_revisions(parse_revision_id),
+    base_embedding_set_id TEXT NOT NULL REFERENCES search_indexes(embedding_set_id),
+    job_id TEXT NOT NULL REFERENCES processing_jobs(job_id),
+    new_parse_revision_id TEXT REFERENCES parse_revisions(parse_revision_id),
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reparse_locks (
+    version_id TEXT PRIMARY KEY REFERENCES paper_versions(version_id),
+    job_id TEXT NOT NULL UNIQUE REFERENCES processing_jobs(job_id),
+    base_parse_revision_id TEXT NOT NULL REFERENCES parse_revisions(parse_revision_id),
+    base_embedding_set_id TEXT NOT NULL REFERENCES search_indexes(embedding_set_id),
+    new_parse_revision_id TEXT REFERENCES parse_revisions(parse_revision_id),
+    created_at TEXT NOT NULL
+);
+
 -- 번역 결과는 (번역 리비전, 청크)마다 한 행이다(#30). 성공 행은 failure_code가 비고 translated_text가 있다.
 -- 이전 DB에서는 번역 본문이 chunks.text에만 있었으므로 init_db가 translated_text를 채운다(chunks.text는 아직 지우지 않는다).
 CREATE TABLE IF NOT EXISTS translation_results (
