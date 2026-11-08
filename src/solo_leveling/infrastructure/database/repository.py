@@ -745,6 +745,10 @@ def reserve_recovery_embedding_set(db_path: str, job_id: str, embedding_set_id: 
         current = lock['new_embedding_set_id']
         if current is not None and current != embedding_set_id:
             raise ValueError('recovery embedding set already reserved')
+        owner = conn.execute('SELECT job_id FROM translation_recovery_requests '
+                             'WHERE new_embedding_set_id=?', (embedding_set_id,)).fetchone()
+        if owner is not None and owner['job_id'] != job_id:
+            raise ValueError('recovery embedding set is owned by another job')
         if conn.execute('SELECT 1 FROM search_indexes WHERE embedding_set_id=?', (embedding_set_id,)).fetchone():
             raise ValueError('embedding set is already published')
         conn.execute('UPDATE translation_recovery_locks SET new_embedding_set_id=? WHERE job_id=?',

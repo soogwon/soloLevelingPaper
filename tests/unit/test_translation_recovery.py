@@ -182,6 +182,23 @@ def test_failed_recovery_keeps_only_its_unpublished_cleanup_candidate(db):
     assert repo.get_unpublished_recovery_embedding_set(db, 'unknown') is None
 
 
+def test_failed_recovery_keeps_embedding_set_ownership_from_later_job(db):
+    repo.prepare_translation_recovery(db, recovery_job(), 'request-1', 'hash-1', 'e1')
+    repo.reserve_recovery_embedding_set(db, 'j2', 'e2')
+    repo.fail_translation_recovery(db, 'j2', ['INDEX_FAILED'])
+
+    accepted = repo.prepare_translation_recovery(db, recovery_job('j3'), 'request-2', 'hash-2', 'e1')
+    assert accepted.disposition == TranslationRecoveryDisposition.ACCEPTED
+    with pytest.raises(ValueError, match='owned by another job'):
+        repo.reserve_recovery_embedding_set(db, 'j3', 'e2')
+
+    assert repo.get_unpublished_recovery_embedding_set(db, 'j2') == 'e2'
+    assert repo.get_unpublished_recovery_embedding_set(db, 'j3') is None
+    repo.reserve_recovery_embedding_set(db, 'j3', 'e3')
+    repo.reserve_recovery_embedding_set(db, 'j3', 'e3')
+    assert repo.get_unpublished_recovery_embedding_set(db, 'j3') == 'e3'
+
+
 def test_publish_rejects_same_translation_revision_with_changed_default_index(db):
     repo.prepare_translation_recovery(db, recovery_job(), 'request-1', 'hash', 'e1')
     repo.save_recovery_translation(db, 'j2', batch('t2', [ok(i, '복구') for i in FAILED]))

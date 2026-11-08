@@ -475,6 +475,9 @@ def _migrate_translation_recovery(conn: sqlite3.Connection) -> None:
         request_columns = {row['name'] for row in conn.execute('PRAGMA table_info(translation_recovery_requests)')}
         if 'new_embedding_set_id' not in request_columns:
             conn.execute('ALTER TABLE translation_recovery_requests ADD COLUMN new_embedding_set_id TEXT')
+        conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS uq_translation_recovery_embedding_set_owner '
+                     'ON translation_recovery_requests(new_embedding_set_id) '
+                     'WHERE new_embedding_set_id IS NOT NULL')
 
 
 _SEARCH_INDEXES_COLUMNS = ('embedding_set_id', 'version_id', 'parse_revision_id', 'translation_revision_id',
