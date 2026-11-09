@@ -13,6 +13,8 @@ import sys
 from time import perf_counter
 from uuid import uuid4
 
+from solo_leveling.worker_diagnostics import stage_output, valid_worker_stage
+
 _request = ContextVar('diagnostic_request', default=None)
 _verbosity = ContextVar('diagnostic_verbosity', default='basic')
 
@@ -74,8 +76,13 @@ def _emit(request_id, span_id, stage, event, elapsed_ms, error_code=None, *, det
     try:
         if details is not None:
             record.update(details)
-        sys.stderr.write(json.dumps(record) + '\n')
-        sys.stderr.flush()
+        output = stage_output.get()
+        if output is None:
+            output = sys.stderr
+        elif not valid_worker_stage(record):
+            return
+        output.write(json.dumps(record) + '\n')
+        output.flush()
     except Exception:
         # 진단 출력 실패가 실제 요청 결과를 바꾸지 않도록 한다.
         pass

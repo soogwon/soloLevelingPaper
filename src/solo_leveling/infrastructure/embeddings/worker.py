@@ -6,6 +6,8 @@ import faulthandler
 import json
 from pathlib import Path
 
+from solo_leveling.worker_diagnostics import stage_output, valid_diagnostic_id
+
 _stack_output = None
 _watchdog_seconds = 30
 
@@ -32,20 +34,27 @@ def _discard_output():
 def diagnostic_worker(connection, target, log_dir, worker_id, watchdog_seconds, collect_raw=False):
     """모델 관련 import보다 먼저 별도 로그를 열고 자식 진입을 기록한다.
 
-    기본(collect_raw=False)은 고정 형식의 worker_enter 한 줄만 남기고 자식의
+    기본(collect_raw=False)은 진입 및 허용된 단계 이벤트만 남기고 자식의
     stdout·stderr(파이썬/네이티브)와 지연 스택은 저장하지 않는다.
     """
     global _stack_output, _watchdog_seconds
     _watchdog_seconds = watchdog_seconds
     try:
+        if not valid_diagnostic_id(worker_id):
+            raise ValueError('invalid worker id')
         folder = Path(log_dir)
         folder.mkdir(parents=True, exist_ok=True)
         enter = json.dumps({'event': 'worker_enter', 'worker_id': worker_id, 'pid': os.getpid()})
         if not collect_raw:
             with (folder / f'worker-{worker_id}.log').open('x', encoding='utf-8') as output:
                 output.write(enter + '\n')
-            _discard_output()
-            target(connection)
+                output.flush()
+                _discard_output()
+                token = stage_output.set(output)
+                try:
+                    target(connection)
+                finally:
+                    stage_output.reset(token)
             return
         with (folder / f'worker-{worker_id}.log').open('x', encoding='utf-8') as output:
             os.dup2(output.fileno(), 2)
