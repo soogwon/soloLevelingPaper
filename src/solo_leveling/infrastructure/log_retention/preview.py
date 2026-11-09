@@ -1,11 +1,11 @@
-"""검사 잠금 아래 MCP 종료 기록과 파일을 대조하는 읽기 전용 미리보기."""
+"""검사 잠금 아래 MCP·worker 종료 기록과 파일을 대조하는 읽기 전용 미리보기."""
 from contextlib import ExitStack
 import errno
 import json
 import os
 import stat
 
-from .policy import MAX_METADATA_BYTES, closed_name, log_name, parse_metadata_summary, retention_status
+from .policy import MAX_METADATA_BYTES, closed_name, log_name, parse_metadata_summary, retention_status, supported_log_kinds
 
 
 def _open_checked(lease, name, stack):
@@ -54,7 +54,7 @@ def _inspect(lease, scanned, now, policy):
             if max(info.st_ctime_ns, info.st_mtime_ns) > metadata.st_mtime_ns:
                 return 'file_changed'
         # 최초 목록을 만든 뒤 추가된 원본·스택 파일까지 잠금 아래 다시 확인한다.
-        for kind in ('safe', 'detail', 'raw', 'stack'):
+        for kind in supported_log_kinds(lease.bundle_id):
             name = log_name(lease.bundle_id, kind)
             if name not in scanned:
                 try:
@@ -67,7 +67,7 @@ def _inspect(lease, scanned, now, policy):
         return retention_status(summary, now=now, policy=policy)
 
 
-def inspect_mcp_bundle(root, bundle, scanned, now, policy):
+def inspect_bundle(root, bundle, scanned, now, policy):
     if os.name == 'posix':
         from .posix import PosixBundleStore
         store = PosixBundleStore()

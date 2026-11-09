@@ -19,13 +19,13 @@
 검증한 열린 파일 핸들만 전달받는다. POSIX 파일명·로그 루트 교체 회귀는 실제 POSIX 환경에서
 `tests/integration/test_posix_worker_log_bundle.py`로 검증한다.
 
-## MCP 보관 기간 미리보기
+## MCP·worker 보관 기간 미리보기
 
 ```sh
 python -m solo_leveling.interfaces.cli.log_inventory --log-dir ./runtime/diagnostics --retention
 ```
 
-`--retention`은 기존 묶음의 잠금을 비차단 방식으로 한 번 시도한다. 잠금을 얻으면 종료 JSON을 최대 16 KiB까지 검증하고, 기록된 모든 파일의 이름·장치·파일 ID·크기를 열린 파일과 대조한다. 보관 기간은 종료 시각(UTC)부터 기본 안전 로그 30일, 상세 안전 로그 7일이다. `--safe-days`와 `--detail-days`로 1~36500일 범위에서 조정할 수 있다. 같은 묶음의 모든 로그가 기간에 도달해야 만료로 표시한다.
+`--retention`은 기존 묶음의 잠금을 비차단 방식으로 한 번 시도한다. 잠금을 얻으면 종료 JSON을 최대 16 KiB까지 검증하고, 기록된 모든 파일의 이름·장치·파일 ID·크기를 열린 파일과 대조한다. 보관 기간은 종료 시각(UTC)부터 기본 안전 로그 30일, 상세 안전 로그 7일이다. `--safe-days`와 `--detail-days`로 1~36500일 범위에서 조정할 수 있다. 같은 묶음의 모든 로그가 기간에 도달해야 만료로 표시한다. worker의 `safe`에는 기본 안전 로그 기간을 적용하고, `raw`나 `stack`이 포함된 묶음은 만료 후보에서 제외한다.
 
 | retention_status | 해석 |
 |---|---|
@@ -35,7 +35,7 @@ python -m solo_leveling.interfaces.cli.log_inventory --log-dir ./runtime/diagnos
 | `file_changed` / `file_set_changed` | 파일 동일성·크기·관찰 시각 또는 묶음 구성 불일치 |
 | `raw_excluded` / `future_timestamp` | 원본·스택이 포함됐거나 종료 시각이 미래인 묶음 |
 | `invalid_metadata` / `unsafe_file` / `unsupported` / `io_error` | 기록·경로·플랫폼 또는 접근 오류로 보관 판정 제외 |
-| `legacy_unknown` / `worker_excluded` | 구형 이름 또는 worker 생산자 검증 범위 밖 |
+| `legacy_unknown` | 종료 기록과 연결할 수 없는 구형 로그 이름 |
 
 검사 결과는 그 시점의 관찰이다. 로그 본문은 읽지 않으며 파일 생성·삭제·순환을 수행하지 않는다. 크기·개수 초과 경고와 수정 시각 기준의 기존 `age_review`는 종료 시각 기준의 `retention_status`와 별개다.
 
