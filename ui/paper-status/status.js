@@ -10,7 +10,7 @@ const failureReasons = new Map([
   ['pdf_unreadable', 'PDF를 읽을 수 없습니다.'],
   ['extraction_empty', 'PDF에서 원문을 추출할 수 없습니다.'],
   ['translation_failed', '번역에 실패했습니다.'],
-  ['provider_unavailable', '번역 서비스에 연결할 수 없습니다.'],
+  ['provider_unavailable', '처리 당시 번역 서비스를 사용할 수 없었습니다.'],
   ['empty_translation', '번역 결과가 비어 있습니다.'],
   ['EMBEDDING_TIMEOUT', '검색 색인을 만드는 시간이 초과되었습니다.'],
   ['EMBEDDING_UNAVAILABLE', '검색 색인을 만드는 서비스를 사용할 수 없습니다.'],
@@ -86,7 +86,10 @@ export function mountStatusApp(app, doc, timeoutMs = 15000) {
     el('next').textContent = data.status === 'ready'
       ? '채팅에서 학습을 시작할 수 있습니다. 검색 준비 완료는 전체 번역 완료를 뜻하지 않습니다.'
       : '상태 새로고침은 조회만 수행합니다. 실패·중단된 작업을 자동 재시도하지 않습니다.';
-    if (data.next_action === 'replace_file') {
+    if (data.status === 'ready' && data.outcome === 'partial'
+        && typeof data.translation_recovery_notice === 'string' && data.translation_recovery_notice) {
+      el('next').textContent = data.translation_recovery_notice;
+    } else if (data.next_action === 'replace_file') {
       el('next').textContent = '읽을 수 있는 PDF로 파일을 교체한 뒤 새로 등록하세요.';
     } else if (data.next_action === 'register_again' && data.retryable === true) {
       el('next').textContent = '같은 파일을 다시 처리하려면 새 요청 키로 등록하세요.';

@@ -60,6 +60,8 @@ next_cursor를 사용하세요. 여러 후보가 있으면 사용자에게 선�
 기존 답변을 덮어쓰지 마세요. 작성 완료는 학습 단계 완료나 정답 판정이 아닙니다.
 저장 결과가 불명확하면 같은 context로 먼저 조회하고 자동 재저장하지 마세요.
 ready는 검색 가능 상태이며 전체 번역 완료를 보장하지 않습니다. limitations를 확인하세요.
+부분 번역이면 translation_recovery_notice를 사용자에게 전달하세요. 질문·상태 조회·같은 PDF 재등록은
+복구 동의가 아닙니다. 등록 도구로 복구를 대신하거나 기존 학습 맥락을 자동 전환하지 마세요.
 provider_unavailable만으로 연결 실패 등 구체적인 원인을 단정하지 마세요.
 status=ok는 질문 전체의 완전한 답변을 보장하지 않습니다. model_checked는 실제 인용 근거와의
 모델 기반 의미 검증을 완료했다는 뜻이지 사실성 보증이 아닙니다. structural_only는 구조 검증이며
@@ -307,6 +309,7 @@ class PaperStatusOutput(TypedDict):
     retryable: bool | None
     next_action: str | None
     outcome: str | None
+    translation_recovery_notice: NotRequired[str | None]
 
 
 class PaperJobOutput(TypedDict):
@@ -469,13 +472,14 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             ready/partial은 검색 가능하지만 번역이 일부 누락된 상태입니다.
             retryable이 null이면 같은 입력의 재시도 가능 여부를 단정하지 마세요.
             next_action에 따라 파일 교체 또는 새 요청 키를 사용한 재등록을 안내하세요.
+            부분 번역의 복구 가능 여부와 추가 전송·비용은 translation_recovery_notice로 안내하세요.
             조회만으로는 작업을 재실행하지 않습니다."""
             try:
                 result = await anyio.to_thread.run_sync(
                     lambda: services.ingestion.get_status(job_id))
                 capabilities = (['start_learning']
                                 if result['status'] == 'ready' else [])
-                return {
+                response: PaperStatusOutput = {
                     'job_id': result['job_id'], 'version_id': result['version_id'],
                     'status': result['status'], 'stage': result['stage'],
                     'capabilities': capabilities, 'limitations': result['limitations'],
@@ -485,7 +489,15 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                     'retryable': result.get('retryable'),
                     'next_action': result.get('next_action'),
                     'outcome': result.get('outcome'),
+                    'translation_recovery_notice': None,
                 }
+                if result['status'] == 'ready' and result.get('outcome') == 'partial':
+                    response['translation_recovery_notice'] = (
+                        '현재 이 도구에서는 누락 구간의 번역 복구를 신청할 수 없습니다. '
+                        '복구를 실행하려면 누락 구간의 원문을 번역 API에 추가로 전송하며 '
+                        '비용이 발생할 수 있어 별도 동의가 필요합니다. '
+                        '기존 학습 맥락에서 검색과 질문을 계속할 수 있습니다.')
+                return response
             except Exception as error:
                 raise to_tool_error(error) from None
 

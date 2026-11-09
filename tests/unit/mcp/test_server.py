@@ -381,6 +381,8 @@ def test_complete_tool_contract(name, required, optional, outputs, hints):
     assert set(tool.inputSchema['properties']) == required | optional
     assert set(tool.outputSchema['required']) == outputs
     extra_outputs = {'verification_history'} if name == 'ask_paper' else set()
+    if name == 'get_paper_status':
+        extra_outputs = {'translation_recovery_notice'}
     assert set(tool.outputSchema['properties']) == outputs | extra_outputs
     assert (tool.annotations.readOnlyHint, tool.annotations.idempotentHint,
             tool.annotations.openWorldHint) == hints
