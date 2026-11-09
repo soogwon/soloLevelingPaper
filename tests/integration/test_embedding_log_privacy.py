@@ -19,13 +19,27 @@ def worker(connection):
         print('SYNTHETIC_CHILD_PRIVATE', file=stream, flush=True)
     os.write(1, b'SYNTHETIC_NATIVE_PRIVATE\n')
     os.write(2, b'SYNTHETIC_NATIVE_PRIVATE\n')
-    request = connection.recv()
-    if request['model'] == 'hang':
-        time.sleep(60)
-    elif request['model'] == 'fail':
-        connection.send({'ok': False})
-    else:
-        connection.send({'ok': True, 'dimension': 1, 'vectors': [[1.0]]})
+    from array import array
+    from types import ModuleType
+    from solo_leveling.infrastructure.embeddings.worker import run_worker
+    class Model:
+        def __init__(self, model_name):
+            self.mode = model_name
+
+        def encode(self, texts, *, convert_to_numpy):
+            if self.mode == 'hang':
+                time.sleep(60)
+            if self.mode == 'fail':
+                raise ValueError('SYNTHETIC_CHILD_PRIVATE')
+            return [array('f', [1.0]) for _ in texts]
+
+        def get_embedding_dimension(self):
+            return 1
+
+    library = ModuleType('sentence_transformers')
+    library.SentenceTransformer = Model
+    sys.modules[library.__name__] = library
+    run_worker(connection)
 
 def server(*args, **kwargs):
     from solo_leveling.interfaces.mcp.runtime import load_environment
@@ -99,7 +113,18 @@ def test_entry_policy_reaches_real_child(tmp_path, entry, raw, mode):
         assert 'Timeout' in stacks[0].read_text(encoding='utf-8')
     if not raw:
         for path in logs:
-            assert [json.loads(line)['event'] for line in path.read_text().splitlines()] == ['worker_enter']
+            enter, *records = [json.loads(line) for line in path.read_text().splitlines()]
+            assert enter['event'] == 'worker_enter'
+            from solo_leveling.worker_diagnostics import valid_worker_stage
+            assert all(valid_worker_stage(record) for record in records)
+            for stage in ('embedding_library_import', 'embedding_model_construct'):
+                assert [r['event'] for r in records if r['stage'] == stage] == ['start', 'end']
+            encode = [r for r in records if r['stage'] == 'embedding_encode']
+            expected = {'ok': ['start', 'end'], 'fail': ['start', 'error'], 'hang': ['start']}
+            assert [r['event'] for r in encode] == expected[mode]
+            assert len({r['span_id'] for r in encode}) == 1
+            if mode == 'fail':
+                assert encode[-1]['error_code'] == 'STAGE_FAILED'
 
 
 def test_restart_without_option_stops_new_raw_logs_and_keeps_old_files(tmp_path):
