@@ -89,6 +89,17 @@ class PosixLease:
         except OSError:
             return False
 
+    def _stat_for_preview(self, name):
+        return os.stat(name, dir_fd=self.root_fd, follow_symlinks=False)
+
+    def _open_for_preview(self, name):
+        return os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.root_fd)
+
+    def _matches_preview(self, name, info):
+        current = self._stat_for_preview(name)
+        return (_regular(current) and os.path.samestat(current, info)
+                and current.st_size == info.st_size and current.st_ctime_ns == info.st_ctime_ns)
+
     def open_log(self, kind):
         """writer lease 아래 새 파일만 생성한다. 반환 스트림의 종료는 호출자 책임이다."""
         if self.role != 'writer' or self.published or not self.valid():
