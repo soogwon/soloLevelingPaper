@@ -102,6 +102,7 @@ def test_cleanup_failure_is_safe_and_not_reported_as_success(failure, capsys):
 
 
 def prepare_runtime(monkeypatch):
+    monkeypatch.setattr('solo_leveling.workers.reparse.ReparseService', Mock())
     embedder = Mock()
     client = SimpleNamespace(close=Mock())
     services = SimpleNamespace(executions=object(), answer=SimpleNamespace(semantic_verification=None), evidence=object(),

@@ -123,6 +123,7 @@ def build_runtime_server(values: Mapping[str, str]):
     client = None
     ingestion = None
     recovery = None
+    reparse = None
     try:
         paths.data_root.mkdir(parents=True, exist_ok=True)
         paths.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,8 +153,15 @@ def build_runtime_server(values: Mapping[str, str]):
             translation_service=services.translation, translation_settings=services.translation_settings,
             embedder=embedder, chroma_client=client,
             provider_available=settings.translation.allow_external_api and not settings.translation.local_only))
+        from solo_leveling.infrastructure.embeddings.embedder import DEFAULT_MODEL_NAME
+        from solo_leveling.workers.reparse import ReparseService
+        from .reparse import ReparseManager
+        reparse = ReparseManager(ReparseService(str(paths.db_path), str(paths.chroma_dir), paths.pdf_dir,
+            translation_service=services.translation, translation_settings=services.translation_settings,
+            embedder=embedder, embedding_model=DEFAULT_MODEL_NAME, chroma_client=client,
+            provider_available=settings.translation.allow_external_api and not settings.translation.local_only))
         gate = RequestGate()
-        lifetime = RuntimeLifetime(gate, ingestion, embedder, client, additional_workers=(recovery,))
+        lifetime = RuntimeLifetime(gate, ingestion, embedder, client, additional_workers=(recovery, reparse))
 
         @asynccontextmanager
         async def lifespan(server):
@@ -168,7 +176,7 @@ def build_runtime_server(values: Mapping[str, str]):
 
         annotations = AnnotationService(str(paths.db_path))
         server = create_server(MCPServices(
-            recovery=gate.wrap(recovery),
+            recovery=gate.wrap(recovery), reparse=gate.wrap(reparse),
             question_keys=gate.wrap(QuestionKeys(paths.data_root.resolve() / 'card-question-keys.sqlite3')),
             executions=gate.wrap(services.executions),
             answer=gate.wrap(services.answer), evidence=gate.wrap(services.evidence),
@@ -182,6 +190,8 @@ def build_runtime_server(values: Mapping[str, str]):
         track_lifetime(lifetime)
         return server
     except BaseException:
+        if reparse is not None:
+            reparse.begin_shutdown()
         if recovery is not None:
             try:
                 recovery.begin_shutdown()

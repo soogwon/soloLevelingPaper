@@ -93,6 +93,7 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
     semantic = SimpleNamespace(verifier=SimpleNamespace(prompt_version='semantic-v2')) if enabled else None
     services = SimpleNamespace(executions=object(), answer=SimpleNamespace(semantic_verification=semantic), evidence=object(),
         search=SimpleNamespace(contexts=object()), translation=object(), translation_settings=object())
+    monkeypatch.setattr('solo_leveling.workers.reparse.ReparseService', Mock())
     build = Mock(return_value=services)
     monkeypatch.setattr(runtime, 'build_services', build)
     client = object()
@@ -165,7 +166,6 @@ def test_external_policy_reaches_real_providers(tmp_path, monkeypatch, allow, lo
     monkeypatch.setattr(runtime, 'ProcessEmbedder', Mock(return_value=embedder))
     client = Mock()
     monkeypatch.setattr(runtime, 'get_client', Mock(return_value=client))
-    monkeypatch.setattr(runtime, 'init_db', Mock())
     monkeypatch.setattr(runtime, 'mark_interrupted_jobs_on_startup', Mock())
     restore = Mock()
     monkeypatch.setattr(runtime, 'restore_legacy_index_memberships', restore)
@@ -176,6 +176,7 @@ def test_external_policy_reaches_real_providers(tmp_path, monkeypatch, allow, lo
     # build_services는 대역으로 바꾸지 않아 실제 번역·생성 제공자까지 연결한다.
     services = runtime.build_runtime_server(values)
     restore.assert_called_once_with(str(runtime.runtime_paths(values).db_path), client)
+    assert services.reparse.service.provider_available is (allow and not local)
     generation = services.answer.generator.settings
     ingestion_services = manager_factory.call_args.args[3]
     translation = ingestion_services.translation.provider.config
