@@ -75,3 +75,14 @@ def test_status_text_and_structured_response_preserve_service_fields(fields):
 def test_no_status_resource_without_ingestion():
     server = create_server(MCPServices(Mock(), Mock()))
     assert all(str(r.uri) != STATUS_APP_URI for r in asyncio.run(server.list_resources()))
+
+
+def test_partial_status_offers_preview_without_starting_recovery():
+    ingestion, recovery = Mock(), Mock()
+    ingestion.get_status.return_value = dict(job_id='j', version_id='v', status='ready',
+        stage='index', limitations=[], result_available=True, outcome='partial')
+    server = create_server(MCPServices(Mock(), Mock(), ingestion, recovery=recovery))
+    content, data = asyncio.run(server.call_tool('get_paper_status', {'job_id': 'j'}))
+    assert '번역 복구 안내 카드' in data['translation_recovery_notice']
+    assert json.loads(content[0].text) == data
+    assert not recovery.mock_calls

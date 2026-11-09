@@ -122,6 +122,7 @@ def build_runtime_server(values: Mapping[str, str]):
                               collect_raw_logs=values.get('SOLO_LEVELING_COLLECT_RAW_LOGS') == '1')
     client = None
     ingestion = None
+    recovery = None
     try:
         paths.data_root.mkdir(parents=True, exist_ok=True)
         paths.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -145,8 +146,14 @@ def build_runtime_server(values: Mapping[str, str]):
             IngestionServices(services.translation, services.translation_settings, embedder, client),
             max_workers=settings.max_workers)
 
+        from solo_leveling.workers.translation_recovery import TranslationRecoveryService
+        from .recovery import RecoveryManager
+        recovery = RecoveryManager(TranslationRecoveryService(str(paths.db_path), str(paths.chroma_dir),
+            translation_service=services.translation, translation_settings=services.translation_settings,
+            embedder=embedder, chroma_client=client,
+            provider_available=settings.translation.allow_external_api and not settings.translation.local_only))
         gate = RequestGate()
-        lifetime = RuntimeLifetime(gate, ingestion, embedder, client)
+        lifetime = RuntimeLifetime(gate, ingestion, embedder, client, additional_workers=(recovery,))
 
         @asynccontextmanager
         async def lifespan(server):
@@ -161,6 +168,7 @@ def build_runtime_server(values: Mapping[str, str]):
 
         annotations = AnnotationService(str(paths.db_path))
         server = create_server(MCPServices(
+            recovery=gate.wrap(recovery),
             question_keys=gate.wrap(QuestionKeys(paths.data_root.resolve() / 'card-question-keys.sqlite3')),
             executions=gate.wrap(services.executions),
             answer=gate.wrap(services.answer), evidence=gate.wrap(services.evidence),
@@ -174,6 +182,11 @@ def build_runtime_server(values: Mapping[str, str]):
         track_lifetime(lifetime)
         return server
     except BaseException:
+        if recovery is not None:
+            try:
+                recovery.begin_shutdown()
+            except Exception:
+                report('RECOVERY_DRAIN_FAILED')
         if ingestion is not None:
             try:
                 ingestion.begin_shutdown()
