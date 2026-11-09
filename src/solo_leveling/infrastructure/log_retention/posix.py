@@ -100,6 +100,10 @@ class PosixLease:
                      0o600, dir_fd=self.root_fd)
         reference = None
         try:
+            if self.bundle_id.owner == 'worker':
+                import fcntl
+                # 전달·복제된 마지막 쓰기 설명자가 닫힐 때까지 같은 잠금이 유지된다.
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
             # 쓰기 스트림 종료 후에도 원본 inode가 재사용되지 않도록 읽기 핸들을 보관한다.
             reference = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.root_fd)
             opened = os.fstat(reference)
@@ -183,6 +187,13 @@ class PosixBundleStore:
                 kind, reference, stream = lease.files[item.name]
                 if not stream.closed or kind != item.kind:
                     return 'invalid_state'
+                if lease.bundle_id.owner == 'worker':
+                    import fcntl
+                    # 독립적으로 열린 원본 참조에서 상속된 writer가 남았는지 확인한다.
+                    try:
+                        fcntl.flock(reference, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        return 'invalid_state'
                 fd = os.open(item.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=lease.root_fd)
                 try:
                     info = os.fstat(fd)

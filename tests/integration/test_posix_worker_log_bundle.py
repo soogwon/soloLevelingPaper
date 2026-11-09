@@ -79,3 +79,45 @@ def test_replaced_path_never_receives_worker_output(tmp_path, replace):
             process.join(5)
         process.close()
         lease.release()
+
+
+def _spawn_inherited_writer(connection):
+    import subprocess
+    import sys
+
+    root = connection.recv()['texts'][0]
+    script = """
+import sys
+import time
+from pathlib import Path
+
+root = Path(sys.argv[1])
+for _ in range(500):
+    if (root / 'write').exists():
+        print('LATE_SYNTHETIC_OUTPUT', flush=True)
+        break
+    time.sleep(0.02)
+"""
+    subprocess.Popen([sys.executable, '-c', script, root], stdin=subprocess.DEVNULL)
+    connection.send({'ok': True, 'dimension': 2, 'vectors': [[1.0, 2.0]]})
+    connection.recv()
+
+
+def test_descendant_with_inherited_stdout_prevents_publication(tmp_path):
+    import time
+    from solo_leveling.infrastructure.embeddings.process_embedder import ProcessEmbedder
+
+    embedder = ProcessEmbedder(10, worker_target=_spawn_inherited_writer,
+                               log_dir=tmp_path, collect_raw_logs=True)
+    try:
+        embedder([str(tmp_path)], model_name='synthetic')
+    finally:
+        embedder.close()
+        (tmp_path / 'write').touch()
+
+    raw = next(tmp_path.glob('slp-log-v1-worker-raw-*.log'))
+    deadline = time.monotonic() + 5
+    while b'LATE_SYNTHETIC_OUTPUT' not in raw.read_bytes():
+        assert time.monotonic() < deadline, '하위 프로세스의 지연 출력이 도착하지 않았습니다.'
+        time.sleep(0.02)
+    assert not list(tmp_path.glob('*.closed.json'))
