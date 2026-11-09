@@ -45,7 +45,7 @@ def _receive_log_fds(control):
                 handle = msvcrt.open_osfhandle(handle, os.O_WRONLY | os.O_NOINHERIT)
             descriptors[kind] = handle
         return descriptors
-    except (EOFError, OSError, ValueError, TypeError):
+    except Exception:
         for descriptor in descriptors.values():
             try:
                 os.close(descriptor)
@@ -72,6 +72,14 @@ def diagnostic_worker(connection, target, log_dir, worker_id, watchdog_seconds, 
                 descriptors = _receive_log_fds(log_control)
             finally:
                 log_control.close()
+            expected = ('raw', 'stack') if collect_raw else ('safe',)
+            if tuple(descriptors) != expected:
+                for descriptor in descriptors.values():
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+                descriptors = {}
             managed_logs = bool(descriptors)
         enter = json.dumps({'event': 'worker_enter', 'worker_id': worker_id, 'pid': os.getpid()})
         if managed_logs:
