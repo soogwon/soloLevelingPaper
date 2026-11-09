@@ -14,7 +14,7 @@ from threading import Lock, Thread
 from time import monotonic
 from uuid import uuid4
 
-from solo_leveling.diagnostics import _request, stage
+from solo_leveling.diagnostics import _request, report_runtime_cleanup, stage
 from .worker import run_worker, diagnostic_worker, raw_logs_requested
 
 
@@ -83,12 +83,25 @@ class ProcessEmbedder:
         except Exception:
             pass
 
+    def _record_close_failure(self, handle):
+        # Pipe는 하위 닫기에서 예외가 나도 핸들을 비운다. 원시 번호는 재사용될 수 있다.
+        closed = getattr(handle, 'closed', None)
+        if closed is None:
+            # Process에는 공개 closed 속성이 없다. 종료 콜백이 남아 있어야 재시도할 수 있다.
+            finalizer = getattr(getattr(handle, '_popen', None), 'finalizer', None)
+            retryable = finalizer is not None and finalizer.still_active()
+        else:
+            retryable = closed is False
+        if retryable:
+            self._pending_closes.append(handle)
+        else:
+            report_runtime_cleanup('WORKER_HANDLE_RELEASE_UNCONFIRMED')
+
     def _close_handle(self, handle):
         try:
             handle.close()
         except Exception:
-            # 다음 정리 호출에서 다시 닫을 수 있도록 소유권을 유지한다.
-            self._pending_closes.append(handle)
+            self._record_close_failure(handle)
 
     def _stop(self):
         """상태 잠금을 잡은 호출자만 사용한다. 자신이 생성한 프로세스만 종료한다."""
@@ -208,7 +221,11 @@ class ProcessEmbedder:
                             self._process.start()
                         self._event('worker_spawn_return', pid=self._process.pid)
                     finally:
-                        child.close()
+                        try:
+                            child.close()
+                        except Exception:
+                            self._record_close_failure(child)
+                            raise
                 connection = self._connection
             request = {'texts': list(texts), 'model': model_name,
                        'request_id': _request.get() or uuid4().hex}

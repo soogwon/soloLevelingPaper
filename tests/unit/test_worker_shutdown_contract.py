@@ -1,12 +1,14 @@
-"""#99의 A 인계용 종료 실패 계약. 실제 프로세스·모델·로그는 사용하지 않는다.
+"""#99 워커 종료 계약을 대역과 실제 Pipe·프로세스의 닫기 경로에서 검증한다."""
 
-기존 정상 종료 검증과 달리 OS 호출 실패를 대역으로 주입한다. strict xfail은 현재
-확인한 결함이며 합격 결과가 아니다. A 수정 후 XPASS가 나면 표식을 제거한다.
-"""
+from contextlib import redirect_stderr
+from io import StringIO
+import json
+from multiprocessing import Pipe
 
 import pytest
 
 from solo_leveling.infrastructure.embeddings import process_embedder as module
+from solo_leveling.interfaces.cli.safe_diagnostic_stream import SafeDiagnosticStream
 
 
 class Process:
@@ -233,3 +235,102 @@ def test_close_retries_only_unreleased_handles(tmp_path, monkeypatch, fail_proce
     assert process.closed and connection.closed
     assert process_calls == [process] * (2 if fail_process else 1)
     assert ipc_calls == [connection] * (2 if fail_ipc else 1)
+
+
+@pytest.mark.parametrize('release_before_error', [False, True])
+def test_pipe_close_with_lost_handle_reports_uncertainty_once(monkeypatch, release_before_error):
+    parent, peer = Pipe()
+    raw_handle = parent.fileno()
+    close_os_handle = parent._close
+    close_calls = []
+
+    def fail_close():
+        close_calls.append(True)
+        if release_before_error:
+            close_os_handle()
+        raise OSError('SYNTHETIC_PRIVATE_CLOSE')
+
+    embedder = module.ProcessEmbedder()
+    embedder._connection = parent
+    output = StringIO()
+    try:
+        monkeypatch.setattr(parent, '_close', fail_close)
+        with redirect_stderr(SafeDiagnosticStream(output)):
+            embedder.close()
+            assert parent.closed
+            assert not embedder._pending_closes
+            embedder.close()
+        assert len(close_calls) == 1
+        assert [json.loads(line) for line in output.getvalue().splitlines()] == [
+            {'event': 'runtime_cleanup', 'code': 'WORKER_HANDLE_RELEASE_UNCONFIRMED'}]
+    finally:
+        peer.close()
+        if not release_before_error and close_calls:
+            # 이 대역이 해제를 생략한 경우에만 테스트가 소유한 핸들을 회수한다.
+            type(parent)(raw_handle).close()
+
+
+def test_pipe_close_with_retained_handle_retries(monkeypatch):
+    parent, peer = Pipe()
+    close = parent.close
+    calls = []
+    output = StringIO()
+
+    def fail_once():
+        calls.append(True)
+        if len(calls) == 1:
+            raise OSError('SYNTHETIC_PRIVATE_CLOSE')
+        close()
+
+    embedder = module.ProcessEmbedder()
+    embedder._connection = parent
+    try:
+        monkeypatch.setattr(parent, 'close', fail_once)
+        with redirect_stderr(SafeDiagnosticStream(output)):
+            embedder.close()
+            assert not parent.closed
+            peer.send('probe')
+            assert parent.recv() == 'probe'
+            embedder.close()
+            embedder.close()
+        assert parent.closed and len(calls) == 2
+        assert output.getvalue() == ''
+    finally:
+        close()
+        peer.close()
+
+
+@pytest.mark.parametrize('release_before_error', [False, True])
+def test_process_close_retries_only_while_finalizer_is_active(monkeypatch, release_before_error):
+    process = module.multiprocessing.get_context('spawn').Process(target=int)
+    process.start()
+    embedder = module.ProcessEmbedder()
+    output = StringIO()
+    try:
+        process.join(timeout=10)
+        assert process.exitcode == 0
+        embedder._process = process
+        close_resources = process._popen.close
+        calls = []
+
+        def close():
+            calls.append(True)
+            if len(calls) == 1:
+                if release_before_error:
+                    close_resources()
+                raise OSError('SYNTHETIC_PRIVATE_CLOSE')
+            close_resources()
+
+        with monkeypatch.context() as patch, redirect_stderr(SafeDiagnosticStream(output)):
+            patch.setattr(process._popen, 'close', close)
+            embedder.close()
+            embedder.close()
+        if release_before_error:
+            assert len(calls) == 1
+            assert json.loads(output.getvalue()) == {
+                'event': 'runtime_cleanup', 'code': 'WORKER_HANDLE_RELEASE_UNCONFIRMED'}
+        else:
+            assert len(calls) == 2
+            assert output.getvalue() == ''
+    finally:
+        process.close()
