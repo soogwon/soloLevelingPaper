@@ -19,6 +19,14 @@ _request = ContextVar('diagnostic_request', default=None)
 _verbosity = ContextVar('diagnostic_verbosity', default='basic')
 
 
+def report_runtime_cleanup(code):
+    """원본 예외나 경로 없이 고정된 종료 코드만 출력한다."""
+    try:
+        print(json.dumps({'event': 'runtime_cleanup', 'code': code}), file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
 @contextmanager
 def diagnostic_verbosity(*, detailed=False, raw=False):
     token = _verbosity.set('raw' if raw else 'detailed' if detailed else 'basic')
