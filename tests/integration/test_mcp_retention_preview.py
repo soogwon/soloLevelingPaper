@@ -75,7 +75,8 @@ def test_same_size_replacement_and_invalid_identity(tmp_path, store, capsys):
     assert preview(tmp_path, capsys)[name] == ('unknown', 'invalid_metadata')
 
 
-def test_killed_writer_and_restart_are_distinct(tmp_path, store, capsys):
+@pytest.mark.parametrize('owner', ['mcp', 'worker'])
+def test_killed_writer_and_restart_are_distinct(tmp_path, store, capsys, owner):
     child = """
 import os, sys
 from pathlib import Path
@@ -84,21 +85,21 @@ if os.name == 'nt':
     from solo_leveling.infrastructure.log_retention.windows import WindowsBundleStore as Store
 else:
     from solo_leveling.infrastructure.log_retention.posix import PosixBundleStore as Store
-lease = Store().try_acquire_writer(Path(sys.argv[1]), BundleId('mcp', '1'*32)).lease
+lease = Store().try_acquire_writer(Path(sys.argv[1]), BundleId(sys.argv[2], '1'*32)).lease
 path, stream = lease.open_log('safe')
 print('ready', flush=True)
 sys.stdin.read()
 """
-    with subprocess.Popen([sys.executable, '-c', child, str(tmp_path)], stdin=subprocess.PIPE,
+    with subprocess.Popen([sys.executable, '-c', child, str(tmp_path), owner], stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, text=True) as process:
         try:
             assert process.stdout.readline().strip() == 'ready'
-            name = log_name(BundleId('mcp', '1' * 32), 'safe')
+            name = log_name(BundleId(owner, '1' * 32), 'safe')
             assert preview(tmp_path, capsys)[name] == ('busy', 'lock_busy')
         finally:
             process.kill()
             process.wait(timeout=10)
-    fresh = BundleId('mcp', '2' * 32)
+    fresh = BundleId(owner, '2' * 32)
     lease = store.try_acquire_writer(tmp_path, fresh).lease
     try:
         _, stream = lease.open_log('safe')
@@ -131,15 +132,30 @@ def test_untrusted_record_or_incomplete_set_is_not_expired(tmp_path, store, caps
     assert reason in ('unsafe_file', 'invalid_metadata', 'file_set_changed')
 
 
-def test_raw_added_after_scan_excludes_bundle(tmp_path, store, capsys, monkeypatch):
+@pytest.mark.parametrize('owner', ['mcp', 'worker'])
+def test_raw_added_after_scan_excludes_bundle(tmp_path, store, capsys, monkeypatch, owner):
     from solo_leveling.interfaces.cli import log_inventory
-    bundle = BundleId('mcp', 'e' * 32)
+    bundle = BundleId(owner, 'e' * 32)
     publish(store, tmp_path, bundle, ['safe'], 31)
-    inspect = log_inventory.inspect_mcp_bundle
+    inspect = log_inventory.inspect_bundle
 
     def add_then_inspect(*args):
         (tmp_path / log_name(bundle, 'raw')).write_bytes(b'PRIVATE')
         return inspect(*args)
 
-    monkeypatch.setattr(log_inventory, 'inspect_mcp_bundle', add_then_inspect)
+    monkeypatch.setattr(log_inventory, 'inspect_bundle', add_then_inspect)
     assert preview(tmp_path, capsys)[log_name(bundle, 'safe')] == ('unknown', 'file_set_changed')
+
+
+def test_worker_deadlines_and_raw_stack_exclusion(tmp_path, store, capsys):
+    recent, old, raw = [BundleId('worker', c * 32) for c in 'abc']
+    publish(store, tmp_path, recent, ['safe'], 8)
+    publish(store, tmp_path, old, ['safe'], 31)
+    publish(store, tmp_path, raw, ['raw', 'stack'], 40)
+    before = snapshot(tmp_path)
+    rows = preview(tmp_path, capsys)
+    assert rows[log_name(recent, 'safe')] == ('closed', 'retained')
+    assert rows[log_name(old, 'safe')] == ('closed', 'expired')
+    assert rows[log_name(raw, 'raw')] == rows[log_name(raw, 'stack')] == ('closed', 'raw_excluded')
+    assert preview(tmp_path, capsys, '--safe-days', '7')[log_name(recent, 'safe')] == ('closed', 'expired')
+    assert snapshot(tmp_path) == before
