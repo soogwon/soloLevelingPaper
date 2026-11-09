@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -89,8 +90,10 @@ path, stream = lease.open_log('safe')
 print('ready', flush=True)
 sys.stdin.read()
 """
+    source_root = Path(__file__).resolve().parents[2] / 'src'
+    child_env = dict(os.environ, PYTHONPATH=str(source_root))
     with subprocess.Popen([sys.executable, '-c', child, str(tmp_path)], stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE, text=True) as process:
+                          stdout=subprocess.PIPE, text=True, env=child_env, cwd=tmp_path) as process:
         try:
             assert process.stdout.readline().strip() == 'ready'
             name = log_name(BundleId('mcp', '1' * 32), 'safe')
