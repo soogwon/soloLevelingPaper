@@ -64,6 +64,39 @@ class Connection:
         self.closed = True
 
 
+class ClosedStateFailure:
+    @property
+    def closed(self):
+        raise OSError('SYNTHETIC_PRIVATE_CLOSED_STATE')
+
+    def close(self):
+        raise OSError('SYNTHETIC_PRIVATE_CLOSE')
+
+
+class FailingFinalizer:
+    def still_active(self):
+        raise OSError('SYNTHETIC_PRIVATE_FINALIZER_STATE')
+
+
+class PopenWithFailingFinalizer:
+    finalizer = FailingFinalizer()
+
+
+class FinalizerStateFailure:
+    pid = 123
+    exitcode = 0
+    _popen = PopenWithFailingFinalizer()
+
+    def is_alive(self):
+        return False
+
+    def join(self, timeout):
+        pass
+
+    def close(self):
+        raise OSError('SYNTHETIC_PRIVATE_CLOSE')
+
+
 def request_failure(tmp_path, fault):
     embedder = module.ProcessEmbedder(1, log_dir=tmp_path)
     process, connection = Process(fault), Connection()
@@ -334,3 +367,21 @@ def test_process_close_retries_only_while_finalizer_is_active(monkeypatch, relea
             assert output.getvalue() == ''
     finally:
         process.close()
+
+
+@pytest.mark.parametrize('attribute', ['closed', 'finalizer'])
+def test_close_state_lookup_failure_is_redacted_and_not_retried(attribute):
+    embedder = module.ProcessEmbedder()
+    if attribute == 'closed':
+        embedder._connection = ClosedStateFailure()
+    else:
+        embedder._process = FinalizerStateFailure()
+    output = StringIO()
+
+    with redirect_stderr(SafeDiagnosticStream(output)):
+        embedder.close()
+        embedder.close()
+
+    assert not embedder._pending_closes
+    assert [json.loads(line) for line in output.getvalue().splitlines()] == [
+        {'event': 'runtime_cleanup', 'code': 'WORKER_HANDLE_RELEASE_UNCONFIRMED'}]

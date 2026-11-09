@@ -85,13 +85,18 @@ class ProcessEmbedder:
 
     def _record_close_failure(self, handle):
         # Pipe는 하위 닫기에서 예외가 나도 핸들을 비운다. 원시 번호는 재사용될 수 있다.
-        closed = getattr(handle, 'closed', None)
-        if closed is None:
-            # Process에는 공개 closed 속성이 없다. 종료 콜백이 남아 있어야 재시도할 수 있다.
-            finalizer = getattr(getattr(handle, '_popen', None), 'finalizer', None)
-            retryable = finalizer is not None and finalizer.still_active()
-        else:
-            retryable = closed is False
+        try:
+            closed = getattr(handle, 'closed', None)
+            if closed is None:
+                # Process에는 공개 closed 속성이 없다. 종료 콜백이 남아 있어야 재시도할 수 있다.
+                finalizer = getattr(getattr(handle, '_popen', None), 'finalizer', None)
+                retryable = finalizer is not None and finalizer.still_active()
+            else:
+                retryable = closed is False
+        except Exception:
+            # 상태 판별도 실패하면 해제됐을 수 있는 원시 번호를 다시 닫지 않는다.
+            report_runtime_cleanup('WORKER_HANDLE_RELEASE_UNCONFIRMED')
+            return
         if retryable:
             self._pending_closes.append(handle)
         else:
