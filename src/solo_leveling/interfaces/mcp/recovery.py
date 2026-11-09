@@ -23,6 +23,11 @@ NOTICE = ('실패한 청크의 원문과 대상 언어를 기존 번역 제공�
           '응답이 없으면 같은 요청 키로 상태를 조회하고 새 작업을 자동 접수하지 마세요.')
 
 
+CARD_GUIDANCE = ('사용자 화면의 카드 표시 여부는 이 도구 응답으로 확인할 수 없습니다. '
+                 '카드가 보인다거나 보이지 않는다고 단정하지 말고 복구 준비 상태를 안내하세요. '
+                 '카드가 보이면 사용자가 직접 확인하도록 안내하고, 대신 접수하지 마세요.')
+
+
 class RecoveryOutput(TypedDict):
     status: Literal['ACCEPTED', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'INTERRUPTED', 'UNKNOWN',
                     'NO_TARGET', 'BASE_CHANGED', 'REQUEST_CONFLICT']
@@ -127,15 +132,18 @@ def register_recovery(server, manager):
 
         사용자의 명시적 복구 요청이 있을 때만 안내하세요. 질문·조회·재등록은 동의가 아닙니다.
         base_embedding_set_id 생략 시 조회한 현재 기본 색인을 카드에 고정합니다. 이후 접수·조회는 그 ID를 사용하세요.
-        카드에서 직접 동의해야 접수됩니다. 카드가 없으면 접수하지 않고 텍스트로 상태를 안내하세요.
+        카드에서 직접 동의해야 접수됩니다. 응답만으로 카드 표시 여부를 추측하지 말고 준비 상태를 안내하세요.
         """
         try:
             preview = await anyio.to_thread.run_sync(lambda: manager.preview(version_id, base_embedding_set_id, request_key))
             data = {**preview, 'notice': NOTICE, 'version_id': version_id, 'request_key': request_key}
             meta = ({'confirmation_token': gate.prepare(scope(version_id, preview['base_embedding_set_id']), request_key)}
                     if preview['status'] == 'AVAILABLE' else {})
-            return CallToolResult(content=[TextContent(type='text', text=json.dumps(data, ensure_ascii=False))],
-                                  structuredContent=data, _meta=meta)
+            return CallToolResult(
+                content=[TextContent(type='text', text=json.dumps(data, ensure_ascii=False)),
+                         TextContent(type='text', text=CARD_GUIDANCE)],
+                structuredContent=data, _meta=meta,
+            )
         except Exception as error:
             raise to_tool_error(error) from None
 

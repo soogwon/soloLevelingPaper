@@ -81,7 +81,8 @@ export function mountRecovery(app, doc, storage) {
       submitted = restore();
       if (result?.isError || !binding(data) || typeof data.notice !== 'string') throw new Error();
       el('notice').textContent = data.notice;
-      el('target').textContent = `버전: ${data.version_id} · 기준 색인: ${data.base_embedding_set_id} · 실패 구간: ${data.target_count ?? '확인 불가'}개`;
+      const targetCount = data.target_count == null ? '확인 불가' : `${data.target_count}개`;
+      el('target').textContent = `버전: ${data.version_id} · 기준 색인: ${data.base_embedding_set_id} · 실패 구간: ${targetCount}`;
       if (submitted) {
         el('status').textContent = same(submitted, data)
           ? '보관한 같은 키로 상태를 먼저 조회하세요. 다시 접수하지 않습니다.'

@@ -23,6 +23,16 @@ function setup(storage = new Map(), response) {
   return {app, doc, calls, storage, local, el, confirm};
 }
 
+test('실패 구간 수가 확인된 경우에만 단위를 붙인다', () => {
+  const s = setup();
+  for (const [status, target_count, expected] of [
+    ['AVAILABLE', 2, '2개'], ['NO_TARGET', 0, '0개'], ['BASE_CHANGED', null, '확인 불가'],
+  ]) {
+    s.app.ontoolresult({structuredContent: {...preview.structuredContent, status, target_count}});
+    assert.equal(s.el('target').textContent, `버전: v · 기준 색인: e · 실패 구간: ${expected}`);
+  }
+});
+
 test('동의·클릭 전 호출이 없고 키를 먼저 보관하며 중복 접수를 막는다', async () => {
   const s = setup();
   assert.equal(s.calls.length, 0);

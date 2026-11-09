@@ -44,7 +44,9 @@ def test_preview_cancellation_and_forged_or_swapped_tokens_do_not_execute(db, co
         assert tools['get_translation_recovery'].annotations.readOnlyHint
         prepared = await server.call_tool('prepare_translation_recovery', ARGS)
         token = prepared.meta['confirmation_token']
-        assert token not in prepared.content[0].text
+        assert all(token not in part.text for part in prepared.content)
+        assert json.loads(prepared.content[0].text) == prepared.structuredContent
+        assert '카드 표시 여부는 이 도구 응답으로 확인할 수 없습니다' in prepared.content[1].text
         assert 'confirmation_token' not in prepared.structuredContent
         assert prepared.structuredContent['target_count'] == 2
         for changed in ({'confirmation_token': 'forged'}, {'base_embedding_set_id': 'other'},
