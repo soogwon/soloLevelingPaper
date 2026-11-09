@@ -31,7 +31,8 @@ def _discard_output():
     sys.stdout = sys.stderr = open(os.devnull, 'w', encoding='utf-8')
 
 
-def diagnostic_worker(connection, target, log_dir, worker_id, watchdog_seconds, collect_raw=False):
+def diagnostic_worker(connection, target, log_dir, worker_id, watchdog_seconds, collect_raw=False,
+                      managed_logs=False, log_control=None):
     """모델 관련 import보다 먼저 별도 로그를 열고 자식 진입을 기록한다.
 
     기본(collect_raw=False)은 진입 및 허용된 단계 이벤트만 남기고 자식의
@@ -42,34 +43,49 @@ def diagnostic_worker(connection, target, log_dir, worker_id, watchdog_seconds, 
     try:
         if not valid_diagnostic_id(worker_id):
             raise ValueError('invalid worker id')
-        folder = Path(log_dir)
-        folder.mkdir(parents=True, exist_ok=True)
+        if log_control is not None:
+            try:
+                managed_logs = log_control.recv() is True
+            except (EOFError, OSError):
+                managed_logs = False
+            finally:
+                log_control.close()
         enter = json.dumps({'event': 'worker_enter', 'worker_id': worker_id, 'pid': os.getpid()})
-        if not collect_raw:
-            with (folder / f'worker-{worker_id}.log').open('x', encoding='utf-8') as output:
-                output.write(enter + '\n')
-                output.flush()
-                _discard_output()
-                token = stage_output.set(output)
+        if managed_logs:
+            folder = Path(log_dir)
+            if not collect_raw:
+                with (folder / f'slp-log-v1-worker-safe-{worker_id}.log').open(
+                        'a', encoding='utf-8') as output:
+                    output.write(enter + '\n')
+                    output.flush()
+                    _discard_output()
+                    token = stage_output.set(output)
+                    try:
+                        target(connection)
+                    finally:
+                        stage_output.reset(token)
+                return
+            with (folder / f'slp-log-v1-worker-raw-{worker_id}.log').open(
+                    'a', encoding='utf-8') as output:
+                os.dup2(output.fileno(), 2)
+            sys.stderr = os.fdopen(os.dup(2), 'w', encoding='utf-8', buffering=1)
+            os.dup2(2, 1)
+            sys.stdout = sys.stderr
+            print(enter, flush=True)
+            with (folder / f'slp-log-v1-worker-stack-{worker_id}.log').open(
+                    'a', encoding='utf-8') as stack:
+                _stack_output = stack
+                faulthandler.dump_traceback_later(watchdog_seconds, file=stack, exit=False)
                 try:
                     target(connection)
                 finally:
-                    stage_output.reset(token)
+                    faulthandler.cancel_dump_traceback_later()
+                    _stack_output = None
             return
-        with (folder / f'worker-{worker_id}.log').open('x', encoding='utf-8') as output:
-            os.dup2(output.fileno(), 2)
-        sys.stderr = os.fdopen(os.dup(2), 'w', encoding='utf-8', buffering=1)
-        os.dup2(2, 1)
-        sys.stdout = sys.stderr
-        print(enter, flush=True)
-        with (folder / f'worker-stack-{worker_id}.log').open('x', encoding='utf-8') as stack:
-            _stack_output = stack
-            faulthandler.dump_traceback_later(watchdog_seconds, file=stack, exit=False)
-            try:
-                target(connection)
-            finally:
-                faulthandler.cancel_dump_traceback_later()
-                _stack_output = None
+        # 부모가 묶음 잠금이나 규약 파일을 확보하지 못하면 구형 이름이나 다른
+        # 경로로 원본 출력을 우회하지 않는다. 작업 자체는 계속 수행한다.
+        _discard_output()
+        target(connection)
     except Exception:
         # 실패의 본문은 로그나 IPC로 내보내지 않는다.
         try:

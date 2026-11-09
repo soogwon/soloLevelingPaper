@@ -177,7 +177,13 @@ if __name__ == '__main__':
     assert (b'SYNTHETIC_NATIVE_PRIVATE' in text) is raw
     if raw and mode == 'hang':
         assert b'Timeout' in text
-    assert not list(logs.glob('*.closed.json'))
+    closed, = logs.glob('slp-log-v1-worker-*.closed.json')
+    record = json.loads(closed.read_text(encoding='utf-8'))
+    assert record['owner'] == 'worker'
+    assert record['run_id'] in closed.name
+    assert {item['kind'] for item in record['files']} == ({'raw', 'stack'} if raw else {'safe'})
+    assert {item['name'] for item in record['files']} == {path.name for path in files}
+    assert all(item['size_bytes'] == (logs / item['name']).stat().st_size for item in record['files'])
     summary = inventory(logs)
     assert summary['file_count'] == len(files)
     assert all(row['activity'] == 'unknown' for row in summary['files'])
