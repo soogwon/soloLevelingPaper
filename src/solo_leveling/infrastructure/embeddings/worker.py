@@ -42,7 +42,13 @@ def _receive_log_fds(control):
             handle = recv_handle(control)
             if os.name == 'nt':
                 import msvcrt
-                handle = msvcrt.open_osfhandle(handle, os.O_WRONLY | os.O_NOINHERIT)
+                import _winapi
+                try:
+                    handle = msvcrt.open_osfhandle(handle, os.O_WRONLY | os.O_NOINHERIT)
+                except Exception:
+                    # 변환이 실패하면 네이티브 핸들의 소유권은 수신자에게 남는다.
+                    _winapi.CloseHandle(handle)
+                    raise
             descriptors[kind] = handle
         return descriptors
     except Exception:
@@ -68,11 +74,13 @@ def diagnostic_worker(connection, target, log_dir, worker_id, watchdog_seconds, 
             raise ValueError('invalid worker id')
         descriptors = {}
         if log_control is not None:
-            try:
-                descriptors = _receive_log_fds(log_control)
-            finally:
-                log_control.close()
+            descriptors = _receive_log_fds(log_control)
             expected = ('raw', 'stack') if collect_raw else ('safe',)
+            try:
+                log_control.close()
+            except Exception:
+                # 파이프를 다시 닫지 않고 받은 설명자를 회수한 뒤 작업을 계속한다.
+                expected = ()
             if tuple(descriptors) != expected:
                 for descriptor in descriptors.values():
                     try:
