@@ -188,6 +188,21 @@ def test_failed_reparse_keeps_existing_default_index(db):
     assert replay.new_parse_revision_id == 'p2'
 
 
+def test_late_failure_preserves_interrupted_reparse(db):
+    prepare(db)
+    repo.update_job_status(db, 'reparse', JobStatus.PROCESSING, limitations=['PARTIAL_RESULT'])
+    assert repo.mark_interrupted_jobs_on_startup(db) == 1
+    interrupted = repo.get_job(db, 'reparse')
+    assert interrupted.status == JobStatus.INTERRUPTED
+    assert interrupted.limitations == ['PARTIAL_RESULT']
+
+    repo.fail_reparse(db, 'reparse', ['TRANSLATION_FAILED'])
+
+    assert repo.get_job(db, 'reparse') == interrupted
+    assert repo.get_reparse_request(db, 'request').disposition == ReparseDisposition.INTERRUPTED
+    assert prepare(db, 'retry', 'retry-request').disposition == ReparseDisposition.ACCEPTED
+
+
 def test_publish_switches_only_new_default_and_keeps_old_index(db):
     repo.create_learning_context(db, LearningContext(
         'old-context', 'v1', 'p1', 't1', embedding_set_id='idx1'))

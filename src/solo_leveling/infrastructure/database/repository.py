@@ -836,13 +836,14 @@ def publish_reparsed_index(db_path: str, job_id: str, embedding_set: EmbeddingSe
 
 
 def fail_reparse(db_path: str, job_id: str, limitations: list[str]) -> None:
-    """재파싱 실패를 기록하되 기존 기본 색인과 기존 리비전은 유지한다."""
+    """진행 중인 재파싱만 실패로 전환하고 해당 작업의 잠금을 해제한다."""
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
         lock = conn.execute('SELECT 1 FROM reparse_locks WHERE job_id=?', (job_id,)).fetchone()
         if lock is None:
             raise ValueError('reparse job is not active')
-        conn.execute("UPDATE processing_jobs SET status='failed', limitations=?, updated_at=? WHERE job_id=?",
+        conn.execute("UPDATE processing_jobs SET status='failed', limitations=?, updated_at=? "
+                     "WHERE job_id=? AND status='processing'",
                      (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
         conn.execute('DELETE FROM reparse_locks WHERE job_id=?', (job_id,))
 
