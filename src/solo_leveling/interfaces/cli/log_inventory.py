@@ -1,5 +1,6 @@
 """로그 본문을 읽거나 파일을 변경하지 않고 보관 검토 목록을 만든다."""
 
+from datetime import datetime, timezone
 import argparse
 import json
 import math
@@ -8,7 +9,8 @@ import re
 import stat
 import time
 
-from solo_leveling.infrastructure.log_retention.policy import parse_log_name
+from solo_leveling.infrastructure.log_retention.policy import RetentionPolicy, parse_log_name
+from solo_leveling.infrastructure.log_retention.preview import inspect_mcp_bundle
 
 
 _HEX = r'[0-9a-f]{32}'
@@ -24,8 +26,8 @@ def _linked(info):
 
 
 def inventory(directory: Path, *, review_days=30, max_bytes=104857600,
-              max_files=100, now=None):
-    """설정한 한도의 초과 여부만 보고한다. 활성 여부와 삭제 안전성은 판정하지 않는다."""
+              max_files=100, now=None, retention_policy=None):
+    """목록과 경고를 반환하고 선택한 경우 MCP 묶음의 보관 상태도 검사한다."""
     if (type(review_days) not in (int, float) or not math.isfinite(review_days)
             or review_days <= 0 or type(max_bytes) is not int or max_bytes <= 0
             or type(max_files) is not int or max_files <= 0):
@@ -39,10 +41,15 @@ def inventory(directory: Path, *, review_days=30, max_bytes=104857600,
         raise ValueError('로그 디렉터리가 필요합니다.')
     timestamp = time.time() if now is None else now
     rows = []
+    bundles = {}
     skipped = 0
     unreadable = 0
     for path in root.iterdir():
         parsed = parse_log_name(path.name)
+        bundle_files = None
+        if retention_policy is not None and parsed and parsed[0].owner == 'mcp':
+            bundle_files = bundles.setdefault(parsed[0], {})
+            bundle_files[path.name] = None
         if parsed is None and not _NAMES.fullmatch(path.name):
             skipped += 1
             continue
@@ -52,6 +59,8 @@ def inventory(directory: Path, *, review_days=30, max_bytes=104857600,
                     or info.st_nlink != 1):
                 skipped += 1
                 continue
+            if bundle_files is not None:
+                bundle_files[path.name] = info
             age = max(0, timestamp - info.st_mtime)
             rows.append({
                 'name': path.name, 'bytes': info.st_size,
@@ -64,14 +73,33 @@ def inventory(directory: Path, *, review_days=30, max_bytes=104857600,
         except OSError:
             # 파일명이나 원본 예외를 오류 응답으로 노출하지 않는다.
             unreadable += 1
+    if retention_policy is not None:
+        instant = datetime.fromtimestamp(timestamp, timezone.utc)
+        statuses = {}
+        for bundle, observed in bundles.items():
+            status = inspect_mcp_bundle(root, bundle, observed, instant, retention_policy)
+            statuses[bundle] = status
+            if status == 'io_error':
+                unreadable += 1
+        for row in rows:
+            parsed = parse_log_name(row['name'])
+            status = statuses.get(parsed[0], 'worker_excluded') if parsed else 'legacy_unknown'
+            row['retention_status'] = status
+            if status in ('expired', 'retained', 'raw_excluded', 'future_timestamp'):
+                row['activity'] = 'closed'
+            elif status == 'lock_busy':
+                row['activity'] = 'busy'
     rows.sort(key=lambda row: (row['modified_at_unix'], row['name']))
     total = sum(row['bytes'] for row in rows)
-    return {'mode': 'preview_only', 'policy': {'review_days': review_days,
+    result = {'mode': 'preview_only', 'policy': {'review_days': review_days,
             'max_bytes': max_bytes, 'max_files': max_files},
             'files': rows, 'total_bytes': total, 'file_count': len(rows),
             'bytes_exceeded': total > max_bytes, 'count_exceeded': len(rows) > max_files,
             'skipped_count': skipped, 'unreadable_count': unreadable,
             'complete': unreadable == 0}
+    if retention_policy is not None:
+        result['policy'].update(safe_days=retention_policy.safe_days, detail_days=retention_policy.detail_days)
+    return result
 
 
 class _InventoryParser(argparse.ArgumentParser):
@@ -86,9 +114,17 @@ def main(argv=None):
     parser.add_argument('--review-days', type=float, default=30)
     parser.add_argument('--max-bytes', type=int, default=104857600)
     parser.add_argument('--max-files', type=int, default=100)
+    parser.add_argument('--retention', action='store_true', help='MCP 종료 기록과 보관 기간 검사')
+    parser.add_argument('--safe-days', type=int)
+    parser.add_argument('--detail-days', type=int)
     args = parser.parse_args(argv)
     try:
-        result = inventory(args.log_dir, review_days=args.review_days,
+        overrides = {k: v for k, v in (('safe_days', args.safe_days), ('detail_days', args.detail_days))
+                     if v is not None}
+        if overrides and not args.retention:
+            raise ValueError('보관 기간 설정에는 --retention이 필요합니다.')
+        policy = RetentionPolicy(**overrides) if args.retention else None
+        result = inventory(args.log_dir, retention_policy=policy, review_days=args.review_days,
                            max_bytes=args.max_bytes, max_files=args.max_files)
     except (OSError, ValueError):
         print(json.dumps({'error_code': 'LOG_INVENTORY_UNAVAILABLE'}))

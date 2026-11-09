@@ -11,9 +11,29 @@
 지연 작업 정리·stderr 복원·파일 닫기 뒤에만 게시하며 실패한 묶음은 종료 미확인 상태로 남는다.
 2026-11-07: Windows 로컬 NTFS에서도 기본·상세 MCP 로그에 같은 종료 절차를 적용한다.
 원본·스택 수집의 범위는 [구현과 검증 범위](log-retention-contract.md)를 참조한다.
-미리보기의 activity는 계속 unknown이며 종료 JSON을 정리 권한으로 사용하지 않는다.
+기본 목록의 activity는 unknown이며 종료 JSON을 정리 권한으로 사용하지 않는다.
 
-## 현재 가능한 작업
+## MCP 보관 기간 미리보기
+
+```sh
+python -m solo_leveling.interfaces.cli.log_inventory --log-dir ./runtime/diagnostics --retention
+```
+
+`--retention`은 기존 묶음의 잠금을 비차단 방식으로 한 번 시도한다. 잠금을 얻으면 종료 JSON을 최대 16 KiB까지 검증하고, 기록된 모든 파일의 이름·장치·파일 ID·크기를 열린 파일과 대조한다. 보관 기간은 종료 시각(UTC)부터 기본 안전 로그 30일, 상세 안전 로그 7일이다. `--safe-days`와 `--detail-days`로 1~36500일 범위에서 조정할 수 있다. 같은 묶음의 모든 로그가 기간에 도달해야 만료로 표시한다.
+
+| retention_status | 해석 |
+|---|---|
+| `retained` / `expired` | 종료가 확인된 묶음의 기간 미도달 / 도달 |
+| `lock_busy` | 실행 중인 writer, 다른 검사자 또는 잠금 파일 이상으로 검사할 수 없음 |
+| `missing_lock` / `missing_closed_record` | 잠금 파일 또는 종료 기록 없음. 강제 종료 후 파일도 여기에 해당 |
+| `file_changed` / `file_set_changed` | 파일 동일성·크기·관찰 시각 또는 묶음 구성 불일치 |
+| `raw_excluded` / `future_timestamp` | 원본·스택이 포함됐거나 종료 시각이 미래인 묶음 |
+| `invalid_metadata` / `unsafe_file` / `unsupported` / `io_error` | 기록·경로·플랫폼 또는 접근 오류로 보관 판정 제외 |
+| `legacy_unknown` / `worker_excluded` | 구형 이름 또는 worker 생산자 검증 범위 밖 |
+
+검사 결과는 그 시점의 관찰이다. 로그 본문은 읽지 않으며 파일 생성·삭제·순환을 수행하지 않는다. 크기·개수 초과 경고와 수정 시각 기준의 기존 `age_review`는 종료 시각 기준의 `retention_status`와 별개다.
+
+## 기본 목록
 
 ```powershell
 python -m solo_leveling.interfaces.cli.log_inventory --log-dir ./runtime/diagnostics

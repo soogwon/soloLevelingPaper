@@ -110,6 +110,19 @@ class WindowsLease:
         if handles is not None:
             handles.close()
 
+    def _stat_for_preview(self, name):
+        return os.lstat(self.root / name)
+
+    def _open_for_preview(self, name):
+        return _fd(self.root / name, 0x80000000, os.O_RDONLY, share=1)
+
+    def _matches_preview(self, name, info):
+        # 상위 경로와 파일의 핸들이 열려 있는 동안 쓰기·삭제 공유를 차단한다.
+        return self.handles is not None
+
+    def valid(self):
+        return self.handles is not None
+
     def open_log(self, kind):
         name = log_name(self.bundle_id, kind)
         if self.handles is None or self.role != 'writer' or self.published or name in self.files:
