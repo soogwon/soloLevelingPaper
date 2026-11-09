@@ -1,6 +1,7 @@
 """임베딩 전용 프로세스를 재사용하고 대기·계산 시간을 제한한다."""
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from enum import Enum
 import math
 import multiprocessing
@@ -72,8 +73,93 @@ class ProcessEmbedder:
         self._pending_closes = []
         self._log_dir = str(Path(log_dir or Path(tempfile.gettempdir()) / 'solo-leveling-diagnostics').resolve())
         self._worker_id = None
+        self._log_store = None
+        self._log_lease = None
+        self._log_files = ()
         # None이면 환경 설정을 따르고, 기본은 원본 로그·스택을 수집하지 않는다.
         self._collect_raw = raw_logs_requested() if collect_raw_logs is None else collect_raw_logs is True
+
+    def _prepare_worker_logs(self):
+        """부모가 잠금·원본 참조·자식에게 넘길 쓰기 스트림을 소유한다."""
+        try:
+            from solo_leveling.infrastructure.log_retention.contracts import BundleId, ClosedFile
+            if os.name == 'nt':
+                from solo_leveling.infrastructure.log_retention.windows import WindowsBundleStore
+                store = WindowsBundleStore()
+            elif os.name == 'posix':
+                from solo_leveling.infrastructure.log_retention.posix import PosixBundleStore
+                store = PosixBundleStore()
+            else:
+                return False
+            acquired = store.try_acquire_writer(Path(self._log_dir), BundleId('worker', self._worker_id))
+            if acquired.lease is None:
+                return False
+            lease = acquired.lease
+            files = []
+            outputs = []
+            try:
+                for kind in (('raw', 'stack') if self._collect_raw else ('safe',)):
+                    path, output = lease.open_log(kind)
+                    output.flush()
+                    os.fsync(output.fileno())
+                    files.append(ClosedFile(kind, path.name, 0))
+                    outputs.append((kind, output))
+            except Exception:
+                lease.release()
+                return False
+            self._log_store, self._log_lease, self._log_files = store, lease, tuple(files)
+            return tuple(outputs)
+        except Exception:
+            return False
+
+    def _send_worker_logs(self, connection, process):
+        """검증한 열린 파일만 OS 핸들 전달로 자식에 넘긴다. 경로는 보내지 않는다."""
+        outputs = self._prepare_worker_logs()
+        if outputs is False:
+            try:
+                connection.send((False, ()))
+            except Exception:
+                pass
+            return
+        try:
+            from multiprocessing.reduction import send_handle
+            connection.send((True, tuple(kind for kind, _ in outputs)))
+            for _, output in outputs:
+                handle = output.fileno()
+                if os.name == 'nt':
+                    import msvcrt
+                    handle = msvcrt.get_osfhandle(handle)
+                send_handle(connection, handle, process.pid)
+        except Exception:
+            # 자식은 불완전한 전달을 감지해 받은 핸들을 닫고 수집 없이 계속한다.
+            pass
+        finally:
+            for _, output in outputs:
+                try:
+                    output.close()
+                except OSError:
+                    pass
+
+    def _finish_worker_logs(self, *, publish):
+        """자식 종료 확인 뒤에만 크기를 다시 읽고 종료 기록을 게시한다."""
+        store, lease, files = self._log_store, self._log_lease, self._log_files
+        self._log_store = self._log_lease = None
+        self._log_files = ()
+        if lease is None:
+            return
+        try:
+            if publish:
+                from solo_leveling.infrastructure.log_retention.contracts import ClosedFile
+                current = tuple(ClosedFile(item.kind, item.name,
+                    (lease.root / item.name).stat().st_size) for item in files)
+                store.publish_closed(lease, current, datetime.now(timezone.utc))
+        except Exception:
+            pass
+        finally:
+            try:
+                lease.release()
+            except Exception:
+                pass
 
     def _event(self, event, *, pid=None, exit_code=None, alive=None):
         try:
@@ -126,6 +212,7 @@ class ProcessEmbedder:
         try:
             if process is None:
                 self._stop_unconfirmed = False
+                self._finish_worker_logs(publish=False)
                 return
             try:
                 pid = process.pid
@@ -136,6 +223,7 @@ class ProcessEmbedder:
                     self._close_handle(process)
                     self._process = None
                     self._stop_unconfirmed = False
+                    self._finish_worker_logs(publish=False)
                     return
 
             # 이전 종료 시도에서 생존 여부를 확정하지 못한 worker에는 종료 API를 반복 호출하지
@@ -174,6 +262,7 @@ class ProcessEmbedder:
                 self._close_handle(process)
                 self._process = None
                 self._stop_unconfirmed = False
+                self._finish_worker_logs(publish=True)
             else:
                 # 살아 있거나 상태 확인이 실패한 프로세스의 마지막 소유 참조를 보존한다.
                 self._process = process
@@ -216,16 +305,25 @@ class ProcessEmbedder:
                         raise EmbeddingProcessError(EmbeddingFailure.UNAVAILABLE)
                     context = multiprocessing.get_context('spawn')
                     self._connection, child = context.Pipe()
+                    # POSIX의 SCM_RIGHTS 핸들 전달에는 Unix socket 기반 duplex Pipe가 필요하다.
+                    log_receiver, log_sender = context.Pipe()
                     self._worker_id = uuid4().hex
                     self._process = context.Process(target=diagnostic_worker,
                         args=(child, self._target, self._log_dir, self._worker_id, min(30, self.timeout / 2),
-                              self._collect_raw), daemon=True)
+                              self._collect_raw, None, log_receiver), daemon=True)
                     try:
                         self._event('worker_spawn_start')
                         with _null_stdin_for_child():
                             self._process.start()
+                        log_receiver.close()
+                        self._send_worker_logs(log_sender, self._process)
                         self._event('worker_spawn_return', pid=self._process.pid)
                     finally:
+                        for handle in (log_receiver, log_sender):
+                            try:
+                                handle.close()
+                            except Exception:
+                                self._record_close_failure(handle)
                         try:
                             child.close()
                         except Exception:
