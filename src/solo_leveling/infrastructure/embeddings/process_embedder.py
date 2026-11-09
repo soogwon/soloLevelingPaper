@@ -14,7 +14,7 @@ from threading import Lock, Thread
 from time import monotonic
 from uuid import uuid4
 
-from solo_leveling.diagnostics import _request, stage
+from solo_leveling.diagnostics import _request, report_runtime_cleanup, stage
 from .worker import run_worker, diagnostic_worker, raw_logs_requested
 
 
@@ -68,6 +68,8 @@ class ProcessEmbedder:
         self._closed = False
         self._process = None
         self._connection = None
+        self._stop_unconfirmed = False
+        self._pending_closes = []
         self._log_dir = str(Path(log_dir or Path(tempfile.gettempdir()) / 'solo-leveling-diagnostics').resolve())
         self._worker_id = None
         # None이면 환경 설정을 따르고, 기본은 원본 로그·스택을 수집하지 않는다.
@@ -81,24 +83,105 @@ class ProcessEmbedder:
         except Exception:
             pass
 
+    def _record_close_failure(self, handle):
+        # Pipe는 하위 닫기에서 예외가 나도 핸들을 비운다. 원시 번호는 재사용될 수 있다.
+        try:
+            closed = getattr(handle, 'closed', None)
+            if closed is None:
+                # Process에는 공개 closed 속성이 없다. 종료 콜백이 남아 있어야 재시도할 수 있다.
+                finalizer = getattr(getattr(handle, '_popen', None), 'finalizer', None)
+                retryable = finalizer is not None and finalizer.still_active()
+            else:
+                retryable = closed is False
+        except Exception:
+            # 상태 판별도 실패하면 해제됐을 수 있는 원시 번호를 다시 닫지 않는다.
+            report_runtime_cleanup('WORKER_HANDLE_RELEASE_UNCONFIRMED')
+            return
+        if retryable:
+            self._pending_closes.append(handle)
+        else:
+            report_runtime_cleanup('WORKER_HANDLE_RELEASE_UNCONFIRMED')
+
+    def _close_handle(self, handle):
+        try:
+            handle.close()
+        except Exception:
+            self._record_close_failure(handle)
+
     def _stop(self):
         """상태 잠금을 잡은 호출자만 사용한다. 자신이 생성한 프로세스만 종료한다."""
         process, connection = self._process, self._connection
-        self._process = self._connection = None
-        if process is not None and process.pid is not None:
-            if process.is_alive():
-                process.terminate()
-            process.join(timeout=1)
-            if process.is_alive():
-                process.kill()
-                process.join(timeout=1)
-            if not process.is_alive():
-                self._event('worker_stopped', pid=process.pid, exit_code=process.exitcode, alive=False)
-                process.close()
+        self._connection = None
+
+        def alive():
+            try:
+                return process.is_alive()
+            except Exception:
+                return None
+
+        pending, self._pending_closes = self._pending_closes, []
+        for handle in pending:
+            self._close_handle(handle)
+
+        try:
+            if process is None:
+                self._stop_unconfirmed = False
+                return
+            try:
+                pid = process.pid
+            except Exception:
+                pid = None
             else:
-                self._event('worker_stop_failed', pid=process.pid, alive=True)
-        if connection is not None:
-            connection.close()
+                if pid is None:
+                    self._close_handle(process)
+                    self._process = None
+                    self._stop_unconfirmed = False
+                    return
+
+            # 이전 종료 시도에서 생존 여부를 확정하지 못한 worker에는 종료 API를 반복 호출하지
+            # 않는다. 자연 종료 여부만 다시 확인해 회수하거나 계속 격리한다.
+            if self._stop_unconfirmed:
+                final_alive = alive()
+            else:
+                current_alive = alive()
+                if current_alive is True:
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                try:
+                    process.join(timeout=1)
+                except Exception:
+                    pass
+                current_alive = alive()
+                if current_alive is True:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+                    try:
+                        process.join(timeout=1)
+                    except Exception:
+                        pass
+                final_alive = alive()
+
+            if final_alive is False:
+                try:
+                    exit_code = process.exitcode
+                except Exception:
+                    exit_code = None
+                self._event('worker_stopped', pid=pid, exit_code=exit_code, alive=False)
+                self._close_handle(process)
+                self._process = None
+                self._stop_unconfirmed = False
+            else:
+                # 살아 있거나 상태 확인이 실패한 프로세스의 마지막 소유 참조를 보존한다.
+                self._process = process
+                self._stop_unconfirmed = True
+                self._event('worker_stop_failed', pid=pid, alive=final_alive)
+        finally:
+            if connection is not None:
+                self._close_handle(connection)
 
     def close(self):
         with self._state:
@@ -123,8 +206,14 @@ class ProcessEmbedder:
             with self._state:
                 if self._closed:
                     raise EmbeddingProcessError(EmbeddingFailure.CLOSED)
+                if self._stop_unconfirmed:
+                    self._stop()
+                    if self._stop_unconfirmed:
+                        raise EmbeddingProcessError(EmbeddingFailure.UNAVAILABLE)
                 if self._process is None or not self._process.is_alive():
                     self._stop()
+                    if self._stop_unconfirmed:
+                        raise EmbeddingProcessError(EmbeddingFailure.UNAVAILABLE)
                     context = multiprocessing.get_context('spawn')
                     self._connection, child = context.Pipe()
                     self._worker_id = uuid4().hex
@@ -137,7 +226,11 @@ class ProcessEmbedder:
                             self._process.start()
                         self._event('worker_spawn_return', pid=self._process.pid)
                     finally:
-                        child.close()
+                        try:
+                            child.close()
+                        except Exception:
+                            self._record_close_failure(child)
+                            raise
                 connection = self._connection
             request = {'texts': list(texts), 'model': model_name,
                        'request_id': _request.get() or uuid4().hex}
