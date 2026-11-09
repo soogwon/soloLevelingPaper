@@ -73,6 +73,7 @@ class SafeDiagnosticStream:
         if isinstance(record, dict) and record.get('event') == 'runtime_cleanup':
             if (set(record) == {'event', 'code'} and isinstance(record['code'], str)
                     and record['code'] in {'INGESTION_CANCEL_STATE_FAILED', 'RUNTIME_DRAIN_FAILED', 'EMBEDDER_CLOSE_FAILED',
+                        'WORKER_HANDLE_RELEASE_UNCONFIRMED',
                         'RUNTIME_SHUTDOWN_DEFERRED', 'CHROMA_CLOSE_UNSUPPORTED', 'CHROMA_CLOSE_FAILED',
                         'RECOVERY_DRAIN_FAILED'}):
                 self.output.write(json.dumps(record) + '\n')

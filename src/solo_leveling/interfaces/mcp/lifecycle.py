@@ -3,10 +3,9 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
-import sys
-import json
 import threading
 
+from solo_leveling.diagnostics import report_runtime_cleanup as report
 from solo_leveling.infrastructure.storage.vector_store import close_client, ChromaCloseResult
 from .ingestion import IngestionShuttingDownError
 
@@ -35,14 +34,6 @@ def cleanup_scope():
                 owner.done.wait()
         finally:
             _lifetimes.reset(token)
-
-
-def report(code):
-    """원본 예외나 경로 없이 고정된 종료 코드만 출력한다."""
-    try:
-        print(json.dumps({'event': 'runtime_cleanup', 'code': code}), file=sys.stderr, flush=True)
-    except Exception:
-        pass
 
 
 class RequestGate:

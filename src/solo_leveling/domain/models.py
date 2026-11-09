@@ -34,6 +34,30 @@ class RequestConflictError(ValueError):
     """같은 등록 요청 키가 이전과 다른 입력에 사용되었다."""
 
 
+class ReparseDisposition(str, Enum):
+    """기존 논문 재파싱 요청의 고정 상태."""
+    ACCEPTED = "ACCEPTED"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    INTERRUPTED = "INTERRUPTED"
+    FAILED = "FAILED"
+    BASE_CHANGED = "BASE_CHANGED"
+    REQUEST_CONFLICT = "REQUEST_CONFLICT"
+
+
+@dataclass(frozen=True)
+class ReparseRegistration:
+    """명시적 재파싱 요청과 작업·새 리비전 연결."""
+    disposition: ReparseDisposition
+    request_key: str
+    version_id: str
+    base_parse_revision_id: str
+    base_embedding_set_id: str
+    job_id: Optional[str] = None
+    new_parse_revision_id: Optional[str] = None
+    new_embedding_set_id: Optional[str] = None
+
+
 class TranslationRecoveryDisposition(str, Enum):
     """번역 복구 접수·재조회에서 문자열 예외 없이 구분하는 고정 상태."""
     ACCEPTED = "ACCEPTED"

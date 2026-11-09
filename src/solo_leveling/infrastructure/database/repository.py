@@ -28,6 +28,8 @@ from solo_leveling.domain.models import (
     LearningContext,
     Evidence,
     PaperSection,
+    ReparseDisposition,
+    ReparseRegistration,
     now_iso,
     RequestConflictError,
     TranslationRecoveryDisposition,
@@ -622,6 +624,261 @@ def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
                      (embedding_set.embedding_set_id, 'publish'))
         conn.execute("UPDATE processing_jobs SET status='ready', stage='index', limitations=?, updated_at=? WHERE job_id=?",
                      (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
+
+
+# ── 기존 논문 재파싱(#116) ──────────────────────────────────────
+def _reparse_registration(conn, request, *, conflict=False) -> ReparseRegistration:
+    if conflict:
+        return ReparseRegistration(
+            ReparseDisposition.REQUEST_CONFLICT, request['request_key'], request['version_id'],
+            request['base_parse_revision_id'], request['base_embedding_set_id'])
+    job = conn.execute('SELECT status FROM processing_jobs WHERE job_id=?',
+                       (request['job_id'],)).fetchone()
+    published = conn.execute('SELECT parse_revision_id, embedding_set_id FROM search_indexes WHERE job_id=?',
+                             (request['job_id'],)).fetchone()
+    new_parse_revision_id = (published['parse_revision_id'] if published
+                             else request['new_parse_revision_id'])
+    if published:
+        disposition = ReparseDisposition.COMPLETED
+    elif job and job['status'] in ('queued', 'processing'):
+        disposition = ReparseDisposition.IN_PROGRESS
+    elif job and job['status'] == 'interrupted':
+        disposition = ReparseDisposition.INTERRUPTED
+    else:
+        disposition = ReparseDisposition.FAILED
+    return ReparseRegistration(
+        disposition, request['request_key'], request['version_id'],
+        request['base_parse_revision_id'], request['base_embedding_set_id'],
+        request['job_id'], new_parse_revision_id,
+        published['embedding_set_id'] if published else None)
+
+
+def get_reparse_request(db_path: str, request_key: str) -> ReparseRegistration | None:
+    """저장된 재파싱 요청 상태만 조회하며 미등록 키로 작업을 만들지 않는다."""
+    require_text(request_key, 'request_key')
+    with closing(get_connection(db_path)) as conn:
+        request = conn.execute('SELECT * FROM reparse_requests WHERE request_key=?',
+                               (request_key,)).fetchone()
+        return _reparse_registration(conn, request) if request else None
+
+
+def prepare_reparse(db_path: str, job: ProcessingJob, request_key: str, input_hash: str,
+                    base_parse_revision_id: str,
+                    base_embedding_set_id: str) -> ReparseRegistration:
+    """명시적 재파싱 실행권을 멱등 접수하고 요청 당시 기본 색인을 고정한다."""
+    for name, value in (('job_id', job.job_id), ('version_id', job.version_id),
+                        ('request_key', request_key), ('input_hash', input_hash),
+                        ('base_parse_revision_id', base_parse_revision_id),
+                        ('base_embedding_set_id', base_embedding_set_id)):
+        require_text(value, name)
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        request = conn.execute('SELECT * FROM reparse_requests WHERE request_key=?',
+                               (request_key,)).fetchone()
+        if request:
+            conflict = (request['input_hash'], request['version_id'],
+                        request['base_parse_revision_id'], request['base_embedding_set_id']) != (
+                            input_hash, job.version_id,
+                            base_parse_revision_id, base_embedding_set_id)
+            return _reparse_registration(conn, request, conflict=conflict)
+        base = conn.execute('SELECT parse_revision_id, embedding_set_id FROM search_indexes '
+                            'WHERE version_id=? AND is_default=1', (job.version_id,)).fetchone()
+        if (base is None or base['parse_revision_id'] != base_parse_revision_id
+                or base['embedding_set_id'] != base_embedding_set_id):
+            return ReparseRegistration(
+                ReparseDisposition.BASE_CHANGED, request_key, job.version_id,
+                base_parse_revision_id, base_embedding_set_id)
+        conn.execute("DELETE FROM reparse_locks WHERE version_id=? AND job_id IN "
+                     "(SELECT job_id FROM processing_jobs WHERE status NOT IN ('queued', 'processing'))",
+                     (job.version_id,))
+        lock = conn.execute('SELECT * FROM reparse_locks WHERE version_id=?',
+                            (job.version_id,)).fetchone()
+        if lock:
+            owner = conn.execute('SELECT * FROM reparse_requests WHERE job_id=? ORDER BY created_at LIMIT 1',
+                                 (lock['job_id'],)).fetchone()
+            same_input = owner is not None and (
+                owner['input_hash'], owner['version_id'], owner['base_parse_revision_id'],
+                owner['base_embedding_set_id']) == (
+                    input_hash, job.version_id, base_parse_revision_id, base_embedding_set_id)
+            if not same_input:
+                return ReparseRegistration(
+                    ReparseDisposition.IN_PROGRESS, request_key, job.version_id,
+                    base_parse_revision_id, base_embedding_set_id)
+            conn.execute('INSERT INTO reparse_requests '
+                         '(request_key, input_hash, version_id, base_parse_revision_id, '
+                         'base_embedding_set_id, job_id, new_parse_revision_id, created_at) '
+                         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                         (request_key, input_hash, job.version_id, base_parse_revision_id,
+                          base_embedding_set_id, lock['job_id'], lock['new_parse_revision_id'], now_iso()))
+            return _reparse_registration(conn, conn.execute(
+                'SELECT * FROM reparse_requests WHERE request_key=?', (request_key,)).fetchone())
+        active = conn.execute("SELECT job_id FROM processing_jobs WHERE version_id=? "
+                              "AND status IN ('queued', 'processing') LIMIT 1",
+                              (job.version_id,)).fetchone()
+        if active:
+            return ReparseRegistration(
+                ReparseDisposition.IN_PROGRESS, request_key, job.version_id,
+                base_parse_revision_id, base_embedding_set_id)
+        conn.execute('INSERT INTO processing_jobs '
+                     '(job_id, version_id, status, stage, limitations, created_at, updated_at) '
+                     "VALUES (?, ?, 'processing', 'parse', '[]', ?, ?)",
+                     (job.job_id, job.version_id, job.created_at, job.updated_at))
+        conn.execute('INSERT INTO reparse_locks '
+                     '(version_id, job_id, base_parse_revision_id, base_embedding_set_id, created_at) '
+                     'VALUES (?, ?, ?, ?, ?)',
+                     (job.version_id, job.job_id, base_parse_revision_id,
+                      base_embedding_set_id, now_iso()))
+        conn.execute('INSERT INTO reparse_requests '
+                     '(request_key, input_hash, version_id, base_parse_revision_id, '
+                     'base_embedding_set_id, job_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                     (request_key, input_hash, job.version_id, base_parse_revision_id,
+                      base_embedding_set_id, job.job_id, now_iso()))
+        return ReparseRegistration(
+            ReparseDisposition.ACCEPTED, request_key, job.version_id,
+            base_parse_revision_id, base_embedding_set_id, job.job_id)
+
+
+def save_reparse_result(db_path: str, job_id: str, revision: ParseRevision,
+                        chunks: List[Chunk], sections: List[PaperSection]) -> None:
+    """새 파싱 리비전·청크·섹션을 기존 결과를 건드리지 않고 원자적으로 저장한다."""
+    require_text(job_id, 'job_id')
+    require_text(revision.parse_revision_id, 'parse_revision_id')
+    if revision.page_count < 1 or not chunks:
+        raise ValueError('reparse result must contain pages and chunks')
+    if (len({chunk.chunk_id for chunk in chunks}) != len(chunks)
+            or len({chunk.chunk_index for chunk in chunks}) != len(chunks)
+            or {chunk.chunk_index for chunk in chunks} != set(range(len(chunks)))
+            or any(chunk.parse_revision_id != revision.parse_revision_id
+                   or chunk.text is not None or chunk.translation_revision_id is not None
+                   or chunk.pdf_page < 1 or chunk.pdf_page > revision.page_count
+                   for chunk in chunks)):
+        raise ValueError('reparse chunks must uniquely belong to the new revision')
+    if any(section.parse_revision_id != revision.parse_revision_id for section in sections):
+        raise ValueError('reparse sections must belong to the new revision')
+    section_ids = {section.section_id for section in sections}
+    if any(chunk.section_id is not None and chunk.section_id not in section_ids
+           for chunk in chunks):
+        raise ValueError('reparse chunk section must exist in the new catalog')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        lock = conn.execute('SELECT * FROM reparse_locks WHERE job_id=?', (job_id,)).fetchone()
+        job = conn.execute('SELECT status FROM processing_jobs WHERE job_id=?', (job_id,)).fetchone()
+        if lock is None or job is None or job['status'] != 'processing' \
+                or lock['version_id'] != revision.version_id:
+            raise ValueError('reparse job is not active or revision version does not match')
+        if lock['new_parse_revision_id'] is not None:
+            if lock['new_parse_revision_id'] == revision.parse_revision_id:
+                stored_revision = conn.execute(
+                    'SELECT * FROM parse_revisions WHERE parse_revision_id=?',
+                    (revision.parse_revision_id,),
+                ).fetchone()
+                stored_chunks = conn.execute(
+                    'SELECT chunk_id, parse_revision_id, chunk_index, original_text, '
+                    'printed_page_label, pdf_page, section_id FROM chunks '
+                    'WHERE parse_revision_id=? ORDER BY chunk_index',
+                    (revision.parse_revision_id,),
+                ).fetchall()
+                stored_sections = conn.execute(
+                    'SELECT * FROM sections WHERE parse_revision_id=? ORDER BY ordinal',
+                    (revision.parse_revision_id,),
+                ).fetchall()
+                expected_chunks = [
+                    (chunk.chunk_id, chunk.parse_revision_id, chunk.chunk_index,
+                     chunk.original_text, chunk.printed_page_label, chunk.pdf_page, chunk.section_id)
+                    for chunk in sorted(chunks, key=lambda item: item.chunk_index)
+                ]
+                expected_sections = [
+                    (section.parse_revision_id, section.section_id, section.title,
+                     section.parent_section_id, section.ordinal, section.level,
+                     section.start_pdf_page, section.end_pdf_page,
+                     section.start_chunk_index, section.end_chunk_index)
+                    for section in sorted(sections, key=lambda item: item.ordinal)
+                ]
+                if (stored_revision is not None
+                        and tuple(stored_revision) == (
+                            revision.parse_revision_id, revision.version_id,
+                            revision.page_count, revision.created_at)
+                        and [tuple(row) for row in stored_chunks] == expected_chunks
+                        and [tuple(row) for row in stored_sections] == expected_sections):
+                    return
+                raise ValueError('reparse result payload differs from the stored revision')
+            raise ValueError('reparse job already owns another parse revision')
+        conn.execute('INSERT INTO parse_revisions VALUES (?, ?, ?, ?)',
+                     (revision.parse_revision_id, revision.version_id,
+                      revision.page_count, revision.created_at))
+        conn.executemany('''INSERT INTO chunks
+            (chunk_id, parse_revision_id, chunk_index, original_text, text,
+             translation_revision_id, printed_page_label, pdf_page, section_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            [(chunk.chunk_id, chunk.parse_revision_id, chunk.chunk_index, chunk.original_text,
+              chunk.text, chunk.translation_revision_id, chunk.printed_page_label,
+              chunk.pdf_page, chunk.section_id) for chunk in chunks])
+        insert_sections_in_transaction(conn, sections)
+        conn.execute('UPDATE reparse_locks SET new_parse_revision_id=? WHERE job_id=?',
+                     (revision.parse_revision_id, job_id))
+        conn.execute('UPDATE reparse_requests SET new_parse_revision_id=? WHERE job_id=?',
+                     (revision.parse_revision_id, job_id))
+        conn.execute("UPDATE processing_jobs SET stage='translate', updated_at=? WHERE job_id=?",
+                     (now_iso(), job_id))
+
+
+def publish_reparsed_index(db_path: str, job_id: str, embedding_set: EmbeddingSet,
+                           chunk_ids: Collection[str], limitations: list[str]) -> None:
+    """기준 기본 색인이 그대로일 때만 새 파싱 색인을 기본으로 원자 전환한다."""
+    if type(embedding_set.dimension) is not int or embedding_set.dimension < 1:
+        raise ValueError('positive embedding dimension required')
+    require_text(job_id, 'job_id')
+    require_text(embedding_set.embedding_set_id, 'embedding_set_id')
+    require_text(embedding_set.model_name, 'model_name')
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        lock = conn.execute('SELECT * FROM reparse_locks WHERE job_id=?', (job_id,)).fetchone()
+        job = conn.execute('SELECT status FROM processing_jobs WHERE job_id=?', (job_id,)).fetchone()
+        if lock is None or job is None or job['status'] != 'processing' \
+                or lock['new_parse_revision_id'] is None:
+            raise ValueError('reparse job is not ready to publish')
+        base = conn.execute('SELECT embedding_set_id, parse_revision_id FROM search_indexes '
+                            'WHERE version_id=? AND is_default=1', (lock['version_id'],)).fetchone()
+        if (base is None or base['embedding_set_id'] != lock['base_embedding_set_id']
+                or base['parse_revision_id'] != lock['base_parse_revision_id']):
+            raise ValueError('default index changed during reparse')
+        translation = conn.execute('SELECT parse_revision_id FROM translation_revisions '
+                                   'WHERE translation_revision_id=?',
+                                   (embedding_set.translation_revision_id,)).fetchone()
+        if translation is None or translation['parse_revision_id'] != lock['new_parse_revision_id']:
+            raise ValueError('index translation does not belong to reparse revision')
+        published_chunk_ids = _validated_published_chunk_ids(
+            conn, lock['new_parse_revision_id'], embedding_set.translation_revision_id, chunk_ids)
+        conn.execute('INSERT INTO embedding_sets VALUES (?, ?, ?, ?, ?)',
+                     (embedding_set.embedding_set_id, embedding_set.translation_revision_id,
+                      embedding_set.model_name, embedding_set.dimension, embedding_set.created_at))
+        conn.execute('UPDATE search_indexes SET is_default=0 WHERE version_id=? AND is_default=1',
+                     (lock['version_id'],))
+        conn.execute('INSERT INTO search_indexes (embedding_set_id, version_id, parse_revision_id, '
+                     'translation_revision_id, job_id, chunk_count, is_default) '
+                     'VALUES (?, ?, ?, ?, ?, ?, 1)',
+                     (embedding_set.embedding_set_id, lock['version_id'], lock['new_parse_revision_id'],
+                      embedding_set.translation_revision_id, job_id, len(published_chunk_ids)))
+        _insert_search_index_chunks(conn, embedding_set.embedding_set_id, published_chunk_ids)
+        conn.execute("INSERT INTO search_index_chunk_snapshots VALUES (?, 'publish')",
+                     (embedding_set.embedding_set_id,))
+        conn.execute("UPDATE processing_jobs SET status='ready', stage='index', limitations=?, updated_at=? "
+                     'WHERE job_id=?',
+                     (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
+        conn.execute('DELETE FROM reparse_locks WHERE job_id=?', (job_id,))
+
+
+def fail_reparse(db_path: str, job_id: str, limitations: list[str]) -> None:
+    """진행 중인 재파싱만 실패로 전환하고 해당 작업의 잠금을 해제한다."""
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        lock = conn.execute('SELECT 1 FROM reparse_locks WHERE job_id=?', (job_id,)).fetchone()
+        if lock is None:
+            raise ValueError('reparse job is not active')
+        conn.execute("UPDATE processing_jobs SET status='failed', limitations=?, updated_at=? "
+                     "WHERE job_id=? AND status='processing'",
+                     (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
+        conn.execute('DELETE FROM reparse_locks WHERE job_id=?', (job_id,))
 
 
 # ── 번역 실패 구간 복구(#30) ─────────────────────────────────────
