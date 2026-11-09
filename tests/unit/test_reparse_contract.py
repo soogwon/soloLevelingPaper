@@ -1,6 +1,7 @@
 """#116 기존 논문의 새 파싱 리비전 저장·게시 계약을 검증한다."""
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import pytest
 
@@ -155,6 +156,23 @@ def test_new_parse_replay_requires_the_same_payload(db):
 
     assert repo.get_chunks_by_parse_revision(db, 'p2') == chunks
     assert repo.get_section_catalog(db, 'v1', 'p2') == sections
+
+
+def test_parse_replay_after_translation_preserves_translation_and_detects_changes(db):
+    prepare(db)
+    revision = ParseRevision('p2', 'v1', 2)
+    chunks = new_chunks()
+    repo.save_reparse_result(db, 'reparse', revision, chunks, [])
+    repo.save_translation_batch(db, translated_batch('t2', 'p2', chunks))
+
+    repo.save_reparse_result(db, 'reparse', revision, chunks, [])
+    for changed in (replace(chunks[0], original_text='Changed.'), replace(chunks[0], pdf_page=2)):
+        with pytest.raises(ValueError, match='payload differs'):
+            repo.save_reparse_result(db, 'reparse', revision, [changed, chunks[1]], [])
+
+    assert repo.get_chunks_by_parse_revision(db, 'p2') == [
+        replace(chunk, text=f'번역 {chunk.chunk_id}', translation_revision_id='t2') for chunk in chunks
+    ]
 
 
 def test_new_parse_rejects_sections_from_another_revision_atomically(db):

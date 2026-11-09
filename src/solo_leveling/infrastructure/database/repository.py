@@ -773,7 +773,9 @@ def save_reparse_result(db_path: str, job_id: str, revision: ParseRevision,
                     (revision.parse_revision_id,),
                 ).fetchone()
                 stored_chunks = conn.execute(
-                    'SELECT * FROM chunks WHERE parse_revision_id=? ORDER BY chunk_index',
+                    'SELECT chunk_id, parse_revision_id, chunk_index, original_text, '
+                    'printed_page_label, pdf_page, section_id FROM chunks '
+                    'WHERE parse_revision_id=? ORDER BY chunk_index',
                     (revision.parse_revision_id,),
                 ).fetchall()
                 stored_sections = conn.execute(
@@ -782,8 +784,7 @@ def save_reparse_result(db_path: str, job_id: str, revision: ParseRevision,
                 ).fetchall()
                 expected_chunks = [
                     (chunk.chunk_id, chunk.parse_revision_id, chunk.chunk_index,
-                     chunk.original_text, chunk.text, chunk.translation_revision_id,
-                     chunk.printed_page_label, chunk.pdf_page, chunk.section_id)
+                     chunk.original_text, chunk.printed_page_label, chunk.pdf_page, chunk.section_id)
                     for chunk in sorted(chunks, key=lambda item: item.chunk_index)
                 ]
                 expected_sections = [
