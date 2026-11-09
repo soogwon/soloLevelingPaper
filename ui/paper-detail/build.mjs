@@ -7,6 +7,7 @@ for (const [name, entry, templateName] of [
   ['question-card', 'question-main', 'question-template'],
   ['paper-detail', 'main', 'template'],
   ['registration', 'registration-main', 'registration-template'],
+  ['paper-reparse', 'reparse-main', 'reparse-template'],
   ['translation-recovery', 'recovery-main', 'recovery-template'],
   ['annotation', 'annotation-main', 'annotation-template'],
 ]) {

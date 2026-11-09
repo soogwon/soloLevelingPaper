@@ -77,6 +77,8 @@ MCP 호출 또는 호스트 권한 검사가 실패하면 실패 사실을 안�
 조회로 우회해 MCP 결과를 대체하지 마세요. 이전 근거를 사용하면 이전 호출의 결과임을 밝히고,
 배경지식을 설명하면 이번 검색에서 검증된 근거와 명확히 구분하세요.
 호스트 권한 검사 오류는 서버 오류와 구분하고, 서버 도달 여부나 차단 범위를 추측하지 마세요.
+명시적 재파싱 요청에는 prepare_paper_reparse로 안내하고 카드에서 동의한 경우에만 실행합니다.
+응답 유실 시 기존 context_id와 request_key로 get_paper_reparse를 조회하세요. 이전 맥락은 자동 전환하지 않습니다.
 게시 후 번역 복구는 prepare_translation_recovery의 안내와 카드에서의 명시적 동의 뒤에만 접수합니다.
 질문·상태 조회·동일 PDF 재등록을 복구 동의로 해석하지 마세요. confirmed=true는 승인 증명이 아닙니다.
 recover_translation은 카드 전용입니다. 카드가 없으면 접수하지 말고 텍스트로 상태와 제한을 안내하세요.
@@ -116,6 +118,7 @@ class MCPServices:
     annotations: AnnotationService | None = None
     question_keys: QuestionKeys | None = None
     recovery: object | None = None
+    reparse: object | None = None
 
 
 class Focus(BaseModel):
@@ -352,6 +355,9 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         log_level='ERROR', lifespan=lifespan)
 
     register_detail_app(server)
+    if services.reparse is not None:
+        from .reparse import register_reparse
+        register_reparse(server, services.reparse)
     if services.recovery is not None:
         from .recovery import register_recovery
         register_recovery(server, services.recovery)
