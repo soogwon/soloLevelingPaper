@@ -24,6 +24,7 @@ from solo_leveling.domain.translation import TranslationSettings, require_text
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.parsing.chunker import chunk_pages_with_sections
 from solo_leveling.infrastructure.parsing.pdf_extractor import extract_pages
+from solo_leveling.infrastructure.storage.pdf_source import open_pdf_source
 from solo_leveling.infrastructure.storage.vector_store import (
     ChromaCloseResult, close_client, get_client, upsert_chunk_embeddings, verify_chunk_embeddings,
 )
@@ -166,6 +167,8 @@ class ReparseService:
         with (self._read() if conn is None else nullcontext(conn)) as conn:
             if registration.disposition == ReparseDisposition.COMPLETED:
                 index = conn.execute('''SELECT s.* FROM search_indexes s
+                    JOIN reparse_requests r ON r.job_id=s.job_id AND r.request_key=?
+                        AND r.new_parse_revision_id=s.parse_revision_id
                     JOIN parse_revisions p ON p.parse_revision_id=s.parse_revision_id AND p.version_id=s.version_id
                     JOIN translation_revisions t ON t.translation_revision_id=s.translation_revision_id
                         AND t.parse_revision_id=p.parse_revision_id
@@ -173,7 +176,7 @@ class ReparseService:
                         AND e.translation_revision_id=t.translation_revision_id
                     JOIN processing_jobs j ON j.job_id=s.job_id AND j.version_id=s.version_id AND j.status='ready'
                     WHERE s.job_id=? AND s.embedding_set_id=? AND s.version_id=? AND s.parse_revision_id=?''',
-                    (registration.job_id, registration.new_embedding_set_id,
+                    (registration.request_key, registration.job_id, registration.new_embedding_set_id,
                      registration.version_id, registration.new_parse_revision_id)).fetchone()
                 if index is None:
                     raise ReparseExecutionError('REPARSE_STATE_UNAVAILABLE')
@@ -252,13 +255,11 @@ class ReparseService:
     @contextmanager
     def _snapshot(self, work):
         try:
-            source = (self.pdf_root / work.stored_path).resolve(strict=True)
-            if not source.is_relative_to(self.pdf_root) or not source.is_file():
-                raise OSError()
+            source = self.pdf_root / work.stored_path
             with tempfile.TemporaryDirectory(prefix='solo-reparse-') as folder:
                 copy = Path(folder) / 'source.pdf'
                 digest = hashlib.sha256()
-                with source.open('rb') as original, copy.open('xb') as target:
+                with open_pdf_source(source, self.pdf_root) as original, copy.open('xb') as target:
                     while block := original.read(1024 * 1024):
                         digest.update(block)
                         target.write(block)

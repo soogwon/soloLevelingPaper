@@ -244,7 +244,7 @@ def test_windows_external_junction_creates_no_copy(tmp_path, monkeypatch, after_
 
 @pytest.mark.skipif(os.name != 'nt', reason='Windows 디렉터리 핸들 검증')
 def test_windows_parent_cannot_be_replaced_at_final_open(tmp_path, monkeypatch):
-    from solo_leveling.interfaces.mcp import windows_pdf
+    from solo_leveling.infrastructure.storage import windows_pdf
 
     pdfs, imports = store(tmp_path)
     slot = imports / 'slot'

@@ -246,6 +246,35 @@ def test_file_errors_do_not_parse_or_translate(data, mode):
     assert repo.get_search_index(data.db, 'v1')['embedding_set_id'] == 'e1'
 
 
+def test_link_swap_before_snapshot_open_blocks_translation_and_publication(data, monkeypatch):
+    outside = data.tmp / 'outside.pdf'
+    outside.write_bytes(data.pdf.read_bytes())
+    link = data.tmp / 'link.pdf'
+    try:
+        link.symlink_to(outside)
+    except OSError as error:
+        if getattr(error, 'winerror', None) == 1314:
+            pytest.skip('심볼릭 링크 생성 권한이 필요합니다.')
+        raise
+    calls = []
+    def parser(path):
+        calls.append(path)
+        return extract_pages(path)
+    svc, provider, embedder = service(data, parser=parser)
+    job = prepare(svc)
+    make_directory = module.tempfile.TemporaryDirectory
+    def swap_before_copy(*args, **kwargs):
+        link.replace(data.pdf)
+        return make_directory(*args, **kwargs)
+    monkeypatch.setattr(module.tempfile, 'TemporaryDirectory', swap_before_copy)
+    result = svc.run(job.job_id)
+    assert data.pdf.is_symlink()
+    assert result.status == S.FAILED and result.reason_code == 'REPARSE_FILE_UNAVAILABLE'
+    assert not calls and not provider.calls and not embedder.calls
+    assert count(data, 'search_indexes') == 1
+    assert repo.get_search_index(data.db, 'v1')['embedding_set_id'] == 'e1'
+
+
 def test_parser_reads_verified_snapshot_not_mutable_original(data):
     def parser(path):
         assert Path(path) != data.pdf
@@ -676,3 +705,15 @@ def test_completed_lookup_rejects_broken_publication_chain(data, link):
             conn.execute('UPDATE processing_jobs SET status=? WHERE job_id=?', ('interrupted', completed.job_id))
     with pytest.raises(ReparseExecutionError, match='STATE_UNAVAILABLE'):
         lookup(svc)
+
+@pytest.mark.parametrize('wrong_revision', ['p1', None])
+def test_completed_result_must_match_request_revision(data, wrong_revision):
+    svc, _, _ = service(data)
+    completed = svc.run(prepare(svc).job_id)
+    assert completed.result_available and lookup(svc) == completed
+    with closing(repo.get_connection(data.db)) as conn, conn:
+        conn.execute('UPDATE reparse_requests SET new_parse_revision_id=? WHERE request_key=?',
+                     (wrong_revision, 'request'))
+    for replay in (lookup, prepare):
+        with pytest.raises(ReparseExecutionError, match='REPARSE_STATE_UNAVAILABLE'):
+            replay(svc)
