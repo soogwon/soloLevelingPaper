@@ -768,7 +768,39 @@ def save_reparse_result(db_path: str, job_id: str, revision: ParseRevision,
             raise ValueError('reparse job is not active or revision version does not match')
         if lock['new_parse_revision_id'] is not None:
             if lock['new_parse_revision_id'] == revision.parse_revision_id:
-                return
+                stored_revision = conn.execute(
+                    'SELECT * FROM parse_revisions WHERE parse_revision_id=?',
+                    (revision.parse_revision_id,),
+                ).fetchone()
+                stored_chunks = conn.execute(
+                    'SELECT * FROM chunks WHERE parse_revision_id=? ORDER BY chunk_index',
+                    (revision.parse_revision_id,),
+                ).fetchall()
+                stored_sections = conn.execute(
+                    'SELECT * FROM sections WHERE parse_revision_id=? ORDER BY ordinal',
+                    (revision.parse_revision_id,),
+                ).fetchall()
+                expected_chunks = [
+                    (chunk.chunk_id, chunk.parse_revision_id, chunk.chunk_index,
+                     chunk.original_text, chunk.text, chunk.translation_revision_id,
+                     chunk.printed_page_label, chunk.pdf_page, chunk.section_id)
+                    for chunk in sorted(chunks, key=lambda item: item.chunk_index)
+                ]
+                expected_sections = [
+                    (section.parse_revision_id, section.section_id, section.title,
+                     section.parent_section_id, section.ordinal, section.level,
+                     section.start_pdf_page, section.end_pdf_page,
+                     section.start_chunk_index, section.end_chunk_index)
+                    for section in sorted(sections, key=lambda item: item.ordinal)
+                ]
+                if (stored_revision is not None
+                        and tuple(stored_revision) == (
+                            revision.parse_revision_id, revision.version_id,
+                            revision.page_count, revision.created_at)
+                        and [tuple(row) for row in stored_chunks] == expected_chunks
+                        and [tuple(row) for row in stored_sections] == expected_sections):
+                    return
+                raise ValueError('reparse result payload differs from the stored revision')
             raise ValueError('reparse job already owns another parse revision')
         conn.execute('INSERT INTO parse_revisions VALUES (?, ?, ?, ?)',
                      (revision.parse_revision_id, revision.version_id,

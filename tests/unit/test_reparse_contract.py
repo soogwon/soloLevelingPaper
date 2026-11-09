@@ -129,6 +129,34 @@ def test_new_parse_is_atomic_and_preserves_old_chunks(db):
     assert repo.get_chunks_by_parse_revision(db, 'p3') == []
 
 
+def test_new_parse_replay_requires_the_same_payload(db):
+    prepare(db)
+    revision = ParseRevision('p2', 'v1', 1)
+    chunks = new_chunks()
+    sections = [PaperSection('section', 'p2', 'Section', 1, 1, 1, 1)]
+    chunks[0].section_id = 'section'
+    repo.save_reparse_result(db, 'reparse', revision, chunks, sections)
+
+    repo.save_reparse_result(db, 'reparse', revision, chunks, sections)
+
+    with pytest.raises(ValueError, match='payload differs'):
+        repo.save_reparse_result(
+            db, 'reparse', ParseRevision('p2', 'v1', 2, revision.created_at), chunks, sections)
+
+    changed_chunks = new_chunks()
+    changed_chunks[0].original_text = 'Changed first.'
+    changed_chunks[0].section_id = 'section'
+    with pytest.raises(ValueError, match='payload differs'):
+        repo.save_reparse_result(db, 'reparse', revision, changed_chunks, sections)
+
+    changed_sections = [PaperSection('section', 'p2', 'Changed section', 1, 1, 1, 1)]
+    with pytest.raises(ValueError, match='payload differs'):
+        repo.save_reparse_result(db, 'reparse', revision, chunks, changed_sections)
+
+    assert repo.get_chunks_by_parse_revision(db, 'p2') == chunks
+    assert repo.get_section_catalog(db, 'v1', 'p2') == sections
+
+
 def test_new_parse_rejects_sections_from_another_revision_atomically(db):
     repo.insert_sections(db, [PaperSection('old-section', 'p1', 'Old title', 1, 1, 1, 1)])
     prepare(db)
