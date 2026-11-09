@@ -161,7 +161,13 @@ test('실패 단계와 복구 안내를 표시하고 다음 결과의 상태로 
   show({outcome:'partial', failed_stage:'translate', failure_code:'empty_translation', retryable:null, next_action:null});
   assert.match(message(), /검색할 수 있지만 일부 구간/);
   assert.match(next(), /학습을 시작/);
+  const notice = '누락된 원문의 추가 전송과 비용에는 별도 동의가 필요합니다.';
+  show({outcome:'partial', failed_stage:'translate', failure_code:'provider_unavailable',
+    translation_recovery_notice:notice});
+  assert.equal(reason.textContent, '번역 · 처리 당시 번역 서비스를 사용할 수 없었습니다.');
+  assert.equal(next(), notice);
   show({});
+  assert.ok(!next().includes(notice));
   assert.equal(reason.hidden, true);
   assert.deepEqual(calls, []);
 });
