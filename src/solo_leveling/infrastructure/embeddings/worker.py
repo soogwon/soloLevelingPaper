@@ -4,7 +4,6 @@ import os
 import sys
 import faulthandler
 import json
-from pathlib import Path
 
 from solo_leveling.worker_diagnostics import stage_output, valid_diagnostic_id
 
@@ -31,6 +30,30 @@ def _discard_output():
     sys.stdout = sys.stderr = open(os.devnull, 'w', encoding='utf-8')
 
 
+def _receive_log_fds(control):
+    """부모가 검증한 핸들만 받는다. 불완전한 전달은 모두 닫고 수집을 중단한다."""
+    descriptors = {}
+    try:
+        enabled, kinds = control.recv()
+        if enabled is not True or not isinstance(kinds, tuple) or kinds not in (('safe',), ('raw', 'stack')):
+            return {}
+        from multiprocessing.reduction import recv_handle
+        for kind in kinds:
+            handle = recv_handle(control)
+            if os.name == 'nt':
+                import msvcrt
+                handle = msvcrt.open_osfhandle(handle, os.O_WRONLY | os.O_NOINHERIT)
+            descriptors[kind] = handle
+        return descriptors
+    except (EOFError, OSError, ValueError, TypeError):
+        for descriptor in descriptors.values():
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        return {}
+
+
 def diagnostic_worker(connection, target, log_dir, worker_id, watchdog_seconds, collect_raw=False,
                       managed_logs=False, log_control=None):
     """모델 관련 import보다 먼저 별도 로그를 열고 자식 진입을 기록한다.
@@ -43,19 +66,17 @@ def diagnostic_worker(connection, target, log_dir, worker_id, watchdog_seconds, 
     try:
         if not valid_diagnostic_id(worker_id):
             raise ValueError('invalid worker id')
+        descriptors = {}
         if log_control is not None:
             try:
-                managed_logs = log_control.recv() is True
-            except (EOFError, OSError):
-                managed_logs = False
+                descriptors = _receive_log_fds(log_control)
             finally:
                 log_control.close()
+            managed_logs = bool(descriptors)
         enter = json.dumps({'event': 'worker_enter', 'worker_id': worker_id, 'pid': os.getpid()})
         if managed_logs:
-            folder = Path(log_dir)
             if not collect_raw:
-                with (folder / f'slp-log-v1-worker-safe-{worker_id}.log').open(
-                        'a', encoding='utf-8') as output:
+                with os.fdopen(descriptors.pop('safe'), 'w', encoding='utf-8') as output:
                     output.write(enter + '\n')
                     output.flush()
                     _discard_output()
@@ -65,15 +86,13 @@ def diagnostic_worker(connection, target, log_dir, worker_id, watchdog_seconds, 
                     finally:
                         stage_output.reset(token)
                 return
-            with (folder / f'slp-log-v1-worker-raw-{worker_id}.log').open(
-                    'a', encoding='utf-8') as output:
+            with os.fdopen(descriptors.pop('raw'), 'w', encoding='utf-8') as output:
                 os.dup2(output.fileno(), 2)
             sys.stderr = os.fdopen(os.dup(2), 'w', encoding='utf-8', buffering=1)
             os.dup2(2, 1)
             sys.stdout = sys.stderr
             print(enter, flush=True)
-            with (folder / f'slp-log-v1-worker-stack-{worker_id}.log').open(
-                    'a', encoding='utf-8') as stack:
+            with os.fdopen(descriptors.pop('stack'), 'w', encoding='utf-8') as stack:
                 _stack_output = stack
                 faulthandler.dump_traceback_later(watchdog_seconds, file=stack, exit=False)
                 try:

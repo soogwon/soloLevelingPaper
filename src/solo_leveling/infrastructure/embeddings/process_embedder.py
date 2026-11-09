@@ -80,7 +80,7 @@ class ProcessEmbedder:
         self._collect_raw = raw_logs_requested() if collect_raw_logs is None else collect_raw_logs is True
 
     def _prepare_worker_logs(self):
-        """부모가 잠금과 원본 참조를 소유한다. 실패하면 다른 파일로 우회하지 않는다."""
+        """부모가 잠금·원본 참조·자식에게 넘길 쓰기 스트림을 소유한다."""
         try:
             from solo_leveling.infrastructure.log_retention.contracts import BundleId, ClosedFile
             if os.name == 'nt':
@@ -96,20 +96,49 @@ class ProcessEmbedder:
                 return False
             lease = acquired.lease
             files = []
+            outputs = []
             try:
                 for kind in (('raw', 'stack') if self._collect_raw else ('safe',)):
                     path, output = lease.open_log(kind)
                     output.flush()
                     os.fsync(output.fileno())
-                    output.close()
                     files.append(ClosedFile(kind, path.name, 0))
+                    outputs.append((kind, output))
             except Exception:
                 lease.release()
                 return False
             self._log_store, self._log_lease, self._log_files = store, lease, tuple(files)
-            return True
+            return tuple(outputs)
         except Exception:
             return False
+
+    def _send_worker_logs(self, connection, process):
+        """검증한 열린 파일만 OS 핸들 전달로 자식에 넘긴다. 경로는 보내지 않는다."""
+        outputs = self._prepare_worker_logs()
+        if outputs is False:
+            try:
+                connection.send((False, ()))
+            except Exception:
+                pass
+            return
+        try:
+            from multiprocessing.reduction import send_handle
+            connection.send((True, tuple(kind for kind, _ in outputs)))
+            for _, output in outputs:
+                handle = output.fileno()
+                if os.name == 'nt':
+                    import msvcrt
+                    handle = msvcrt.get_osfhandle(handle)
+                send_handle(connection, handle, process.pid)
+        except Exception:
+            # 자식은 불완전한 전달을 감지해 받은 핸들을 닫고 수집 없이 계속한다.
+            pass
+        finally:
+            for _, output in outputs:
+                try:
+                    output.close()
+                except OSError:
+                    pass
 
     def _finish_worker_logs(self, *, publish):
         """자식 종료 확인 뒤에만 크기를 다시 읽고 종료 기록을 게시한다."""
@@ -276,7 +305,8 @@ class ProcessEmbedder:
                         raise EmbeddingProcessError(EmbeddingFailure.UNAVAILABLE)
                     context = multiprocessing.get_context('spawn')
                     self._connection, child = context.Pipe()
-                    log_receiver, log_sender = context.Pipe(duplex=False)
+                    # POSIX의 SCM_RIGHTS 핸들 전달에는 Unix socket 기반 duplex Pipe가 필요하다.
+                    log_receiver, log_sender = context.Pipe()
                     self._worker_id = uuid4().hex
                     self._process = context.Process(target=diagnostic_worker,
                         args=(child, self._target, self._log_dir, self._worker_id, min(30, self.timeout / 2),
@@ -286,8 +316,7 @@ class ProcessEmbedder:
                         with _null_stdin_for_child():
                             self._process.start()
                         log_receiver.close()
-                        managed_logs = self._prepare_worker_logs()
-                        log_sender.send(managed_logs)
+                        self._send_worker_logs(log_sender, self._process)
                         self._event('worker_spawn_return', pid=self._process.pid)
                     finally:
                         for handle in (log_receiver, log_sender):
