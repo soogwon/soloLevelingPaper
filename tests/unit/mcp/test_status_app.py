@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -60,10 +60,16 @@ def test_status_text_and_structured_response_preserve_service_fields(fields):
     server = create_server(MCPServices(Mock(), Mock(), ingestion))
     content, structured = asyncio.run(server.call_tool('get_paper_status', {'job_id': 'job'}))
     empty = dict.fromkeys(('failed_stage', 'failure_code', 'retryable', 'next_action', 'outcome'))
-    assert structured == {**empty, **ingestion.get_status.return_value,
+    extra = {'translation_recovery_notice': None}
+    if fields.get('outcome') == 'partial':
+        notice = structured['translation_recovery_notice']
+        for phrase in ('신청할 수 없습니다', '원문', '번역 API', '비용', '별도 동의', '기존 학습 맥락'):
+            assert phrase in notice
+        extra['translation_recovery_notice'] = notice
+    assert structured == {**empty, **extra, **ingestion.get_status.return_value,
                           'capabilities': ['start_learning'] if ready else []}
     assert json.loads(content[0].text) == structured
-    ingestion.get_status.assert_called_once_with('job')
+    assert ingestion.mock_calls == [call.get_status('job')]
 
 
 def test_no_status_resource_without_ingestion():
