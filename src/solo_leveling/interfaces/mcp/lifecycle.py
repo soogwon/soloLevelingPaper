@@ -95,13 +95,14 @@ class GuardedService:
 
 
 class RuntimeLifetime:
-    def __init__(self, gate, ingestion, embedder, client):
+    def __init__(self, gate, ingestion, embedder, client, *, additional_workers=()):
         self.gate, self.ingestion = gate, ingestion
         self.embedder, self.client = embedder, client
         self.lock = threading.Lock()
         self.started = False
         self.done = threading.Event()
         self.close_result = None
+        self.additional_workers = tuple(additional_workers)
 
     def begin(self):
         """반복 호출을 허용하고 비동기 루프 밖에서 종료를 기다린다."""
@@ -115,10 +116,15 @@ class RuntimeLifetime:
     def _finish(self):
         try:
             self.ingestion.begin_shutdown()
+            for worker in self.additional_workers:
+                worker.begin_shutdown()
             self.gate.wait()
             # 호출이 반환된 뒤에도 실행 중인 등록 작업까지 모두 기다린다.
             if not self.ingestion.wait_for_idle(None):
                 raise RuntimeError('RUNTIME_DRAIN_FAILED')
+            for worker in self.additional_workers:
+                if not worker.wait_for_idle(None):
+                    raise RuntimeError('RUNTIME_DRAIN_FAILED')
         except Exception:
             # 사용 종료를 증명하지 못했으면 공유 자원을 닫지 않는다.
             report('RUNTIME_DRAIN_FAILED')

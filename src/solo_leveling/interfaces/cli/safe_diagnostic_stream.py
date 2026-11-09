@@ -13,7 +13,8 @@ embedding_memory_cache_hit embedding_model_construct embedding_process_response
 embedding_process_wait embedding_worker evidence_quality evidence_save
 evidence_validation generation_api_call generation_repair generation query_embedding
 vector_search worker_request_received worker_result_send
-semantic_verification semantic_api_call'''.split())
+semantic_verification semantic_api_call translation_recovery recovery_translation
+recovery_embedding recovery_index'''.split())
 
 EXTRACTION_REASONS = frozenset('''NO_EXTRACTION_RISK STANDALONE_NUMBER EMPTY_BODY
 SUPPORT_NOT_FOUND SUPPORT_LOCATION_UNRESOLVED UNFINISHED_TAIL UNRESOLVED_PREFIX AMBIGUOUS_OVERLAP'''.split())
@@ -72,7 +73,15 @@ class SafeDiagnosticStream:
         if isinstance(record, dict) and record.get('event') == 'runtime_cleanup':
             if (set(record) == {'event', 'code'} and isinstance(record['code'], str)
                     and record['code'] in {'INGESTION_CANCEL_STATE_FAILED', 'RUNTIME_DRAIN_FAILED', 'EMBEDDER_CLOSE_FAILED',
-                        'RUNTIME_SHUTDOWN_DEFERRED', 'CHROMA_CLOSE_UNSUPPORTED', 'CHROMA_CLOSE_FAILED'}):
+                        'RUNTIME_SHUTDOWN_DEFERRED', 'CHROMA_CLOSE_UNSUPPORTED', 'CHROMA_CLOSE_FAILED',
+                        'RECOVERY_DRAIN_FAILED'}):
+                self.output.write(json.dumps(record) + '\n')
+            return
+        if isinstance(record, dict) and record.get('event') == 'translation_recovery':
+            if (set(record) == {'event', 'code'} and isinstance(record['code'], str)
+                    and record['code'] in {'RECOVERY_TRANSLATION_FAILED', 'RECOVERY_EMBEDDING_FAILED',
+                        'RECOVERY_INDEX_FAILED', 'RECOVERY_BASE_CHANGED', 'RECOVERY_STATE_UNAVAILABLE',
+                        'INDEX_CLEANUP_FAILED', 'CHROMA_CLOSE_FAILED', 'CHROMA_CLOSE_UNSUPPORTED'}):
                 self.output.write(json.dumps(record) + '\n')
             return
         if isinstance(record, dict) and record.get('event') == 'chroma_close':

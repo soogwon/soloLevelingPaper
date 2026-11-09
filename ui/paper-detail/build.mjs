@@ -7,6 +7,7 @@ for (const [name, entry, templateName] of [
   ['question-card', 'question-main', 'question-template'],
   ['paper-detail', 'main', 'template'],
   ['registration', 'registration-main', 'registration-template'],
+  ['translation-recovery', 'recovery-main', 'recovery-template'],
   ['annotation', 'annotation-main', 'annotation-template'],
 ]) {
   // 외부 CDN 없이 실행되도록 SDK와 화면 코드를 하나의 HTML로 묶는다.

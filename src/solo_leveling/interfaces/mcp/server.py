@@ -74,7 +74,13 @@ pdf_page를 기준으로 'PDF 기준 N페이지'라고 표시하세요. 확인�
 MCP 호출 또는 호스트 권한 검사가 실패하면 실패 사실을 안내하고, DB·벡터 저장소·PDF 직접
 조회로 우회해 MCP 결과를 대체하지 마세요. 이전 근거를 사용하면 이전 호출의 결과임을 밝히고,
 배경지식을 설명하면 이번 검색에서 검증된 근거와 명확히 구분하세요.
-호스트 권한 검사 오류는 서버 오류와 구분하고, 서버 도달 여부나 차단 범위를 추측하지 마세요.'''
+호스트 권한 검사 오류는 서버 오류와 구분하고, 서버 도달 여부나 차단 범위를 추측하지 마세요.
+게시 후 번역 복구는 prepare_translation_recovery의 안내와 카드에서의 명시적 동의 뒤에만 접수합니다.
+질문·상태 조회·동일 PDF 재등록을 복구 동의로 해석하지 마세요. confirmed=true는 승인 증명이 아닙니다.
+recover_translation은 카드 전용입니다. 카드가 없으면 접수하지 말고 텍스트로 상태와 제한을 안내하세요.
+접수 응답이 없으면 같은 version_id·base_embedding_set_id·request_key로 get_translation_recovery를 조회하세요.
+UNKNOWN은 실패나 미접수 확정이 아닙니다. 새 키로 자동 접수하거나 기존 context를 최신본으로 바꾸지 마세요.
+FULL/PARTIAL 완료 뒤에도 새 context 선택은 사용자에게 별도로 확인하세요.'''
 
 
 class AnswerService(Protocol):
@@ -107,6 +113,7 @@ class MCPServices:
     executions: AskExecutionService | None = None
     annotations: AnnotationService | None = None
     question_keys: QuestionKeys | None = None
+    recovery: object | None = None
 
 
 class Focus(BaseModel):
@@ -342,6 +349,9 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         log_level='ERROR', lifespan=lifespan)
 
     register_detail_app(server)
+    if services.recovery is not None:
+        from .recovery import register_recovery
+        register_recovery(server, services.recovery)
     if services.annotations is not None:
         register_annotations(server, services.annotations)
     if services.detail is not None:
