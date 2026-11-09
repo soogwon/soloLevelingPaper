@@ -502,8 +502,10 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                     'translation_recovery_notice': None,
                 }
                 if result['status'] == 'ready' and result.get('outcome') == 'partial':
-                    response['translation_recovery_notice'] = (
-                        '현재 이 도구에서는 누락 구간의 번역 복구를 신청할 수 없습니다. '
+                    availability = ('복구를 원하면 번역 복구 안내 카드를 요청해 대상과 가능 여부를 확인하세요. '
+                                    if services.recovery is not None else
+                                    '현재 이 도구에서는 누락 구간의 번역 복구를 신청할 수 없습니다. ')
+                    response['translation_recovery_notice'] = availability + (
                         '복구를 실행하려면 누락 구간의 원문을 번역 API에 추가로 전송하며 '
                         '비용이 발생할 수 있어 별도 동의가 필요합니다. '
                         '기존 학습 맥락에서 검색과 질문을 계속할 수 있습니다.')

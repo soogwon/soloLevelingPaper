@@ -152,3 +152,56 @@ for (const status of ['BASE_CHANGED','NO_TARGET','REQUEST_CONFLICT']) {
     assert.equal(s.el('confirm').disabled,true);
   });
 }
+
+for (const event of ['ontoolinput', 'ontoolinputpartial', 'ontoolcancelled']) {
+  test(`${event} 후 이전 동의와 늦은 준비 결과로 접수할 수 없다`, async () => {
+    const s = setup();
+    const next = {...input, version_id:'other', request_key:'other-key'};
+    s.el('agree').checked = true;
+    s.el('agree').onchange();
+    s.app[event]({arguments:next});
+    assert.equal(s.el('agree').checked, false);
+    s.app.ontoolresult(preview);
+    await s.confirm();
+    assert.deepEqual(s.calls, []);
+    s.app.ontoolinput({arguments:next});
+    s.app.ontoolresult({...preview, structuredContent:{...preview.structuredContent, ...next}});
+    assert.equal(s.el('confirm').disabled, true);
+    await s.confirm();
+    assert.equal(s.calls[0].arguments.request_key, 'other-key');
+  });
+}
+
+test('다른 작업 진행 중으로 미접수된 키만 해제한다', async () => {
+  for (const [job_id, result_available, retained] of [[null,false,0], ['active',false,1], [null,true,1], [undefined,false,1]]) {
+    const s = setup(new Map(), () => ({structuredContent:{...input, status:'IN_PROGRESS', job_id, result_available}}));
+    await s.confirm();
+    assert.equal(s.storage.size, retained);
+    if (!retained) {
+      assert.match(s.el('status').textContent, /접수되지 않았습니다/);
+      await s.el('refresh').onclick();
+      assert.equal(s.calls.length, 1);
+      s.app.ontoolresult(preview);
+      assert.equal(s.el('agree').disabled, false);
+      assert.equal(s.el('confirm').disabled, true);
+    }
+  }
+});
+
+test('제출 중 호스트 취소 후 늦은 응답이 화면을 복원하지 않고 보관 키로만 재조회한다', async () => {
+  const storage = new Map();
+  let finish;
+  const first = setup(storage, () => new Promise(resolve => { finish = resolve; }));
+  const request = first.confirm();
+  first.app.ontoolcancelled({});
+  const status = first.el('status').textContent;
+  finish({structuredContent:{...input,status:'ACCEPTED',job_id:'job'}});
+  await request;
+  assert.equal(first.el('status').textContent, status);
+  assert.equal(first.el('confirm').disabled, true);
+  assert.equal(storage.size, 1);
+  const reopened = setup(storage);
+  await reopened.confirm();
+  await reopened.el('refresh').onclick();
+  assert.deepEqual(reopened.calls, [{name:'get_translation_recovery', arguments:input}]);
+});

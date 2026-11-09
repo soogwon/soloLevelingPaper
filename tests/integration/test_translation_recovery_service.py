@@ -122,7 +122,10 @@ def test_lookup_missing_conflict_and_reads_do_not_start_work(setup):
     assert service.lookup('v1', 'e1', 'key').status == 'IN_PROGRESS'
     conflict = service.prepare('v1', 'other', 'key')
     assert conflict.status == 'REQUEST_CONFLICT' and conflict.job_id is None
-    assert service.prepare('v1', 'e1', 'different').status == 'IN_PROGRESS'
+    busy = service.prepare('v1', 'e1', 'different')
+    assert (busy.status, busy.job_id, busy.result_available) == ('IN_PROGRESS', None, False)
+    with pytest.raises(ResourceNotFoundError):
+        service.lookup('v1', 'e1', 'different')
     assert not provider.calls and not embeddings and not client.list_collections()
     assert service.cleanup(accepted.job_id) == 'INDEX_CLEANUP_NOT_ALLOWED'
 
