@@ -230,16 +230,27 @@ def test_concurrent_recovery_context_selection_creates_one_context(db):
     assert len(rows(db, "SELECT * FROM learning_contexts WHERE embedding_set_id='e2'")) == 1
 
 
-def test_recovery_context_selection_requires_verified_publish_snapshot(db):
+@pytest.mark.parametrize('damage', ['missing_marker', 'empty_members', 'wrong_revision'])
+def test_recovery_context_selection_requires_verified_publish_snapshot(db, damage):
     complete_keyed_recovery(db)
+    if damage == 'wrong_revision':
+        add_second_partial_version(db)
     with closing(get_connection(db)) as conn, conn:
-        conn.execute("DELETE FROM search_index_chunk_snapshots WHERE embedding_set_id='e2'")
+        if damage == 'missing_marker':
+            conn.execute("DELETE FROM search_index_chunk_snapshots WHERE embedding_set_id='e2'")
+        elif damage == 'empty_members':
+            conn.execute("DELETE FROM search_index_chunks WHERE embedding_set_id='e2'")
+        else:
+            changed = conn.execute("UPDATE search_index_chunks SET chunk_id='d0' "
+                                   "WHERE embedding_set_id='e2' AND chunk_id='c0'")
+            assert changed.rowcount == 1
     with pytest.raises(ValueError, match='valid published index'):
         repo.get_or_create_recovery_context(
             db, selection_key='select-1', request_key='request-1', job_id='j2',
             version_id='v1', embedding_set_id='e2', goal='understand', known_concepts=[],
         )
     assert rows(db, 'SELECT * FROM translation_recovery_context_selections') == []
+    assert rows(db, "SELECT * FROM learning_contexts WHERE embedding_set_id='e2'") == []
 
 
 def test_recovery_context_selection_schema_is_repeatable_and_stores_no_user_text(db):

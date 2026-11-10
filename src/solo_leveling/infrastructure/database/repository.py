@@ -1433,7 +1433,16 @@ def get_or_create_recovery_context(
                 AND j.version_id=s.version_id AND j.status='ready'
             JOIN search_index_chunk_snapshots m ON m.embedding_set_id=s.embedding_set_id
                 AND m.source='publish'
-            WHERE s.embedding_set_id=? AND s.version_id=? AND s.job_id=?''',
+            WHERE s.embedding_set_id=? AND s.version_id=? AND s.job_id=?
+              AND s.chunk_count > 0
+              AND EXISTS (
+                SELECT 1 FROM search_index_chunks member
+                LEFT JOIN chunks c ON c.chunk_id=member.chunk_id
+                    AND c.parse_revision_id=s.parse_revision_id
+                WHERE member.embedding_set_id=s.embedding_set_id
+                GROUP BY member.embedding_set_id
+                HAVING COUNT(*)=s.chunk_count AND COUNT(c.chunk_id)=s.chunk_count
+              )''',
             (embedding_set_id, version_id, job_id)).fetchone()
         if index is None:
             raise ValueError('recovery result is not a valid published index')
