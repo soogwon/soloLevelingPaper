@@ -27,6 +27,14 @@ class DefaultContextStore(LearningContextReader, Protocol):
         """게시 완료된 논문 버전에서 같은 학습 설정의 맥락을 준비한다."""
         ...
 
+    def get_or_create_recovery_context(
+        self, *, selection_key: str, request_key: str, job_id: str,
+        version_id: str, embedding_set_id: str, goal: str,
+        known_concepts: list[str],
+    ) -> LearningContext:
+        """사용자가 선택한 완료 복구 결과의 정확한 색인에 맥락을 고정한다."""
+        ...
+
 
 class ScopedRetriever(Protocol):
     def search(self, question: str, scope: SearchScope, top_k: int) -> SearchResult:

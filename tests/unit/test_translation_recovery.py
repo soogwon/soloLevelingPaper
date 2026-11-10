@@ -8,7 +8,7 @@ import pytest
 
 from solo_leveling.domain.models import (
     Chunk, EmbeddingSet, JobStage, JobStatus, Paper, PaperVersion, ParseRevision, ProcessingJob,
-    TranslationRecoveryDisposition, TranslationRevision,
+    RequestConflictError, TranslationRecoveryDisposition, TranslationRevision,
 )
 from solo_leveling.domain.translation import (
     ChunkTranslationResult, TranslationBatchResult, TranslationFailureCode, TranslationRequest,
@@ -68,6 +68,13 @@ def run_recovery(db, job_id='j2', rev='t2', items=None):
     repo.claim_translation_recovery(db, recovery_job(job_id), 't1')
     repo.save_recovery_translation(db, job_id, batch(rev, items or [ok(i, '복구') for i in FAILED]))
     repo.reserve_recovery_embedding_set(db, job_id, 'e2')
+
+
+def complete_keyed_recovery(db):
+    repo.prepare_translation_recovery(db, recovery_job(), 'request-1', 'hash-1', 'e1')
+    repo.save_recovery_translation(db, 'j2', batch('t2', [ok(i, '복구') for i in FAILED]))
+    repo.reserve_recovery_embedding_set(db, 'j2', 'e2')
+    repo.publish_recovered_index(db, 'j2', emb('e2', 't2'), chunk_ids(), [])
 
 
 def rows(db, sql, *args):
@@ -134,6 +141,118 @@ def test_keyed_recovery_replays_status_and_rejects_changed_input(db):
     conflict = repo.prepare_translation_recovery(db, recovery_job('unused'), 'request-1', 'different', 'e1')
     assert conflict.disposition == TranslationRecoveryDisposition.REQUEST_CONFLICT
     assert conflict.job_id is None
+
+
+def test_recovery_context_selection_pins_exact_completed_index_and_replays(db):
+    old = repo.get_or_create_default_context(db, 'v1')
+    complete_keyed_recovery(db)
+    # 사용자 선택 직전에 기본 색인이 바뀌어도 확인한 복구 결과 e2를 사용해야 한다.
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute("UPDATE search_indexes SET is_default=0 WHERE embedding_set_id='e2'")
+        conn.execute("UPDATE search_indexes SET is_default=1 WHERE embedding_set_id='e1'")
+
+    selected = repo.get_or_create_recovery_context(
+        db, selection_key='select-1', request_key='request-1', job_id='j2',
+        version_id='v1', embedding_set_id='e2', goal='implement',
+        known_concepts=['Transformer'],
+    )
+    replay = repo.get_or_create_recovery_context(
+        db, selection_key='select-1', request_key='request-1', job_id='j2',
+        version_id='v1', embedding_set_id='e2', goal='implement',
+        known_concepts=['Transformer'],
+    )
+
+    assert replay == selected
+    assert selected.embedding_set_id == 'e2'
+    assert selected.translation_revision_id == 't2'
+    assert repo.get_learning_context(db, old.context_id) == old
+    assert rows(db, 'SELECT selection_key, request_key, job_id, embedding_set_id, context_id '
+                    'FROM translation_recovery_context_selections') == [{
+        'selection_key': 'select-1', 'request_key': 'request-1', 'job_id': 'j2',
+        'embedding_set_id': 'e2', 'context_id': selected.context_id,
+    }]
+
+
+def test_recovery_context_selection_rejects_changed_replay_input(db):
+    complete_keyed_recovery(db)
+    args = dict(selection_key='select-1', request_key='request-1', job_id='j2',
+                version_id='v1', embedding_set_id='e2', goal='understand', known_concepts=[])
+    repo.get_or_create_recovery_context(db, **args)
+
+    with pytest.raises(RequestConflictError):
+        repo.get_or_create_recovery_context(db, **{**args, 'goal': 'skim'})
+    assert len(rows(db, 'SELECT * FROM translation_recovery_context_selections')) == 1
+    assert len(rows(db, "SELECT * FROM learning_contexts WHERE embedding_set_id='e2'")) == 1
+
+
+def test_recovery_context_selection_does_not_reuse_existing_learning_data(db):
+    complete_keyed_recovery(db)
+    existing = repo.get_or_create_default_context(db, 'v1')
+
+    selected = repo.get_or_create_recovery_context(
+        db, selection_key='select-1', request_key='request-1', job_id='j2',
+        version_id='v1', embedding_set_id='e2', goal='understand', known_concepts=[],
+    )
+
+    assert selected.context_id != existing.context_id
+    assert selected.embedding_set_id == existing.embedding_set_id == 'e2'
+    assert len(rows(db, "SELECT * FROM learning_contexts WHERE embedding_set_id='e2'")) == 2
+
+
+def test_recovery_context_selection_requires_matching_completed_request(db):
+    repo.prepare_translation_recovery(db, recovery_job(), 'request-1', 'hash-1', 'e1')
+    args = dict(selection_key='select-1', request_key='request-1', job_id='j2',
+                version_id='v1', embedding_set_id='e2', goal='understand', known_concepts=[])
+    with pytest.raises(ValueError, match='does not match'):
+        repo.get_or_create_recovery_context(db, **args)
+    assert rows(db, 'SELECT * FROM translation_recovery_context_selections') == []
+    assert rows(db, "SELECT * FROM learning_contexts WHERE embedding_set_id='e2'") == []
+
+    complete_keyed_recovery(db)
+    for change in ({'job_id': 'j1'}, {'version_id': 'other'}, {'embedding_set_id': 'e1'}):
+        with pytest.raises(ValueError, match='does not match'):
+            repo.get_or_create_recovery_context(db, **{**args, **change})
+
+
+def test_concurrent_recovery_context_selection_creates_one_context(db):
+    complete_keyed_recovery(db)
+
+    def select(_):
+        return repo.get_or_create_recovery_context(
+            db, selection_key='select-1', request_key='request-1', job_id='j2',
+            version_id='v1', embedding_set_id='e2', goal='understand', known_concepts=[],
+        ).context_id
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        context_ids = list(pool.map(select, range(4)))
+    assert len(set(context_ids)) == 1
+    assert len(rows(db, 'SELECT * FROM translation_recovery_context_selections')) == 1
+    assert len(rows(db, "SELECT * FROM learning_contexts WHERE embedding_set_id='e2'")) == 1
+
+
+def test_recovery_context_selection_requires_verified_publish_snapshot(db):
+    complete_keyed_recovery(db)
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute("DELETE FROM search_index_chunk_snapshots WHERE embedding_set_id='e2'")
+    with pytest.raises(ValueError, match='valid published index'):
+        repo.get_or_create_recovery_context(
+            db, selection_key='select-1', request_key='request-1', job_id='j2',
+            version_id='v1', embedding_set_id='e2', goal='understand', known_concepts=[],
+        )
+    assert rows(db, 'SELECT * FROM translation_recovery_context_selections') == []
+
+
+def test_recovery_context_selection_schema_is_repeatable_and_stores_no_user_text(db):
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute('DROP TABLE translation_recovery_context_selections')
+    init_db(db)
+    init_db(db)
+    columns = [row['name'] for row in rows(
+        db, 'PRAGMA table_info(translation_recovery_context_selections)')]
+    assert columns == [
+        'selection_key', 'request_key', 'job_id', 'version_id',
+        'embedding_set_id', 'context_id', 'created_at',
+    ]
 
 
 def test_concurrent_same_key_starts_only_one_recovery_job(db):

@@ -204,6 +204,18 @@ CREATE TABLE IF NOT EXISTS default_learning_contexts (
     context_id TEXT NOT NULL UNIQUE REFERENCES learning_contexts(context_id)
 );
 
+-- 번역 복구 완료 뒤 사용자가 선택한 색인과 학습 맥락의 멱등 연결(#223).
+-- 사용자 입력 본문이나 known_concepts를 이 선택 기록에 중복 저장하지 않는다.
+CREATE TABLE IF NOT EXISTS translation_recovery_context_selections (
+    selection_key TEXT PRIMARY KEY,
+    request_key TEXT NOT NULL REFERENCES translation_recovery_requests(request_key),
+    job_id TEXT NOT NULL REFERENCES processing_jobs(job_id),
+    version_id TEXT NOT NULL REFERENCES paper_versions(version_id),
+    embedding_set_id TEXT NOT NULL REFERENCES search_indexes(embedding_set_id),
+    context_id TEXT NOT NULL UNIQUE REFERENCES learning_contexts(context_id),
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS evidences (
     evidence_id TEXT PRIMARY KEY,
     context_id TEXT NOT NULL REFERENCES learning_contexts(context_id),
