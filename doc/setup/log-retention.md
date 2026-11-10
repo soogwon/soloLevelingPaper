@@ -39,6 +39,31 @@ python -m solo_leveling.interfaces.cli.log_inventory --log-dir ./runtime/diagnos
 
 검사 결과는 그 시점의 관찰이다. 로그 본문은 읽지 않으며 파일 생성·삭제·순환을 수행하지 않는다. 크기·개수 초과 경고와 수정 시각 기준의 기존 `age_review`는 종료 시각 기준의 `retention_status`와 별개다.
 
+## 만료 묶음 하나 정리
+
+위 목록에서 만료된 로그의 소유자와 32자리 실행 ID를 확인한 뒤, 같은 로그 디렉터리에서
+아래 예시처럼 실행한다. 첫 명령은 현재 묶음의 상태와 정리할 바이트 수,
+만료된 경우 확인값(`token`)을 출력한다.
+
+```sh
+python -m solo_leveling.interfaces.cli.log_cleanup --log-dir ./runtime/diagnostics --bundle worker-<실행ID>
+python -m solo_leveling.interfaces.cli.log_cleanup --log-dir ./runtime/diagnostics --bundle worker-<실행ID> --apply <확인값>
+```
+
+`<실행ID>`, `<확인값>`은 실제 값으로 바꾼다. MCP 묶음은 `mcp-<실행ID>`를 사용한다.
+기간을 조정했다면 두 명령에 같은 `--safe-days`, `--detail-days`를 지정한다.
+실행할 때 원래 종료 기록, 파일 구성과 동일성, 보관 기간을 잠금 아래 다시 확인한다.
+다른 작업이 묶음 잠금을 보유하면 `lock_busy`, 같은 이름의 파일이 교체되면
+`file_changed`로 건너뛴다. 원본·스택이 포함된 묶음은 정리할 수 없다.
+
+정상 완료 시 `deleted`를 반환하고 종료 기록을 마지막으로 제거한다. 잠금 파일은 보존한다.
+여러 파일 삭제는 원자적이지 않다. 일부 파일이 이미 제거됐다면 남은 파일로 다시 미리보기한 뒤
+새 확인값을 사용한다. POSIX에서는 검증한 파일을 같은 로그 루트의 전용 디렉터리로 옮겨
+열린 파일과 다시 대조한다. 묶음 잠금과 파일 잠금은 협력하는 프로세스 사이에 적용된다.
+이동 중 프로세스가 중단되거나 복원할 위치를 다른 파일이 점유하면
+`.slp-cleanup-<소유자>-<실행ID>`가 남을 수 있다. 이 경우 디렉터리 안의 파일을 확인하고
+복구한 뒤 다시 시도한다.
+
 ## 기본 목록
 
 ```powershell

@@ -159,3 +159,117 @@ def test_worker_deadlines_and_raw_stack_exclusion(tmp_path, store, capsys):
     assert rows[log_name(raw, 'raw')] == rows[log_name(raw, 'stack')] == ('closed', 'raw_excluded')
     assert preview(tmp_path, capsys, '--safe-days', '7')[log_name(recent, 'safe')] == ('closed', 'expired')
     assert snapshot(tmp_path) == before
+
+
+def cleanup(root, bundle, capsys, token=None):
+    from solo_leveling.interfaces.cli.log_cleanup import main as cleanup_main
+    args = ['--log-dir', str(root), '--bundle', f'{bundle.owner}-{bundle.run_id}']
+    if token is not None:
+        args.extend(['--apply', token])
+    assert cleanup_main(args) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+@pytest.mark.parametrize('owner,kinds', [('worker', ['safe']), ('mcp', ['safe', 'detail'])])
+def test_cleanup_explicit_verified_bundle(tmp_path, store, capsys, owner, kinds):
+    bundle = BundleId(owner, '1' * 32)
+    publish(store, tmp_path, bundle, kinds, 31)
+    before = snapshot(tmp_path)
+    planned = cleanup(tmp_path, bundle, capsys)
+    assert planned['status'] == 'expired' and snapshot(tmp_path) == before
+    assert cleanup(tmp_path, bundle, capsys, planned['token'])['status'] == 'deleted'
+    assert [p.suffix for p in tmp_path.iterdir()] == ['.lock']
+    assert cleanup(tmp_path, bundle, capsys, planned['token'])['status'] == 'missing_closed_record'
+
+
+@pytest.mark.parametrize('change,expected', [
+    ('replace', 'file_changed'), ('lock', 'lock_busy'), ('raw', 'file_set_changed'),
+    ('record', 'file_changed')])
+def test_cleanup_rechecks_preview(tmp_path, store, capsys, change, expected):
+    bundle = BundleId('worker', '2' * 32)
+    publish(store, tmp_path, bundle, ['safe'], 31)
+    token = cleanup(tmp_path, bundle, capsys)['token']
+    lease = None
+    if change == 'lock':
+        lease = store.try_acquire_inspector(tmp_path, bundle).lease
+        assert lease is not None
+    elif change == 'raw':
+        (tmp_path / log_name(bundle, 'raw')).write_bytes(b'RAW')
+    else:
+        name = closed_name(bundle) if change == 'record' else log_name(bundle, 'safe')
+        replacement = tmp_path / 'replacement'
+        replacement.write_bytes((tmp_path / name).read_bytes())
+        replacement.replace(tmp_path / name)
+    try:
+        before = snapshot(tmp_path)
+        assert cleanup(tmp_path, bundle, capsys, token)['status'] == expected
+        assert snapshot(tmp_path) == before
+    finally:
+        if lease:
+            lease.release()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX 이름 교체 경합')
+def test_cleanup_swap_at_last_rename_preserves_replacement(tmp_path, store, capsys, monkeypatch):
+    bundle = BundleId('worker', '3' * 32)
+    publish(store, tmp_path, bundle, ['safe'], 31)
+    token = cleanup(tmp_path, bundle, capsys)['token']
+    name = log_name(bundle, 'safe')
+    replacement = tmp_path / 'replacement'
+    replacement.write_bytes(b'CHANGED')
+    rename = os.rename
+
+    def swap(src, dst, **kwargs):
+        if src == name:
+            replacement.replace(tmp_path / name)
+        rename(src, dst, **kwargs)
+
+    monkeypatch.setattr(os, 'rename', swap)
+    assert cleanup(tmp_path, bundle, capsys, token)['status'] == 'file_changed'
+    assert (tmp_path / name).read_bytes() == b'CHANGED'
+    assert (tmp_path / closed_name(bundle)).exists()
+
+
+@pytest.mark.parametrize('kinds,days,status', [
+    (['safe', 'raw'], 60, 'raw_excluded'), (['safe'], 5, 'retained')])
+def test_apply_cannot_override_retention(tmp_path, store, capsys, kinds, days, status):
+    bundle = BundleId('mcp', 'a' * 32)
+    publish(store, tmp_path, bundle, kinds, days)
+    before = snapshot(tmp_path)
+    assert cleanup(tmp_path, bundle, capsys, '0' * 64)['status'] == status
+    assert before == snapshot(tmp_path)
+
+
+def test_partial_cleanup_requires_fresh_preview_for_remaining_files(tmp_path, store, capsys):
+    bundle = BundleId('mcp', 'a' * 32)
+    publish(store, tmp_path, bundle, ['safe', 'detail'], 31)
+    old_token = cleanup(tmp_path, bundle, capsys)['token']
+    (tmp_path / log_name(bundle, 'safe')).unlink()
+    assert cleanup(tmp_path, bundle, capsys, old_token)['status'] == 'file_changed'
+    assert (tmp_path / log_name(bundle, 'detail')).exists()
+    fresh_token = cleanup(tmp_path, bundle, capsys)['token']
+    assert fresh_token != old_token
+    assert cleanup(tmp_path, bundle, capsys, fresh_token)['status'] == 'deleted'
+
+
+def test_cleanup_skips_log_locked_by_another_process(tmp_path, store, capsys):
+    bundle = BundleId('worker', 'f' * 32)
+    publish(store, tmp_path, bundle, ['safe'], 31)
+    token = cleanup(tmp_path, bundle, capsys)['token']
+    child = """import os, sys
+with open(sys.argv[1]) as stream:
+    if os.name == "posix":
+        import fcntl
+        fcntl.flock(stream, fcntl.LOCK_SH)
+    print('ready', flush=True)
+    sys.stdin.read()
+"""
+    with subprocess.Popen([sys.executable, '-c', child, str(tmp_path / log_name(bundle, 'safe'))],
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True) as proc:
+        try:
+            assert proc.stdout.readline().strip() == 'ready'
+            before = snapshot(tmp_path)
+            assert cleanup(tmp_path, bundle, capsys, token)['status'] == 'lock_busy'
+            assert snapshot(tmp_path) == before
+        finally:
+            proc.communicate('', timeout=5)

@@ -1,0 +1,39 @@
+name: 로그 정리 플랫폼 검증
+on:
+  push:
+    branches: [feat/issue-99-safe-log-cleanup]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 임시 파일의 NTFS 볼륨 확인
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $drive = (Get-Item ([System.IO.Path]::GetTempPath())).PSDrive.Name
+          $volume = Get-Volume -DriveLetter $drive
+          $volume | Select-Object DriveLetter, FileSystem, DriveType
+          if ($volume.FileSystem -ne 'NTFS' -or $volume.DriveType -ne 'Fixed') { throw '고정 NTFS 필요' }
+      - run: python -m pip install pytest
+      - name: 임시 로그 실제 삭제·교체·잠금과 보관 정책 검증
+        run: >-
+          python -m pytest -v --tb=short
+          tests/integration/test_mcp_retention_preview.py
+          tests/unit/test_log_inventory.py tests/unit/test_log_retention_policy.py
+          tests/unit/test_posix_log_retention.py tests/integration/test_windows_log_retention.py

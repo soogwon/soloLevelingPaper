@@ -10,7 +10,7 @@ import stat
 from uuid import uuid4
 
 from .contracts import LeaseResult
-from .policy import closed_name, log_name, parse_metadata_summary
+from .policy import closed_name, log_name, parse_metadata_summary, supported_log_kinds
 
 
 _kernel = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -118,6 +118,26 @@ class WindowsLease:
 
     def _open_for_preview(self, name):
         return _fd(self.root / name, 0x80000000, os.O_RDONLY, share=1)
+
+    def _open_for_cleanup(self, name):
+        # DELETE 접근과 배타 공유로 열어 다른 사용자가 있는 파일은 건너뛴다.
+        return _fd(self.root / name, 0x80010000, os.O_RDONLY, share=0)
+
+    def remove_verified(self, observed, descriptors, record):
+        # 검증한 핸들에만 삭제를 표시한다. 로그 표시 성공 후 종료 기록을 처리한다.
+        disposition = ctypes.c_ubyte(1)
+        absent = {log_name(self.bundle_id, kind) for kind in supported_log_kinds(self.bundle_id)} - observed.keys()
+        for name in [n for n in observed if n != record] + [record]:
+            for extra in absent:
+                try:
+                    self._stat_for_preview(extra)
+                except FileNotFoundError:
+                    continue
+                return 'file_set_changed'
+            handle = msvcrt.get_osfhandle(descriptors[name])
+            if not _set_info(handle, 4, ctypes.byref(disposition), ctypes.sizeof(disposition)):
+                raise ctypes.WinError(ctypes.get_last_error())
+        return 'deleted'
 
     def _matches_preview(self, name, info):
         # 상위 경로와 파일의 핸들이 열려 있는 동안 쓰기·삭제 공유를 차단한다.
