@@ -189,24 +189,24 @@ def test_cleanup_rechecks_preview(tmp_path, store, capsys, change, expected):
     bundle = BundleId('worker', '2' * 32)
     publish(store, tmp_path, bundle, ['safe'], 31)
     token = cleanup(tmp_path, bundle, capsys)['token']
-    lease = None
-    if change == 'lock':
-        lease = store.try_acquire_inspector(tmp_path, bundle).lease
-        assert lease is not None
-    elif change == 'raw':
+    if change == 'raw':
         (tmp_path / log_name(bundle, 'raw')).write_bytes(b'RAW')
-    else:
+    elif change in ('record', 'replace'):
         name = closed_name(bundle) if change == 'record' else log_name(bundle, 'safe')
         replacement = tmp_path / 'replacement'
         replacement.write_bytes((tmp_path / name).read_bytes())
         replacement.replace(tmp_path / name)
+    before = snapshot(tmp_path)
+    lease = None
+    if change == 'lock':
+        lease = store.try_acquire_inspector(tmp_path, bundle).lease
+        assert lease is not None
     try:
-        before = snapshot(tmp_path)
         assert cleanup(tmp_path, bundle, capsys, token)['status'] == expected
-        assert snapshot(tmp_path) == before
     finally:
         if lease:
             lease.release()
+    assert snapshot(tmp_path) == before
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='POSIX 이름 교체 경합')
