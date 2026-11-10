@@ -1377,6 +1377,118 @@ def get_or_create_learning_context(db_path: str, version_id: str, goal: str,
         return context
 
 
+def get_or_create_recovery_context(
+        db_path: str, *, selection_key: str, request_key: str, job_id: str,
+        version_id: str, embedding_set_id: str, goal: str,
+        known_concepts: list[str]) -> LearningContext:
+    """완료된 번역 복구 결과에 고정된 학습 맥락을 멱등 선택한다.
+
+    호출자가 넘긴 색인 ID를 현재 기본 색인으로 대체하지 않는다. 복구 요청·작업·게시 결과와
+    정확히 일치할 때만 같은 색인/설정의 맥락을 만들거나 재사용한다.
+    """
+    for name, value in (
+            ('selection_key', selection_key), ('request_key', request_key),
+            ('job_id', job_id), ('version_id', version_id),
+            ('embedding_set_id', embedding_set_id)):
+        require_text(value, name)
+    if goal not in ('understand', 'implement', 'skim'):
+        raise ValueError('invalid learning goal')
+    if (not isinstance(known_concepts, list)
+            or any(not isinstance(value, str) or not value.strip()
+                   for value in known_concepts)):
+        raise ValueError('known_concepts must contain nonempty strings')
+    if len(set(known_concepts)) != len(known_concepts):
+        raise ValueError('known_concepts must not contain duplicates')
+    serialized_concepts = json.dumps(known_concepts, ensure_ascii=False)
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        selected = conn.execute(
+            'SELECT * FROM translation_recovery_context_selections WHERE selection_key=?',
+            (selection_key,),
+        ).fetchone()
+        if selected is not None:
+            if (selected['request_key'] != request_key
+                    or selected['job_id'] != job_id
+                    or selected['version_id'] != version_id
+                    or selected['embedding_set_id'] != embedding_set_id):
+                raise RequestConflictError('recovery context selection key conflict')
+
+        request = conn.execute(
+            'SELECT * FROM translation_recovery_requests WHERE request_key=?',
+            (request_key,),
+        ).fetchone()
+        if (request is None
+                or request['job_id'] != job_id
+                or request['version_id'] != version_id
+                or request['new_embedding_set_id'] != embedding_set_id):
+            raise ValueError('recovery result does not match selection')
+        index = conn.execute('''SELECT s.* FROM search_indexes s
+            JOIN parse_revisions p ON p.parse_revision_id=s.parse_revision_id
+                AND p.version_id=s.version_id
+            JOIN translation_revisions t ON t.translation_revision_id=s.translation_revision_id
+                AND t.parse_revision_id=p.parse_revision_id
+            JOIN embedding_sets e ON e.embedding_set_id=s.embedding_set_id
+                AND e.translation_revision_id=t.translation_revision_id
+            JOIN processing_jobs j ON j.job_id=s.job_id
+                AND j.version_id=s.version_id AND j.status='ready'
+            JOIN search_index_chunk_snapshots m ON m.embedding_set_id=s.embedding_set_id
+                AND m.source='publish'
+            WHERE s.embedding_set_id=? AND s.version_id=? AND s.job_id=?
+              AND s.chunk_count > 0
+              AND EXISTS (
+                SELECT 1 FROM search_index_chunks member
+                LEFT JOIN chunks c ON c.chunk_id=member.chunk_id
+                    AND c.parse_revision_id=s.parse_revision_id
+                WHERE member.embedding_set_id=s.embedding_set_id
+                GROUP BY member.embedding_set_id
+                HAVING COUNT(*)=s.chunk_count AND COUNT(c.chunk_id)=s.chunk_count
+              )''',
+            (embedding_set_id, version_id, job_id)).fetchone()
+        if index is None:
+            raise ValueError('recovery result is not a valid published index')
+
+        if selected is not None:
+            row = conn.execute(
+                'SELECT * FROM learning_contexts WHERE context_id=?',
+                (selected['context_id'],),
+            ).fetchone()
+            if row is None:
+                raise ValueError('recovery context selection is invalid')
+            values = dict(row)
+            values['known_concepts'] = json.loads(values['known_concepts'])
+            context = LearningContext(**values)
+            if (context.version_id != version_id
+                    or context.parse_revision_id != index['parse_revision_id']
+                    or context.translation_revision_id != index['translation_revision_id']
+                    or context.embedding_set_id != embedding_set_id):
+                raise ValueError('recovery context selection is invalid')
+            if context.goal != goal or context.known_concepts != known_concepts:
+                raise RequestConflictError('recovery context selection key conflict')
+            return context
+
+        # 새 학습 선택은 같은 설정의 기존 맥락에 저장된 진도·메모·답변을 이어받지 않는다.
+        # 응답 유실 재전송만 위 selection_key 기록을 통해 같은 맥락을 재생한다.
+        context = LearningContext(
+            str(uuid4()), version_id, index['parse_revision_id'],
+            index['translation_revision_id'], goal=goal,
+            known_concepts=list(known_concepts), embedding_set_id=embedding_set_id,
+        )
+        conn.execute('''INSERT INTO learning_contexts
+            (context_id, version_id, parse_revision_id, translation_revision_id,
+             embedding_set_id, goal, known_concepts, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            (context.context_id, context.version_id, context.parse_revision_id,
+             context.translation_revision_id, context.embedding_set_id, context.goal,
+             serialized_concepts, context.created_at))
+        conn.execute('''INSERT INTO translation_recovery_context_selections
+            (selection_key, request_key, job_id, version_id,
+             embedding_set_id, context_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)''',
+            (selection_key, request_key, job_id, version_id,
+             embedding_set_id, context.context_id, now_iso()))
+        return context
+
+
 def get_learning_context(db_path: str, context_id: str) -> Optional[LearningContext]:
     with closing(get_connection(db_path)) as conn:
         row = conn.execute('SELECT * FROM learning_contexts WHERE context_id=?', (context_id,)).fetchone()

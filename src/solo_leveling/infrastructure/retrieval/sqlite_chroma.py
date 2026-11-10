@@ -9,7 +9,7 @@ from solo_leveling.application.evidence_qa.page_completion import completion_exc
 from solo_leveling.domain.evidence_qa import (
     RetrievedChunk, RetrievalMethod, SearchResult, SearchScope, positive_int, require_text,
 )
-from solo_leveling.domain.models import Chunk
+from solo_leveling.domain.models import Chunk, RequestConflictError
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.database.schema import get_connection
 from solo_leveling.infrastructure.embeddings.embedder import embed_texts
@@ -44,6 +44,22 @@ class SQLiteContextReader:
             raise
         except ValueError:
             raise DataIntegrityError('학습 맥락의 저장 정보가 올바르지 않습니다.') from None
+
+    def get_or_create_recovery_context(
+            self, *, selection_key: str, request_key: str, job_id: str,
+            version_id: str, embedding_set_id: str, goal: str,
+            known_concepts: list[str]):
+        try:
+            return repo.get_or_create_recovery_context(
+                self.db_path, selection_key=selection_key, request_key=request_key,
+                job_id=job_id, version_id=version_id,
+                embedding_set_id=embedding_set_id, goal=goal,
+                known_concepts=known_concepts,
+            )
+        except RequestConflictError:
+            raise
+        except ValueError:
+            raise DataIntegrityError('복구 학습 맥락의 저장 정보가 올바르지 않습니다.') from None
 
 
 class SQLiteChromaRetriever:
