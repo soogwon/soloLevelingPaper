@@ -60,15 +60,16 @@ def test_failure_resets_worker_without_retry(mode, code, tmp_path, capsys):
         assert error.value.code == code
         assert time.monotonic() - start < 7
         assert embedder._process is None
-        child_logs = list(tmp_path.glob('worker-*.log'))
+        child_logs = list(tmp_path.glob('slp-log-v1-worker-*.log'))
         assert child_logs
         events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
         assert any(event.get('event') == 'worker_stopped' and event['alive'] is False for event in events)
-        entries = [path for path in child_logs if not path.name.startswith('worker-stack-')]
+        entries = [path for path in child_logs if '-raw-' in path.name]
         assert json.loads(entries[0].read_text().splitlines()[0])['event'] == 'worker_enter'
         if mode == 'hang':
-            stack = next(tmp_path.glob('worker-stack-*.log')).read_text()
+            stack = next(tmp_path.glob('slp-log-v1-worker-stack-*.log')).read_text()
             assert 'Timeout' in stack and 'fake_worker' in stack
+        assert len(list(tmp_path.glob('slp-log-v1-worker-*.closed.json'))) == 1
         embedder.timeout = 10
         assert len(embedder(['sample'], model_name='ok')) == 1
     finally:
@@ -86,6 +87,17 @@ def test_queue_timeout_does_not_kill_other_request():
     finally:
         embedder._serial.release()
         embedder.close()
+
+
+def test_bundle_acquire_failure_skips_files_without_failing_request(tmp_path, monkeypatch):
+    embedder = ProcessEmbedder(10, worker_target=fake_worker, log_dir=tmp_path,
+                               collect_raw_logs=True)
+    monkeypatch.setattr(embedder, '_prepare_worker_logs', lambda: False)
+    try:
+        assert len(embedder(['sample'], model_name='ok')) == 1
+    finally:
+        embedder.close()
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_close_interrupts_active_request():
@@ -189,9 +201,10 @@ def test_default_does_not_collect_child_output_or_stack(tmp_path, monkeypatch):
         assert error.value.code == EmbeddingFailure.TIMEOUT
     finally:
         embedder.close()
-    assert not list(tmp_path.glob('worker-stack-*.log'))
+    assert not list(tmp_path.glob('slp-log-v1-worker-stack-*.log'))
+    assert not list(tmp_path.glob('worker-*.log'))
     assert SECRET not in _all_log_text(tmp_path)
-    for path in tmp_path.glob('worker-*.log'):
+    for path in tmp_path.glob('slp-log-v1-worker-safe-*.log'):
         lines = path.read_text().splitlines()
         assert [json.loads(line)['event'] for line in lines] == ['worker_enter']
 
@@ -216,7 +229,8 @@ def test_explicit_opt_in_collects_raw_output_and_stack(tmp_path):
     finally:
         embedder.close()
     assert SECRET in _all_log_text(tmp_path)
-    assert list(tmp_path.glob('worker-stack-*.log'))
+    assert list(tmp_path.glob('slp-log-v1-worker-stack-*.log'))
+    assert not list(tmp_path.glob('worker-*.log'))
 
 
 def test_environment_opt_in_and_invalid_values(tmp_path, monkeypatch):

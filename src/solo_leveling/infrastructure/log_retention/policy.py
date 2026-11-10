@@ -13,8 +13,18 @@ _LOG = re.compile(r'slp-log-v1-(mcp|worker)-(safe|detail|raw|stack)-([0-9a-f]{32
 _UTC = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z')
 
 
+_LOG_KINDS = {
+    'mcp': ('safe', 'detail', 'raw', 'stack'),
+    'worker': ('safe', 'raw', 'stack'),
+}
+
+
+def supported_log_kinds(bundle: BundleId) -> tuple[Kind, ...]:
+    return _LOG_KINDS[bundle.owner]
+
+
 def log_name(bundle: BundleId, kind: Kind) -> str:
-    if kind not in ('safe', 'detail', 'raw', 'stack') or (bundle.owner == 'worker' and kind == 'detail'):
+    if kind not in supported_log_kinds(bundle):
         raise ValueError('UNSUPPORTED_LOG_KIND')
     return f'slp-log-v1-{bundle.owner}-{kind}-{bundle.run_id}.log'
 
@@ -24,9 +34,10 @@ def parse_log_name(name: str) -> tuple[BundleId, Kind] | None:
     if match is None:
         return None
     owner, kind, run_id = match.groups()
-    if owner == 'worker' and kind == 'detail':
+    bundle = BundleId(owner, run_id)
+    if kind not in supported_log_kinds(bundle):
         return None
-    return BundleId(owner, run_id), kind
+    return bundle, kind
 
 
 def closed_name(bundle: BundleId) -> str:

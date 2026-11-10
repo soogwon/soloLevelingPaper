@@ -242,3 +242,25 @@ def test_release_attempts_both_handles_even_when_close_fails(owned, monkeypatch)
         lease.release()
     assert set(calls) == expected
     assert lease.lock_fd is None and lease.root_fd is None
+
+
+@pytest.mark.parametrize('kind', ['safe', 'raw', 'stack'])
+def test_worker_publication_waits_for_last_writer(tmp_path, kind):
+    store = PosixBundleStore()
+    bundle = BundleId('worker', 'a' * 32)
+    lease = store.try_acquire_writer(tmp_path.resolve(), bundle).lease
+    assert lease is not None
+    try:
+        path, output = lease.open_log(kind)
+        with output, os.fdopen(os.dup(output.fileno()), 'wb') as duplicate:
+            output.close()
+            item = ClosedFile(kind, path.name, 0)
+            assert store.publish_closed(lease, (item,), NOW) == 'invalid_state'
+            assert not (lease.root / closed_name(bundle)).exists()
+            duplicate.write(b'late')
+        item = ClosedFile(kind, path.name, 4)
+        assert store.publish_closed(lease, (item,), NOW) == 'published'
+        assert parse_metadata_summary((lease.root / closed_name(bundle)).read_bytes(),
+                                      expected=bundle).files == (item,)
+    finally:
+        lease.release()

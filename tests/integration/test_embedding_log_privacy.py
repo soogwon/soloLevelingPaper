@@ -105,9 +105,9 @@ def test_entry_policy_reaches_real_child(tmp_path, entry, raw, mode):
     for secret in ('SYNTHETIC_CHILD_PRIVATE', 'SYNTHETIC_NATIVE_PRIVATE'):
         assert (secret in text) is raw
         assert secret not in result.stdout + result.stderr
-    logs = list(folder.rglob('worker-*.log'))
+    logs = list(folder.rglob('slp-log-v1-worker-*.log'))
     assert logs
-    stacks = list(folder.rglob('worker-stack-*.log'))
+    stacks = list(folder.rglob('slp-log-v1-worker-stack-*.log'))
     assert bool(stacks) is raw
     if raw and mode == 'hang':
         assert 'Timeout' in stacks[0].read_text(encoding='utf-8')

@@ -10,7 +10,7 @@ import stat
 import time
 
 from solo_leveling.infrastructure.log_retention.policy import RetentionPolicy, parse_log_name
-from solo_leveling.infrastructure.log_retention.preview import inspect_mcp_bundle
+from solo_leveling.infrastructure.log_retention.preview import inspect_bundle
 
 
 _HEX = r'[0-9a-f]{32}'
@@ -27,7 +27,7 @@ def _linked(info):
 
 def inventory(directory: Path, *, review_days=30, max_bytes=104857600,
               max_files=100, now=None, retention_policy=None):
-    """목록과 경고를 반환하고 선택한 경우 MCP 묶음의 보관 상태도 검사한다."""
+    """목록과 경고를 반환하고 선택한 경우 MCP·worker 묶음의 보관 상태도 검사한다."""
     if (type(review_days) not in (int, float) or not math.isfinite(review_days)
             or review_days <= 0 or type(max_bytes) is not int or max_bytes <= 0
             or type(max_files) is not int or max_files <= 0):
@@ -47,7 +47,7 @@ def inventory(directory: Path, *, review_days=30, max_bytes=104857600,
     for path in root.iterdir():
         parsed = parse_log_name(path.name)
         bundle_files = None
-        if retention_policy is not None and parsed and parsed[0].owner == 'mcp':
+        if retention_policy is not None and parsed:
             bundle_files = bundles.setdefault(parsed[0], {})
             bundle_files[path.name] = None
         if parsed is None and not _NAMES.fullmatch(path.name):
@@ -77,13 +77,13 @@ def inventory(directory: Path, *, review_days=30, max_bytes=104857600,
         instant = datetime.fromtimestamp(timestamp, timezone.utc)
         statuses = {}
         for bundle, observed in bundles.items():
-            status = inspect_mcp_bundle(root, bundle, observed, instant, retention_policy)
+            status = inspect_bundle(root, bundle, observed, instant, retention_policy)
             statuses[bundle] = status
             if status == 'io_error':
                 unreadable += 1
         for row in rows:
             parsed = parse_log_name(row['name'])
-            status = statuses.get(parsed[0], 'worker_excluded') if parsed else 'legacy_unknown'
+            status = statuses[parsed[0]] if parsed else 'legacy_unknown'
             row['retention_status'] = status
             if status in ('expired', 'retained', 'raw_excluded', 'future_timestamp'):
                 row['activity'] = 'closed'
@@ -114,7 +114,7 @@ def main(argv=None):
     parser.add_argument('--review-days', type=float, default=30)
     parser.add_argument('--max-bytes', type=int, default=104857600)
     parser.add_argument('--max-files', type=int, default=100)
-    parser.add_argument('--retention', action='store_true', help='MCP 종료 기록과 보관 기간 검사')
+    parser.add_argument('--retention', action='store_true', help='MCP·worker 종료 기록과 보관 기간 검사')
     parser.add_argument('--safe-days', type=int)
     parser.add_argument('--detail-days', type=int)
     args = parser.parse_args(argv)

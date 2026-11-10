@@ -10,7 +10,7 @@ import stat
 from uuid import uuid4
 
 from .contracts import LeaseResult
-from .policy import closed_name, log_name, parse_metadata_summary
+from .policy import closed_name, log_name, parse_metadata_summary, supported_log_kinds
 
 
 _kernel = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -91,11 +91,14 @@ def _rename_open_file(fd, destination):
     encoded = str(destination).encode('utf-16-le')
     class Rename(ctypes.Structure):
         _fields_ = [('flags', w.DWORD), ('root', w.HANDLE), ('length', w.DWORD),
-                    ('name', ctypes.c_char * len(encoded))]
+                    ('name', ctypes.c_char * (len(encoded) + 2))]
     info = Rename()
     info.length = len(encoded)
     ctypes.memmove(ctypes.addressof(info) + Rename.name.offset, encoded, len(encoded))
-    if not _set_info(msvcrt.get_osfhandle(fd), 3, ctypes.byref(info), ctypes.sizeof(info)):
+    # FileNameLength가 있어도 일부 Windows 빌드는 가변 배열 뒤 바이트까지 이름으로
+    # 관찰하므로 명시적 UTF-16 NUL을 포함하고 구조체 정렬 패딩은 제외한다.
+    size = Rename.name.offset + len(encoded) + 2
+    if not _set_info(msvcrt.get_osfhandle(fd), 3, ctypes.byref(info), size):
         raise ctypes.WinError(ctypes.get_last_error())
 
 
@@ -115,6 +118,26 @@ class WindowsLease:
 
     def _open_for_preview(self, name):
         return _fd(self.root / name, 0x80000000, os.O_RDONLY, share=1)
+
+    def _open_for_cleanup(self, name):
+        # DELETE 접근과 배타 공유로 열어 다른 사용자가 있는 파일은 건너뛴다.
+        return _fd(self.root / name, 0x80010000, os.O_RDONLY, share=0)
+
+    def remove_verified(self, observed, descriptors, record):
+        # 검증한 핸들에만 삭제를 표시한다. 로그 표시 성공 후 종료 기록을 처리한다.
+        disposition = ctypes.c_ubyte(1)
+        absent = {log_name(self.bundle_id, kind) for kind in supported_log_kinds(self.bundle_id)} - observed.keys()
+        for name in [n for n in observed if n != record] + [record]:
+            for extra in absent:
+                try:
+                    self._stat_for_preview(extra)
+                except FileNotFoundError:
+                    continue
+                return 'file_set_changed'
+            handle = msvcrt.get_osfhandle(descriptors[name])
+            if not _set_info(handle, 4, ctypes.byref(disposition), ctypes.sizeof(disposition)):
+                raise ctypes.WinError(ctypes.get_last_error())
+        return 'deleted'
 
     def _matches_preview(self, name, info):
         # 상위 경로와 파일의 핸들이 열려 있는 동안 쓰기·삭제 공유를 차단한다.

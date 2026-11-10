@@ -12,14 +12,20 @@
 2026-11-07: Windows 로컬 NTFS에서도 기본·상세 MCP 로그에 같은 종료 절차를 적용한다.
 원본·스택 수집의 범위는 [구현과 검증 범위](log-retention-contract.md)를 참조한다.
 기본 목록의 activity는 unknown이며 종료 JSON을 정리 권한으로 사용하지 않는다.
+2026-11-09: 임베딩 worker 생산자도 부모 소유 묶음 잠금과 종료 기록에 연결했다.
+기본 모드는 `worker-safe`, 명시적 원본 수집은 `worker-raw`와 `worker-stack`으로 분리한다.
+부모가 실제 자식 종료를 확인한 뒤에만 종료 기록을 게시하며, 잠금·생성·게시 실패는 임베딩
+결과를 바꾸거나 구형 이름으로 출력을 우회하지 않는다. 자식은 경로를 재해석하지 않고 부모가
+검증한 열린 파일 핸들만 전달받는다. POSIX 파일명·로그 루트 교체 회귀는 실제 POSIX 환경에서
+`tests/integration/test_posix_worker_log_bundle.py`로 검증한다.
 
-## MCP 보관 기간 미리보기
+## MCP·worker 보관 기간 미리보기
 
 ```sh
 python -m solo_leveling.interfaces.cli.log_inventory --log-dir ./runtime/diagnostics --retention
 ```
 
-`--retention`은 기존 묶음의 잠금을 비차단 방식으로 한 번 시도한다. 잠금을 얻으면 종료 JSON을 최대 16 KiB까지 검증하고, 기록된 모든 파일의 이름·장치·파일 ID·크기를 열린 파일과 대조한다. 보관 기간은 종료 시각(UTC)부터 기본 안전 로그 30일, 상세 안전 로그 7일이다. `--safe-days`와 `--detail-days`로 1~36500일 범위에서 조정할 수 있다. 같은 묶음의 모든 로그가 기간에 도달해야 만료로 표시한다.
+`--retention`은 기존 묶음의 잠금을 비차단 방식으로 한 번 시도한다. 잠금을 얻으면 종료 JSON을 최대 16 KiB까지 검증하고, 기록된 모든 파일의 이름·장치·파일 ID·크기를 열린 파일과 대조한다. 보관 기간은 종료 시각(UTC)부터 기본 안전 로그 30일, 상세 안전 로그 7일이다. `--safe-days`와 `--detail-days`로 1~36500일 범위에서 조정할 수 있다. 같은 묶음의 모든 로그가 기간에 도달해야 만료로 표시한다. worker의 `safe`에는 기본 안전 로그 기간을 적용하고, `raw`나 `stack`이 포함된 묶음은 만료 후보에서 제외한다.
 
 | retention_status | 해석 |
 |---|---|
@@ -29,9 +35,34 @@ python -m solo_leveling.interfaces.cli.log_inventory --log-dir ./runtime/diagnos
 | `file_changed` / `file_set_changed` | 파일 동일성·크기·관찰 시각 또는 묶음 구성 불일치 |
 | `raw_excluded` / `future_timestamp` | 원본·스택이 포함됐거나 종료 시각이 미래인 묶음 |
 | `invalid_metadata` / `unsafe_file` / `unsupported` / `io_error` | 기록·경로·플랫폼 또는 접근 오류로 보관 판정 제외 |
-| `legacy_unknown` / `worker_excluded` | 구형 이름 또는 worker 생산자 검증 범위 밖 |
+| `legacy_unknown` | 종료 기록과 연결할 수 없는 구형 로그 이름 |
 
 검사 결과는 그 시점의 관찰이다. 로그 본문은 읽지 않으며 파일 생성·삭제·순환을 수행하지 않는다. 크기·개수 초과 경고와 수정 시각 기준의 기존 `age_review`는 종료 시각 기준의 `retention_status`와 별개다.
+
+## 만료 묶음 하나 정리
+
+위 목록에서 만료된 로그의 소유자와 32자리 실행 ID를 확인한 뒤, 같은 로그 디렉터리에서
+아래 예시처럼 실행한다. 첫 명령은 현재 묶음의 상태와 정리할 바이트 수,
+만료된 경우 확인값(`token`)을 출력한다.
+
+```sh
+python -m solo_leveling.interfaces.cli.log_cleanup --log-dir ./runtime/diagnostics --bundle worker-<실행ID>
+python -m solo_leveling.interfaces.cli.log_cleanup --log-dir ./runtime/diagnostics --bundle worker-<실행ID> --apply <확인값>
+```
+
+`<실행ID>`, `<확인값>`은 실제 값으로 바꾼다. MCP 묶음은 `mcp-<실행ID>`를 사용한다.
+기간을 조정했다면 두 명령에 같은 `--safe-days`, `--detail-days`를 지정한다.
+실행할 때 원래 종료 기록, 파일 구성과 동일성, 보관 기간을 잠금 아래 다시 확인한다.
+다른 작업이 묶음 잠금을 보유하면 `lock_busy`, 같은 이름의 파일이 교체되면
+`file_changed`로 건너뛴다. 원본·스택이 포함된 묶음은 정리할 수 없다.
+
+정상 완료 시 `deleted`를 반환하고 종료 기록을 마지막으로 제거한다. 잠금 파일은 보존한다.
+여러 파일 삭제는 원자적이지 않다. 일부 파일이 이미 제거됐다면 남은 파일로 다시 미리보기한 뒤
+새 확인값을 사용한다. POSIX에서는 검증한 파일을 같은 로그 루트의 전용 디렉터리로 옮겨
+열린 파일과 다시 대조한다. 묶음 잠금과 파일 잠금은 협력하는 프로세스 사이에 적용된다.
+이동 중 프로세스가 중단되거나 복원할 위치를 다른 파일이 점유하면
+`.slp-cleanup-<소유자>-<실행ID>`가 남을 수 있다. 이 경우 디렉터리 안의 파일을 확인하고
+복구한 뒤 다시 시도한다.
 
 ## 기본 목록
 
@@ -41,7 +72,7 @@ python -m solo_leveling.interfaces.cli.log_inventory --log-dir ./runtime/diagnos
 
 별도 CLI에서만 실행하며 MCP 서버의 stdout에는 연결하지 않는다.
 로그 본문을 열지 않고 이름·크기·수정 시각으로 목록을 만든다. 디렉터리도 생성하지 않는다.
-인식하는 이름은 현재 실행기가 생성하는 `mcp-시간-UUID.log`, `worker-UUID.log`,
+인식하는 구형 이름은 `mcp-시간-UUID.log`, `worker-UUID.log`,
 `worker-stack-UUID.log`, `import-stack-요청ID-spanID.log` 형식으로 제한한다.
 하위 폴더, 다른 이름, 링크·Windows 재분석 지점·하드 링크는 제외한다.
 DB·PDF·벡터 저장소를 탐색하거나 수정하지 않는다.
@@ -81,7 +112,8 @@ worker-detail은 지원하지 않는다. 새 이름은 kind만 구분하며 acti
 
 1. B·C가 종류별 기간·용량·파일 수·설정 위치와 적용 시점을 확정한다.
 2. 생성 시 종류와 활성 상태를 신뢰할 수 있게 구분한다. PID만으로 종료 여부를 단정하지 않고 재시작·동시 프로세스를 고려한다.
-3. A의 임베딩 worker 로그 생성 방식을 바꿔야 하면 먼저 협의한다. 이번 단계는 해당 파일을 수정하지 않는다.
+3. A의 임베딩 worker 생산자 연결은 완료됐다. 종료가 확인되지 않은 worker의 잠금과 소유권을
+   유지하고, 새 worker 생성을 차단하는 계약을 순환·정리 구현에서도 보존한다.
 4. 네이티브 stderr는 파일 설명자에 직접 쓰므로 Python 로거 교체만으로 순환되지 않는다. 원본 로그의 순환 방식은 별도로 설계한다.
 5. 명시적 정리 기능은 실행 시 대상·경로·활성 상태를 재검증하고 잠긴 파일은 건너뛴다. 로그 디렉터리 밖 접근과 링크 교체도 방어한다.
 6. 크기 순환·보관 만료·동시 실행·Windows 잠금·재시작 및 로깅 실패 시 MCP 통신 유지 테스트를 추가한다.
