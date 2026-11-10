@@ -8,8 +8,8 @@ import stat
 from .policy import MAX_METADATA_BYTES, closed_name, log_name, parse_metadata_summary, retention_status, supported_log_kinds
 
 
-def _open_checked(lease, name, stack):
-    fd = lease._open_for_preview(name)
+def _open_checked(open_file, name, stack):
+    fd = open_file(name)
     stack.callback(os.close, fd)
     info = os.fstat(fd)
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
@@ -17,31 +17,45 @@ def _open_checked(lease, name, stack):
     return fd, info
 
 
-def _inspect(lease, scanned, now, policy):
+def _inspect(lease, scanned, now, policy, *, verified=None, apply=False):
     record = closed_name(lease.bundle_id)
+    open_file = lease._open_for_cleanup if apply else lease._open_for_preview
     with ExitStack() as stack:
         try:
-            fd, metadata = _open_checked(lease, record, stack)
+            fd, metadata = _open_checked(open_file, record, stack)
         except FileNotFoundError:
             return 'missing_closed_record'
         if metadata.st_size > MAX_METADATA_BYTES:
             return 'invalid_metadata'
         payload = os.read(fd, MAX_METADATA_BYTES + 1)
         summary = parse_metadata_summary(payload, expected=lease.bundle_id)
-        if {item.name for item in summary.files} != set(scanned):
+        declared = {item.name for item in summary.files}
+        if scanned is None:
+            # 부분 정리 뒤에도 남은 파일은 원래 종료 기록으로 검증한다.
+            scanned = {}
+            for name in declared:
+                try:
+                    scanned[name] = lease._stat_for_preview(name)
+                except FileNotFoundError:
+                    pass
+        if (verified is None and declared != set(scanned)) or set(scanned) - declared:
             return 'file_set_changed'
         observed = {record: metadata}
+        descriptors = {record: fd}
         # 공통 파서는 이름과 필드를 검증하고 OS 식별자의 해석은 여기에 맡긴다.
         for row in json.loads(payload)['files']:
             name = row['name']
+            if name not in scanned:
+                continue
             initial = scanned[name]
             if initial is None:
                 return 'unsafe_file'
-            _, info = _open_checked(lease, name, stack)
+            file_fd, info = _open_checked(open_file, name, stack)
             if (not os.path.samestat(initial, info)
                     or initial.st_size != info.st_size or initial.st_mtime_ns != info.st_mtime_ns):
                 return 'file_changed'
             observed[name] = info
+            descriptors[name] = file_fd
             expected = dict(platform='windows' if os.name == 'nt' else 'posix',
                             st_dev=info.st_dev, st_ino=info.st_ino, st_size=info.st_size)
             identity = row['identity']
@@ -64,10 +78,13 @@ def _inspect(lease, scanned, now, policy):
                 return 'file_set_changed'
         if not lease.valid() or not all(lease._matches_preview(n, s) for n, s in observed.items()):
             return 'file_changed'
-        return retention_status(summary, now=now, policy=policy)
+        status = retention_status(summary, now=now, policy=policy)
+        if status == 'expired' and verified is not None:
+            return verified(lease, observed, descriptors, payload)
+        return status
 
 
-def inspect_bundle(root, bundle, scanned, now, policy):
+def inspect_bundle(root, bundle, scanned, now, policy, *, verified=None, apply=False):
     if os.name == 'posix':
         from .posix import PosixBundleStore
         store = PosixBundleStore()
@@ -81,7 +98,7 @@ def inspect_bundle(root, bundle, scanned, now, policy):
         return {'busy': 'lock_busy', 'missing': 'missing_lock'}.get(result.status, result.status)
     try:
         try:
-            return _inspect(result.lease, scanned, now, policy)
+            return _inspect(result.lease, scanned, now, policy, verified=verified, apply=apply)
         finally:
             result.lease.release()
     except FileNotFoundError:
@@ -89,4 +106,6 @@ def inspect_bundle(root, bundle, scanned, now, policy):
     except ValueError:
         return 'invalid_metadata'
     except OSError as exc:
+        if isinstance(exc, BlockingIOError) or getattr(exc, 'winerror', None) in (32, 33):
+            return 'lock_busy'
         return 'unsafe_file' if exc.errno == errno.ELOOP else 'io_error'

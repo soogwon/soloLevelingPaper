@@ -10,7 +10,7 @@ from uuid import uuid4
 from weakref import WeakSet
 
 from .contracts import BundleId, ClosedFile, LeaseResult
-from .policy import closed_name, log_name, parse_metadata_summary
+from .policy import closed_name, log_name, parse_metadata_summary, supported_log_kinds
 
 
 _leases = WeakSet()
@@ -63,6 +63,14 @@ def _open_root(root, *, create=False):
         raise
 
 
+def _exists(directory, name):
+    try:
+        os.stat(name, dir_fd=directory, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+
+
 class PosixLease:
     def __init__(self, root, bundle_id, role, root_fd, lock_fd, lock_name):
         self.root, self.bundle_id, self.role = root, bundle_id, role
@@ -99,6 +107,67 @@ class PosixLease:
         current = self._stat_for_preview(name)
         return (_regular(current) and os.path.samestat(current, info)
                 and current.st_size == info.st_size and current.st_ctime_ns == info.st_ctime_ns)
+
+    def _open_for_cleanup(self, name):
+        import fcntl
+        fd = self._open_for_preview(name)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def remove_verified(self, observed, descriptors, record):
+        # 원래 이름을 검사한 뒤 바로 unlink하면 그 사이 교체된 파일을 지울 수 있다.
+        # 전용 디렉터리로 이동한 뒤에도 열린 파일과 같은지 비교한다.
+        staging = f'.slp-cleanup-{self.bundle_id.owner}-{self.bundle_id.run_id}'
+        try:
+            os.mkdir(staging, mode=0o700, dir_fd=self.root_fd)
+        except FileExistsError:
+            return 'recovery_required'
+        stage_fd = os.open(staging, os.O_DIRECTORY | os.O_RDONLY | os.O_NOFOLLOW, dir_fd=self.root_fd)
+        try:
+            stage = os.fstat(stage_fd)
+            if stage.st_uid != os.geteuid() or stage.st_mode & 0o077 or os.listdir(stage_fd):
+                return 'recovery_required'
+            # 한 파일씩 처리해 중단되더라도 종료 기록과 나머지 로그는 원래 위치에 둔다.
+            all_names = {log_name(self.bundle_id, kind) for kind in supported_log_kinds(self.bundle_id)}
+            remaining = set(observed)
+            for name in [n for n in observed if n != record] + [record]:
+                if not self.valid() or not self._matches_preview(name, observed[name]):
+                    return 'file_changed'
+                if any(_exists(self.root_fd, n) for n in all_names - remaining):
+                    return 'file_set_changed'
+                os.rename(name, name, src_dir_fd=self.root_fd, dst_dir_fd=stage_fd)
+                current = os.stat(name, dir_fd=stage_fd, follow_symlinks=False)
+                before = observed[name]
+                remaining.remove(name)
+                unexpected = (all_names | {record}) - remaining
+                if (_regular(current) and os.path.samestat(current, os.fstat(descriptors[name]))
+                        and current.st_size == before.st_size and current.st_mtime_ns == before.st_mtime_ns
+                        and self.valid() and not any(_exists(self.root_fd, n) for n in unexpected)):
+                    try:
+                        os.unlink(name, dir_fd=stage_fd)
+                    except OSError:
+                        return 'recovery_required'
+                    continue
+                # 경합 중 생긴 새 파일은 덮어쓰지 않고 복구 사본을 보존한다.
+                try:
+                    os.link(name, name, src_dir_fd=stage_fd, dst_dir_fd=self.root_fd,
+                            follow_symlinks=False)
+                    os.unlink(name, dir_fd=stage_fd)
+                except OSError:
+                    return 'recovery_required'
+                return 'file_changed'
+            return 'deleted'
+        finally:
+            try:
+                if (not os.listdir(stage_fd) and os.path.samestat(os.fstat(stage_fd),
+                        self._stat_for_preview(staging))):
+                    os.rmdir(staging, dir_fd=self.root_fd)
+            finally:
+                os.close(stage_fd)
 
     def open_log(self, kind):
         """writer lease 아래 새 파일만 생성한다. 반환 스트림의 종료는 호출자 책임이다."""
