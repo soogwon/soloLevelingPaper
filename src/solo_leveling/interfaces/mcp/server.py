@@ -84,7 +84,9 @@ MCP 호출 또는 호스트 권한 검사가 실패하면 실패 사실을 안�
 recover_translation은 카드 전용입니다. 카드가 없으면 접수하지 말고 텍스트로 상태와 제한을 안내하세요.
 접수 응답이 없으면 같은 version_id·base_embedding_set_id·request_key로 get_translation_recovery를 조회하세요.
 UNKNOWN은 실패나 미접수 확정이 아닙니다. 새 키로 자동 접수하거나 기존 context를 최신본으로 바꾸지 마세요.
-FULL/PARTIAL 완료 뒤에도 새 context 선택은 사용자에게 별도로 확인하세요.'''
+FULL/PARTIAL 완료 뒤에도 새 context 선택은 사용자에게 별도로 확인하세요.
+사용자가 선택한 경우에만 select_recovery_context를 호출하세요. 응답 유실 시 같은 selection_key와
+입력을 재사용하고, 성공하면 반환된 context_id로 후속 질문을 진행하세요.'''
 
 
 class AnswerService(Protocol):
@@ -348,6 +350,13 @@ class StartLearningOutput(TypedDict):
     capabilities: list[str]
 
 
+class RecoveryContextOutput(TypedDict):
+    context_id: str
+    version_id: str
+    embedding_set_id: str
+    goal: str
+
+
 def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
     """저장소 수명이나 환경 설정에 관여하지 않고 MCP 도구만 구성한다."""
     server = ReflectionInputServer('solo-leveling-paper',
@@ -557,6 +566,40 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                     'capabilities': ['ask_paper', 'get_evidence'] + (
                         ['submit_paper_question', 'get_paper_question_status'] if services.executions else []),
                 }
+            except Exception as error:
+                raise to_tool_error(error) from None
+
+    if services.recovery is not None and services.contexts is not None:
+        @server.tool(structured_output=True, annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+        async def select_recovery_context(
+            selection_key: str, request_key: str, job_id: str, version_id: str,
+            new_embedding_set_id: str,
+            goal: Literal['understand', 'implement', 'skim'] = 'understand',
+            known_concepts: list[str] | None = None,
+        ) -> RecoveryContextOutput:
+            """사용자가 완료된 복구 결과로 새 학습을 선택한 경우에만 호출합니다.
+
+            복구 접수 때의 request_key와 완료 조회 결과의 job_id, version_id,
+            new_embedding_set_id를 전달하세요. 선택마다 새 selection_key를 준비하고
+            같은 선택을 재시도할 때에는 키와 입력을 그대로 사용하세요.
+            """
+            try:
+                try:
+                    for value in (selection_key, request_key, job_id, version_id, new_embedding_set_id):
+                        require_text(value, 'identifier')
+                    concepts = [value.strip() for value in known_concepts or []]
+                    if any(not value for value in concepts) or len(set(concepts)) != len(concepts):
+                        raise ValueError('기존 지식에 빈 값이나 중복 값이 있습니다.')
+                except ValueError as error:
+                    raise InvalidArgumentError(str(error)) from None
+                context = await anyio.to_thread.run_sync(
+                    lambda: services.contexts.get_or_create_recovery_context(
+                        selection_key=selection_key, request_key=request_key, job_id=job_id,
+                        version_id=version_id, embedding_set_id=new_embedding_set_id,
+                        goal=goal, known_concepts=concepts))
+                return {'context_id': context.context_id, 'version_id': context.version_id,
+                        'embedding_set_id': context.embedding_set_id, 'goal': context.goal}
             except Exception as error:
                 raise to_tool_error(error) from None
 

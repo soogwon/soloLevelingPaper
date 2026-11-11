@@ -16,6 +16,7 @@ from solo_leveling.interfaces.mcp.lifecycle import RequestGate, RuntimeLifetime
 from solo_leveling.interfaces.mcp.recovery import RecoveryManager, RECOVERY_URI
 from solo_leveling.interfaces.mcp.server import MCPServices, create_server
 from solo_leveling.infrastructure.database import repository as repo
+from solo_leveling.infrastructure.retrieval.sqlite_chroma import SQLiteContextReader
 from tests.integration.test_translation_recovery_service import db, setup as service_setup
 from tests.unit.test_translation_recovery import add_second_partial_version
 
@@ -24,10 +25,10 @@ ARGS = dict(version_id='v1', base_embedding_set_id='e1', request_key='SYNTHETIC_
 
 
 @pytest.fixture
-def connected(service_setup):
+def connected(service_setup, db):
     service, provider, embeddings, client = service_setup
     manager = RecoveryManager(service)
-    server = create_server(MCPServices(Mock(), Mock(), recovery=manager))
+    server = create_server(MCPServices(Mock(), Mock(), contexts=SQLiteContextReader(db), recovery=manager))
     try:
         yield server, manager, provider, embeddings, client
     finally:
@@ -83,6 +84,21 @@ def test_protocol_consent_submit_lookup_preserves_context(db, connected, failure
             assert result.structuredContent['status'] == ('FAILED' if count == 0 else 'COMPLETED')
             again = await session.call_tool('get_translation_recovery', ARGS)
             assert again.structuredContent == result.structuredContent
+            selection = dict(selection_key='selection-1', request_key=ARGS['request_key'],
+                             version_id='v1', job_id=result.structuredContent['job_id'],
+                             new_embedding_set_id=result.structuredContent['new_embedding_set_id'] or 'missing')
+            selected = await session.call_tool('select_recovery_context', selection)
+            if count:
+                assert not selected.isError
+                data = selected.structuredContent
+                assert data['context_id'] != old.context_id
+                assert data['embedding_set_id'] == selection['new_embedding_set_id']
+                replay = await session.call_tool('select_recovery_context', selection)
+                assert replay.structuredContent == data
+                conflict = await session.call_tool('select_recovery_context', {**selection, 'goal': 'skim'})
+                assert conflict.isError
+            else:
+                assert selected.isError
             duplicate = await session.call_tool('recover_translation', {**ARGS, 'confirmation_token': token})
             assert duplicate.isError
     asyncio.run(check())
