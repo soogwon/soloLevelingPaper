@@ -1,6 +1,7 @@
 // 6. 컬렉션 상세 페이지
 // GET /v1/collections/{id}, GET /v1/collections/{id}/papers (페이지 번호 방식), PATCH·DELETE /v1/collections/{id},
 // GET /v1/papers?unassigned=true, PUT·DELETE /v1/collections/{id}/papers/{paper_id}
+import { CONFIG } from '../config.js';
 import { api } from '../api/index.js';
 import { html, setHTML } from '../lib/html.js';
 import { navigate, buildHash, replaceQuery } from '../router.js';
@@ -11,8 +12,8 @@ import { formatAuthors, formatPublished, paperTitle } from '../lib/format.js';
 import { openNameDialog } from './collection-form.js';
 import { pageFromQuery } from './papers.js';
 
-// 논문 추가 대화상자는 좁아서 한 페이지에 10개씩 보여준다.
-const ADD_PAGE_SIZE = 10;
+// 논문 추가 대화상자도 다른 목록과 같은 개수로 보여준다.
+const ADD_PAGE_SIZE = CONFIG.PAGE_SIZE;
 
 /** 목록에는 제목·저자·발행일만 표시한다 (요청서 6.1, 6.7). */
 function paperRowHtml(p) {
