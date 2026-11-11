@@ -50,6 +50,9 @@ ALLOW_EXTERNAL_API=false
 활성화 전에 [외부 전송 데이터·시점과 설정의 범위](external-data-transfer.md)를 확인한다.
 이를 확인한 뒤 실제 사용 시에만 `ALLOW_EXTERNAL_API=true`로 바꾼다.
 키의 존재 검사는 인증 성공을 뜻하지 않는다. `false` 상태에서는 외부 호출을 허용하지 않는다.
+macOS에서도 연결 확인용 `settings.env`에 `OPENAI_API_KEY=local-test-placeholder`처럼
+비어 있지 않은 값을 넣고 `ALLOW_EXTERNAL_API=false`로 시작한다.
+실제 번역·질문을 시험할 때는 개인 설정 파일에서 실제 키로 교체한다.
 
 ```powershell
 $settings = Join-Path $installRoot 'settings.env'
