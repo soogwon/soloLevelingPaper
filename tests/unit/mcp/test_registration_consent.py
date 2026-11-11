@@ -1,5 +1,6 @@
 """카드 확인 전 부작용, 토큰 바꿔치기와 재사용을 차단한다."""
 import asyncio
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -22,6 +23,7 @@ def test_registration_card_then_confirmation():
         prepared = await server.call_tool('prepare_paper_registration', args)
         ingestion.add_local_pdf.assert_not_called()
         assert 'confirmation_token' not in prepared.structuredContent
+        assert json.loads(prepared.content[0].text) == prepared.structuredContent
         assert prepared.meta['confirmation_token'] not in prepared.content[0].text
         for text in ('OpenAI', '원문 청크', '대상 언어', '등록 후', '백그라운드 번역', '논문 전체 원문', '비용'):
             assert text in prepared.structuredContent['notice']

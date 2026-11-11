@@ -1,6 +1,7 @@
 """B 서비스를 읽기 중심 MCP 도구로 노출한다."""
 
 from dataclasses import dataclass
+import json
 from typing import Annotated, Literal, Protocol
 from typing_extensions import NotRequired, TypedDict
 
@@ -454,10 +455,11 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             OpenAI로 보냅니다. 논문 전체 원문이 전송될 수 있습니다. 사용자에게 카드 확인을 요청하세요.
             """
             # 일회성 토큰은 모델에 보이는 응답 대신 카드용 메타데이터에만 전달한다.
+            preview = {'status': 'confirmation_required', 'notice': REGISTRATION_NOTICE,
+                       'source': source.model_dump(), 'request_key': request_key}
             return CallToolResult(
-                content=[TextContent(type='text', text=REGISTRATION_NOTICE)],
-                structuredContent={'status': 'confirmation_required', 'notice': REGISTRATION_NOTICE,
-                                   'source': source.model_dump(), 'request_key': request_key},
+                content=[TextContent(type='text', text=json.dumps(preview, ensure_ascii=False))],
+                structuredContent=preview,
                 _meta={'confirmation_token': registration_gate.prepare(source.relative_path, request_key)},
             )
 
