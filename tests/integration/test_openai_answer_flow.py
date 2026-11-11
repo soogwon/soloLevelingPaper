@@ -53,7 +53,8 @@ def test_openai_response_to_persisted_evidence(setup_search, monkeypatch, valid_
             assert conn.execute('SELECT COUNT(*) FROM evidences').fetchone()[0] == 0
 
 
-def test_provider_support_drives_partial_and_persists_real_quotes(setup_search, monkeypatch):
+def test_number_only_line_claim_is_excluded_without_persisting(setup_search, monkeypatch):
+    # #97: 숫자만 있는 줄에서 가져온 수치 주장은 제외하고, 모두 제외되면 근거를 저장하지 않는다.
     db, _, retriever, _, _ = setup_search
     with closing(get_connection(db)) as conn, conn:
         conn.execute("UPDATE chunks SET original_text='Faster when the sequence\n6' WHERE chunk_id='a'")
@@ -74,7 +75,8 @@ def test_provider_support_drives_partial_and_persists_real_quotes(setup_search, 
         OpenAIClaimGenerator(OpenAIGenerationSettings('test-key', allow_external_api=True)),
         SQLiteEvidenceWriter(db))
     result = service.answer('조건은?', context_id='ctx', top_k=1)
-    assert result.result.status.value == 'partial'
+    assert result.result.status.value == 'insufficient_evidence'
     assert result.result.reason_code.value == 'extraction_limited'
-    detail = repo.get_evidences(db, 'ctx', [result.result.citations[0].evidence_id]).evidence[0]
-    assert detail.quote_original == 'Faster when the sequence\n6'
+    assert not result.result.claims and not result.result.citations
+    with closing(get_connection(db)) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM evidences').fetchone()[0] == 0

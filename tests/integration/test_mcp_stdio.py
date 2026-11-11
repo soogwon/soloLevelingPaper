@@ -41,6 +41,11 @@ def test_stdio_server_lists_tools(tmp_path):
                         'create_annotation', 'get_annotation', 'list_annotations',
                         'update_annotation', 'delete_annotation',
                         'get_quiz_scores', 'review_quiz_attempt',
+                        # 번역 복구(#223)와 재파싱(#116) 도구
+                        'prepare_translation_recovery', 'cancel_translation_recovery',
+                        'recover_translation', 'get_translation_recovery', 'select_recovery_context',
+                        'prepare_paper_reparse', 'cancel_paper_reparse', 'submit_paper_reparse',
+                        'get_paper_reparse', 'select_reparsed_context',
                     }
                     ask = next(tool for tool in tools.tools if tool.name == 'ask_paper')
                     assert ask.outputSchema is not None

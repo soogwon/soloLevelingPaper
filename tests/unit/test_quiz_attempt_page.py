@@ -191,8 +191,10 @@ def test_step_scores_are_context_isolated(env):
 def test_step_scores_reject_corrupt_summary_rows(env, step, correct, total):
     with closing(get_connection(env)) as conn, conn:
         conn.execute('PRAGMA foreign_keys = OFF')
-        conn.execute('INSERT INTO quiz_attempts VALUES (?, ?, ?, ?, ?, ?, ?)',
-                     ('broken', 'ctx', 'quiz1', step, correct, total, T0))
+        conn.execute('''INSERT INTO quiz_attempts
+            (attempt_id, context_id, quiz_id, step, correct_count, total_count, submitted_at, attempt_seq)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                     ('broken', 'ctx', 'quiz1', step, correct, total, T0, 1))
     with pytest.raises(DataIntegrityError):
         QuizAttemptService(env).step_scores('ctx')
 
