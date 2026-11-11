@@ -9,8 +9,8 @@ import {
 } from '../lib/ui.js';
 import { pageFromQuery } from './papers.js';
 
-// 상세 오른쪽 패널은 좁아서 한 페이지에 5개씩 보여준다.
-const MEMO_PAGE_SIZE = 5;
+// 상세 오른쪽 패널은 좁아서 메모·하이라이트를 한 페이지에 3개씩 보여준다.
+const MEMO_PAGE_SIZE = 3;
 import { compactAnnotationCard } from '../lib/annotation.js';
 import {
   formatAuthorsYear, formatPosition, formatDate, formatDateTime, formatTime, paperTitle, SUMMARY_KINDS,

@@ -29,7 +29,7 @@ function setLoggedIn(value) {
 // 요청 page(1부터), limit(기본 20, 최대 100) → { items, total_count, page, page_size, total_pages }
 // 범위를 넘는 page는 빈 items를 돌려주고, 프론트가 마지막 페이지로 다시 요청한다.
 function paginate(list, query) {
-  const limit = Number(query.limit ?? CONFIG.PAGE_SIZE);
+  const limit = Number(query.limit ?? 20); // limit이 없으면 서버 기본값 20 (요청서 1.5)
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw fail(400, 'invalid_argument', '조회 개수는 1~100이어야 해요.', 'limit');
   const page = Number(query.page ?? 1);
   if (!Number.isInteger(page) || page < 1) throw fail(400, 'invalid_argument', '페이지 번호가 올바르지 않아요.', 'page');
