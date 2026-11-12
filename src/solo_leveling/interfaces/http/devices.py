@@ -69,6 +69,10 @@ class PostgresDeviceStore:
     def __init__(self, pool: Any):
         self._pool = pool
 
+    @property
+    def connection_pool(self):
+        return self._pool
+
     @classmethod
     def from_dsn(cls, dsn: str) -> "PostgresDeviceStore":
         from psycopg.rows import dict_row
