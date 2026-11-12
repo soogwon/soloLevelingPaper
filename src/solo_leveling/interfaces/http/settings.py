@@ -38,6 +38,16 @@ class OidcSettings:
         _validate_https_url("OIDC_JWKS_URL", self.jwks_url)
 
 
+@dataclass(frozen=True)
+class DatabaseSettings:
+    dsn: str
+
+    def __post_init__(self) -> None:
+        scheme = urlsplit(self.dsn).scheme
+        if scheme not in ("postgresql", "postgres"):
+            raise ValueError("DATABASE_URL은 PostgreSQL DSN이어야 합니다.")
+
+
 def load_http_settings(source: Mapping[str, str] | None = None) -> HttpSettings:
     """프로세스 환경 또는 전달된 매핑에서 HTTP 설정을 구성한다."""
 
@@ -64,6 +74,12 @@ def load_oidc_settings(source: Mapping[str, str] | None = None) -> OidcSettings 
     if not all(raw):
         raise ValueError("OIDC_ISSUER, OIDC_AUDIENCE, OIDC_JWKS_URL을 모두 설정해야 합니다.")
     return OidcSettings(*raw)
+
+
+def load_database_settings(source: Mapping[str, str] | None = None) -> DatabaseSettings | None:
+    values = environ if source is None else source
+    dsn = values.get("DATABASE_URL", "").strip()
+    return DatabaseSettings(dsn) if dsn else None
 
 
 def _validate_https_url(name: str, value: str) -> None:

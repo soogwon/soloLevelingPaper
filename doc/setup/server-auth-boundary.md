@@ -32,6 +32,6 @@ OIDC 토큰의 기본 자격은 `web_session`이다. 연결된 로컬 기기 토
 
 유효한 서명만으로 기기 접근을 허용하지 않는다. 기기 토큰은 `DeviceRegistry`에서 같은 `user_id`와 `device_id`의 활성 연결을 다시 확인해야 한다. 등록이 없거나 해제됐거나 다른 사용자의 기기이면 모두 동일한 401로 거부한다. 기기 저장소 조회가 실패하면 토큰 오류로 오인하지 않고 503을 반환한다. 저장소가 연결되지 않은 기본 상태에서는 웹 세션은 검증할 수 있지만 모든 기기 자격은 fail-closed로 거부한다.
 
-다음으로 PostgreSQL 기기 등록부와 웹 세션 기반 등록·해제 API를 연결한다. 이후 모든 논문·학습 기록 repository는 handler가 받은 임의 ID가 아니라 `AuthenticatedPrincipal.user_id`를 소유권 필터에 사용한다.
+PostgreSQL 스키마와 웹 세션 기반 등록·목록·해제 API는 [중앙 서버 기기 등록부](server-device-registry.md)를 따른다. 다음으로 기기 토큰 발급·갱신·폐기와 로컬 PKCE 연결을 구현한다. 이후 모든 논문·학습 기록 repository는 handler가 받은 임의 ID가 아니라 `AuthenticatedPrincipal.user_id`를 소유권 필터에 사용한다.
 
 로컬 계정 연결은 일반 MCP tool이 아니라 전용 CLI와 시스템 브라우저의 Authorization Code + PKCE 흐름으로 구현한다. access token과 refresh token은 MCP 입력·출력, 일반 로그, 로컬 SQLite 본문에 저장하지 않는다.

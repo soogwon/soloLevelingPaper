@@ -18,8 +18,8 @@ solo-leveling-verification-retention = "solo_leveling.interfaces.cli.verificatio
 solo-leveling-api = "solo_leveling.interfaces.http.runtime:main"
 
 [project.optional-dependencies]
-dev = ["pytest", "mcp>=1,<2", "jsonschema>=4.20,<5", "pdfplumber", "chromadb>=1.5.9,<1.6", "requests>=2.32,<3", "python-dotenv>=1,<2", "fastapi>=0.121,<0.122", "PyJWT[crypto]>=2.10,<3"]
-server = ["fastapi>=0.121,<0.122", "uvicorn[standard]>=0.30,<1", "PyJWT[crypto]>=2.10,<3"]
+dev = ["pytest", "mcp>=1,<2", "jsonschema>=4.20,<5", "pdfplumber", "chromadb>=1.5.9,<1.6", "requests>=2.32,<3", "python-dotenv>=1,<2", "fastapi>=0.121,<0.122", "PyJWT[crypto]>=2.10,<3", "psycopg[binary,pool]>=3.2,<4"]
+server = ["fastapi>=0.121,<0.122", "uvicorn[standard]>=0.30,<1", "PyJWT[crypto]>=2.10,<3", "psycopg[binary,pool]>=3.2,<4"]
 generation = ["requests>=2.32,<3", "python-dotenv>=1,<2"]
 translation = ["requests>=2.32,<3", "python-dotenv>=1,<2"]
 local = [
