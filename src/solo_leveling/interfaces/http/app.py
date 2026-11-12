@@ -18,6 +18,8 @@ def create_app(
     from fastapi import Depends, FastAPI
 
     from .auth import RejectAllTokenVerifier, create_auth_dependency
+    from .oidc import OidcAccessTokenVerifier
+    from .settings import load_oidc_settings
 
     selected = settings or load_http_settings()
 
@@ -27,7 +29,8 @@ def create_app(
     )
     app.state.settings = selected
     if token_verifier is None:
-        token_verifier = RejectAllTokenVerifier()
+        oidc_settings = load_oidc_settings()
+        token_verifier = OidcAccessTokenVerifier(oidc_settings) if oidc_settings else RejectAllTokenVerifier()
     require_principal = create_auth_dependency(token_verifier)
 
     @app.get("/health", tags=["operations"])
