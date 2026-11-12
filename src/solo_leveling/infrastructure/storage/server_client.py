@@ -3,17 +3,20 @@
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
 from .server_credentials import KeyringCredentialStore, StoredDeviceCredentials
+
+
+_refresh_lock = Lock()
 
 
 class ServerConnectionRequired(Exception):
     """저장된 자격이 없거나 갱신할 수 없어 다시 연결해야 함."""
 
 
-class ServerResponseInvalid(Exception):
+class ServerResponseInvalid(ServerConnectionRequired):
     """신뢰할 수 없는 형식의 서버 응답."""
 
 
@@ -25,40 +28,45 @@ class AuthenticatedServerClient:
         self._session = session
         self._credentials = credential_store
         self._now = now or (lambda: datetime.now(timezone.utc))
-        self._refresh_lock = Lock()
 
     @classmethod
     def from_keyring(cls, server_url: str) -> "AuthenticatedServerClient":
         import requests
 
-        return cls(server_url, requests.Session(), KeyringCredentialStore())
+        session = requests.Session()
+        # 명시한 Bearer 헤더가 로컬 netrc 인증으로 교체되지 않게 한다.
+        session.auth = lambda request: request
+        return cls(server_url, session, KeyringCredentialStore())
 
     def request(self, method: str, path: str, **kwargs):
         url = self._request_url(path)
-        credentials = self._current_credentials()
+        credentials = self._load_credentials()
+        refreshed = _parse_time(credentials.access_expires_at) <= self._now() + timedelta(seconds=30)
+        if refreshed:
+            credentials = self._refresh(credentials)
         response = self._send(method, url, credentials.access_token, **kwargs)
-        if response.status_code != 401:
-            return response
+        if response.status_code == 401 and not refreshed:
+            response.close()
+            credentials = self._refresh(credentials)
+            response = self._send(method, url, credentials.access_token, **kwargs)
+        if response.status_code == 401:
+            response.close()
+            raise ServerConnectionRequired
+        return response
 
-        credentials = self._refresh(credentials.refresh_token)
-        return self._send(method, url, credentials.access_token, **kwargs)
-
-    def _current_credentials(self) -> StoredDeviceCredentials:
+    def _load_credentials(self) -> StoredDeviceCredentials:
         credentials = self._credentials.load(self.server_url)
         if credentials is None or credentials.server_url != self.server_url:
             raise ServerConnectionRequired
         _validate_stored(credentials)
-        if _parse_time(credentials.access_expires_at) > self._now() + timedelta(seconds=30):
-            return credentials
-        return self._refresh(credentials.refresh_token)
+        return credentials
 
-    def _refresh(self, expected_refresh_token: str) -> StoredDeviceCredentials:
-        with self._refresh_lock:
-            current = self._credentials.load(self.server_url)
-            if current is None or current.server_url != self.server_url:
+    def _refresh(self, expected: StoredDeviceCredentials) -> StoredDeviceCredentials:
+        with _refresh_lock:
+            current = self._load_credentials()
+            if current.device_id != expected.device_id:
                 raise ServerConnectionRequired
-            _validate_stored(current)
-            if current.refresh_token != expected_refresh_token:
+            if current.refresh_token != expected.refresh_token:
                 if _parse_time(current.access_expires_at) > self._now():
                     return current
                 raise ServerConnectionRequired
@@ -75,14 +83,22 @@ class AuthenticatedServerClient:
                 raise ServerConnectionRequired
             if not 200 <= response.status_code < 300:
                 return _raise_for_server_failure(response)
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError:
+                raise ServerResponseInvalid from None
             refreshed = _validated_refresh(data, current, self.server_url, self._now())
             self._credentials.save(refreshed)
             return refreshed
 
     def _send(self, method: str, url: str, access_token: str, **kwargs):
-        headers = dict(kwargs.pop("headers", {}))
+        headers = {k: v for k, v in kwargs.pop("headers", {}).items()
+                   if k.lower() not in ("authorization", "host")}
         kwargs.pop("allow_redirects", None)
+        if kwargs.keys() - {"json", "params", "timeout", "data"}:
+            raise ValueError("지원하지 않는 서버 요청 옵션입니다.")
+        if "data" in kwargs and not isinstance(kwargs["data"], (str, bytes, dict, list, tuple, type(None))):
+            raise ValueError("서버 요청 본문은 재전송 가능한 값이어야 합니다.")
         headers["Authorization"] = f"Bearer {access_token}"
         return self._session.request(
             method.upper(),
@@ -97,6 +113,9 @@ class AuthenticatedServerClient:
         parsed = urlsplit(path)
         if parsed.scheme or parsed.netloc or not path.startswith("/v1/") or parsed.fragment:
             raise ValueError("서버 요청 경로는 /v1/ 아래의 상대 경로여야 합니다.")
+        decoded = unquote(parsed.path)
+        if "%" in decoded or "\\" in decoded or any(part in (".", "..") for part in decoded.split("/")):
+            raise ValueError("서버 요청 경로에 허용되지 않는 구간이 있습니다.")
         return f"{self.server_url}{path}"
 
 
@@ -129,6 +148,8 @@ def _validate_stored(credentials: StoredDeviceCredentials) -> None:
         UUID(credentials.device_id)
     except (ValueError, AttributeError):
         raise ServerResponseInvalid from None
+    if not isinstance(credentials.access_token, str) or not isinstance(credentials.refresh_token, str):
+        raise ServerResponseInvalid
     if not credentials.access_token.startswith("slp_at_") or not credentials.refresh_token.startswith("slp_rt_"):
         raise ServerResponseInvalid
     if _parse_time(credentials.access_expires_at) > _parse_time(credentials.refresh_expires_at):
@@ -138,7 +159,7 @@ def _validate_stored(credentials: StoredDeviceCredentials) -> None:
 def _parse_time(value: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (TypeError, ValueError):
+    except (AttributeError, TypeError, ValueError):
         raise ServerResponseInvalid from None
     if parsed.tzinfo is None:
         raise ServerResponseInvalid

@@ -45,6 +45,9 @@ class Response:
     def __init__(self, status_code=200, data=None):
         self.status_code, self.data = status_code, data or {}
 
+    def close(self):
+        pass
+
     def json(self):
         return self.data
 
@@ -154,13 +157,15 @@ def test_request_rejects_absolute_or_out_of_scope_paths():
 
 def test_concurrent_refresh_is_collapsed_to_one_rotation():
     store, session = Store(credentials(access_delta=timedelta(seconds=1))), Session()
-    client = AuthenticatedServerClient(SERVER, session, store, now=lambda: NOW)
     barrier, results, errors = Barrier(3), [], []
+
+    expected = store.value
 
     def run():
         barrier.wait()
         try:
-            results.append(client._refresh("slp_rt_refresh-1"))
+            other_client = AuthenticatedServerClient(SERVER, session, store, now=lambda: NOW)
+            results.append(other_client._refresh(expected))
         except Exception as exc:
             errors.append(exc)
 
@@ -174,3 +179,33 @@ def test_concurrent_refresh_is_collapsed_to_one_rotation():
     assert errors == [] and len(results) == 2
     assert len(session.refreshes) == 1
     assert all(result.refresh_token == "slp_rt_refresh-2" for result in results)
+
+@pytest.mark.parametrize("delta,requests", [(10, 1), (600, 2)])
+def test_401_after_rotation_requires_reconnection_without_second_refresh(delta, requests):
+    session = Session([Response(401), Response(401)])
+    store = Store(credentials(access_delta=timedelta(seconds=delta)))
+    client = AuthenticatedServerClient(SERVER, session, store, now=lambda: NOW)
+    with pytest.raises(ServerConnectionRequired):
+        client.request("GET", "/v1/session")
+    assert len(session.refreshes) == 1
+    assert len(session.requests) == requests
+
+
+def test_client_rejects_parent_path_and_transport_overrides():
+    session = Session()
+    client = AuthenticatedServerClient(SERVER, session, Store(credentials()), now=lambda: NOW)
+    with pytest.raises(ValueError):
+        client.request("GET", "/v1/../health")
+    with pytest.raises(ValueError):
+        client.request("GET", "/v1/session", auth=("alternate", "identity"))
+    assert not session.requests
+
+
+def test_retry_never_uses_reconnected_device():
+    from dataclasses import replace
+
+    previous = credentials()
+    store = Store(replace(previous, device_id="00000000-0000-0000-0000-000000000002"))
+    client = AuthenticatedServerClient(SERVER, Session(), store, now=lambda: NOW)
+    with pytest.raises(ServerConnectionRequired):
+        client._refresh(previous)
