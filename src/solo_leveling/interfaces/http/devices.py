@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from contextlib import contextmanager
 from typing import Any, Protocol
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from .device_auth import DeviceRegistry
 
@@ -67,6 +67,10 @@ class PostgresDeviceStore:
         self._pool.close()
 
     def is_active(self, user_id: str, device_id: str) -> bool:
+        try:
+            device_id = str(UUID(device_id))
+        except ValueError:
+            return False
         with _connection(self._pool) as conn:
             row = conn.execute(
                 """SELECT 1 FROM server_devices

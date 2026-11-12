@@ -3,10 +3,12 @@
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import UUID
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from solo_leveling.interfaces.http import create_app
 from solo_leveling.interfaces.http.auth import AuthenticatedPrincipal
@@ -60,15 +62,16 @@ def test_postgres_queries_always_include_owner_and_active_state():
     pool = Pool([Result(one={"?column?": 1}), Result(many=[row()]), Result()])
     store = PostgresDeviceStore(pool)
 
-    assert store.is_active("user-1", "device-1") is True
+    device_id = row()["device_id"]
+    assert store.is_active("user-1", device_id) is True
     assert store.list_active("user-1")[0].owner_user_id == "user-1"
-    store.revoke("user-1", "device-1")
+    store.revoke("user-1", device_id)
 
-    assert pool.conn.calls[0][1] == ("user-1", "device-1")
+    assert pool.conn.calls[0][1] == ("user-1", device_id)
     assert "owner_user_id = %s" in pool.conn.calls[0][0] and "revoked_at IS NULL" in pool.conn.calls[0][0]
     assert pool.conn.calls[1][1] == ("user-1",)
     assert "owner_user_id = %s" in pool.conn.calls[1][0] and "revoked_at IS NULL" in pool.conn.calls[1][0]
-    assert pool.conn.calls[2][1] == ("user-1", "device-1")
+    assert pool.conn.calls[2][1] == ("user-1", device_id)
     assert "owner_user_id = %s" in pool.conn.calls[2][0] and "revoked_at IS NULL" in pool.conn.calls[2][0]
 
 
@@ -132,6 +135,32 @@ def test_device_credential_cannot_manage_devices():
 
     assert caught.value.status_code == 403
     assert caught.value.detail == {"code": "web_session_required"}
+
+
+def test_invalid_device_id_returns_401_before_connecting_to_database():
+    pool = SimpleNamespace(connection=Mock(side_effect=AssertionError("예상하지 않은 DB 연결")))
+    principal = AuthenticatedPrincipal("user-1", "device", "not-a-uuid")
+    app = create_app(token_verifier=SimpleNamespace(verify=lambda token: principal), device_store=PostgresDeviceStore(pool))
+
+    with TestClient(app) as client:
+        response = client.get("/v1/session", headers={"Authorization": "Bearer token"})
+
+    assert response.status_code == 401
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+    pool.connection.assert_not_called()
+
+
+def test_nul_in_display_name_returns_422_before_registration():
+    store = MemoryStore()
+    principal = AuthenticatedPrincipal("user-1", "web_session")
+    app = create_app(token_verifier=SimpleNamespace(verify=lambda token: principal), device_store=store)
+
+    with TestClient(app) as client:
+        response = client.post("/v1/devices", headers={"Authorization": "Bearer token"}, json={"display_name": "PC\x00"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "display_name"]
+    assert store.calls == []
 
 
 def test_openapi_exposes_device_management_contract():

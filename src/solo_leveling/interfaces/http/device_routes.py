@@ -21,6 +21,8 @@ def create_device_router(require_principal: Any, store: DeviceStore):
             normalized = value.strip()
             if not normalized:
                 raise ValueError("display_name은 공백일 수 없습니다.")
+            if "\x00" in normalized:
+                raise ValueError("display_name에 NUL 문자를 사용할 수 없습니다.")
             return normalized
 
     class DeviceView(BaseModel):
