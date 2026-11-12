@@ -12,6 +12,7 @@ from solo_leveling.infrastructure.database.schema import get_connection, init_db
 
 NOW = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
 SERVER_PAPER_ID = "10000000-0000-0000-0000-000000000001"
+SERVER_RECORD_ID = "10000000-0000-0000-0000-000000000002"
 
 
 class Response:
@@ -51,6 +52,31 @@ def database(tmp_path):
     return path
 
 
+def add_learning_record(database):
+    with get_connection(database) as conn:
+        conn.execute("INSERT INTO paper_versions VALUES (?,?,?,?,?,?)", (
+            "version-1", "paper-local-1", "hash", r"C:\private\paper.pdf", "paper.pdf", NOW.isoformat()))
+        conn.execute("INSERT INTO parse_revisions VALUES (?,?,?,?)", ("parse-1", "version-1", 10, NOW.isoformat()))
+        conn.execute("INSERT INTO translation_revisions VALUES (?,?,?,?,?,?,?)", (
+            "translation-1", "parse-1", None, None, None, None, NOW.isoformat()))
+        conn.execute("INSERT INTO embedding_sets VALUES (?,?,?,?,?)", (
+            "embedding-1", "translation-1", "model", 3, NOW.isoformat()))
+        conn.execute("INSERT INTO processing_jobs VALUES (?,?,?,?,?,?,?)", (
+            "job-1", "version-1", "succeeded", None, "[]", NOW.isoformat(), NOW.isoformat()))
+        conn.execute("INSERT INTO search_indexes VALUES (?,?,?,?,?,?,?)", (
+            "embedding-1", "version-1", "parse-1", "translation-1", "job-1", 1, 1))
+        conn.execute("INSERT INTO learning_contexts VALUES (?,?,?,?,?,?,?,?)", (
+            "context-1", "version-1", "parse-1", "translation-1", "embedding-1",
+            "understand", "[]", NOW.isoformat()))
+        conn.execute("INSERT INTO sections VALUES (?,?,?,?,?,?,?,?,?,?)", (
+            "parse-1", "method", "Method", None, 1, 1, 3, 5, 0, 0))
+        conn.execute("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?)", (
+            "chunk-1", "parse-1", 0, "text", None, None, "3", 3, "method"))
+        conn.execute("INSERT INTO learning_progress VALUES (?,?,?,?,?,?)", (
+            "context-1", "deep_read", '["preview","structure"]',
+            '{"chunk_id":"chunk-1","pdf_page":3}', NOW.isoformat(), NOW.isoformat()))
+
+
 def test_explicit_consent_queues_without_sending_or_storing_payload(database):
     client = Client()
     service = PaperMetadataSyncService(database, client, now=lambda: NOW)
@@ -75,6 +101,15 @@ def test_preview_is_read_only_and_status_recovers_after_restart(database):
 
     assert restarted.status(operation) == SyncResult(operation, "pending")
     assert client.calls == []
+
+
+def test_preview_does_not_create_server_identity(database):
+    service = PaperMetadataSyncService(database, Client(), now=lambda: NOW)
+
+    service.preview("paper-local-1")
+
+    with get_connection(database) as conn:
+        assert conn.execute("SELECT count(*) FROM server_sync_identity").fetchone()[0] == 0
 
 
 def test_caller_supplied_operation_id_is_persisted_for_response_recovery(database):
@@ -106,6 +141,59 @@ def test_success_uses_operation_as_idempotency_key_and_atomically_records_mappin
     conn.close()
     assert dict(outbox) == {"status": "synced", "attempt_count": 1}
     assert (mapping["server_object_id"], mapping["server_revision"]) == (SERVER_PAPER_ID, 1)
+
+
+def test_approved_paper_queues_and_sends_learning_record_without_local_path(database):
+    add_learning_record(database)
+    learning_response = Response(200, {
+        "learning_record_id": SERVER_RECORD_ID, "revision": 1, "sync_status": "stored",
+        "server_updated_at": "2026-11-12T12:00:00Z",
+    })
+    client = Client([Response(), learning_response])
+    service = PaperMetadataSyncService(database, client, now=lambda: NOW)
+    preview = service.preview("paper-local-1")
+    assert (preview.learning_record_count, preview.last_studied_at) == (1, NOW.isoformat())
+    operation = service.grant_and_queue("paper-local-1", "paper-learning-sync-v2", preview=preview).operation_id
+
+    result = service.sync(operation)
+
+    assert result == SyncResult(operation, "synced", SERVER_PAPER_ID)
+    assert [(call[0], call[1]) for call in client.calls] == [
+        ("POST", "/v1/mcp/papers"),
+        ("PUT", f"/v1/mcp/papers/{SERVER_PAPER_ID}/learning-records/context-1"),
+    ]
+    body = client.calls[1][2]["json"]
+    assert body["file_name"] == "paper.pdf" and "local_learning_record_id" not in body
+    assert body["last_position"] == {
+        "chunk_id": "chunk-1", "pdf_page": 3, "printed_page_label": "3",
+        "section_id": "method", "section_title": "Method",
+    }
+    assert body["completed_steps"] == ["preview", "structure"]
+    assert r"C:\private" not in str(body)
+    with get_connection(database) as conn:
+        statuses = conn.execute(
+            "SELECT object_type, status FROM sync_outbox ORDER BY object_type").fetchall()
+        mapping = conn.execute("SELECT * FROM server_subobject_mappings").fetchone()
+    assert [(row["object_type"], row["status"]) for row in statuses] == [
+        ("learning_record", "synced"), ("paper", "synced")]
+    assert (mapping["local_subobject_id"], mapping["server_object_id"]) == ("context-1", SERVER_RECORD_ID)
+
+
+def test_learning_change_after_approval_conflicts_without_sending_changed_payload(database):
+    add_learning_record(database)
+    client = Client([Response()])
+    service = PaperMetadataSyncService(database, client, now=lambda: NOW)
+    operation = service.grant_and_queue("paper-local-1", "paper-learning-sync-v2").operation_id
+    with get_connection(database) as conn:
+        conn.execute("UPDATE learning_progress SET completed_steps='[\"preview\",\"structure\",\"deep_read\"]'")
+
+    assert service.sync(operation).status == "synced"
+
+    assert len(client.calls) == 1
+    with get_connection(database) as conn:
+        learning = conn.execute(
+            "SELECT status, last_error_code FROM sync_outbox WHERE object_type='learning_record'").fetchone()
+    assert dict(learning) == {"status": "conflict", "last_error_code": "payload_changed"}
 
 
 def test_transport_failure_keeps_stable_key_for_retry(database):

@@ -16,8 +16,9 @@ from solo_leveling.infrastructure.storage.server_client import ServerConnectionR
 
 
 SERVER_SYNC_APP_URI = "ui://solo-leveling/server-sync.html"
-SERVER_SYNC_NOTICE_VERSION = "paper-metadata-sync-v1"
+SERVER_SYNC_NOTICE_VERSION = "paper-learning-sync-v2"
 SERVER_SYNC_NOTICE = """로컬 설치 식별자와 선택한 논문의 ID, 제목, 원래 등록 시각을 연결된 Solo Leveling Paper 서버로 전송합니다.
+이 논문의 학습 맥락 ID, 원문 버전 ID, 파일명, 마지막 학습 위치·시각과 완료한 학습 단계도 함께 전송합니다.
 저자와 출판 연도는 현재 로컬에 없어 빈 값으로 전송합니다.
 PDF 파일, 추출 원문, 번역문, 메모, 하이라이트, 질문·답변과 로컬 파일 경로는 전송하지 않습니다.
 메타데이터는 연결된 계정에 저장됩니다.
@@ -64,7 +65,7 @@ def register_server_sync(server, service: ServerSyncService) -> None:
     gate = ServerSyncGate()
 
     @server.resource(
-        SERVER_SYNC_APP_URI, name="server-sync", title="논문 메타데이터 서버 동기화 확인",
+        SERVER_SYNC_APP_URI, name="server-sync", title="논문 및 학습 기록 서버 동기화 확인",
         mime_type="text/html;profile=mcp-app",
         meta={"ui": {"csp": {"connectDomains": [], "resourceDomains": []}}},
     )
@@ -87,7 +88,9 @@ def register_server_sync(server, service: ServerSyncService) -> None:
             raise ToolError("SERVER_CONNECTION_REQUIRED: 먼저 전용 연결 명령으로 서버 계정을 연결하세요.") from None
         operation_id = str(uuid4())
         data = {"status": "confirmation_required", "notice": SERVER_SYNC_NOTICE,
-                "operation_id": operation_id, "paper_id": preview.paper_id, "title": preview.title}
+                "operation_id": operation_id, "paper_id": preview.paper_id, "title": preview.title,
+                "learning_record_count": preview.learning_record_count,
+                "last_studied_at": preview.last_studied_at}
         return CallToolResult(
             content=[TextContent(type="text", text=SERVER_SYNC_NOTICE)], structuredContent=data,
             _meta={"confirmation_token": gate.prepare(preview, operation_id)},
