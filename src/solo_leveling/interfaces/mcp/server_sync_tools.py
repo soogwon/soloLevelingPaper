@@ -87,12 +87,14 @@ def register_server_sync(server, service: ServerSyncService) -> None:
         except ServerConnectionRequired:
             raise ToolError("SERVER_CONNECTION_REQUIRED: 먼저 전용 연결 명령으로 서버 계정을 연결하세요.") from None
         operation_id = str(uuid4())
-        data = {"status": "confirmation_required", "notice": SERVER_SYNC_NOTICE,
+        notice = (f"{SERVER_SYNC_NOTICE}\n학습 기록 {preview.learning_record_count}건 · "
+                  f"마지막 학습 시각 {preview.last_studied_at or '기록 없음'}")
+        data = {"status": "confirmation_required", "notice": notice,
                 "operation_id": operation_id, "paper_id": preview.paper_id, "title": preview.title,
                 "learning_record_count": preview.learning_record_count,
                 "last_studied_at": preview.last_studied_at}
         return CallToolResult(
-            content=[TextContent(type="text", text=SERVER_SYNC_NOTICE)], structuredContent=data,
+            content=[TextContent(type="text", text=notice)], structuredContent=data,
             _meta={"confirmation_token": gate.prepare(preview, operation_id)},
         )
 
@@ -104,7 +106,7 @@ def register_server_sync(server, service: ServerSyncService) -> None:
     )
     async def sync_paper_to_server(paper_id: str, operation_id: str,
                                    confirmation_token: str) -> dict[str, Any]:
-        """확인 카드에서 승인한 논문의 메타데이터만 서버로 전송합니다."""
+        """확인 카드에서 승인한 논문의 메타데이터와 학습 기록을 서버로 전송합니다."""
         preview = gate.consume(confirmation_token, paper_id, operation_id)
         try:
             queued = await anyio.to_thread.run_sync(

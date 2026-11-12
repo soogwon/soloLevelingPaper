@@ -187,7 +187,8 @@ def test_learning_change_after_approval_conflicts_without_sending_changed_payloa
     with get_connection(database) as conn:
         conn.execute("UPDATE learning_progress SET completed_steps='[\"preview\",\"structure\",\"deep_read\"]'")
 
-    assert service.sync(operation).status == "synced"
+    assert service.sync(operation).status == "conflict"
+    assert service.status(operation).error_code == "payload_changed"
 
     assert len(client.calls) == 1
     with get_connection(database) as conn:
@@ -287,3 +288,34 @@ def test_approval_rejects_changed_preview_before_writing_consent(database, chang
         for table in ("sync_outbox", "server_sync_consents"):
             assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
     assert not client.calls
+
+
+def test_learning_retry_resumes_only_current_consent_after_restart(database):
+    add_learning_record(database)
+    response = Response(200, {"learning_record_id": SERVER_RECORD_ID, "revision": 1,
+                              "server_updated_at": NOW.isoformat(), "sync_status": "stored"})
+    client = Client([Response(), Response(503), response])
+    service = PaperMetadataSyncService(database, client)
+    other = service.grant_and_queue("paper-local-1", "v2").operation_id
+    op = service.grant_and_queue("paper-local-1", "v2").operation_id
+    assert service.sync(op).status == "retryable_failure"
+    restarted = PaperMetadataSyncService(database, client)
+    assert restarted.status(op).error_code == "server_unavailable"
+    assert restarted.sync(op).status == "synced"
+    assert restarted.status(other).status == "pending"
+    assert [method for method, _, _ in client.calls] == ["POST", "PUT", "PUT"]
+    assert client.calls[1] == client.calls[2]
+
+
+def test_same_count_and_study_time_do_not_hide_changed_preview(database):
+    from solo_leveling.application.server_sync.paper_metadata import SyncPreviewChanged
+
+    add_learning_record(database)
+    service = PaperMetadataSyncService(database, Client())
+    preview = service.preview("paper-local-1")
+    with get_connection(database) as conn:
+        conn.execute("UPDATE learning_progress SET completed_steps='[]'")
+    with pytest.raises(SyncPreviewChanged):
+        service.grant_and_queue("paper-local-1", "v2", preview=preview)
+    with get_connection(database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM sync_outbox").fetchone()[0] == 0

@@ -26,6 +26,7 @@ class PaperSyncPreview:
     created_at: str
     learning_record_count: int = 0
     last_studied_at: str | None = None
+    learning_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ class PaperMetadataSyncService:
                 account_id, payload["local_paper_id"], payload["title"], payload["original_created_at"],
                 len(learning_payloads), _latest_timestamp(
                     item["last_studied_at"] for item in learning_payloads),
+                _learning_hash(learning_payloads),
             ):
                 raise SyncPreviewChanged
             digest = _payload_hash(payload)
@@ -109,13 +111,15 @@ class PaperMetadataSyncService:
         account_id = self._client.connection_id()
         conn = get_connection(self._db_path)
         try:
+            conn.execute("BEGIN")
             row = conn.execute("SELECT paper_id, title, created_at FROM papers WHERE paper_id=?", (paper_id,)).fetchone()
             if row is None:
                 raise KeyError("논문을 찾을 수 없습니다.")
-            learning_count, last_studied_at = _learning_preview(conn, paper_id)
+            records = _learning_payloads(conn, paper_id, "")
             return PaperSyncPreview(
                 account_id, row["paper_id"], row["title"], row["created_at"],
-                learning_count, last_studied_at,
+                len(records), _latest_timestamp(item["last_studied_at"] for item in records),
+                _learning_hash(records),
             )
         finally:
             conn.close()
@@ -129,12 +133,23 @@ class PaperMetadataSyncService:
         conn = get_connection(self._db_path)
         try:
             row = conn.execute(
-                "SELECT * FROM sync_outbox WHERE operation_id=? AND account_id=?",
+                "SELECT * FROM sync_outbox WHERE operation_id=? AND account_id=? AND object_type='paper'",
                 (operation_id, account_id),
             ).fetchone()
             if row is None:
                 raise KeyError("동기화 작업을 찾을 수 없습니다.")
-            return _current_result(conn, row)
+            result = _current_result(conn, row)
+            if result.status == "synced":
+                child = conn.execute(
+                    """SELECT status, last_error_code FROM sync_outbox WHERE consent_scope_id=?
+                       AND object_type='learning_record' AND status!='synced'
+                       ORDER BY CASE status WHEN 'conflict' THEN 0 WHEN 'action_required' THEN 1
+                           WHEN 'retryable_failure' THEN 2 ELSE 3 END, operation_id LIMIT 1""",
+                    (row["consent_scope_id"],),
+                ).fetchone()
+                if child:
+                    return SyncResult(operation_id, child["status"], result.server_object_id, child["last_error_code"])
+            return result
         finally:
             conn.close()
 
@@ -144,13 +159,29 @@ class PaperMetadataSyncService:
             account_id = self._client.connection_id()
         except ServerConnectionRequired:
             return SyncResult(operation_id, "action_required", error_code="reauthentication_required")
+        result = self._sync_paper(operation_id, account_id)
+        if result.status != "synced":
+            return result
+        conn = get_connection(self._db_path)
+        try:
+            parent = conn.execute(
+                "SELECT consent_scope_id FROM sync_outbox WHERE operation_id=? AND account_id=?",
+                (operation_id, account_id),
+            ).fetchone()
+            source_id = _source_instance_id(conn)
+        finally:
+            conn.close()
+        self._sync_learning_records(account_id, parent["consent_scope_id"], source_id, result.server_object_id)
+        return self.status(operation_id)
+
+    def _sync_paper(self, operation_id: str, account_id: str) -> SyncResult:
         conn = get_connection(self._db_path)
         try:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """SELECT o.*, c.revoked_at FROM sync_outbox o
                    JOIN server_sync_consents c USING (consent_scope_id)
-                   WHERE o.operation_id = ? AND o.account_id = ?""",
+                   WHERE o.operation_id = ? AND o.account_id = ? AND o.object_type='paper'""",
                 (operation_id, account_id),
             ).fetchone()
             if row is None:
@@ -229,24 +260,21 @@ class PaperMetadataSyncService:
                 (now, operation_id),
             )
             conn.commit()
-            synced = SyncResult(operation_id, "synced", result["paper_id"])
+            return SyncResult(operation_id, "synced", result["paper_id"])
         except Exception:
             conn.rollback()
             raise
         finally:
             conn.close()
-        self._sync_learning_records(account_id, row["local_object_id"], source_id, result["paper_id"])
-        return synced
-
-    def _sync_learning_records(self, account_id: str, paper_id: str,
+    def _sync_learning_records(self, account_id: str, consent_id: str,
                                source_id: str, server_paper_id: str) -> None:
         conn = get_connection(self._db_path)
         try:
             rows = conn.execute(
                 """SELECT operation_id FROM sync_outbox
-                   WHERE account_id=? AND object_type='learning_record' AND local_object_id=?
-                     AND status IN ('pending', 'retryable_failure') ORDER BY created_at, operation_id""",
-                (account_id, paper_id),
+                   WHERE account_id=? AND object_type='learning_record' AND consent_scope_id=?
+                     AND status IN ('pending', 'retryable_failure', 'syncing') ORDER BY created_at, operation_id""",
+                (account_id, consent_id),
             ).fetchall()
         finally:
             conn.close()
@@ -391,14 +419,13 @@ def _paper_payload(conn: sqlite3.Connection, paper_id: str, source_id: str) -> d
     }
 
 
-def _learning_preview(conn: sqlite3.Connection, paper_id: str) -> tuple[int, str | None]:
-    rows = conn.execute(
-        """SELECT lp.last_studied_at
-           FROM learning_contexts c JOIN paper_versions v USING(version_id)
-           LEFT JOIN learning_progress lp USING(context_id) WHERE v.paper_id=?""",
-        (paper_id,),
-    ).fetchall()
-    return len(rows), _latest_timestamp(row["last_studied_at"] for row in rows)
+def _learning_hash(records) -> str | None:
+    if not records:
+        return None
+    return _payload_hash({"records": [
+        {key: value for key, value in record.items() if key != "source_instance_id"}
+        for record in records
+    ]})
 
 
 def _latest_timestamp(values) -> str | None:
@@ -439,13 +466,18 @@ def _learning_payload(conn: sqlite3.Connection, paper_id: str, context_id: str,
     if position is not None and not isinstance(position, dict):
         raise ValueError("저장된 학습 위치가 올바르지 않습니다.")
     if position:
+        position = {key: position[key] for key in (
+            "chunk_id", "pdf_page", "section_id", "section_number", "section_title", "printed_page_label"
+        ) if key in position}
         detail = None
         if position.get("chunk_id") is not None:
             detail = conn.execute(
                 """SELECT c.pdf_page, c.printed_page_label, c.section_id, s.title AS section_title
                    FROM chunks c LEFT JOIN sections s
                      ON s.parse_revision_id=c.parse_revision_id AND s.section_id=c.section_id
-                   WHERE c.chunk_id=?""", (position["chunk_id"],),
+                   WHERE c.chunk_id=? AND c.parse_revision_id=(
+                       SELECT parse_revision_id FROM learning_contexts WHERE context_id=?)""",
+                (position["chunk_id"], context_id),
             ).fetchone()
         elif position.get("section_id") is not None:
             detail = conn.execute(
@@ -513,6 +545,15 @@ def _validated_learning_response(data: Any) -> dict[str, Any]:
 def _current_result(conn, row):
     if row["status"] != "synced":
         return SyncResult(row["operation_id"], row["status"], error_code=row["last_error_code"])
+    if row["object_type"] == "learning_record":
+        mapping = conn.execute(
+            """SELECT server_object_id FROM server_subobject_mappings
+               WHERE account_id=? AND object_type='learning_record' AND local_object_id=?
+               AND local_subobject_id=? AND source_instance_id=(
+                   SELECT source_instance_id FROM server_sync_identity WHERE singleton=1)""",
+            (row["account_id"], row["local_object_id"], row["local_subobject_id"]),
+        ).fetchone()
+        return SyncResult(row["operation_id"], "synced", mapping["server_object_id"])
     mapping = conn.execute(
         """SELECT * FROM server_object_mappings
            WHERE account_id=? AND object_type=? AND local_object_id=?
