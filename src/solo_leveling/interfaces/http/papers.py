@@ -74,6 +74,10 @@ class IdempotencyConflict(Exception):
     pass
 
 
+class LearningRecordConflict(Exception):
+    pass
+
+
 class PaperNotFound(Exception):
     pass
 
@@ -236,18 +240,24 @@ class PostgresPaperStore:
                      source_updated_at=excluded.source_updated_at, revision=server_learning_records.revision+1,
                      updated_at=CURRENT_TIMESTAMP
                    WHERE excluded.paper_id=server_learning_records.paper_id
-                     AND excluded.source_updated_at>=server_learning_records.source_updated_at
+                     AND excluded.source_updated_at>server_learning_records.source_updated_at
                    RETURNING learning_record_id, revision, updated_at""",
                 (values[0], values[1], *values[3:], paper_id, owner_user_id, metadata.source_instance_id),
             ).fetchone()
             if row is None:
                 row = conn.execute(
-                    """SELECT learning_record_id, revision, updated_at FROM server_learning_records
+                    """SELECT learning_record_id, revision, updated_at, source_updated_at,
+                              selected_version_id, file_name, last_position, last_studied_at, reading_status
+                       FROM server_learning_records
                        WHERE owner_user_id=%s AND source_instance_id=%s AND local_learning_record_id=%s
                          AND paper_id=%s""",
                     (owner_user_id, metadata.source_instance_id,
                      metadata.local_learning_record_id, paper_id),
                 ).fetchone()
+                if row is not None and row["source_updated_at"] == metadata.source_updated_at:
+                    fields = ("selected_version_id", "file_name", "last_position", "last_studied_at", "reading_status")
+                    if any(row[field] != getattr(metadata, field) for field in fields):
+                        raise LearningRecordConflict
             if row is None:
                 raise PaperNotFound
         return LearningRecordRegistration(

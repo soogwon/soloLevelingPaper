@@ -273,7 +273,7 @@ def test_postgres_learning_record_upsert_is_owner_and_source_scoped():
     assert result == LearningRecordRegistration(record_id, 2, "stored", NOW)
     sql, params = pool.conn.calls[0]
     assert "p.owner_user_id=%s AND p.source_instance_id=%s" in sql
-    assert "excluded.source_updated_at>=server_learning_records.source_updated_at" in sql
+    assert "excluded.source_updated_at>server_learning_records.source_updated_at" in sql
     assert params[-3:] == (PAPER_ID, "user-1", SOURCE_ID)
 
 
@@ -371,4 +371,21 @@ def test_nul_in_search_query_is_rejected_before_database_access():
         response = client.get("/v1/papers?q=a%00b", headers={"Authorization": "Bearer web"})
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "invalid_paper_query"
+    assert not store.calls
+
+@pytest.mark.parametrize("change", [
+    {"file_name": r"C:\papers\private.pdf"}, {"file_name": "/private/paper.pdf"},
+    {"selected_version_id": "../private"}, {"source_updated_at": "0001-01-01T00:00:00+09:00"},
+])
+def test_learning_record_invalid_metadata_never_reaches_store(change):
+    store = MemoryStore()
+    device = AuthenticatedPrincipal("user", "device", SOURCE_ID)
+    app = create_app(token_verifier=SimpleNamespace(verify=lambda _: device),
+                     device_registry=SimpleNamespace(is_active=lambda *_: True), paper_store=store)
+    body = {"source_instance_id": SOURCE_ID, "source_updated_at": NOW.isoformat()} | change
+    with TestClient(app) as client:
+        response = client.put(f"/v1/mcp/papers/{PAPER_ID}/learning-records/context-1",
+                              json=body, headers={"Authorization": "Bearer test"})
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_paper_request"
     assert not store.calls

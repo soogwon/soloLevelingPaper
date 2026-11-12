@@ -10,7 +10,7 @@ from .auth import AuthenticatedPrincipal
 from solo_leveling.domain.learning_progress import LEARNING_STEPS
 
 from .papers import (
-    IdempotencyConflict, LearningRecordMetadata, PaperMetadata, PaperNotFound,
+    IdempotencyConflict, LearningRecordConflict, LearningRecordMetadata, PaperMetadata, PaperNotFound,
     PaperStore, PaperStoreUnavailable,
 )
 
@@ -120,14 +120,20 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         def require_timestamp_timezone(cls, value):
             if value is not None and (value.tzinfo is None or value.utcoffset() is None):
                 raise ValueError("학습 시각에는 시간대가 필요합니다.")
-            return value.astimezone(timezone.utc) if value is not None else None
+            try:
+                return value.astimezone(timezone.utc) if value is not None else None
+            except OverflowError:
+                raise ValueError("UTC로 변환할 수 없는 학습 시각입니다.") from None
 
         @field_validator("selected_version_id", "file_name")
         @classmethod
         def reject_unsafe_text(cls, value):
-            if value is not None and ("\x00" in value or not value.strip()):
-                raise ValueError("빈 값이나 NUL 문자를 사용할 수 없습니다.")
-            return value.strip() if value is not None else None
+            if value is None:
+                return None
+            value = value.strip()
+            if not value or "\x00" in value or "/" in value or "\\" in value or PureWindowsPath(value).drive:
+                raise ValueError("파일명과 버전 ID에는 경로를 사용할 수 없습니다.")
+            return value
 
         @model_validator(mode="after")
         def validate_learning_times(self):
@@ -194,7 +200,7 @@ def create_paper_router(require_principal: Any, store: PaperStore):
                                 detail={"code": "device_credential_required"})
         local_record_id = local_record_id.strip()
         if (not local_record_id or len(local_record_id) > 128 or "\x00" in local_record_id
-                or "/" in local_record_id or "\\" in local_record_id):
+                or "/" in local_record_id or "\\" in local_record_id or PureWindowsPath(local_record_id).drive):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                                 detail={"code": "invalid_learning_record_id"})
         completed = set(payload.completed_steps)
@@ -210,6 +216,8 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         )
         try:
             result = store.upsert_learning_record(principal.user_id, str(paper_id), metadata)
+        except LearningRecordConflict:
+            raise HTTPException(status_code=409, detail={"code": "learning_record_conflict"}) from None
         except PaperNotFound:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail={"code": "paper_not_found"}) from None
