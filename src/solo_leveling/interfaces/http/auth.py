@@ -30,6 +30,10 @@ class AccessTokenRejected(Exception):
     """토큰이 없거나 만료·폐기·위조되어 신뢰할 수 없음."""
 
 
+class AccessTokenVerificationUnavailable(Exception):
+    """공개 키를 조회할 수 없어 토큰 검증을 완료하지 못함."""
+
+
 class AccessTokenVerifier(Protocol):
     """인증 제공자 토큰을 서버 내부 주체로 변환하는 포트."""
 
@@ -61,6 +65,11 @@ def create_auth_dependency(verifier: AccessTokenVerifier):
             raise _unauthorized(HTTPException, status.HTTP_401_UNAUTHORIZED)
         try:
             return verifier.verify(credentials.credentials)
+        except AccessTokenVerificationUnavailable:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "authentication_unavailable"},
+            ) from None
         except AccessTokenRejected:
             raise _unauthorized(HTTPException, status.HTTP_401_UNAUTHORIZED) from None
 

@@ -1,8 +1,9 @@
 """OIDC 공급자의 RS256 access token 검증 adapter."""
 
+from json import JSONDecodeError
 from typing import Any
 
-from .auth import AccessTokenRejected, AuthenticatedPrincipal
+from .auth import AccessTokenRejected, AccessTokenVerificationUnavailable, AuthenticatedPrincipal
 from .settings import OidcSettings
 
 
@@ -21,6 +22,12 @@ class OidcAccessTokenVerifier:
         if not token.strip():
             raise AccessTokenRejected
         try:
+            header = jwt.get_unverified_header(token)
+            token_type = header.get("typ")
+            if header.get("alg") != "RS256" or not isinstance(token_type, str):
+                raise AccessTokenRejected
+            if token_type.lower() not in ("at+jwt", "application/at+jwt"):
+                raise AccessTokenRejected
             signing_key = self._jwks_client.get_signing_key_from_jwt(token)
             claims = jwt.decode(
                 token,
@@ -31,6 +38,8 @@ class OidcAccessTokenVerifier:
                 options={"require": ["exp", "iat", "iss", "aud", "sub"]},
             )
             return _principal_from_claims(claims)
+        except (jwt.PyJWKClientConnectionError, jwt.PyJWKSetError, JSONDecodeError):
+            raise AccessTokenVerificationUnavailable from None
         except (jwt.PyJWTError, ValueError, TypeError, KeyError):
             raise AccessTokenRejected from None
 

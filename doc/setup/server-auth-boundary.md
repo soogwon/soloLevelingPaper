@@ -26,6 +26,8 @@
 
 `OIDC_ISSUER`, `OIDC_AUDIENCE`, `OIDC_JWKS_URL`을 모두 설정하면 `AccessTokenVerifier` 포트에 OIDC RS256 adapter가 연결된다. adapter는 토큰이 선언한 알고리즘을 신뢰하지 않고 RS256만 허용하며, JWKS 서명과 `iss`, `aud`, `exp`, `iat`, `sub`를 검증한다. 설정이 없으면 보호 API는 계속 fail-closed로 동작하고, 일부 값만 설정되면 서버 시작을 거부한다.
 
+공급자는 API용 access token에 서명된 JOSE 헤더 `typ=at+jwt` 또는 `typ=application/at+jwt`를 발급해야 한다. 이 표기가 없는 토큰과 일반 `typ=JWT` ID 토큰은 issuer와 audience가 일치해도 401로 거부한다. JWKS 연결 장애로 검증할 수 없으면 Bearer challenge 없이 503과 `authentication_unavailable`을 반환한다. 조회한 키 집합에 대응하는 키가 없거나 서명이 유효하지 않으면 401을 반환한다.
+
 OIDC 토큰의 기본 자격은 `web_session`이다. 연결된 로컬 기기 토큰에는 인증 제공자 또는 서버가 검증해 넣은 `credential_type=device`와 `device_id` claim이 모두 필요하다. 클라이언트가 임의로 보낸 claim은 유효한 서버 서명 없이는 사용할 수 없다.
 
 다음으로 인증 제공자의 토큰 발급·폐기 방식과 기기 등록 모델을 연결한다. 이후 모든 논문·학습 기록 repository는 handler가 받은 임의 ID가 아니라 `AuthenticatedPrincipal.user_id`를 소유권 필터에 사용한다.

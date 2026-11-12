@@ -2,11 +2,14 @@
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import jwt
 import pytest
+from fastapi.testclient import TestClient
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from solo_leveling.interfaces.http import create_app
 from solo_leveling.interfaces.http.auth import AccessTokenRejected
 from solo_leveling.interfaces.http.oidc import OidcAccessTokenVerifier
 from solo_leveling.interfaces.http.settings import OidcSettings, load_oidc_settings
@@ -32,7 +35,7 @@ class KeyClient:
         return SimpleNamespace(key=self.public_key)
 
 
-def make_token(private_key, **overrides):
+def make_token(private_key, *, typ="at+jwt", **overrides):
     now = datetime.now(timezone.utc)
     claims = {
         "iss": ISSUER,
@@ -42,7 +45,7 @@ def make_token(private_key, **overrides):
         "exp": now + timedelta(minutes=5),
         **overrides,
     }
-    return jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "test-key"})
+    return jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "test-key", "typ": typ})
 
 
 def verifier(public_key):
@@ -101,3 +104,33 @@ def test_oidc_settings_are_all_or_nothing_and_require_https():
         "OIDC_AUDIENCE": AUDIENCE,
         "OIDC_JWKS_URL": "https://identity.example.com/jwks",
     }) == OidcSettings(ISSUER, AUDIENCE, "https://identity.example.com/jwks")
+
+
+@pytest.mark.parametrize("typ, expected", [("at+jwt", 200), ("application/at+jwt", 200), ("JWT", 401), (None, 401)])
+def test_session_requires_access_token_type(keys, typ, expected):
+    private, public = keys
+    token = make_token(private, typ=typ)
+    with TestClient(create_app(token_verifier=verifier(public))) as client:
+        response = client.get("/v1/session", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == expected
+    if expected == 401:
+        assert response.headers["WWW-Authenticate"] == "Bearer"
+
+
+@pytest.mark.parametrize("error, expected", [
+    (jwt.PyJWKClientConnectionError("private diagnostic"), 503),
+    (jwt.PyJWKClientError("unknown signing key"), 401),
+])
+def test_session_distinguishes_key_outage_from_unknown_key(keys, error, expected):
+    private, _ = keys
+    settings = OidcSettings(ISSUER, AUDIENCE, "https://identity.example.com/keys")
+    key_client = Mock()
+    key_client.get_signing_key_from_jwt.side_effect = error
+    with TestClient(create_app(token_verifier=OidcAccessTokenVerifier(settings, key_client))) as client:
+        response = client.get("/v1/session", headers={"Authorization": f"Bearer {make_token(private)}"})
+    assert response.status_code == expected
+    if expected == 503:
+        assert response.json() == {"detail": {"code": "authentication_unavailable"}}
+        assert "WWW-Authenticate" not in response.headers
+    else:
+        assert response.headers["WWW-Authenticate"] == "Bearer"
