@@ -473,6 +473,57 @@ CREATE TABLE IF NOT EXISTS ask_executions (
     key_expires_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ask_executions_key_expiry ON ask_executions(key_expires_at);
+
+-- 중앙 서버 동기화는 기존 로컬 도메인 테이블과 분리한다. 토큰, 원문, 절대경로와
+-- 전체 payload는 이 저장소에 넣지 않는다.
+CREATE TABLE IF NOT EXISTS server_sync_identity (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    source_instance_id TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS server_sync_consents (
+    consent_scope_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    object_type TEXT NOT NULL,
+    local_object_id TEXT NOT NULL REFERENCES papers(paper_id),
+    notice_version TEXT NOT NULL,
+    granted_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_server_sync_consents_object
+    ON server_sync_consents(account_id, object_type, local_object_id);
+
+CREATE TABLE IF NOT EXISTS sync_outbox (
+    operation_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    consent_scope_id TEXT NOT NULL REFERENCES server_sync_consents(consent_scope_id),
+    object_type TEXT NOT NULL,
+    local_object_id TEXT NOT NULL REFERENCES papers(paper_id),
+    operation TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN (
+        'pending', 'syncing', 'synced', 'retryable_failure', 'action_required', 'conflict'
+    )),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    next_attempt_at TEXT,
+    last_error_code TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sync_outbox_ready
+    ON sync_outbox(account_id, status, next_attempt_at, created_at);
+
+CREATE TABLE IF NOT EXISTS server_object_mappings (
+    account_id TEXT NOT NULL,
+    source_instance_id TEXT NOT NULL,
+    object_type TEXT NOT NULL,
+    local_object_id TEXT NOT NULL REFERENCES papers(paper_id),
+    server_object_id TEXT NOT NULL,
+    server_revision INTEGER NOT NULL CHECK (server_revision >= 1),
+    synced_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, source_instance_id, object_type, local_object_id),
+    UNIQUE (account_id, object_type, server_object_id)
+);
 """
 
 
