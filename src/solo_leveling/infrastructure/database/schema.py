@@ -499,6 +499,7 @@ CREATE TABLE IF NOT EXISTS sync_outbox (
     consent_scope_id TEXT NOT NULL REFERENCES server_sync_consents(consent_scope_id),
     object_type TEXT NOT NULL,
     local_object_id TEXT NOT NULL REFERENCES papers(paper_id),
+    local_subobject_id TEXT,
     operation TEXT NOT NULL,
     payload_hash TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN (
@@ -524,6 +525,19 @@ CREATE TABLE IF NOT EXISTS server_object_mappings (
     PRIMARY KEY (account_id, source_instance_id, object_type, local_object_id),
     UNIQUE (account_id, object_type, server_object_id)
 );
+
+CREATE TABLE IF NOT EXISTS server_subobject_mappings (
+    account_id TEXT NOT NULL,
+    source_instance_id TEXT NOT NULL,
+    object_type TEXT NOT NULL,
+    local_object_id TEXT NOT NULL REFERENCES papers(paper_id),
+    local_subobject_id TEXT NOT NULL,
+    server_object_id TEXT NOT NULL,
+    server_revision INTEGER NOT NULL CHECK (server_revision >= 1),
+    synced_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, source_instance_id, object_type, local_object_id, local_subobject_id),
+    UNIQUE (account_id, object_type, server_object_id)
+);
 """
 
 
@@ -544,6 +558,7 @@ def init_db(db_path: str) -> None:
         _migrate_translation_recovery(conn)
         _migrate_search_index_chunks(conn)
         _migrate_quiz_attempt_seq(conn)
+        _migrate_server_sync_outbox(conn)
         # 기존 생성된 DB에 컬럼을 추가하는 형식.
         # 초기값은 NULL로 번역 설정을 임의로 채우지 않는다.
         with conn:
@@ -555,6 +570,14 @@ def init_db(db_path: str) -> None:
                     conn.execute(f'ALTER TABLE translation_revisions ADD COLUMN {name} TEXT')
     finally:
         conn.close()
+
+
+def _migrate_server_sync_outbox(conn: sqlite3.Connection) -> None:
+    """기존 논문 outbox에 하위 학습 기록 식별자를 반복 안전하게 추가한다."""
+    with conn:
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(sync_outbox)')}
+        if 'local_subobject_id' not in columns:
+            conn.execute('ALTER TABLE sync_outbox ADD COLUMN local_subobject_id TEXT')
 
 
 def _migrate_translation_recovery(conn: sqlite3.Connection) -> None:
