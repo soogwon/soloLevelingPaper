@@ -360,7 +360,7 @@ def test_web_detail_uses_session_owner_and_reports_unavailable_dependencies():
                  if route.path == "/v1/papers/{paper_id}")
     record_id = UUID("00000000-0000-0000-0000-000000000301")
 
-    result = route(UUID(PAPER_ID), principal, record_id, "version-1")
+    result = route(UUID(PAPER_ID), principal, record_id, " version-1 ")
 
     assert store.calls == [("web-user", PAPER_ID, {
         "learning_record_id": str(record_id), "version_id": "version-1",
@@ -462,4 +462,16 @@ def test_learning_record_invalid_metadata_never_reaches_store(change):
                               json=body, headers={"Authorization": "Bearer test"})
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "invalid_paper_request"
+    assert not store.calls
+
+
+@pytest.mark.parametrize("version_id", ["  ", "D:relative", "dir/file", "bad\x00id"])
+def test_detail_rejects_invalid_version_before_storage(version_id):
+    store = MemoryStore()
+    route = next(route.endpoint for route in create_app(paper_store=store).routes
+                 if route.path == "/v1/papers/{paper_id}")
+    with pytest.raises(HTTPException) as failure:
+        route(UUID(PAPER_ID), AuthenticatedPrincipal("web-user", "web_session"), version_id=version_id)
+    assert failure.value.status_code == 422
+    assert failure.value.detail == {"code": "invalid_version_id"}
     assert not store.calls

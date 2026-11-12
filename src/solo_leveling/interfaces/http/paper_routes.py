@@ -18,6 +18,15 @@ from .papers import (
 _KEY = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
 
 
+def _normalize_file_or_version(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if not value or "\x00" in value or "/" in value or "\\" in value or PureWindowsPath(value).drive:
+        raise ValueError("파일명과 버전 ID에는 경로를 사용할 수 없습니다.")
+    return value
+
+
 def create_paper_router(require_principal: Any, store: PaperStore):
     from fastapi import APIRouter, Depends, Header, HTTPException, status
     from fastapi.exceptions import RequestValidationError
@@ -128,12 +137,7 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         @field_validator("selected_version_id", "file_name")
         @classmethod
         def reject_unsafe_text(cls, value):
-            if value is None:
-                return None
-            value = value.strip()
-            if not value or "\x00" in value or "/" in value or "\\" in value or PureWindowsPath(value).drive:
-                raise ValueError("파일명과 버전 ID에는 경로를 사용할 수 없습니다.")
-            return value
+            return _normalize_file_or_version(value)
 
         @model_validator(mode="after")
         def validate_learning_times(self):
@@ -328,9 +332,11 @@ def create_web_paper_router(require_principal: Any, store: PaperStore):
         if principal.credential_type != "web_session":
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail={"code": "web_session_required"})
-        if version_id is not None and ("\x00" in version_id or "/" in version_id or "\\" in version_id):
+        try:
+            version_id = _normalize_file_or_version(version_id)
+        except ValueError:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                                detail={"code": "invalid_version_id"})
+                                detail={"code": "invalid_version_id"}) from None
         try:
             detail = store.get_paper(
                 principal.user_id, str(paper_id),
