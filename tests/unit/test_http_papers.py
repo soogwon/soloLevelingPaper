@@ -13,7 +13,9 @@ from solo_leveling.interfaces.http import create_app
 from solo_leveling.interfaces.http.auth import AuthenticatedPrincipal
 from solo_leveling.interfaces.http.papers import (
     IdempotencyConflict,
+    PaperListItem,
     PaperMetadata,
+    PaperPage,
     PaperRegistration,
     PostgresPaperStore,
     _payload_hash,
@@ -26,11 +28,14 @@ PAPER_ID = "00000000-0000-0000-0000-000000000201"
 
 
 class Result:
-    def __init__(self, one=None):
-        self.one = one
+    def __init__(self, one=None, many=None):
+        self.one, self.many = one, many or []
 
     def fetchone(self):
         return self.one
+
+    def fetchall(self):
+        return self.many
 
 
 class Connection:
@@ -121,6 +126,10 @@ class MemoryStore:
         self.calls.append((owner_user_id, key, item))
         return PaperRegistration(PAPER_ID, 1, "stored", NOW)
 
+    def list_papers(self, owner_user_id, **filters):
+        self.calls.append((owner_user_id, filters))
+        return PaperPage((), filters["page"], filters["limit"], 0, 0)
+
 
 def endpoint(app):
     return next(route.endpoint for route in app.routes if route.path == "/v1/mcp/papers")
@@ -183,3 +192,98 @@ def test_rejected_paper_request_never_reaches_store_or_echoes_input(change):
     assert response.status_code == 422
     assert response.json() == {"detail": {"code": "invalid_paper_request"}}
     assert not store.calls
+
+
+def test_postgres_list_is_owner_scoped_searchable_and_stably_paginated():
+    second = "00000000-0000-0000-0000-000000000202"
+    pool = Pool([
+        Result({"total_count": 21}),
+        Result(many=[
+            {"paper_id": PAPER_ID, "title": "Paper", "authors": ["A"], "publication_year": 2024},
+            {"paper_id": second, "title": None, "authors": None, "publication_year": None},
+        ]),
+    ])
+
+    result = PostgresPaperStore(pool).list_papers(
+        "user-1", query=r" 100%_\\test ", reading_status=None, page=2, limit=20)
+
+    assert result == PaperPage((
+        PaperListItem(PAPER_ID, "Paper", ("A",), 2024),
+        PaperListItem(second, None, None, None),
+    ), 2, 20, 21, 2)
+    count_sql, count_params = pool.conn.calls[0]
+    page_sql, page_params = pool.conn.calls[1]
+    assert "owner_user_id = %s" in count_sql and "title ILIKE %s" in count_sql
+    assert count_params == ("user-1", r"% 100\%\_\\\\test %")
+    assert "ORDER BY paper_id ASC" in page_sql
+    assert page_params == (*count_params, 20, 20)
+
+
+def test_unknown_learning_state_is_not_inferred_for_status_filter():
+    pool = Pool([Result({"total_count": 0}), Result(many=[])])
+
+    result = PostgresPaperStore(pool).list_papers(
+        "user-1", query=None, reading_status="reading", page=3, limit=10)
+
+    assert result == PaperPage((), 3, 10, 0, 0)
+    assert "FALSE" in pool.conn.calls[0][0]
+
+
+def test_web_list_uses_session_owner_and_preserves_out_of_range_page():
+    store = MemoryStore()
+    principal = AuthenticatedPrincipal("web-user", "web_session")
+    app = create_app(token_verifier=SimpleNamespace(verify=lambda _: principal), paper_store=store)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/papers?q=%20Paper%20&page=7&limit=10",
+            headers={"Authorization": "Bearer web-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "page": 7, "page_size": 10,
+                               "total_count": 0, "total_pages": 0}
+    assert store.calls == [("web-user", {"query": "Paper", "reading_status": None, "page": 7, "limit": 10})]
+
+
+def test_web_list_shape_matches_external_site_without_inventing_learning_data():
+    class ListStore(MemoryStore):
+        def list_papers(self, owner_user_id, **filters):
+            return PaperPage((PaperListItem(PAPER_ID, "Paper", ("A", "B"), 2024),), 1, 20, 1, 1)
+
+    principal = AuthenticatedPrincipal("web-user", "web_session")
+    app = create_app(token_verifier=SimpleNamespace(verify=lambda _: principal), paper_store=ListStore())
+    with TestClient(app) as client:
+        response = client.get("/v1/papers", headers={"Authorization": "Bearer web-token"})
+
+    assert response.status_code == 200
+    assert response.json()["items"] == [{
+        "paper_id": PAPER_ID, "title": "Paper", "authors": ["A", "B"], "file_name": None,
+        "published": {"year": 2024, "month": None, "day": None, "precision": "year"},
+        "selected_learning_record_id": None, "selected_version_id": None,
+        "last_position": None, "last_studied_at": None, "reading_status": "unknown",
+        "collection_id": None,
+    }]
+
+
+def test_device_cannot_use_web_list_and_invalid_paging_never_reaches_store():
+    store = MemoryStore()
+    device = AuthenticatedPrincipal("user-1", "device", PAPER_ID)
+    app = create_app(token_verifier=SimpleNamespace(verify=lambda _: device),
+                     device_registry=SimpleNamespace(is_active=lambda *_: True), paper_store=store)
+    with TestClient(app) as client:
+        forbidden = client.get("/v1/papers", headers={"Authorization": "Bearer device"})
+        invalid = client.get("/v1/papers?page=0&limit=101", headers={"Authorization": "Bearer device"})
+    assert forbidden.status_code == 403
+    assert forbidden.json() == {"detail": {"code": "web_session_required"}}
+    assert invalid.status_code == 422
+    assert store.calls == []
+
+
+def test_openapi_exposes_protected_web_paper_page_contract():
+    operation = create_app().openapi()["paths"]["/v1/papers"]["get"]
+    assert operation["security"] == [{"ServerAccessToken": []}]
+    parameters = {item["name"]: item for item in operation["parameters"]}
+    assert set(parameters) == {"q", "reading_status", "sort", "page", "limit"}
+    assert parameters["page"]["schema"]["default"] == 1
+    assert parameters["limit"]["schema"]["default"] == 20

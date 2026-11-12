@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from pathlib import PureWindowsPath
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from .auth import AuthenticatedPrincipal
@@ -114,5 +114,81 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         except PaperStoreUnavailable:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                                 detail={"code": "paper_store_unavailable"}) from None
+
+    return router
+
+
+def create_web_paper_router(require_principal: Any, store: PaperStore):
+    """외부 웹이 로그인 사용자의 서버 확정 논문만 페이지 단위로 조회한다."""
+    from fastapi import APIRouter, Depends, HTTPException, Query, status
+    from pydantic import BaseModel
+
+    class PublishedView(BaseModel):
+        year: int
+        month: None = None
+        day: None = None
+        precision: Literal["year"] = "year"
+
+    class PaperListItemView(BaseModel):
+        paper_id: str
+        title: str | None
+        authors: list[str] | None
+        file_name: str | None
+        published: PublishedView | None
+        selected_learning_record_id: str | None
+        selected_version_id: str | None
+        last_position: dict[str, Any] | None
+        last_studied_at: datetime | None
+        reading_status: Literal["not_started", "reading", "completed", "unknown"]
+        collection_id: str | None
+
+    class PaperPageView(BaseModel):
+        items: list[PaperListItemView]
+        page: int
+        page_size: int
+        total_count: int
+        total_pages: int
+
+    router = APIRouter(prefix="/v1/papers", tags=["web-papers"])
+    Principal = Annotated[AuthenticatedPrincipal, Depends(require_principal)]
+
+    @router.get("", response_model=PaperPageView)
+    def list_papers(
+        principal: Principal,
+        q: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
+        reading_status: Literal["not_started", "reading", "completed", "unknown"] | None = None,
+        sort: Literal["recent"] = "recent",
+        page: Annotated[int, Query(ge=1)] = 1,
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    ):
+        if principal.credential_type != "web_session":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail={"code": "web_session_required"})
+        normalized_query = q.strip() if q is not None else None
+        if q is not None and not normalized_query:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                                detail={"code": "invalid_paper_query"})
+        try:
+            result = store.list_papers(
+                principal.user_id, query=normalized_query, reading_status=reading_status,
+                page=page, limit=limit,
+            )
+        except PaperStoreUnavailable:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail={"code": "paper_store_unavailable"}) from None
+        return PaperPageView(
+            items=[PaperListItemView(
+                paper_id=item.paper_id, title=item.title, authors=list(item.authors) if item.authors else None,
+                file_name=None,
+                published=({"year": item.publication_year, "month": None, "day": None, "precision": "year"}
+                           if item.publication_year is not None else None),
+                selected_learning_record_id=item.selected_learning_record_id,
+                selected_version_id=item.selected_version_id, last_position=item.last_position,
+                last_studied_at=item.last_studied_at, reading_status=item.reading_status,
+                collection_id=item.collection_id,
+            ) for item in result.items],
+            page=result.page, page_size=result.page_size,
+            total_count=result.total_count, total_pages=result.total_pages,
+        )
 
     return router
