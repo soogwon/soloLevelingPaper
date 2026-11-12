@@ -19,6 +19,8 @@ def create_app(
     device_registry: "DeviceRegistry | None" = None,
     device_store: "DeviceStore | None" = None,
     paper_store: "PaperStore | None" = None,
+    web_auth_flow=None,
+    web_session_store=None,
 ) -> "FastAPI":
     """명시적 설정 또는 환경 설정으로 독립적인 API 앱을 만든다."""
 
@@ -32,7 +34,9 @@ def create_app(
     from .oidc import OidcAccessTokenVerifier
     from .paper_routes import create_paper_router, create_web_paper_router
     from .papers import PostgresPaperStore, UnavailablePaperStore
-    from .settings import load_database_settings, load_oidc_settings
+    from .settings import load_database_settings, load_oidc_settings, load_web_auth_settings
+    from .web_auth import OidcWebAuthFlow, PostgresWebSessionStore, WebSessionVerifier
+    from .web_auth_routes import create_web_auth_router
 
     selected = settings or load_http_settings()
     managed_store = None
@@ -65,6 +69,21 @@ def create_app(
     if token_verifier is None:
         oidc_settings = load_oidc_settings()
         token_verifier = OidcAccessTokenVerifier(oidc_settings) if oidc_settings else RejectAllTokenVerifier()
+    web_access_verifier = token_verifier
+    web_settings = load_web_auth_settings()
+    if web_settings is not None:
+        from fastapi.middleware.cors import CORSMiddleware
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[web_settings.app_origin.rstrip("/")],
+            allow_credentials=True,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Content-Type", "X-CSRF-Token", "Idempotency-Key"],
+        )
+    if web_session_store is None and managed_store is not None and web_settings is not None:
+        web_session_store = PostgresWebSessionStore(managed_store.connection_pool)
+    if web_auth_flow is None and web_session_store is not None and web_settings is not None:
+        web_auth_flow = OidcWebAuthFlow.create(web_settings, web_session_store, web_access_verifier)
     token_verifier = RoutingAccessTokenVerifier(token_verifier, OpaqueDeviceTokenVerifier(selected_store))
     if device_registry is not None:
         selected_registry = device_registry
@@ -73,7 +92,8 @@ def create_app(
     else:
         selected_registry = RejectAllDeviceRegistry()
     token_verifier = DeviceAuthorizingTokenVerifier(token_verifier, selected_registry)
-    require_principal = create_auth_dependency(token_verifier)
+    session_verifier = WebSessionVerifier(web_session_store) if web_session_store is not None else None
+    require_principal = create_auth_dependency(token_verifier, session_verifier)
 
     @app.get("/health", tags=["operations"])
     def health() -> dict[str, str]:
@@ -97,5 +117,7 @@ def create_app(
     app.include_router(create_device_token_router(selected_store))
     app.include_router(create_paper_router(require_principal, selected_paper_store))
     app.include_router(create_web_paper_router(require_principal, selected_paper_store))
+    if web_auth_flow is not None and web_session_store is not None:
+        app.include_router(create_web_auth_router(web_auth_flow, web_session_store))
 
     return app
