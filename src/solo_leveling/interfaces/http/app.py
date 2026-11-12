@@ -7,17 +7,20 @@ from .settings import HttpSettings, load_http_settings
 if TYPE_CHECKING:
     from fastapi import FastAPI
     from .auth import AccessTokenVerifier
+    from .device_auth import DeviceRegistry
 
 
 def create_app(
     settings: HttpSettings | None = None,
     token_verifier: "AccessTokenVerifier | None" = None,
+    device_registry: "DeviceRegistry | None" = None,
 ) -> "FastAPI":
     """명시적 설정 또는 환경 설정으로 독립적인 API 앱을 만든다."""
 
     from fastapi import Depends, FastAPI
 
     from .auth import RejectAllTokenVerifier, create_auth_dependency
+    from .device_auth import DeviceAuthorizingTokenVerifier, RejectAllDeviceRegistry
     from .oidc import OidcAccessTokenVerifier
     from .settings import load_oidc_settings
 
@@ -31,6 +34,8 @@ def create_app(
     if token_verifier is None:
         oidc_settings = load_oidc_settings()
         token_verifier = OidcAccessTokenVerifier(oidc_settings) if oidc_settings else RejectAllTokenVerifier()
+    selected_registry = device_registry if device_registry is not None else RejectAllDeviceRegistry()
+    token_verifier = DeviceAuthorizingTokenVerifier(token_verifier, selected_registry)
     require_principal = create_auth_dependency(token_verifier)
 
     @app.get("/health", tags=["operations"])
