@@ -1,12 +1,17 @@
 """중앙 HTTP API 애플리케이션 팩터리."""
 
-from fastapi import FastAPI
+from typing import TYPE_CHECKING
 
 from .settings import HttpSettings, load_http_settings
 
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
-def create_app(settings: HttpSettings | None = None) -> FastAPI:
+
+def create_app(settings: HttpSettings | None = None) -> "FastAPI":
     """명시적 설정 또는 환경 설정으로 독립적인 API 앱을 만든다."""
+
+    from fastapi import FastAPI
 
     selected = settings or load_http_settings()
 

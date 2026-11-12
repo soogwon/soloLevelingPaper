@@ -1,6 +1,8 @@
 """중앙 HTTP API의 실행 골격을 검증한다."""
 
+import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +10,14 @@ import pytest
 from solo_leveling.interfaces.http import create_app
 from solo_leveling.interfaces.http import runtime
 from solo_leveling.interfaces.http.settings import HttpSettings, load_http_settings
+
+
+def test_package_import_without_server_dependencies():
+    subprocess.run(
+        [sys.executable, "-E", "-S", "-c", "from solo_leveling.interfaces.http import create_app"],
+        cwd=Path(__file__).resolve().parents[2] / "src",
+        check=True,
+    )
 
 
 def test_health_reports_process_status():
