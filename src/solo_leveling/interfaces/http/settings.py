@@ -48,6 +48,38 @@ class DatabaseSettings:
             raise ValueError("DATABASE_URL은 PostgreSQL DSN이어야 합니다.")
 
 
+@dataclass(frozen=True)
+class WebAuthSettings:
+    authorization_url: str
+    token_url: str
+    userinfo_url: str
+    client_id: str
+    client_secret: str
+    redirect_uri: str
+    app_origin: str
+    scopes: str = "openid profile email"
+
+    def __post_init__(self) -> None:
+        for name, value in (("WEB_OIDC_AUTHORIZATION_URL", self.authorization_url),
+                            ("WEB_OIDC_TOKEN_URL", self.token_url),
+                            ("WEB_OIDC_USERINFO_URL", self.userinfo_url),
+                            ("WEB_OIDC_REDIRECT_URI", self.redirect_uri),
+                            ("WEB_APP_ORIGIN", self.app_origin)):
+            _validate_https_url(name, value)
+        if not self.client_id.strip() or not self.client_secret.strip():
+            raise ValueError("웹 OIDC client 설정이 비어 있습니다.")
+        if "openid" not in self.scopes.split():
+            raise ValueError("WEB_OIDC_SCOPES에는 openid가 필요합니다.")
+        redirect = urlsplit(self.redirect_uri)
+        if redirect.query or redirect.path != "/v1/auth/callback":
+            raise ValueError("WEB_OIDC_REDIRECT_URI는 /v1/auth/callback 이어야 합니다.")
+        origin = urlsplit(self.app_origin)
+        if origin.path not in ("", "/") or origin.query:
+            raise ValueError("WEB_APP_ORIGIN에는 origin만 지정해야 합니다.")
+        if (redirect.scheme, redirect.netloc) != (origin.scheme, origin.netloc):
+            raise ValueError("웹 callback은 WEB_APP_ORIGIN과 같은 origin이어야 합니다.")
+
+
 def load_http_settings(source: Mapping[str, str] | None = None) -> HttpSettings:
     """프로세스 환경 또는 전달된 매핑에서 HTTP 설정을 구성한다."""
 
@@ -80,6 +112,18 @@ def load_database_settings(source: Mapping[str, str] | None = None) -> DatabaseS
     values = environ if source is None else source
     dsn = values.get("DATABASE_URL", "").strip()
     return DatabaseSettings(dsn) if dsn else None
+
+
+def load_web_auth_settings(source: Mapping[str, str] | None = None) -> WebAuthSettings | None:
+    values = environ if source is None else source
+    names = ("WEB_OIDC_AUTHORIZATION_URL", "WEB_OIDC_TOKEN_URL", "WEB_OIDC_USERINFO_URL",
+             "WEB_OIDC_CLIENT_ID", "WEB_OIDC_CLIENT_SECRET", "WEB_OIDC_REDIRECT_URI", "WEB_APP_ORIGIN")
+    raw = tuple(values.get(name, "").strip() for name in names)
+    if not any(raw):
+        return None
+    if not all(raw):
+        raise ValueError("웹 OIDC와 WEB_APP_ORIGIN 설정을 모두 지정해야 합니다.")
+    return WebAuthSettings(*raw, values.get("WEB_OIDC_SCOPES", "openid profile email").strip())
 
 
 def _validate_https_url(name: str, value: str) -> None:

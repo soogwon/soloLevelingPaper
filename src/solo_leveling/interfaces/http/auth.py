@@ -48,11 +48,13 @@ class RejectAllTokenVerifier:
         raise AccessTokenRejected
 
 
-def create_auth_dependency(verifier: AccessTokenVerifier):
+def create_auth_dependency(verifier: AccessTokenVerifier, web_session_verifier=None):
     """FastAPI Bearer 입력을 공급자 중립 검증기에 연결한다."""
 
-    from fastapi import HTTPException, Security, status
+    from fastapi import HTTPException, Request, Security, status
     from fastapi.security import HTTPBearer
+
+    from .web_auth import CSRF_COOKIE, SESSION_COOKIE, matching_tokens
 
     bearer = HTTPBearer(
         auto_error=False,
@@ -60,11 +62,25 @@ def create_auth_dependency(verifier: AccessTokenVerifier):
         description="웹 세션 또는 연결된 로컬 기기에 발급된 access token",
     )
 
-    def require_principal(credentials=Security(bearer)) -> AuthenticatedPrincipal:
-        if credentials is None or credentials.scheme.lower() != "bearer":
+    def require_principal(credentials=Security(bearer), request: Request = None) -> AuthenticatedPrincipal:
+        csrf_token = None
+        selected = verifier
+        token = None
+        if credentials is not None and credentials.scheme.lower() == "bearer":
+            token = credentials.credentials
+        elif web_session_verifier is not None and request is not None:
+            token = request.cookies.get(SESSION_COOKIE)
+            if token and request.method not in ("GET", "HEAD", "OPTIONS"):
+                csrf_token = request.headers.get("X-CSRF-Token")
+                if not matching_tokens(request.cookies.get(CSRF_COOKIE), csrf_token):
+                    raise HTTPException(status_code=403, detail={"code": "csrf_validation_failed"})
+            selected = web_session_verifier
+        if not token:
             raise _unauthorized(HTTPException, status.HTTP_401_UNAUTHORIZED)
         try:
-            return verifier.verify(credentials.credentials)
+            if csrf_token is not None:
+                return selected.verify(token, csrf_token)
+            return selected.verify(token)
         except AccessTokenVerificationUnavailable:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

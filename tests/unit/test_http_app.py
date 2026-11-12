@@ -9,7 +9,7 @@ import pytest
 
 from solo_leveling.interfaces.http import create_app
 from solo_leveling.interfaces.http import runtime
-from solo_leveling.interfaces.http.settings import HttpSettings, load_http_settings
+from solo_leveling.interfaces.http.settings import HttpSettings, load_http_settings, load_web_auth_settings
 
 
 def test_package_import_without_server_dependencies():
@@ -57,3 +57,22 @@ def test_runtime_starts_application_factory_with_environment(monkeypatch):
         "host": "0.0.0.0",
         "port": 8080,
     })]
+
+
+def test_web_auth_settings_are_all_or_none_and_https():
+    assert load_web_auth_settings({}) is None
+    values = {
+        "WEB_OIDC_AUTHORIZATION_URL": "https://id.example/authorize",
+        "WEB_OIDC_TOKEN_URL": "https://id.example/token",
+        "WEB_OIDC_USERINFO_URL": "https://id.example/userinfo",
+        "WEB_OIDC_CLIENT_ID": "client", "WEB_OIDC_CLIENT_SECRET": "secret",
+        "WEB_APP_ORIGIN": "https://app.example",
+        "WEB_OIDC_REDIRECT_URI": "https://app.example/v1/auth/callback",
+    }
+    assert load_web_auth_settings(values).client_id == "client"
+    with pytest.raises(ValueError):
+        load_web_auth_settings(values | {"WEB_OIDC_TOKEN_URL": ""})
+    with pytest.raises(ValueError):
+        load_web_auth_settings(values | {"WEB_APP_ORIGIN": "http://app.example"})
+    with pytest.raises(ValueError):
+        load_web_auth_settings(values | {"WEB_OIDC_REDIRECT_URI": "https://api.example/v1/auth/callback"})

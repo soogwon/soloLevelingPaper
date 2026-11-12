@@ -1,16 +1,15 @@
 # 외부 웹 논문 목록 API
 
-외부 웹의 논문 아카이브는 웹 세션 Bearer 자격으로 서버에 확정된 자기 논문만 조회한다.
+외부 웹의 논문 아카이브는 서버가 발급한 HttpOnly 웹 세션 쿠키로 서버에 확정된 자기 논문만 조회한다.
 기기 access token은 이 경로를 사용할 수 없다.
 
-현재 HTTP 서버의 웹 주체 전달 방식은 검증된 Bearer access token이다. External site의 실제
-client는 HttpOnly 쿠키 세션을 전제로 작성돼 있으므로, 운영 연결 전에 로그인 callback·쿠키
-세션 adapter를 추가해야 한다. 이 목록 API가 임의 쿠키 값이나 요청 본문의 사용자 ID를 인증
-대체물로 신뢰하지는 않는다.
+브라우저는 `credentials: include`로 요청하며 API 서버는 쿠키에 대응하는 세션 hash를 DB에서
+검증한다. Bearer 자격은 연결된 로컬 기기용이며, 이 목록 API가 임의 쿠키 값이나 요청 본문의
+사용자 ID를 인증 대체물로 신뢰하지는 않는다.
 
 ```http
 GET /v1/papers?q=transformer&reading_status=unknown&sort=recent&page=1&limit=20
-Authorization: Bearer <web session access token>
+Cookie: slp_session=<opaque session token>
 ```
 
 `q`는 앞뒤 공백을 제거한 뒤 제목에 대소문자 구분 없이 부분 일치시킨다. `%`, `_`, `\`는
