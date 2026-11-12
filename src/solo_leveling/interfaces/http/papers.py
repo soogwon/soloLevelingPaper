@@ -27,11 +27,32 @@ class PaperRegistration:
 
 
 @dataclass(frozen=True)
+class LearningRecordMetadata:
+    source_instance_id: str
+    local_learning_record_id: str
+    selected_version_id: str | None
+    file_name: str | None
+    last_position: dict[str, Any] | None
+    last_studied_at: datetime | None
+    reading_status: str
+    source_updated_at: datetime
+
+
+@dataclass(frozen=True)
+class LearningRecordRegistration:
+    learning_record_id: str
+    revision: int
+    sync_status: str
+    server_updated_at: datetime
+
+
+@dataclass(frozen=True)
 class PaperListItem:
     paper_id: str
     title: str | None
     authors: tuple[str, ...] | None
     publication_year: int | None
+    file_name: str | None = None
     selected_learning_record_id: str | None = None
     selected_version_id: str | None = None
     last_position: dict[str, Any] | None = None
@@ -53,6 +74,14 @@ class IdempotencyConflict(Exception):
     pass
 
 
+class LearningRecordConflict(Exception):
+    pass
+
+
+class PaperNotFound(Exception):
+    pass
+
+
 class PaperStoreUnavailable(Exception):
     pass
 
@@ -63,6 +92,9 @@ class PaperStore(Protocol):
     def list_papers(self, owner_user_id: str, *, query: str | None,
                     reading_status: str | None, page: int, limit: int) -> PaperPage: ...
 
+    def upsert_learning_record(self, owner_user_id: str, paper_id: str,
+                               metadata: LearningRecordMetadata) -> LearningRecordRegistration: ...
+
 
 class UnavailablePaperStore:
     def register(self, owner_user_id: str, key: str, metadata: PaperMetadata) -> PaperRegistration:
@@ -70,6 +102,10 @@ class UnavailablePaperStore:
 
     def list_papers(self, owner_user_id: str, *, query: str | None,
                     reading_status: str | None, page: int, limit: int) -> PaperPage:
+        raise PaperStoreUnavailable
+
+    def upsert_learning_record(self, owner_user_id: str, paper_id: str,
+                               metadata: LearningRecordMetadata) -> LearningRecordRegistration:
         raise PaperStoreUnavailable
 
 
@@ -140,31 +176,93 @@ class PostgresPaperStore:
         if query is not None:
             filters.append("title ILIKE %s ESCAPE '\\'")
             params.append(f"%{_escape_like(query)}%")
-        # 학습 기록 동기화 전에는 상태를 추정하지 않는다. 명시 상태 필터에는 미확인 논문이 포함되지 않는다.
-        if reading_status not in (None, "unknown"):
-            filters.append("FALSE")
+        if reading_status is not None:
+            filters.append("COALESCE(r.reading_status, 'unknown') = %s")
+            params.append(reading_status)
         where = " AND ".join(filters)
+        latest = """LEFT JOIN LATERAL (
+            SELECT learning_record_id, selected_version_id, file_name, last_position,
+                   last_studied_at, reading_status
+            FROM server_learning_records
+            WHERE owner_user_id=p.owner_user_id AND paper_id=p.paper_id
+            ORDER BY last_studied_at DESC NULLS LAST, learning_record_id ASC LIMIT 1
+        ) r ON TRUE"""
         with _connection(self._pool) as conn:
             # 등록과 목록 조회가 겹쳐도 전체 건수와 항목을 같은 시점에서 읽는다.
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             total = int(conn.execute(
-                f"SELECT count(*) AS total_count FROM server_papers WHERE {where}", tuple(params)
+                f"SELECT count(*) AS total_count FROM server_papers p {latest} WHERE {where}", tuple(params)
             ).fetchone()["total_count"])
             total_pages = (total + limit - 1) // limit
             if page > total_pages:
                 return PaperPage((), page, limit, total, total_pages)
             rows = conn.execute(
-                f"""SELECT paper_id, title, authors, publication_year
-                    FROM server_papers WHERE {where}
-                    ORDER BY paper_id ASC LIMIT %s OFFSET %s""",
+                f"""SELECT p.paper_id, p.title, p.authors, p.publication_year,
+                           r.learning_record_id, r.selected_version_id, r.file_name,
+                           r.last_position, r.last_studied_at, r.reading_status
+                    FROM server_papers p {latest} WHERE {where}
+                    ORDER BY r.last_studied_at DESC NULLS LAST, p.paper_id ASC LIMIT %s OFFSET %s""",
                 (*params, limit, (page - 1) * limit),
             ).fetchall()
         items = tuple(PaperListItem(
             paper_id=str(row["paper_id"]), title=row["title"],
             authors=tuple(row["authors"]) if row["authors"] is not None else None,
             publication_year=row["publication_year"],
+            file_name=row.get("file_name"),
+            selected_learning_record_id=(str(row.get("learning_record_id"))
+                                         if row.get("learning_record_id") is not None else None),
+            selected_version_id=row.get("selected_version_id"), last_position=row.get("last_position"),
+            last_studied_at=row.get("last_studied_at"), reading_status=row.get("reading_status") or "unknown",
         ) for row in rows)
         return PaperPage(items, page, limit, total, total_pages)
+
+    def upsert_learning_record(self, owner_user_id: str, paper_id: str,
+                               metadata: LearningRecordMetadata) -> LearningRecordRegistration:
+        values = (
+            str(uuid4()), owner_user_id, paper_id, metadata.source_instance_id,
+            metadata.local_learning_record_id, metadata.selected_version_id, metadata.file_name,
+            json.dumps(metadata.last_position) if metadata.last_position is not None else None,
+            metadata.last_studied_at, metadata.reading_status, metadata.source_updated_at,
+        )
+        with _connection(self._pool) as conn:
+            row = conn.execute(
+                """INSERT INTO server_learning_records
+                   (learning_record_id, owner_user_id, paper_id, source_instance_id,
+                    local_learning_record_id, selected_version_id, file_name, last_position,
+                    last_studied_at, reading_status, source_updated_at)
+                   SELECT %s, %s, p.paper_id, %s, %s, %s, %s, %s::jsonb, %s, %s, %s
+                   FROM server_papers p
+                   WHERE p.paper_id=%s AND p.owner_user_id=%s AND p.source_instance_id=%s
+                   ON CONFLICT(owner_user_id, source_instance_id, local_learning_record_id)
+                   DO UPDATE SET selected_version_id=excluded.selected_version_id,
+                     file_name=excluded.file_name, last_position=excluded.last_position,
+                     last_studied_at=excluded.last_studied_at, reading_status=excluded.reading_status,
+                     source_updated_at=excluded.source_updated_at, revision=server_learning_records.revision+1,
+                     updated_at=CURRENT_TIMESTAMP
+                   WHERE excluded.paper_id=server_learning_records.paper_id
+                     AND excluded.source_updated_at>server_learning_records.source_updated_at
+                   RETURNING learning_record_id, revision, updated_at""",
+                (values[0], values[1], *values[3:], paper_id, owner_user_id, metadata.source_instance_id),
+            ).fetchone()
+            if row is None:
+                row = conn.execute(
+                    """SELECT learning_record_id, revision, updated_at, source_updated_at,
+                              selected_version_id, file_name, last_position, last_studied_at, reading_status
+                       FROM server_learning_records
+                       WHERE owner_user_id=%s AND source_instance_id=%s AND local_learning_record_id=%s
+                         AND paper_id=%s""",
+                    (owner_user_id, metadata.source_instance_id,
+                     metadata.local_learning_record_id, paper_id),
+                ).fetchone()
+                if row is not None and row["source_updated_at"] == metadata.source_updated_at:
+                    fields = ("selected_version_id", "file_name", "last_position", "last_studied_at", "reading_status")
+                    if any(row[field] != getattr(metadata, field) for field in fields):
+                        raise LearningRecordConflict
+            if row is None:
+                raise PaperNotFound
+        return LearningRecordRegistration(
+            str(row["learning_record_id"]), int(row["revision"]), "stored", row["updated_at"]
+        )
 
 
 def _payload_hash(metadata: PaperMetadata) -> bytes:

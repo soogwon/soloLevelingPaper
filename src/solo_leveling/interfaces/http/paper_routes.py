@@ -7,7 +7,12 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from .auth import AuthenticatedPrincipal
-from .papers import IdempotencyConflict, PaperMetadata, PaperStore, PaperStoreUnavailable
+from solo_leveling.domain.learning_progress import LEARNING_STEPS
+
+from .papers import (
+    IdempotencyConflict, LearningRecordConflict, LearningRecordMetadata, PaperMetadata, PaperNotFound,
+    PaperStore, PaperStoreUnavailable,
+)
 
 
 _KEY = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
@@ -17,7 +22,7 @@ def create_paper_router(require_principal: Any, store: PaperStore):
     from fastapi import APIRouter, Depends, Header, HTTPException, status
     from fastapi.exceptions import RequestValidationError
     from fastapi.routing import APIRoute
-    from pydantic import BaseModel, ConfigDict, Field, field_validator
+    from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
     class PaperCreate(BaseModel):
         model_config = ConfigDict(extra="forbid")
@@ -74,6 +79,74 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         sync_status: str
         server_updated_at: datetime
 
+    class PositionView(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        chunk_id: str | None = Field(default=None, min_length=1, max_length=128)
+        pdf_page: int | None = Field(default=None, ge=1)
+        section_id: str | None = Field(default=None, min_length=1, max_length=128)
+        section_number: str | None = Field(default=None, min_length=1, max_length=50)
+        section_title: str | None = Field(default=None, min_length=1, max_length=500)
+        printed_page_label: str | None = Field(default=None, min_length=1, max_length=50)
+
+        @field_validator("chunk_id", "section_id", "section_number", "section_title", "printed_page_label")
+        @classmethod
+        def normalize_position_text(cls, value):
+            if value is not None and ("\x00" in value or not value.strip()):
+                raise ValueError("학습 위치 문자열이 올바르지 않습니다.")
+            return value.strip() if value is not None else None
+
+        @model_validator(mode="after")
+        def require_position_value(self):
+            if not any(value is not None for value in self.model_dump().values()):
+                raise ValueError("학습 위치에는 하나 이상의 값이 필요합니다.")
+            return self
+
+    class LearningRecordUpsert(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        source_instance_id: UUID
+        selected_version_id: str | None = Field(default=None, min_length=1, max_length=128)
+        file_name: str | None = Field(default=None, min_length=1, max_length=500)
+        last_position: PositionView | None = None
+        last_studied_at: datetime | None = None
+        completed_steps: list[Literal["preview", "structure", "deep_read", "review"]] = Field(
+            default_factory=list, max_length=len(LEARNING_STEPS)
+        )
+        source_updated_at: datetime
+
+        @field_validator("last_studied_at", "source_updated_at")
+        @classmethod
+        def require_timestamp_timezone(cls, value):
+            if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+                raise ValueError("학습 시각에는 시간대가 필요합니다.")
+            try:
+                return value.astimezone(timezone.utc) if value is not None else None
+            except OverflowError:
+                raise ValueError("UTC로 변환할 수 없는 학습 시각입니다.") from None
+
+        @field_validator("selected_version_id", "file_name")
+        @classmethod
+        def reject_unsafe_text(cls, value):
+            if value is None:
+                return None
+            value = value.strip()
+            if not value or "\x00" in value or "/" in value or "\\" in value or PureWindowsPath(value).drive:
+                raise ValueError("파일명과 버전 ID에는 경로를 사용할 수 없습니다.")
+            return value
+
+        @model_validator(mode="after")
+        def validate_learning_times(self):
+            if self.last_studied_at is not None and self.last_studied_at > self.source_updated_at:
+                raise ValueError("마지막 학습 시각은 원본 갱신 시각보다 늦을 수 없습니다.")
+            return self
+
+    class LearningRecordView(BaseModel):
+        learning_record_id: UUID
+        revision: int
+        sync_status: Literal["stored"]
+        server_updated_at: datetime
+
     class PaperRoute(APIRoute):
         def get_route_handler(self):
             handle = super().get_route_handler()
@@ -114,6 +187,44 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         except PaperStoreUnavailable:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                                 detail={"code": "paper_store_unavailable"}) from None
+
+    @router.put("/{paper_id}/learning-records/{local_record_id}", response_model=LearningRecordView)
+    def upsert_learning_record(
+        paper_id: UUID,
+        local_record_id: str,
+        payload: LearningRecordUpsert,
+        principal: Principal,
+    ):
+        if principal.credential_type != "device":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail={"code": "device_credential_required"})
+        local_record_id = local_record_id.strip()
+        if (not local_record_id or len(local_record_id) > 128 or "\x00" in local_record_id
+                or "/" in local_record_id or "\\" in local_record_id or PureWindowsPath(local_record_id).drive):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                                detail={"code": "invalid_learning_record_id"})
+        completed = set(payload.completed_steps)
+        if len(completed) != len(payload.completed_steps):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                                detail={"code": "invalid_completed_steps"})
+        reading_status = ("not_started" if payload.last_studied_at is None else
+                          "completed" if completed == set(LEARNING_STEPS) else "reading")
+        metadata = LearningRecordMetadata(
+            str(payload.source_instance_id), local_record_id, payload.selected_version_id,
+            payload.file_name, payload.last_position.model_dump(exclude_none=True) if payload.last_position else None,
+            payload.last_studied_at, reading_status, payload.source_updated_at,
+        )
+        try:
+            result = store.upsert_learning_record(principal.user_id, str(paper_id), metadata)
+        except LearningRecordConflict:
+            raise HTTPException(status_code=409, detail={"code": "learning_record_conflict"}) from None
+        except PaperNotFound:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail={"code": "paper_not_found"}) from None
+        except PaperStoreUnavailable:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail={"code": "paper_store_unavailable"}) from None
+        return LearningRecordView(**result.__dict__)
 
     return router
 
@@ -179,7 +290,7 @@ def create_web_paper_router(require_principal: Any, store: PaperStore):
         return PaperPageView(
             items=[PaperListItemView(
                 paper_id=item.paper_id, title=item.title, authors=list(item.authors) if item.authors else None,
-                file_name=None,
+                file_name=item.file_name,
                 published=({"year": item.publication_year, "month": None, "day": None, "precision": "year"}
                            if item.publication_year is not None else None),
                 selected_learning_record_id=item.selected_learning_record_id,
