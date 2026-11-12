@@ -59,7 +59,10 @@ def test_session_uses_supplied_verifier_even_when_its_length_is_zero():
             return 0
 
     verifier = EmptyVerifier(AuthenticatedPrincipal("user-1", "device", "device-1"))
-    with TestClient(create_app(token_verifier=verifier)) as client:
+    registry = SimpleNamespace(
+        is_active=lambda user_id, device_id: (user_id, device_id) == ("user-1", "device-1")
+    )
+    with TestClient(create_app(token_verifier=verifier, device_registry=registry)) as client:
         response = client.get("/v1/session", headers={"Authorization": "Bearer verified-token"})
 
     assert response.status_code == 200
