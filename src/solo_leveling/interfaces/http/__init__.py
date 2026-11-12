@@ -1,1 +1,5 @@
-"""후속 공동 서버용 빈 골격. 로컬 M1에서는 HTTP 엔드포인트를 제공하지 않는다."""
+"""중앙 HTTP API의 실행 경계."""
+
+from .app import create_app
+
+__all__ = ["create_app"]

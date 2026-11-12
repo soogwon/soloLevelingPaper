@@ -15,9 +15,11 @@ solo-leveling-desktop = "solo_leveling.interfaces.cli.desktop:main"
 solo-leveling-prepare-model = "solo_leveling.interfaces.cli.prepare_embedding_model:main"
 solo-leveling-mcp-diagnostics = "solo_leveling.interfaces.cli.mcp_diagnostics:main"
 solo-leveling-verification-retention = "solo_leveling.interfaces.cli.verification_retention:main"
+solo-leveling-api = "solo_leveling.interfaces.http.runtime:main"
 
 [project.optional-dependencies]
-dev = ["pytest", "mcp>=1,<2", "jsonschema>=4.20,<5", "pdfplumber", "chromadb>=1.5.9,<1.6", "requests>=2.32,<3", "python-dotenv>=1,<2"]
+dev = ["pytest", "mcp>=1,<2", "jsonschema>=4.20,<5", "pdfplumber", "chromadb>=1.5.9,<1.6", "requests>=2.32,<3", "python-dotenv>=1,<2", "fastapi>=0.121,<0.122"]
+server = ["fastapi>=0.121,<0.122", "uvicorn[standard]>=0.30,<1"]
 generation = ["requests>=2.32,<3", "python-dotenv>=1,<2"]
 translation = ["requests>=2.32,<3", "python-dotenv>=1,<2"]
 local = [
