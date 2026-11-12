@@ -49,6 +49,21 @@
 - 기기 연결 해제 뒤 남아 있는 갱신 자격과 접근 토큰도 사용할 수 없어야 한다.
 - 계정 전환 시 이전 계정의 outbox를 새 계정으로 자동 전송하지 않는다.
 
+### 로컬 계정 연결 경계
+
+계정 연결과 토큰 갱신은 Claude가 호출하는 일반 MCP 도구 안에서 처리하지 않는다. 로컬 설정 또는
+전용 CLI가 시스템 브라우저에서 Authorization Code + PKCE 흐름을 시작하고, loopback callback으로
+결과를 받은 뒤 운영체제 자격 증명 저장소에 인증정보를 보관한다.
+
+- access token, refresh token, authorization code를 MCP tool 입력·출력에 포함하지 않는다.
+- 인증정보를 Claude 대화, structuredContent, 일반 로그, SQLite 본문 필드에 저장하지 않는다.
+- MCP 런타임은 자격 증명 저장소의 참조를 통해 서버 client를 구성한다.
+- MCP가 공개하는 연결 상태에는 연결 여부, 안전한 계정 표시명, 기기 ID와 재인증 필요 여부만 포함한다.
+- 브라우저 로그인 성공만으로 데이터 또는 PDF 동기화를 시작하지 않는다.
+
+인증 제공자가 확정되기 전 테스트에서는 주입된 검증 주체를 사용할 수 있지만, 운영 HTTP API가
+요청 본문의 임의 user_id를 개발용 인증 대체물로 허용해서는 안 된다.
+
 ## 서버 ID와 로컬 ID
 
 서버 ID와 로컬 ID의 역할을 분리한다.
@@ -120,6 +135,16 @@ Idempotency-Key: <stable request key>
 - 웹 날짜 표시·날짜별 필터는 별도 API 계약대로 Asia/Seoul 기준을 적용할 수 있다.
 - 로그에는 토큰, API 키, 메모·인용 본문, 전체 payload, 로컬 절대경로를 남기지 않는다.
 - 운영 추적에는 안전한 오류 코드, 요청 ID, 객체 종류와 단계만 사용한다.
+
+## 로컬 revision과 서버 revision
+
+Annotation 등 현재 로컬 모델의 수정 revision은 로컬 동시 수정 검사를 계속 담당한다. 서버는
+별도의 revision을 발급하며 두 값을 같은 카운터로 간주하지 않는다.
+
+- 로컬 수정 성공 후 outbox payload에는 해당 로컬 revision을 출처 정보로 기록할 수 있다.
+- 서버 조건부 수정은 마지막으로 확인한 server_revision으로 수행한다.
+- 서버 성공 응답 뒤 mapping의 server_revision만 새 값으로 갱신한다.
+- 다른 기기의 서버 수정 때문에 충돌해도 로컬 revision을 임의로 되돌리거나 맞춰 올리지 않는다.
 
 ## 삭제 정책의 현재 범위
 

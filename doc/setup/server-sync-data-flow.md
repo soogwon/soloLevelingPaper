@@ -40,12 +40,17 @@ Content-Type: application/json
 {
   "source_instance_id": "local-installation-id",
   "local_paper_id": "local-paper-id",
-  "title": "Example Paper",
-  "authors": ["Author A"],
-  "publication_year": 2025,
+  "title": null,
+  "authors": null,
+  "publication_year": null,
   "original_created_at": "2026-11-01T10:00:00+09:00"
 }
 ```
+
+`title`, `authors`, `publication_year`는 선택 필드다. 현재 로컬 `papers`에는 저자·출판 연도가
+없고 기존 제목도 비어 있을 수 있다. 서버는 메타데이터 결측을 이유로 논문 등록을 거부하거나
+등록일·업로드일로 출판일을 추정하지 않는다. 이후 확인된 메타데이터는 서버 ID와 마지막으로
+확인한 서버 revision을 사용해 수정한다.
 
 요청 본문에 회원 ID를 받더라도 소유권 판단에 사용하지 않는다. 서버는 검증된 인증 주체에서
 사용자를 결정하고, 인증된 기기가 그 사용자에게 연결되어 있는지 확인한다.
@@ -101,6 +106,36 @@ Content-Type: application/json
 서버가 성공 응답을 반환하고 ID 매핑과 outbox 성공 상태를 같은 로컬 트랜잭션으로 기록한 뒤에만
 원격 저장 완료로 표시한다. 응답 후 로컬 기록 전에 프로세스가 종료돼도 같은 멱등 키로 재시도해
 기존 서버 결과를 복구한다.
+
+## 학습 기록 투영
+
+로컬 `learning_context`는 서버 `LearningRecord`와 같은 객체가 아니다. 동기화 계층은 로컬
+컨텍스트를 출처 참조로 유지하면서 사용자 학습 기록을 별도로 투영한다.
+
+| 서버 필드 | 로컬 근거 | 규칙 |
+|---|---|---|
+| source_context_id | learning_context.context_id | 연결 정보이며 서버 학습 기록 ID로 사용하지 않음 |
+| server_version_id | context의 version_id 매핑 | 먼저 원문 버전 서버 ID를 확보함 |
+| started_at | 명시적 학습 시작 성공 | context 생성 시각으로 임의 대체하지 않음 |
+| last_learned_at | 실제 학습 위치 저장 시각 | 서버 업로드 시각으로 대체하지 않음 |
+| last_position | 명시적으로 저장된 사용자 위치 | 검색된 근거 페이지로 추정하지 않음 |
+| reading_status | 별도 상태 모델 | 파싱·질문·웹 열람으로 자동 변경하지 않음 |
+
+이 필드의 로컬 근거가 아직 없으면 논문 메타데이터 세로 조각에는 포함하지 않는다. 외부 웹은
+학습 기록 없음과 알 수 없는 위치를 정상적인 빈 값으로 처리한다.
+
+## 목록 조회 adapter
+
+현재 로컬 Annotation 라이브러리는 cursor 기반 키셋 조회를 사용한다. 외부 웹 티켓은 페이지 번호
+이동과 전체 페이지 수를 요구하므로 서버 HTTP API가 로컬 cursor를 그대로 노출하지 않는다.
+
+- MCP·로컬 조회: 기존 `limit`·`cursor` 계약 유지
+- 서버 웹 조회: `page`·`limit`, `total_count`, `page_size`, `total_pages` 제공
+- 서버 repository: 사용자 소유권 필터와 고정 보조 정렬을 포함한 별도 SQL 사용
+- 날짜별 기록 수: 현재 page의 개수가 아니라 같은 전체 필터 결과에서 계산
+
+한 응답에서 cursor와 page를 동시에 반환하지 않는다. 프론트가 페이지 번호를 요구하는 동안
+서버가 cursor를 page 번호로 추정하거나 모든 앞 페이지를 순차 조회해서는 안 된다.
 
 ## 처리 순서
 
