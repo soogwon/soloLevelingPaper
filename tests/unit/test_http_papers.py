@@ -22,6 +22,9 @@ from solo_leveling.interfaces.http.papers import (
     PaperSelectionConflict,
     PaperRegistration,
     PostgresPaperStore,
+    StoredSummary,
+    SummaryMetadata,
+    SummaryRegistration,
     _payload_hash,
 )
 
@@ -139,6 +142,10 @@ class MemoryStore:
         return LearningRecordRegistration(
             "00000000-0000-0000-0000-000000000301", 1, "stored", NOW
         )
+
+    def upsert_summary(self, owner_user_id, paper_id, item):
+        self.calls.append((owner_user_id, paper_id, item))
+        return SummaryRegistration("00000000-0000-0000-0000-000000000401", 1, "stored", NOW)
 
     def get_paper(self, owner_user_id, paper_id, **selection):
         self.calls.append((owner_user_id, paper_id, selection))
@@ -306,6 +313,27 @@ def test_learning_record_route_derives_status_and_uses_device_owner():
     assert store.calls[0][2].reading_status == "completed"
 
 
+def test_summary_route_uses_device_owner_and_preserves_evidence_links():
+    store = MemoryStore()
+    route = next(route.endpoint for route in create_app(paper_store=store).routes
+                 if route.path.endswith("/summaries/{local_summary_id}"))
+    payload = SimpleNamespace(
+        source_instance_id=UUID(SOURCE_ID), scope="paper", author_type="mcp",
+        items=[SimpleNamespace(model_dump=lambda: {
+            "kind": "claim", "text": "핵심 주장", "evidence_ids": ["e1"],
+        })],
+        original_created_at=NOW, source_updated_at=NOW,
+    )
+    principal = AuthenticatedPrincipal("user-1", "device", SOURCE_ID)
+
+    result = route(UUID(PAPER_ID), "context-1", "summary-1", payload, principal)
+
+    assert str(result.summary_id) == "00000000-0000-0000-0000-000000000401"
+    sent = store.calls[0][2]
+    assert sent.local_learning_record_id == "context-1"
+    assert sent.items[0]["evidence_ids"] == ["e1"]
+
+
 def test_postgres_detail_selects_requested_record_in_owner_scope():
     record_id = "00000000-0000-0000-0000-000000000301"
     pool = Pool([
@@ -314,6 +342,7 @@ def test_postgres_detail_selects_requested_record_in_owner_scope():
         Result({"learning_record_id": record_id, "selected_version_id": "version-1",
                 "file_name": "paper.pdf", "last_position": {"pdf_page": 3},
                 "last_studied_at": NOW, "reading_status": "reading"}),
+        Result(),
     ])
 
     detail = PostgresPaperStore(pool).get_paper(
@@ -333,6 +362,7 @@ def test_detail_rejects_mismatched_record_and_version():
         Result({"learning_record_id": record_id, "selected_version_id": "version-2",
                 "file_name": None, "last_position": None, "last_studied_at": NOW,
                 "reading_status": "reading"}),
+        Result(),
     ])
 
     with pytest.raises(PaperSelectionConflict):
@@ -353,6 +383,44 @@ def test_detail_without_learning_record_returns_basic_paper_only():
     assert detail.paper == PaperListItem(PAPER_ID, None, None, None)
 
 
+def test_postgres_summary_upsert_requires_owned_paper_and_learning_record():
+    summary_id = "00000000-0000-0000-0000-000000000401"
+    pool = Pool([Result({"summary_id": summary_id, "revision": 1, "updated_at": NOW})])
+    item = SummaryMetadata(
+        SOURCE_ID, "context-1", "summary-1", "paper", "mcp",
+        ({"kind": "claim", "text": "핵심 주장", "evidence_ids": ["e1"]},), NOW, NOW,
+    )
+
+    result = PostgresPaperStore(pool).upsert_summary("user-1", PAPER_ID, item)
+
+    assert result == SummaryRegistration(summary_id, 1, "stored", NOW)
+    sql, params = pool.conn.calls[0]
+    assert "JOIN server_learning_records" in sql
+    assert "p.owner_user_id=%s AND p.source_instance_id=%s" in sql
+    assert params[-4:] == (PAPER_ID, "user-1", SOURCE_ID, "context-1")
+
+
+def test_detail_returns_paper_scope_summary_for_selected_record():
+    record_id = "00000000-0000-0000-0000-000000000301"
+    summary_id = "00000000-0000-0000-0000-000000000401"
+    items = [{"kind": "result", "text": "결과", "evidence_ids": ["e1"]}]
+    pool = Pool([
+        Result(),
+        Result({"paper_id": PAPER_ID, "title": "Paper", "authors": None, "publication_year": 2024}),
+        Result({"learning_record_id": record_id, "selected_version_id": "version-1",
+                "file_name": "paper.pdf", "last_position": None,
+                "last_studied_at": NOW, "reading_status": "reading"}),
+        Result({"summary_id": summary_id, "author_type": "mcp", "items": items,
+                "original_created_at": NOW}),
+    ])
+
+    detail = PostgresPaperStore(pool).get_paper(
+        "user-1", PAPER_ID, learning_record_id=record_id, version_id=None)
+
+    assert detail.summary == StoredSummary(summary_id, NOW, "mcp", tuple(items))
+    assert pool.conn.calls[3][1] == ("user-1", PAPER_ID, record_id)
+
+
 def test_web_detail_uses_session_owner_and_reports_unavailable_dependencies():
     store = MemoryStore()
     principal = AuthenticatedPrincipal("web-user", "web_session")
@@ -368,6 +436,26 @@ def test_web_detail_uses_session_owner_and_reports_unavailable_dependencies():
     assert result.summary is None
     assert (result.file_access.available, result.file_access.reason) == (False, "not_uploaded")
     assert (result.resume.available, result.resume.reason) == (False, "local_client_required")
+
+
+def test_web_detail_serializes_synced_summary():
+    class SummaryStore(MemoryStore):
+        def get_paper(self, owner_user_id, paper_id, **selection):
+            return PaperDetail(
+                PaperListItem(paper_id, "Paper", None, None, selected_learning_record_id=
+                              "00000000-0000-0000-0000-000000000301"),
+                StoredSummary("00000000-0000-0000-0000-000000000401", NOW, "mcp", ({
+                    "kind": "claim", "text": "핵심 주장", "evidence_ids": ["e1"],
+                },)),
+            )
+
+    route = next(route.endpoint for route in create_app(paper_store=SummaryStore()).routes
+                 if route.path == "/v1/papers/{paper_id}")
+
+    result = route(UUID(PAPER_ID), AuthenticatedPrincipal("web-user", "web_session"), None, None)
+
+    assert result.summary["author_type"] == "mcp"
+    assert result.summary["items"][0]["evidence_ids"] == ["e1"]
 
 
 def test_web_list_uses_session_owner_and_preserves_out_of_range_page():
