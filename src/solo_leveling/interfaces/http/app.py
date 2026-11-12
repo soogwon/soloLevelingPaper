@@ -24,7 +24,8 @@ def create_app(
 
     from .auth import RejectAllTokenVerifier, create_auth_dependency
     from .device_auth import DeviceAuthorizingTokenVerifier, RejectAllDeviceRegistry
-    from .device_routes import create_device_router
+    from .device_routes import create_device_router, create_device_token_router
+    from .device_tokens import OpaqueDeviceTokenVerifier, RoutingAccessTokenVerifier
     from .devices import PostgresDeviceStore, UnavailableDeviceStore
     from .oidc import OidcAccessTokenVerifier
     from .settings import load_database_settings, load_oidc_settings
@@ -57,6 +58,7 @@ def create_app(
     if token_verifier is None:
         oidc_settings = load_oidc_settings()
         token_verifier = OidcAccessTokenVerifier(oidc_settings) if oidc_settings else RejectAllTokenVerifier()
+    token_verifier = RoutingAccessTokenVerifier(token_verifier, OpaqueDeviceTokenVerifier(selected_store))
     if device_registry is not None:
         selected_registry = device_registry
     elif device_store is not None:
@@ -85,5 +87,6 @@ def create_app(
         }
 
     app.include_router(create_device_router(require_principal, selected_store))
+    app.include_router(create_device_token_router(selected_store))
 
     return app
