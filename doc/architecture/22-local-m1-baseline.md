@@ -131,6 +131,8 @@ URL은 HTTPS·허용 출처·응답 크기·시간을 제한하고 DNS 및 모�
 
 원격 MCP transport, 인증·권한, 객체 저장소, API/worker 분리, DB 전환은 후속 단계의 별도 결정이다. 어댑터·안정적인 ID를 유지하지만 자동 이관을 보장하지 않는다. 로컬 DB나 파일을 사용자 동의 없이 공동 서버로 업로드하지 않는다.
 
+2026-11-12 이후 첫 서버 단계는 [로컬 MCP와 중앙 서버 병행 전환 결정](24-hybrid-server-transition.md)을 따른다. 로컬 MCP와 중앙 동기화 API를 먼저 병행하고, 원격 MCP transport와 서버 측 논문 처리는 해당 문서의 재평가 조건을 충족한 뒤 별도로 결정한다. 이 후속 결정은 위의 로컬 M1 실행·파일·외부 전송 경계를 소급해 변경하지 않는다.
+
 ## 공식 기술 자료
 
 - [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
