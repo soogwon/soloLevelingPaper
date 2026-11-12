@@ -30,7 +30,7 @@ def create_app(
     from .device_tokens import OpaqueDeviceTokenVerifier, RoutingAccessTokenVerifier
     from .devices import PostgresDeviceStore, UnavailableDeviceStore
     from .oidc import OidcAccessTokenVerifier
-    from .paper_routes import create_paper_router
+    from .paper_routes import create_paper_router, create_web_paper_router
     from .papers import PostgresPaperStore, UnavailablePaperStore
     from .settings import load_database_settings, load_oidc_settings
 
@@ -96,5 +96,6 @@ def create_app(
     app.include_router(create_device_router(require_principal, selected_store))
     app.include_router(create_device_token_router(selected_store))
     app.include_router(create_paper_router(require_principal, selected_paper_store))
+    app.include_router(create_web_paper_router(require_principal, selected_paper_store))
 
     return app

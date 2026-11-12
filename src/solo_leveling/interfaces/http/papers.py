@@ -26,6 +26,29 @@ class PaperRegistration:
     server_updated_at: datetime
 
 
+@dataclass(frozen=True)
+class PaperListItem:
+    paper_id: str
+    title: str | None
+    authors: tuple[str, ...] | None
+    publication_year: int | None
+    selected_learning_record_id: str | None = None
+    selected_version_id: str | None = None
+    last_position: dict[str, Any] | None = None
+    last_studied_at: datetime | None = None
+    reading_status: str = "unknown"
+    collection_id: str | None = None
+
+
+@dataclass(frozen=True)
+class PaperPage:
+    items: tuple[PaperListItem, ...]
+    page: int
+    page_size: int
+    total_count: int
+    total_pages: int
+
+
 class IdempotencyConflict(Exception):
     pass
 
@@ -37,9 +60,16 @@ class PaperStoreUnavailable(Exception):
 class PaperStore(Protocol):
     def register(self, owner_user_id: str, key: str, metadata: PaperMetadata) -> PaperRegistration: ...
 
+    def list_papers(self, owner_user_id: str, *, query: str | None,
+                    reading_status: str | None, page: int, limit: int) -> PaperPage: ...
+
 
 class UnavailablePaperStore:
     def register(self, owner_user_id: str, key: str, metadata: PaperMetadata) -> PaperRegistration:
+        raise PaperStoreUnavailable
+
+    def list_papers(self, owner_user_id: str, *, query: str | None,
+                    reading_status: str | None, page: int, limit: int) -> PaperPage:
         raise PaperStoreUnavailable
 
 
@@ -102,6 +132,40 @@ class PostgresPaperStore:
             )
             return result
 
+    def list_papers(self, owner_user_id: str, *, query: str | None,
+                    reading_status: str | None, page: int, limit: int) -> PaperPage:
+        """웹 목록용 offset 페이지를 소유권 범위에서 안정적인 순서로 조회한다."""
+        filters = ["owner_user_id = %s"]
+        params: list[Any] = [owner_user_id]
+        if query is not None:
+            filters.append("title ILIKE %s ESCAPE '\\'")
+            params.append(f"%{_escape_like(query)}%")
+        # 학습 기록 동기화 전에는 상태를 추정하지 않는다. 명시 상태 필터에는 미확인 논문이 포함되지 않는다.
+        if reading_status not in (None, "unknown"):
+            filters.append("FALSE")
+        where = " AND ".join(filters)
+        with _connection(self._pool) as conn:
+            # 등록과 목록 조회가 겹쳐도 전체 건수와 항목을 같은 시점에서 읽는다.
+            conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            total = int(conn.execute(
+                f"SELECT count(*) AS total_count FROM server_papers WHERE {where}", tuple(params)
+            ).fetchone()["total_count"])
+            total_pages = (total + limit - 1) // limit
+            if page > total_pages:
+                return PaperPage((), page, limit, total, total_pages)
+            rows = conn.execute(
+                f"""SELECT paper_id, title, authors, publication_year
+                    FROM server_papers WHERE {where}
+                    ORDER BY paper_id ASC LIMIT %s OFFSET %s""",
+                (*params, limit, (page - 1) * limit),
+            ).fetchall()
+        items = tuple(PaperListItem(
+            paper_id=str(row["paper_id"]), title=row["title"],
+            authors=tuple(row["authors"]) if row["authors"] is not None else None,
+            publication_year=row["publication_year"],
+        ) for row in rows)
+        return PaperPage(items, page, limit, total, total_pages)
+
 
 def _payload_hash(metadata: PaperMetadata) -> bytes:
     payload = asdict(metadata)
@@ -109,6 +173,10 @@ def _payload_hash(metadata: PaperMetadata) -> bytes:
     payload["original_created_at"] = metadata.original_created_at.astimezone(timezone.utc).isoformat()
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return sha256(canonical.encode("utf-8")).digest()
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _response_body(result: PaperRegistration) -> dict[str, Any]:
