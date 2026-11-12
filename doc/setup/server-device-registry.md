@@ -10,6 +10,7 @@
 $env:DATABASE_URL = "postgresql://app:password@db.example.com/solo_leveling"
 psql $env:DATABASE_URL -f migrations/server/0001_server_devices.sql
 psql $env:DATABASE_URL -f migrations/server/0002_device_credentials.sql
+psql $env:DATABASE_URL -f migrations/server/0003_server_papers.sql
 solo-leveling-api
 ```
 

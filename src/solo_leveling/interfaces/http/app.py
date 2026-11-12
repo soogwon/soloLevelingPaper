@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .auth import AccessTokenVerifier
     from .device_auth import DeviceRegistry
     from .devices import DeviceStore
+    from .papers import PaperStore
 
 
 def create_app(
@@ -17,6 +18,7 @@ def create_app(
     token_verifier: "AccessTokenVerifier | None" = None,
     device_registry: "DeviceRegistry | None" = None,
     device_store: "DeviceStore | None" = None,
+    paper_store: "PaperStore | None" = None,
 ) -> "FastAPI":
     """명시적 설정 또는 환경 설정으로 독립적인 API 앱을 만든다."""
 
@@ -28,6 +30,8 @@ def create_app(
     from .device_tokens import OpaqueDeviceTokenVerifier, RoutingAccessTokenVerifier
     from .devices import PostgresDeviceStore, UnavailableDeviceStore
     from .oidc import OidcAccessTokenVerifier
+    from .paper_routes import create_paper_router
+    from .papers import PostgresPaperStore, UnavailablePaperStore
     from .settings import load_database_settings, load_oidc_settings
 
     selected = settings or load_http_settings()
@@ -38,6 +42,9 @@ def create_app(
             managed_store = PostgresDeviceStore.from_dsn(database.dsn)
             device_store = managed_store
     selected_store = device_store if device_store is not None else UnavailableDeviceStore()
+    if paper_store is None and managed_store is not None:
+        paper_store = PostgresPaperStore(managed_store.connection_pool)
+    selected_paper_store = paper_store if paper_store is not None else UnavailablePaperStore()
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -88,5 +95,6 @@ def create_app(
 
     app.include_router(create_device_router(require_principal, selected_store))
     app.include_router(create_device_token_router(selected_store))
+    app.include_router(create_paper_router(require_principal, selected_paper_store))
 
     return app
