@@ -129,3 +129,30 @@ def test_server_failures_are_safe_local_states(database, response, status, code)
     result = service.sync(operation)
     assert (result.status, result.error_code) == (status, code)
     assert response.closed
+
+
+def test_late_failure_cannot_replace_completed_retry(database):
+    client = Client()
+    service = PaperMetadataSyncService(database, client, now=lambda: NOW)
+    operation = service.grant_and_queue("paper-local-1", "paper-sync-v1").operation_id
+    normal_request = client.request
+
+    def delayed_failure(*args, **kwargs):
+        client.request = normal_request
+        assert service.sync(operation).status == "synced"
+        return Response(503)
+
+    client.request = delayed_failure
+    result = service.sync(operation)
+    assert (result.status, result.server_object_id) == ("synced", SERVER_PAPER_ID)
+    assert service.sync(operation) == result
+
+
+@pytest.mark.parametrize("change", [{"server_updated_at": None}, {"paper_id": 123}, {"revision": 2**63}])
+def test_invalid_success_does_not_leave_outbox_syncing(database, change):
+    response = Response()
+    response.data.update(change)
+    service = PaperMetadataSyncService(database, Client([response]), now=lambda: NOW)
+    operation = service.grant_and_queue("paper-local-1", "paper-sync-v1").operation_id
+    result = service.sync(operation)
+    assert (result.status, result.error_code) == ("action_required", "invalid_server_response")

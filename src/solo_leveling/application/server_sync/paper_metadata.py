@@ -66,7 +66,10 @@ class PaperMetadataSyncService:
 
     def sync(self, operation_id: str) -> SyncResult:
         """한 작업을 전송한다. 실패해도 기존 로컬 논문 기능에는 예외를 전파하지 않는다."""
-        account_id = self._client.connection_id()
+        try:
+            account_id = self._client.connection_id()
+        except ServerConnectionRequired:
+            return SyncResult(operation_id, "action_required", error_code="reauthentication_required")
         conn = get_connection(self._db_path)
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -78,16 +81,15 @@ class PaperMetadataSyncService:
             ).fetchone()
             if row is None:
                 raise KeyError("동기화 작업을 찾을 수 없습니다.")
-            if row["status"] == "synced":
-                mapping = _mapping(conn, row)
-                conn.commit()
-                return SyncResult(operation_id, "synced", mapping["server_object_id"])
+            if row["status"] in ("synced", "conflict"):
+                return _current_result(conn, row)
             if row["revoked_at"] is not None:
                 return _finish(conn, row, "action_required", "consent_revoked", self._now())
             source_id = _source_instance_id(conn)
             payload = _paper_payload(conn, row["local_object_id"], source_id)
             if _payload_hash(payload) != row["payload_hash"]:
                 return _finish(conn, row, "conflict", "payload_changed", self._now())
+            attempt = row["attempt_count"] + 1
             conn.execute(
                 """UPDATE sync_outbox SET status='syncing', attempt_count=attempt_count+1,
                    last_error_code=NULL, updated_at=? WHERE operation_id=?""",
@@ -99,28 +101,28 @@ class PaperMetadataSyncService:
 
         try:
             response = self._client.request(
-                "POST", "/v1/mcp/papers", json=payload,
+                "POST", "/v1/mcp/papers", json=payload, expected_connection_id=account_id,
                 headers={"Idempotency-Key": operation_id},
             )
         except ServerConnectionRequired:
-            return self._record_failure(operation_id, account_id, "action_required", "reauthentication_required")
+            return self._record_failure(operation_id, account_id, attempt, "action_required", "reauthentication_required")
         except Exception as exc:
             if not _is_transport_failure(exc):
                 raise
-            return self._record_failure(operation_id, account_id, "retryable_failure", "server_unavailable", retry=True)
+            return self._record_failure(operation_id, account_id, attempt, "retryable_failure", "server_unavailable", retry=True)
 
         try:
             if response.status_code == 409:
-                return self._record_failure(operation_id, account_id, "conflict", "server_conflict")
+                return self._record_failure(operation_id, account_id, attempt, "conflict", "server_conflict")
             if response.status_code == 422:
-                return self._record_failure(operation_id, account_id, "action_required", "invalid_paper_request")
+                return self._record_failure(operation_id, account_id, attempt, "action_required", "invalid_paper_request")
             if response.status_code >= 500:
-                return self._record_failure(operation_id, account_id, "retryable_failure", "server_unavailable", retry=True)
+                return self._record_failure(operation_id, account_id, attempt, "retryable_failure", "server_unavailable", retry=True)
             if response.status_code != 201:
-                return self._record_failure(operation_id, account_id, "action_required", "unexpected_server_response")
+                return self._record_failure(operation_id, account_id, attempt, "action_required", "unexpected_server_response")
             result = _validated_response(response.json())
         except (ValueError, TypeError, KeyError):
-            return self._record_failure(operation_id, account_id, "action_required", "invalid_server_response")
+            return self._record_failure(operation_id, account_id, attempt, "action_required", "invalid_server_response")
         finally:
             response.close()
 
@@ -133,7 +135,8 @@ class PaperMetadataSyncService:
             ).fetchone()
             if row is None:
                 raise KeyError("동기화 작업을 찾을 수 없습니다.")
-            source_id = _source_instance_id(conn)
+            if row["attempt_count"] != attempt or row["status"] != "syncing":
+                return _current_result(conn, row)
             now = _iso(self._now())
             conn.execute(
                 """INSERT INTO server_object_mappings
@@ -159,15 +162,18 @@ class PaperMetadataSyncService:
         finally:
             conn.close()
 
-    def _record_failure(self, operation_id, account_id, status, code, retry=False):
+    def _record_failure(self, operation_id, account_id, attempt, status, code, retry=False):
         conn = get_connection(self._db_path)
         try:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM sync_outbox WHERE operation_id=? AND account_id=?",
                 (operation_id, account_id),
             ).fetchone()
             if row is None:
                 raise KeyError("동기화 작업을 찾을 수 없습니다.")
+            if row["attempt_count"] != attempt or row["status"] != "syncing":
+                return _current_result(conn, row)
             return _finish(conn, row, status, code, self._now(), retry)
         finally:
             conn.close()
@@ -200,8 +206,10 @@ def _payload_hash(payload: dict[str, Any]) -> str:
 def _validated_response(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict) or data.get("sync_status") != "stored":
         raise ValueError
+    if not isinstance(data.get("paper_id"), str) or not isinstance(data.get("server_updated_at"), str):
+        raise ValueError
     UUID(data["paper_id"])
-    if not isinstance(data.get("revision"), int) or isinstance(data["revision"], bool) or data["revision"] < 1:
+    if not isinstance(data.get("revision"), int) or isinstance(data["revision"], bool) or not 1 <= data["revision"] <= 2**63 - 1:
         raise ValueError
     value = datetime.fromisoformat(data["server_updated_at"].replace("Z", "+00:00"))
     if value.tzinfo is None:
@@ -209,12 +217,16 @@ def _validated_response(data: Any) -> dict[str, Any]:
     return data
 
 
-def _mapping(conn: sqlite3.Connection, row: sqlite3.Row):
-    return conn.execute(
+def _current_result(conn, row):
+    if row["status"] != "synced":
+        return SyncResult(row["operation_id"], row["status"], error_code=row["last_error_code"])
+    mapping = conn.execute(
         """SELECT * FROM server_object_mappings
-           WHERE account_id=? AND object_type=? AND local_object_id=?""",
+           WHERE account_id=? AND object_type=? AND local_object_id=?
+             AND source_instance_id=(SELECT source_instance_id FROM server_sync_identity WHERE singleton=1)""",
         (row["account_id"], row["object_type"], row["local_object_id"]),
     ).fetchone()
+    return SyncResult(row["operation_id"], "synced", mapping["server_object_id"])
 
 
 def _finish(conn, row, status, code, now, retry=False):

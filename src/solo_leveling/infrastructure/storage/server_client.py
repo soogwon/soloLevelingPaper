@@ -39,9 +39,11 @@ class AuthenticatedServerClient:
         session.auth = lambda request: request
         return cls(server_url, session, KeyringCredentialStore())
 
-    def request(self, method: str, path: str, **kwargs):
+    def request(self, method: str, path: str, *, expected_connection_id: str | None = None, **kwargs):
         url = self._request_url(path)
         credentials = self._load_credentials()
+        if expected_connection_id is not None and self._connection_id(credentials) != expected_connection_id:
+            raise ServerConnectionRequired
         refreshed = _parse_time(credentials.access_expires_at) <= self._now() + timedelta(seconds=30)
         if refreshed:
             credentials = self._refresh(credentials)
@@ -57,7 +59,9 @@ class AuthenticatedServerClient:
 
     def connection_id(self) -> str:
         """현재 기기 연결을 토큰이나 서버 사용자 ID 노출 없이 로컬에서 구분한다."""
-        credentials = self._load_credentials()
+        return self._connection_id(self._load_credentials())
+
+    def _connection_id(self, credentials: StoredDeviceCredentials) -> str:
         value = f"{self.server_url}\0{credentials.device_id}".encode("utf-8")
         return f"device-{sha256(value).hexdigest()}"
 
