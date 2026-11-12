@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS server_summaries (
     paper_id uuid NOT NULL,
     learning_record_id uuid NOT NULL REFERENCES server_learning_records(learning_record_id),
     source_instance_id uuid NOT NULL,
+    selected_version_id text,
     local_summary_id text NOT NULL,
     scope text NOT NULL,
     author_type text NOT NULL CHECK (author_type IN ('mcp', 'user')),

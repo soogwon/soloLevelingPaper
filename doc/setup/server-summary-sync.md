@@ -9,6 +9,7 @@
 
 - device 자격만 사용할 수 있다.
 - 요청의 `source_instance_id`와 서버에 등록된 논문 및 학습 기록의 source가 모두 같아야 한다.
+- 요청에는 요약의 원문 버전인 `selected_version_id`를 포함한다(버전 미지정 시 `null`). 학습 기록의 현재 버전과 다르면 409를 반환하며 기존 요약 ID를 다른 버전에 재사용할 수 없다.
 - 현재 외부 상세 페이지에 필요한 전체 논문 요약만 받으므로 `scope`는 `paper`만 허용한다.
 - `author_type`은 현재 MCP 생성 요약을 뜻하는 `mcp`와 향후 사용자 작성 요약을 위한 `user`를 허용한다.
 - 각 항목은 `claim`, `method`, `result`, `limitation` 중 하나이며 본문과 하나 이상의 `evidence_ids`를 가진다.

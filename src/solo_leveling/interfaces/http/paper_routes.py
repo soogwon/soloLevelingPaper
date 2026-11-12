@@ -179,11 +179,14 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         model_config = ConfigDict(extra="forbid")
 
         source_instance_id: UUID
+        selected_version_id: str | None = Field(max_length=128)
         scope: Literal["paper"]
         author_type: Literal["mcp", "user"]
         items: list[SummaryItemUpsert] = Field(min_length=1, max_length=100)
         original_created_at: datetime
         source_updated_at: datetime
+
+        _version_id = field_validator("selected_version_id")(_normalize_file_or_version)
 
         @field_validator("original_created_at", "source_updated_at")
         @classmethod
@@ -308,7 +311,7 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         metadata = SummaryMetadata(
             str(payload.source_instance_id), identifiers[0], identifiers[1], payload.scope,
             payload.author_type, tuple(item.model_dump() for item in payload.items),
-            payload.original_created_at, payload.source_updated_at,
+            payload.original_created_at, payload.source_updated_at, payload.selected_version_id,
         )
         try:
             result = store.upsert_summary(principal.user_id, str(paper_id), metadata)

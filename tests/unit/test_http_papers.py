@@ -318,7 +318,7 @@ def test_summary_route_uses_device_owner_and_preserves_evidence_links():
     route = next(route.endpoint for route in create_app(paper_store=store).routes
                  if route.path.endswith("/summaries/{local_summary_id}"))
     payload = SimpleNamespace(
-        source_instance_id=UUID(SOURCE_ID), scope="paper", author_type="mcp",
+        source_instance_id=UUID(SOURCE_ID), scope="paper", author_type="mcp", selected_version_id="v1",
         items=[SimpleNamespace(model_dump=lambda: {
             "kind": "claim", "text": "핵심 주장", "evidence_ids": ["e1"],
         })],
@@ -385,18 +385,19 @@ def test_detail_without_learning_record_returns_basic_paper_only():
 
 def test_postgres_summary_upsert_requires_owned_paper_and_learning_record():
     summary_id = "00000000-0000-0000-0000-000000000401"
-    pool = Pool([Result({"summary_id": summary_id, "revision": 1, "updated_at": NOW})])
+    pool = Pool([Result({"learning_record_id": PAPER_ID, "selected_version_id": "v1"}),
+                 Result({"summary_id": summary_id, "revision": 1, "updated_at": NOW})])
     item = SummaryMetadata(
         SOURCE_ID, "context-1", "summary-1", "paper", "mcp",
-        ({"kind": "claim", "text": "핵심 주장", "evidence_ids": ["e1"]},), NOW, NOW,
+        ({"kind": "claim", "text": "핵심 주장", "evidence_ids": ["e1"]},), NOW, NOW, "v1",
     )
 
     result = PostgresPaperStore(pool).upsert_summary("user-1", PAPER_ID, item)
 
     assert result == SummaryRegistration(summary_id, 1, "stored", NOW)
     sql, params = pool.conn.calls[0]
-    assert "JOIN server_learning_records" in sql
-    assert "p.owner_user_id=%s AND p.source_instance_id=%s" in sql
+    assert "FROM server_learning_records" in sql
+    assert "owner_user_id=%s AND source_instance_id=%s" in sql
     assert params[-4:] == (PAPER_ID, "user-1", SOURCE_ID, "context-1")
 
 
@@ -418,7 +419,7 @@ def test_detail_returns_paper_scope_summary_for_selected_record():
         "user-1", PAPER_ID, learning_record_id=record_id, version_id=None)
 
     assert detail.summary == StoredSummary(summary_id, NOW, "mcp", tuple(items))
-    assert pool.conn.calls[3][1] == ("user-1", PAPER_ID, record_id)
+    assert pool.conn.calls[3][1] == ("user-1", PAPER_ID, record_id, "version-1")
 
 
 def test_web_detail_uses_session_owner_and_reports_unavailable_dependencies():
@@ -563,3 +564,19 @@ def test_detail_rejects_invalid_version_before_storage(version_id):
     assert failure.value.status_code == 422
     assert failure.value.detail == {"code": "invalid_version_id"}
     assert not store.calls
+
+
+@pytest.mark.parametrize(("record", "error"), [
+    (None, "missing"),
+    ({"learning_record_id": PAPER_ID, "selected_version_id": "new-version"}, "changed"),
+])
+def test_summary_rejects_missing_record_or_changed_version_before_write(record, error):
+    from solo_leveling.interfaces.http.papers import PaperNotFound, SummaryConflict
+
+    pool = Pool([Result(record)])
+    item = SummaryMetadata(SOURCE_ID, "context", "summary", "paper", "mcp",
+                           ({"kind": "result", "text": "결과", "evidence_ids": ["e1"]},),
+                           NOW, NOW, "old-version")
+    with pytest.raises(PaperNotFound if error == "missing" else SummaryConflict):
+        PostgresPaperStore(pool).upsert_summary("user-1", PAPER_ID, item)
+    assert len(pool.conn.calls) == 1

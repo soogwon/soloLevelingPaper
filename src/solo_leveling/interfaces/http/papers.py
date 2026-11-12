@@ -56,6 +56,7 @@ class SummaryMetadata:
     items: tuple[dict[str, Any], ...]
     original_created_at: datetime
     source_updated_at: datetime
+    selected_version_id: str | None
 
 
 @dataclass(frozen=True)
@@ -323,34 +324,41 @@ class PostgresPaperStore:
     def upsert_summary(self, owner_user_id: str, paper_id: str,
                        metadata: SummaryMetadata) -> SummaryRegistration:
         with _connection(self._pool) as conn:
+            record = conn.execute(
+                """SELECT learning_record_id, selected_version_id FROM server_learning_records
+                   WHERE paper_id=%s AND owner_user_id=%s AND source_instance_id=%s
+                     AND local_learning_record_id=%s FOR SHARE""",
+                (paper_id, owner_user_id, metadata.source_instance_id, metadata.local_learning_record_id),
+            ).fetchone()
+            if record is None:
+                raise PaperNotFound
+            if record["selected_version_id"] != metadata.selected_version_id:
+                raise SummaryConflict
             row = conn.execute(
                 """INSERT INTO server_summaries
                    (summary_id, owner_user_id, paper_id, learning_record_id, source_instance_id,
-                    local_summary_id, scope, author_type, items, original_created_at, source_updated_at)
-                   SELECT %s, %s, p.paper_id, r.learning_record_id, %s, %s, %s, %s, %s::jsonb, %s, %s
-                   FROM server_papers p JOIN server_learning_records r
-                     ON r.paper_id=p.paper_id AND r.owner_user_id=p.owner_user_id
-                    AND r.source_instance_id=p.source_instance_id
-                   WHERE p.paper_id=%s AND p.owner_user_id=%s AND p.source_instance_id=%s
-                     AND r.local_learning_record_id=%s
+                    local_summary_id, scope, author_type, items, original_created_at, source_updated_at,
+                    selected_version_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
                    ON CONFLICT(owner_user_id, source_instance_id, local_summary_id)
                    DO UPDATE SET scope=excluded.scope, author_type=excluded.author_type,
                      items=excluded.items, original_created_at=excluded.original_created_at,
                      source_updated_at=excluded.source_updated_at,
                      revision=server_summaries.revision+1, updated_at=CURRENT_TIMESTAMP
                    WHERE excluded.paper_id=server_summaries.paper_id
+                     AND excluded.selected_version_id IS NOT DISTINCT FROM server_summaries.selected_version_id
                      AND excluded.learning_record_id=server_summaries.learning_record_id
                      AND excluded.source_updated_at>server_summaries.source_updated_at
                    RETURNING summary_id, revision, updated_at""",
-                (str(uuid4()), owner_user_id, metadata.source_instance_id, metadata.local_summary_id,
+                (str(uuid4()), owner_user_id, paper_id, record["learning_record_id"], metadata.source_instance_id,
+                 metadata.local_summary_id,
                  metadata.scope, metadata.author_type, json.dumps(metadata.items, ensure_ascii=False),
-                 metadata.original_created_at, metadata.source_updated_at, paper_id, owner_user_id,
-                 metadata.source_instance_id, metadata.local_learning_record_id),
+                 metadata.original_created_at, metadata.source_updated_at, metadata.selected_version_id),
             ).fetchone()
             if row is None:
                 row = conn.execute(
                     """SELECT s.summary_id, s.revision, s.updated_at, s.paper_id, s.learning_record_id,
-                              s.scope, s.author_type, s.items, s.original_created_at, s.source_updated_at,
+                              s.selected_version_id, s.scope, s.author_type, s.items, s.original_created_at, s.source_updated_at,
                               r.local_learning_record_id
                        FROM server_summaries s JOIN server_learning_records r
                          ON r.learning_record_id=s.learning_record_id
@@ -358,6 +366,7 @@ class PostgresPaperStore:
                     (owner_user_id, metadata.source_instance_id, metadata.local_summary_id),
                 ).fetchone()
                 if row is not None and (str(row["paper_id"]) != paper_id
+                                        or row["selected_version_id"] != metadata.selected_version_id
                                         or row["local_learning_record_id"] != metadata.local_learning_record_id):
                     raise SummaryConflict
                 if row is not None and row["source_updated_at"] == metadata.source_updated_at:
@@ -402,8 +411,9 @@ class PostgresPaperStore:
                     """SELECT summary_id, author_type, items, original_created_at
                        FROM server_summaries
                        WHERE owner_user_id=%s AND paper_id=%s AND learning_record_id=%s AND scope='paper'
+                         AND selected_version_id IS NOT DISTINCT FROM %s
                        ORDER BY source_updated_at DESC, summary_id ASC LIMIT 1""",
-                    (owner_user_id, paper_id, record["learning_record_id"]),
+                    (owner_user_id, paper_id, record["learning_record_id"], record["selected_version_id"]),
                 ).fetchone()
         if learning_record_id is not None and record is None:
             raise PaperNotFound
