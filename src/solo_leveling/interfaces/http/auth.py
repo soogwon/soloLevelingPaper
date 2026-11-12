@@ -54,6 +54,8 @@ def create_auth_dependency(verifier: AccessTokenVerifier, web_session_verifier=N
     from fastapi import HTTPException, Request, Security, status
     from fastapi.security import HTTPBearer
 
+    from .web_auth import CSRF_COOKIE, SESSION_COOKIE, matching_tokens
+
     bearer = HTTPBearer(
         auto_error=False,
         scheme_name="ServerAccessToken",
@@ -61,16 +63,23 @@ def create_auth_dependency(verifier: AccessTokenVerifier, web_session_verifier=N
     )
 
     def require_principal(credentials=Security(bearer), request: Request = None) -> AuthenticatedPrincipal:
+        csrf_token = None
         selected = verifier
         token = None
         if credentials is not None and credentials.scheme.lower() == "bearer":
             token = credentials.credentials
         elif web_session_verifier is not None and request is not None:
-            token = request.cookies.get("slp_session")
+            token = request.cookies.get(SESSION_COOKIE)
+            if token and request.method not in ("GET", "HEAD", "OPTIONS"):
+                csrf_token = request.headers.get("X-CSRF-Token")
+                if not matching_tokens(request.cookies.get(CSRF_COOKIE), csrf_token):
+                    raise HTTPException(status_code=403, detail={"code": "csrf_validation_failed"})
             selected = web_session_verifier
         if not token:
             raise _unauthorized(HTTPException, status.HTTP_401_UNAUTHORIZED)
         try:
+            if csrf_token is not None:
+                return selected.verify(token, csrf_token)
             return selected.verify(token)
         except AccessTokenVerificationUnavailable:
             raise HTTPException(

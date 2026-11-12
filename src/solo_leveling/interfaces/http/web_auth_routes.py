@@ -1,10 +1,9 @@
 """외부 웹 로그인, 현재 사용자와 로그아웃 HTTP 계약."""
 
-from hmac import compare_digest
 from typing import Any
 
 from .web_auth import (
-    CSRF_COOKIE, SESSION_COOKIE, WebAuthenticationRejected, WebAuthenticationUnavailable,
+    CSRF_COOKIE, LOGIN_COOKIE, SESSION_COOKIE, matching_tokens, WebAuthenticationRejected, WebAuthenticationUnavailable,
 )
 
 
@@ -19,15 +18,22 @@ def create_web_auth_router(flow: Any, store: Any):
         if provider not in ("oidc", "google"):
             raise HTTPException(status_code=422, detail={"code": "unsupported_authentication_provider"})
         try:
-            return RedirectResponse(flow.start(return_to), status_code=status.HTTP_302_FOUND,
-                                    headers={"Cache-Control": "no-store"})
+            location, state = flow.start(return_to)
+            response = RedirectResponse(location, status_code=status.HTTP_302_FOUND,
+                                        headers={"Cache-Control": "no-store"})
+            response.set_cookie(LOGIN_COOKIE, state, max_age=600, httponly=True,
+                                secure=True, samesite="lax", path="/")
+            return response
         except WebAuthenticationRejected:
             raise HTTPException(status_code=422, detail={"code": "invalid_return_to"}) from None
         except WebAuthenticationUnavailable:
             raise HTTPException(status_code=503, detail={"code": "authentication_unavailable"}) from None
 
     @router.get("/auth/callback")
-    def callback(code: str = Query(...), state: str = Query(...)):
+    def callback(code: str = Query(...), state: str = Query(...),
+                 login_state: str | None = Cookie(None, alias=LOGIN_COOKIE)):
+        if not matching_tokens(state, login_state):
+            raise HTTPException(status_code=401, detail={"code": "authentication_failed"})
         try:
             session, return_to = flow.complete(code, state)
         except WebAuthenticationRejected:
@@ -36,6 +42,7 @@ def create_web_auth_router(flow: Any, store: Any):
             raise HTTPException(status_code=503, detail={"code": "authentication_unavailable"}) from None
         response = RedirectResponse(return_to, status_code=status.HTTP_303_SEE_OTHER,
                                     headers={"Cache-Control": "no-store"})
+        response.delete_cookie(LOGIN_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
         max_age = max(0, int((session.expires_at - flow.now()).total_seconds()))
         response.set_cookie(SESSION_COOKIE, session.token, max_age=max_age, httponly=True,
                             secure=True, samesite="lax", path="/")
@@ -68,7 +75,7 @@ def create_web_auth_router(flow: Any, store: Any):
         csrf_header: str | None = Header(None, alias="X-CSRF-Token"),
     ):
         if (not session_token or not csrf_cookie or not csrf_header
-                or not compare_digest(csrf_cookie, csrf_header)):
+                or not matching_tokens(csrf_cookie, csrf_header)):
             raise HTTPException(status_code=403, detail={"code": "csrf_validation_failed"})
         try:
             revoked = store.revoke(session_token, csrf_header)

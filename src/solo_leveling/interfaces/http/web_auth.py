@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from hmac import compare_digest
 from secrets import token_urlsafe
 from typing import Any
 from urllib.parse import urlencode, urlsplit
@@ -13,6 +14,7 @@ from .auth import AccessTokenRejected, AccessTokenVerificationUnavailable, Authe
 from .settings import WebAuthSettings
 
 
+LOGIN_COOKIE = "__Host-slp_login"
 SESSION_COOKIE = "slp_session"
 CSRF_COOKIE = "csrf_token"
 
@@ -81,14 +83,17 @@ class PostgresWebSessionStore:
             )
         return WebSession(token, csrf, expires, identity)
 
-    def authenticate(self, token: str) -> WebIdentity:
+    def authenticate(self, token: str, csrf_token: str | None = None) -> WebIdentity:
+        sql = """SELECT s.owner_user_id, u.display_name, u.email FROM web_sessions s
+                 JOIN server_users u USING(owner_user_id)
+                 WHERE s.session_hash=%s AND s.revoked_at IS NULL
+                   AND s.expires_at>CURRENT_TIMESTAMP"""
+        params = [_hash(token)]
+        if csrf_token is not None:
+            sql += " AND s.csrf_hash=%s"
+            params.append(_hash(csrf_token))
         with _connection(self._pool) as conn:
-            row = conn.execute(
-                """SELECT s.owner_user_id, u.display_name, u.email FROM web_sessions s
-                   JOIN server_users u USING(owner_user_id)
-                   WHERE s.session_hash=%s AND s.revoked_at IS NULL
-                     AND s.expires_at>CURRENT_TIMESTAMP""", (_hash(token),),
-            ).fetchone()
+            row = conn.execute(sql, params).fetchone()
         if row is None:
             raise AccessTokenRejected
         return WebIdentity(row["owner_user_id"], row["display_name"], row["email"])
@@ -107,9 +112,9 @@ class WebSessionVerifier:
     def __init__(self, store: PostgresWebSessionStore):
         self._store = store
 
-    def verify(self, token: str) -> AuthenticatedPrincipal:
+    def verify(self, token: str, csrf_token: str | None = None) -> AuthenticatedPrincipal:
         try:
-            identity = self._store.authenticate(token)
+            identity = self._store.authenticate(token, csrf_token)
         except WebAuthenticationUnavailable:
             raise AccessTokenVerificationUnavailable from None
         return AuthenticatedPrincipal(identity.user_id, "web_session")
@@ -129,7 +134,7 @@ class OidcWebAuthFlow:
         session.trust_env = False
         return cls(settings, store, verifier, session)
 
-    def start(self, return_to: str) -> str:
+    def start(self, return_to: str) -> tuple[str, str]:
         safe_return = _return_to(return_to, self.settings.app_origin)
         state, verifier = token_urlsafe(32), token_urlsafe(64)
         challenge = urlsafe_b64encode(sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
@@ -137,7 +142,7 @@ class OidcWebAuthFlow:
         params = {"response_type": "code", "client_id": self.settings.client_id,
                   "redirect_uri": self.settings.redirect_uri, "scope": self.settings.scopes,
                   "state": state, "code_challenge": challenge, "code_challenge_method": "S256"}
-        return f"{self.settings.authorization_url}{'&' if '?' in self.settings.authorization_url else '?'}{urlencode(params)}"
+        return f"{self.settings.authorization_url}{'&' if '?' in self.settings.authorization_url else '?'}{urlencode(params)}", state
 
     def complete(self, code: str, state: str) -> tuple[WebSession, str]:
         if not code or not state:
@@ -149,6 +154,8 @@ class OidcWebAuthFlow:
                 "client_secret": self.settings.client_secret, "code": code,
                 "redirect_uri": self.settings.redirect_uri, "code_verifier": verifier,
             }, timeout=15, allow_redirects=False)
+            if token_response.status_code >= 500 or token_response.status_code == 429:
+                raise WebAuthenticationUnavailable
             if token_response.status_code != 200:
                 raise WebAuthenticationRejected
             access_token = token_response.json().get("access_token")
@@ -159,6 +166,8 @@ class OidcWebAuthFlow:
                 raise WebAuthenticationRejected
             info_response = self.session.get(self.settings.userinfo_url,
                 headers={"Authorization": f"Bearer {access_token}"}, timeout=15, allow_redirects=False)
+            if info_response.status_code >= 500 or info_response.status_code == 429:
+                raise WebAuthenticationUnavailable
             if info_response.status_code != 200:
                 raise WebAuthenticationRejected
             info = info_response.json()
@@ -189,6 +198,10 @@ def _return_to(value: str, app_origin: str) -> str:
             or parsed.username or parsed.password):
         raise WebAuthenticationRejected
     return value
+
+
+def matching_tokens(first: str | None, second: str | None) -> bool:
+    return bool(first and second and first.isascii() and second.isascii() and compare_digest(first, second))
 
 
 def _hash(value: str) -> bytes:
