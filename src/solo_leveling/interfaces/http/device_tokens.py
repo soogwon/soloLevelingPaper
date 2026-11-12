@@ -58,4 +58,6 @@ class RoutingAccessTokenVerifier:
     def verify(self, token: str) -> AuthenticatedPrincipal:
         if token.startswith(ACCESS_TOKEN_PREFIX):
             return self._device.verify(token)
+        if token.startswith(REFRESH_TOKEN_PREFIX):
+            raise AccessTokenRejected
         return self._oidc.verify(token)

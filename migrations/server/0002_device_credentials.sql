@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS server_device_credentials (
     refresh_expires_at timestamptz NOT NULL,
     created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
     revoked_at timestamptz NULL,
-    CHECK (access_expires_at < refresh_expires_at)
+    CHECK (access_expires_at <= refresh_expires_at)
 );
 
 CREATE INDEX IF NOT EXISTS server_device_credentials_active_device_idx

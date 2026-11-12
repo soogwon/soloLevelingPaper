@@ -133,8 +133,6 @@ class PostgresDeviceStore:
             )
 
     def issue_credentials(self, owner_user_id: str, device_id: str) -> DeviceTokenPair:
-        now = datetime.now(timezone.utc)
-        pair, hashes = _new_token_pair(device_id, now, now + timedelta(days=30))
         with _connection(self._pool) as conn:
             active = conn.execute(
                 """SELECT 1 FROM server_devices
@@ -149,34 +147,43 @@ class PostgresDeviceStore:
                    WHERE device_id = %s AND revoked_at IS NULL""",
                 (device_id,),
             )
+            now = datetime.now(timezone.utc)
+            pair, hashes = _new_token_pair(device_id, now, now + timedelta(days=30))
             _insert_credential(conn, str(uuid4()), str(uuid4()), device_id, pair, hashes)
         return pair
 
     def rotate_credentials(self, refresh_token: str) -> DeviceTokenPair:
-        if not refresh_token.startswith(REFRESH_TOKEN_PREFIX):
+        if not refresh_token.startswith(REFRESH_TOKEN_PREFIX) or not refresh_token.isascii():
             raise DeviceCredentialRejected
-        now = datetime.now(timezone.utc)
+        refresh_hash = _token_hash(refresh_token)
         replay_detected = False
         pair = None
         with _connection(self._pool) as conn:
-            row = conn.execute(
-                """SELECT c.credential_id, c.family_id, c.device_id, c.refresh_expires_at,
-                          c.revoked_at, d.revoked_at AS device_revoked_at
-                   FROM server_device_credentials c
-                   JOIN server_devices d ON d.device_id = c.device_id
-                   WHERE c.refresh_token_hash = %s FOR UPDATE""",
-                (_token_hash(refresh_token),),
+            # 재발급·해제와 같은 순서로 기기를 잠근 뒤 최신 자격 상태를 읽는다.
+            device = conn.execute(
+                """SELECT d.device_id FROM server_devices d
+                   JOIN server_device_credentials c ON c.device_id = d.device_id
+                   WHERE c.refresh_token_hash = %s AND d.revoked_at IS NULL FOR UPDATE OF d""",
+                (refresh_hash,),
             ).fetchone()
+            if device is None:
+                raise DeviceCredentialRejected
+            row = conn.execute(
+                """SELECT credential_id, family_id, device_id, refresh_expires_at, revoked_at
+                   FROM server_device_credentials WHERE refresh_token_hash = %s""",
+                (refresh_hash,),
+            ).fetchone()
+            now = datetime.now(timezone.utc)
             if row is None:
                 raise DeviceCredentialRejected
             if row["revoked_at"] is not None:
                 conn.execute(
-                    """UPDATE server_device_credentials SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP)
-                       WHERE family_id = %s""",
+                    """UPDATE server_device_credentials SET revoked_at = CURRENT_TIMESTAMP
+                       WHERE family_id = %s AND revoked_at IS NULL""",
                     (row["family_id"],),
                 )
                 replay_detected = True
-            elif row["device_revoked_at"] is not None or row["refresh_expires_at"] <= now:
+            elif row["refresh_expires_at"] <= now:
                 raise DeviceCredentialRejected
             else:
                 conn.execute(
@@ -190,7 +197,7 @@ class PostgresDeviceStore:
         return pair
 
     def authenticate_access_token(self, access_token: str) -> AuthenticatedPrincipal | None:
-        if not access_token.startswith(ACCESS_TOKEN_PREFIX):
+        if not access_token.startswith(ACCESS_TOKEN_PREFIX) or not access_token.isascii():
             return None
         with _connection(self._pool) as conn:
             row = conn.execute(
@@ -219,7 +226,8 @@ def _record(row: dict[str, Any]) -> DeviceRecord:
 def _new_token_pair(device_id: str, now: datetime, refresh_expires_at: datetime):
     access_token = ACCESS_TOKEN_PREFIX + token_urlsafe(32)
     refresh_token = REFRESH_TOKEN_PREFIX + token_urlsafe(32)
-    pair = DeviceTokenPair(access_token, now + timedelta(minutes=15), refresh_token, refresh_expires_at, device_id)
+    access_expires_at = min(now + timedelta(minutes=15), refresh_expires_at)
+    pair = DeviceTokenPair(access_token, access_expires_at, refresh_token, refresh_expires_at, device_id)
     return pair, (_token_hash(access_token), _token_hash(refresh_token))
 
 

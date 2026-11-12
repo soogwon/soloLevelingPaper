@@ -77,8 +77,9 @@ def test_access_token_lookup_returns_device_principal_and_uses_hash():
     assert isinstance(pool.conn.calls[0][1][0], bytes)
 
 
-def test_refresh_rotates_both_tokens_without_extending_family_expiry():
-    expires = NOW + timedelta(days=20)
+@pytest.mark.parametrize("remaining", [timedelta(days=20), timedelta(minutes=3)])
+def test_refresh_rotates_both_tokens_without_extending_family_expiry(remaining):
+    expires = NOW + remaining
     row = {
         "credential_id": "00000000-0000-0000-0000-000000000010",
         "family_id": "00000000-0000-0000-0000-000000000020",
@@ -87,13 +88,14 @@ def test_refresh_rotates_both_tokens_without_extending_family_expiry():
         "revoked_at": None,
         "device_revoked_at": None,
     }
-    pool = Pool([Result(one=row), Result(), Result()])
+    pool = Pool([Result(one={"device_id": DEVICE_ID}), Result(one=row), Result(), Result()])
 
     pair = PostgresDeviceStore(pool).rotate_credentials("slp_rt_" + "r" * 43)
 
     assert pair.refresh_expires_at == expires
-    assert "SET revoked_at" in pool.conn.calls[1][0]
-    assert pool.conn.calls[2][1][1] == row["family_id"]
+    assert pair.access_expires_at <= expires
+    assert "SET revoked_at" in pool.conn.calls[2][0]
+    assert pool.conn.calls[3][1][1] == row["family_id"]
 
 
 def test_replayed_refresh_revokes_family_then_returns_generic_rejection():
@@ -105,13 +107,13 @@ def test_replayed_refresh_revokes_family_then_returns_generic_rejection():
         "revoked_at": NOW,
         "device_revoked_at": None,
     }
-    pool = Pool([Result(one=row), Result()])
+    pool = Pool([Result(one={"device_id": DEVICE_ID}), Result(one=row), Result()])
 
     with pytest.raises(DeviceCredentialRejected):
         PostgresDeviceStore(pool).rotate_credentials("slp_rt_" + "r" * 43)
 
-    assert "WHERE family_id = %s" in pool.conn.calls[1][0]
-    assert pool.conn.calls[1][1] == ("family",)
+    assert "WHERE family_id = %s" in pool.conn.calls[2][0]
+    assert pool.conn.calls[2][1] == ("family",)
 
 
 def test_opaque_and_oidc_tokens_use_separate_verifiers():
@@ -122,6 +124,8 @@ def test_opaque_and_oidc_tokens_use_separate_verifiers():
     verifier = RoutingAccessTokenVerifier(oidc, opaque)
 
     assert verifier.verify(ACCESS_TOKEN_PREFIX + "x").credential_type == "device"
+    with pytest.raises(AccessTokenRejected):
+        verifier.verify("slp_rt_" + "r" * 43)
     assert verifier.verify("external-jwt").credential_type == "web_session"
 
     with pytest.raises(AccessTokenRejected):
@@ -163,3 +167,10 @@ def test_issue_and_refresh_routes_return_no_store_credentials():
     assert issued.access_token == refreshed.access_token == pair.access_token
     assert issue_response.headers["Cache-Control"] == refresh_response.headers["Cache-Control"] == "no-store"
     assert issue_response.headers["Pragma"] == refresh_response.headers["Pragma"] == "no-cache"
+
+
+def test_non_ascii_device_tokens_are_rejected_before_database_lookup():
+    store = PostgresDeviceStore(Pool([]))
+    assert store.authenticate_access_token("slp_at_" + "기" * 43) is None
+    with pytest.raises(DeviceCredentialRejected):
+        store.rotate_credentials("slp_rt_" + "기" * 43)
