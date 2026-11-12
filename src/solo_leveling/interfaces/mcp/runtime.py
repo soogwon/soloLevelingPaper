@@ -26,6 +26,8 @@ from solo_leveling.application.paper_detail.service import PaperDetailService
 from solo_leveling.application.reflection.service import ReflectionService
 from solo_leveling.infrastructure.retrieval.paper_detail import SQLitePaperDetailReader
 from solo_leveling.application.annotations.service import AnnotationService
+from solo_leveling.application.server_sync import PaperMetadataSyncService
+from solo_leveling.infrastructure.storage.server_client import AuthenticatedServerClient
 from .question_card import QuestionKeys
 from .server import MCPServices, create_server
 from .quiz_tools import QuizContractAdapter, StoredQuizService
@@ -53,6 +55,7 @@ class RuntimeSettings:
     generation: OpenAIGenerationSettings
     translation: OpenAITranslationConfig
     verification: SemanticSettings
+    server_api_url: str | None
 
 
 def load_environment(path: Path | None = None,
@@ -108,9 +111,13 @@ def validate_runtime_settings(values: Mapping[str, str]) -> RuntimeSettings:
         raise ValueError('MAX_UPLOAD_BYTES는 양의 정수여야 합니다.')
     if max_workers != 1:
         raise ValueError('현재 MAX_CONCURRENT_INGESTIONS는 1만 지원합니다.')
+    configured_server = values.get('SERVER_API_URL', '').strip()
+    server_api_url = (AuthenticatedServerClient.normalize_server_url(configured_server)
+                      if configured_server else None)
     return RuntimeSettings(paths, timeout, shutdown_timeout, max_bytes, max_workers,
                            OpenAIGenerationSettings.from_env(values),
-                           OpenAITranslationConfig.from_env(values), SemanticSettings.from_env(values))
+                           OpenAITranslationConfig.from_env(values), SemanticSettings.from_env(values),
+                           server_api_url)
 
 
 def build_runtime_server(values: Mapping[str, str]):
@@ -175,6 +182,10 @@ def build_runtime_server(values: Mapping[str, str]):
                         report('RUNTIME_SHUTDOWN_DEFERRED')
 
         annotations = AnnotationService(str(paths.db_path))
+        server_sync = None
+        if settings.server_api_url is not None:
+            server_client = AuthenticatedServerClient.from_keyring(settings.server_api_url)
+            server_sync = PaperMetadataSyncService(str(paths.db_path), server_client)
         server = create_server(MCPServices(
             recovery=gate.wrap(recovery), reparse=gate.wrap(reparse),
             question_keys=gate.wrap(QuestionKeys(paths.data_root.resolve() / 'card-question-keys.sqlite3')),
@@ -186,6 +197,7 @@ def build_runtime_server(values: Mapping[str, str]):
             reflection=gate.wrap(ReflectionService(str(paths.db_path))),
             annotations=gate.wrap(annotations),
             quiz=gate.wrap(QuizContractAdapter(StoredQuizService(str(paths.db_path)))),
+            server_sync=gate.wrap(server_sync) if server_sync is not None else None,
         ), lifespan=lifespan)
         track_lifetime(lifetime)
         return server

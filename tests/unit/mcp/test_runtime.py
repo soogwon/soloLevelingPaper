@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from solo_leveling.interfaces.mcp.runtime import load_environment, runtime_paths
+from solo_leveling.interfaces.mcp.runtime import load_environment, runtime_paths, validate_runtime_settings
 
 
 def test_process_environment_wins_without_mutation(tmp_path):
@@ -40,6 +40,15 @@ def test_paths_are_resolved_below_data_root(tmp_path):
     assert paths.chroma_dir == (tmp_path / 'vectors').resolve()
     assert paths.import_dir == (tmp_path / 'imports').resolve()
     assert paths.pdf_dir == (tmp_path / 'pdfs').resolve()
+
+
+def test_server_api_url_is_optional_and_requires_https(tmp_path):
+    base = {'DATA_ROOT': str(tmp_path), 'OPENAI_API_KEY': 'fixture'}
+    assert validate_runtime_settings(base).server_api_url is None
+    assert validate_runtime_settings(base | {'SERVER_API_URL': 'https://api.example.com/'}).server_api_url == \
+        'https://api.example.com'
+    with pytest.raises(ValueError):
+        validate_runtime_settings(base | {'SERVER_API_URL': 'http://api.example.com'})
 
 
 @pytest.mark.parametrize(('key', 'value'), [
@@ -124,6 +133,7 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
     assert isinstance(connected.reflection.target, runtime.ReflectionService)
     assert connected.reflection.db_path == str(runtime.runtime_paths(values).db_path)
     assert connected.dashboard.db_path == str(runtime.runtime_paths(values).db_path)
+    assert connected.server_sync is None
     assert factory.call_args.kwargs['collect_raw_logs'] is (raw_setting == '1')
     captured = capsys.readouterr()
     assert captured.out == ''

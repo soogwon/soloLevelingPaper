@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from solo_leveling.application.server_sync import PaperMetadataSyncService
+from solo_leveling.application.server_sync import PaperMetadataSyncService, SyncResult
 from solo_leveling.domain.models import Paper
 from solo_leveling.infrastructure.database.repository import insert_paper
 from solo_leveling.infrastructure.database.schema import get_connection, init_db
@@ -63,6 +63,28 @@ def test_explicit_consent_queues_without_sending_or_storing_payload(database):
     conn.close()
     assert row["payload_hash"] and "payload" not in row.keys()
     assert consent["notice_version"] == "paper-sync-v1"
+
+
+def test_preview_is_read_only_and_status_recovers_after_restart(database):
+    client = Client()
+    first = PaperMetadataSyncService(database, client, now=lambda: NOW)
+    assert first.preview("paper-local-1").title == "A paper"
+    operation = first.grant_and_queue("paper-local-1", "paper-sync-v1").operation_id
+
+    restarted = PaperMetadataSyncService(database, client, now=lambda: NOW)
+
+    assert restarted.status(operation) == SyncResult(operation, "pending")
+    assert client.calls == []
+
+
+def test_caller_supplied_operation_id_is_persisted_for_response_recovery(database):
+    operation_id = "20000000-0000-0000-0000-000000000002"
+    service = PaperMetadataSyncService(database, Client(), now=lambda: NOW)
+
+    queued = service.grant_and_queue("paper-local-1", "paper-sync-v1", operation_id)
+
+    assert queued.operation_id == operation_id
+    assert service.status(operation_id) == SyncResult(operation_id, "pending")
 
 
 def test_success_uses_operation_as_idempotency_key_and_atomically_records_mapping(database):
@@ -156,3 +178,24 @@ def test_invalid_success_does_not_leave_outbox_syncing(database, change):
     operation = service.grant_and_queue("paper-local-1", "paper-sync-v1").operation_id
     result = service.sync(operation)
     assert (result.status, result.error_code) == ("action_required", "invalid_server_response")
+
+@pytest.mark.parametrize("change", ["title", "connection", "created_at"])
+def test_approval_rejects_changed_preview_before_writing_consent(database, change):
+    from solo_leveling.application.server_sync.paper_metadata import SyncPreviewChanged
+
+    client = Client()
+    service = PaperMetadataSyncService(database, client)
+    preview = service.preview("paper-local-1")
+    with get_connection(database) as conn:
+        if change == "connection":
+            client._connection_id = "other"
+        elif change == "title":
+            conn.execute("UPDATE papers SET title='changed'")
+        else:
+            conn.execute("UPDATE papers SET created_at='2026-11-01T00:00:00Z'")
+    with pytest.raises(SyncPreviewChanged):
+        service.grant_and_queue("paper-local-1", "v1", preview=preview)
+    with get_connection(database) as conn:
+        for table in ("sync_outbox", "server_sync_consents"):
+            assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+    assert not client.calls

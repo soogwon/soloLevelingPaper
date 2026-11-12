@@ -10,6 +10,7 @@ for (const [name, entry, templateName] of [
   ['paper-reparse', 'reparse-main', 'reparse-template'],
   ['translation-recovery', 'recovery-main', 'recovery-template'],
   ['annotation', 'annotation-main', 'annotation-template'],
+  ['server-sync', 'server-sync-main', 'server-sync-template'],
 ]) {
   // 외부 CDN 없이 실행되도록 SDK와 화면 코드를 하나의 HTML로 묶는다.
   const result = await build({

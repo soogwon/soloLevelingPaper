@@ -39,6 +39,11 @@ class AuthenticatedServerClient:
         session.auth = lambda request: request
         return cls(server_url, session, KeyringCredentialStore())
 
+    @classmethod
+    def normalize_server_url(cls, server_url: str) -> str:
+        """외부 호출 없이 런타임 설정의 서버 URL을 검증·정규화한다."""
+        return _server_url(server_url)
+
     def request(self, method: str, path: str, *, expected_connection_id: str | None = None, **kwargs):
         url = self._request_url(path)
         credentials = self._load_credentials()
