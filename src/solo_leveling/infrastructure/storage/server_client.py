@@ -1,6 +1,7 @@
 """OS 자격 저장소의 기기 토큰으로 중앙 서버를 호출한다."""
 
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from threading import Lock
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -53,6 +54,12 @@ class AuthenticatedServerClient:
             response.close()
             raise ServerConnectionRequired
         return response
+
+    def connection_id(self) -> str:
+        """현재 기기 연결을 토큰이나 서버 사용자 ID 노출 없이 로컬에서 구분한다."""
+        credentials = self._load_credentials()
+        value = f"{self.server_url}\0{credentials.device_id}".encode("utf-8")
+        return f"device-{sha256(value).hexdigest()}"
 
     def _load_credentials(self) -> StoredDeviceCredentials:
         credentials = self._credentials.load(self.server_url)

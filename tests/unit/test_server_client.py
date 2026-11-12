@@ -77,6 +77,17 @@ class Session:
         })
 
 
+def test_connection_id_is_stable_and_does_not_expose_server_or_device_id():
+    client = AuthenticatedServerClient(SERVER, Session(), Store(credentials()), now=lambda: NOW)
+
+    first = client.connection_id()
+
+    assert first == client.connection_id()
+    assert first.startswith("device-")
+    assert DEVICE_ID not in first
+    assert "example.com" not in first
+
+
 def test_valid_access_token_is_used_without_refresh_and_caller_cannot_override_it():
     store, session = Store(credentials()), Session()
     client = AuthenticatedServerClient(SERVER, session, store, now=lambda: NOW)
