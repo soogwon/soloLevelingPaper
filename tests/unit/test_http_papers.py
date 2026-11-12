@@ -7,6 +7,7 @@ from uuid import UUID
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from solo_leveling.interfaces.http import create_app
 from solo_leveling.interfaces.http.auth import AuthenticatedPrincipal
@@ -164,3 +165,21 @@ def test_openapi_marks_paper_registration_as_bearer_protected():
 
     assert operation["security"] == [{"ServerAccessToken": []}]
     assert any(parameter["name"] == "Idempotency-Key" and parameter["required"] for parameter in operation["parameters"])
+
+@pytest.mark.parametrize("change", [
+    {"pdf_text": "private content"}, {"owner_user_id": "someone"},
+    {"local_paper_id": "/private/paper.pdf"}, {"local_paper_id": r"C:\papers\one.pdf"},
+    {"original_created_at": "0001-01-01T00:00:00+09:00"},
+])
+def test_rejected_paper_request_never_reaches_store_or_echoes_input(change):
+    store = MemoryStore()
+    principal = AuthenticatedPrincipal("user-1", "device", PAPER_ID)
+    app = create_app(token_verifier=SimpleNamespace(verify=lambda _: principal),
+                     device_registry=SimpleNamespace(is_active=lambda *_: True), paper_store=store)
+    data = {"source_instance_id": SOURCE_ID, "local_paper_id": "local-paper", "original_created_at": NOW.isoformat()}
+    with TestClient(app) as client:
+        response = client.post("/v1/mcp/papers", json=data | change,
+                               headers={"Authorization": "Bearer test", "Idempotency-Key": "operation-key-0001"})
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"code": "invalid_paper_request"}}
+    assert not store.calls

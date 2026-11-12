@@ -1,6 +1,7 @@
 """로컬 기기의 논문 메타데이터 동기화 API."""
 
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import PureWindowsPath
 import re
 from typing import Annotated, Any
 from uuid import UUID
@@ -14,9 +15,13 @@ _KEY = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
 
 def create_paper_router(require_principal: Any, store: PaperStore):
     from fastapi import APIRouter, Depends, Header, HTTPException, status
-    from pydantic import BaseModel, Field, field_validator
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.routing import APIRoute
+    from pydantic import BaseModel, ConfigDict, Field, field_validator
 
     class PaperCreate(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
         source_instance_id: UUID
         local_paper_id: str = Field(min_length=1, max_length=128)
         title: str | None = Field(default=None, max_length=1000)
@@ -27,9 +32,10 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         @field_validator("local_paper_id")
         @classmethod
         def validate_local_id(cls, value):
-            if "\x00" in value or not value.strip():
+            value = value.strip()
+            if not value or "\x00" in value or "/" in value or "\\" in value or PureWindowsPath(value).drive:
                 raise ValueError("local_paper_id가 올바르지 않습니다.")
-            return value.strip()
+            return value
 
         @field_validator("title")
         @classmethod
@@ -57,7 +63,10 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         def require_timezone(cls, value):
             if value.tzinfo is None or value.utcoffset() is None:
                 raise ValueError("original_created_at에는 시간대가 필요합니다.")
-            return value
+            try:
+                return value.astimezone(timezone.utc)
+            except OverflowError:
+                raise ValueError("UTC로 변환할 수 없는 등록 시각입니다.") from None
 
     class PaperView(BaseModel):
         paper_id: str
@@ -65,7 +74,20 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         sync_status: str
         server_updated_at: datetime
 
-    router = APIRouter(prefix="/v1/mcp/papers", tags=["paper-sync"])
+    class PaperRoute(APIRoute):
+        def get_route_handler(self):
+            handle = super().get_route_handler()
+
+            async def register_request(request):
+                try:
+                    return await handle(request)
+                except RequestValidationError:
+                    # 거부된 본문에는 로컬 경로나 원문이 있을 수 있다.
+                    raise HTTPException(status_code=422, detail={"code": "invalid_paper_request"}) from None
+
+            return register_request
+
+    router = APIRouter(prefix="/v1/mcp/papers", tags=["paper-sync"], route_class=PaperRoute)
     Principal = Annotated[AuthenticatedPrincipal, Depends(require_principal)]
 
     @router.post("", response_model=PaperView, status_code=status.HTTP_201_CREATED)
