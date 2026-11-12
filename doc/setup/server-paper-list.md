@@ -40,11 +40,10 @@ Cookie: slp_session=<opaque session token>
 }
 ```
 
-현재 첫 동기화 조각은 논문 메타데이터만 서버에 저장한다. 원문 버전, 학습 기록, 위치, 읽기
-상태와 컬렉션을 로컬 값에서 추정하지 않는다. 따라서 해당 필드는 `null`, 읽기 상태는
-`unknown`으로 반환한다. `reading_status=unknown`에는 현재 논문이 포함되지만 `reading`,
-`completed`, `not_started` 필터에는 명시 상태가 없는 논문이 포함되지 않는다.
+학습 기록이 동기화된 논문은 `last_studied_at DESC NULLS LAST, learning_record_id ASC`로 가장
+최근 기록 하나를 선택해 원문 버전, 파일명, 마지막 위치, 학습일과 읽기 상태를 반환한다.
+기록이 아직 동기화되지 않은 논문은 관련 필드를 `null`, 읽기 상태를 `unknown`으로 반환한다.
+상태 필터는 이 서버 확정 값을 사용하며 프론트가 위치나 단계에서 상태를 추정하지 않는다.
 
-모든 학습일이 없는 현재 데이터는 논문 ID 오름차순으로 고정한다. 학습 기록 동기화가 추가되면
-같은 API에서 `last_studied_at DESC NULLS LAST, paper_id ASC`로 확장한다. 검색·필터·페이지의
-count와 item 조회에는 항상 같은 소유자 조건을 적용한다.
+목록은 `last_studied_at DESC NULLS LAST, paper_id ASC`로 고정한다. 검색·필터·페이지의 count와
+item 조회에는 항상 같은 소유자 조건과 같은 repeatable-read snapshot을 적용한다.

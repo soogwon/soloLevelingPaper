@@ -13,6 +13,8 @@ from solo_leveling.interfaces.http import create_app
 from solo_leveling.interfaces.http.auth import AuthenticatedPrincipal
 from solo_leveling.interfaces.http.papers import (
     IdempotencyConflict,
+    LearningRecordMetadata,
+    LearningRecordRegistration,
     PaperListItem,
     PaperMetadata,
     PaperPage,
@@ -130,6 +132,12 @@ class MemoryStore:
         self.calls.append((owner_user_id, filters))
         return PaperPage((), filters["page"], filters["limit"], 0, 0)
 
+    def upsert_learning_record(self, owner_user_id, paper_id, item):
+        self.calls.append((owner_user_id, paper_id, item))
+        return LearningRecordRegistration(
+            "00000000-0000-0000-0000-000000000301", 1, "stored", NOW
+        )
+
 
 def endpoint(app):
     return next(route.endpoint for route in app.routes if route.path == "/v1/mcp/papers")
@@ -215,18 +223,77 @@ def test_postgres_list_is_owner_scoped_searchable_and_stably_paginated():
     page_sql, page_params = pool.conn.calls[2]
     assert "owner_user_id = %s" in count_sql and "title ILIKE %s" in count_sql
     assert count_params == ("user-1", r"% 100\%\_\\\\test %")
-    assert "ORDER BY paper_id ASC" in page_sql
+    assert "ORDER BY r.last_studied_at DESC NULLS LAST, p.paper_id ASC" in page_sql
     assert page_params == (*count_params, 20, 20)
 
 
-def test_unknown_learning_state_is_not_inferred_for_status_filter():
+def test_status_filter_uses_synced_record_and_excludes_unknown_papers():
     pool = Pool([Result(), Result({"total_count": 0})])
 
     result = PostgresPaperStore(pool).list_papers(
         "user-1", query=None, reading_status="reading", page=3, limit=10)
 
     assert result == PaperPage((), 3, 10, 0, 0)
-    assert "FALSE" in pool.conn.calls[1][0]
+    assert "COALESCE(r.reading_status, 'unknown') = %s" in pool.conn.calls[1][0]
+    assert pool.conn.calls[1][1] == ("user-1", "reading")
+
+
+def test_list_returns_latest_synced_learning_record_fields():
+    record_id = "00000000-0000-0000-0000-000000000301"
+    pool = Pool([
+        Result(), Result({"total_count": 1}), Result(many=[{
+            "paper_id": PAPER_ID, "title": "Paper", "authors": ["A"], "publication_year": 2024,
+            "learning_record_id": record_id, "selected_version_id": "version-1",
+            "file_name": "paper.pdf", "last_position": {"pdf_page": 3},
+            "last_studied_at": NOW, "reading_status": "reading",
+        }]),
+    ])
+
+    result = PostgresPaperStore(pool).list_papers(
+        "user-1", query=None, reading_status="reading", page=1, limit=20)
+
+    item = result.items[0]
+    assert (item.selected_learning_record_id, item.selected_version_id, item.file_name) == (
+        record_id, "version-1", "paper.pdf"
+    )
+    assert item.last_position == {"pdf_page": 3}
+    assert (item.last_studied_at, item.reading_status) == (NOW, "reading")
+
+
+def test_postgres_learning_record_upsert_is_owner_and_source_scoped():
+    record_id = "00000000-0000-0000-0000-000000000301"
+    pool = Pool([Result({"learning_record_id": record_id, "revision": 2, "updated_at": NOW})])
+    metadata = LearningRecordMetadata(
+        SOURCE_ID, "context-1", "version-1", "paper.pdf",
+        {"pdf_page": 3, "section_title": "Method"}, NOW, "reading", NOW,
+    )
+
+    result = PostgresPaperStore(pool).upsert_learning_record("user-1", PAPER_ID, metadata)
+
+    assert result == LearningRecordRegistration(record_id, 2, "stored", NOW)
+    sql, params = pool.conn.calls[0]
+    assert "p.owner_user_id=%s AND p.source_instance_id=%s" in sql
+    assert "excluded.source_updated_at>=server_learning_records.source_updated_at" in sql
+    assert params[-3:] == (PAPER_ID, "user-1", SOURCE_ID)
+
+
+def test_learning_record_route_derives_status_and_uses_device_owner():
+    store = MemoryStore()
+    route = next(route.endpoint for route in create_app(paper_store=store).routes
+                 if route.path == "/v1/mcp/papers/{paper_id}/learning-records/{local_record_id}")
+    payload = SimpleNamespace(
+        source_instance_id=UUID(SOURCE_ID), selected_version_id="version-1", file_name="paper.pdf",
+        last_position=SimpleNamespace(model_dump=lambda **_: {"pdf_page": 3}),
+        last_studied_at=NOW, completed_steps=list(("preview", "structure", "deep_read", "review")),
+        source_updated_at=NOW,
+    )
+    principal = AuthenticatedPrincipal("user-1", "device", SOURCE_ID)
+
+    result = route(UUID(PAPER_ID), "context-1", payload, principal)
+
+    assert str(result.learning_record_id) == "00000000-0000-0000-0000-000000000301"
+    assert store.calls[0][0:2] == ("user-1", PAPER_ID)
+    assert store.calls[0][2].reading_status == "completed"
 
 
 def test_web_list_uses_session_owner_and_preserves_out_of_range_page():

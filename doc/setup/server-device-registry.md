@@ -13,6 +13,7 @@ psql $env:DATABASE_URL -f migrations/server/0002_device_credentials.sql
 psql $env:DATABASE_URL -f migrations/server/0003_server_papers.sql
 psql $env:DATABASE_URL -f migrations/server/0004_server_paper_list.sql
 psql $env:DATABASE_URL -f migrations/server/0005_web_sessions.sql
+psql $env:DATABASE_URL -f migrations/server/0006_server_learning_records.sql
 solo-leveling-api
 ```
 
