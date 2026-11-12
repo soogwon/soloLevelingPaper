@@ -33,6 +33,7 @@ from solo_leveling.application.annotations.service import AnnotationService
 from solo_leveling.domain.annotation import Annotation
 from .annotation_tools import register_annotations
 from .quiz_tools import QuizContractAdapter, register_quiz
+from .server_sync_tools import register_server_sync
 
 
 HOST_INSTRUCTIONS = '''등록된 논문에서 한국어 근거 답변과 원문 근거를 조회합니다.
@@ -87,7 +88,11 @@ recover_translation은 카드 전용입니다. 카드가 없으면 접수하지 
 UNKNOWN은 실패나 미접수 확정이 아닙니다. 새 키로 자동 접수하거나 기존 context를 최신본으로 바꾸지 마세요.
 FULL/PARTIAL 완료 뒤에도 새 context 선택은 사용자에게 별도로 확인하세요.
 사용자가 선택한 경우에만 select_recovery_context를 호출하세요. 응답 유실 시 같은 selection_key와
-입력을 재사용하고, 성공하면 반환된 context_id로 후속 질문을 진행하세요.'''
+입력을 재사용하고, 성공하면 반환된 context_id로 후속 질문을 진행하세요.
+외부 웹 표시를 위한 논문 동기화는 prepare_paper_server_sync 안내 카드에서 사용자가 승인한
+경우에만 시작합니다. 계정 연결이나 논문 등록을 동기화 동의로 해석하지 마세요.
+sync_paper_to_server와 cancel_paper_server_sync는 카드 전용입니다. 응답을 확인하지 못하면
+새 작업을 만들지 말고 기존 operation_id로 get_paper_server_sync를 조회하세요.'''
 
 
 class AnswerService(Protocol):
@@ -122,6 +127,7 @@ class MCPServices:
     question_keys: QuestionKeys | None = None
     recovery: object | None = None
     reparse: object | None = None
+    server_sync: object | None = None
 
 
 class Focus(BaseModel):
@@ -416,6 +422,8 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         register_reflection(server, services.reflection)
     if services.quiz is not None:
         register_quiz(server, services.quiz)
+    if services.server_sync is not None:
+        register_server_sync(server, services.server_sync)
 
     if services.ingestion is not None:
         register_status_app(server)

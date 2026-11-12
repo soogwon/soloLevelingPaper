@@ -31,4 +31,6 @@ macOS는 Keychain, Windows는 자격 증명 관리자, Linux는 Secret Service�
 
 refresh token이 만료·거부되거나 회전 응답의 기기 ID·만료 경계가 기존 자격과 맞지 않으면 새 값을 저장하지 않고 재연결 필요 상태로 처리한다. redirect를 따라가지 않으며 호출 경로는 같은 서버의 `/v1/` 아래로 제한한다.
 
-다음 단계에서는 이 client를 논문 메타데이터 동기화 서비스에 주입하고, 로컬 ID mapping과 outbox를 구현한다.
+MCP 런타임에도 같은 `SERVER_API_URL`을 설정하면 keyring 자격을 사용하는 논문 메타데이터
+동기화 도구가 활성화된다. URL은 HTTPS만 허용하며 런타임 시작만으로 서버 요청이나 기존 논문
+업로드를 수행하지 않는다. 계정 연결이 없거나 만료됐다면 전용 연결 CLI로 다시 연결한다.
