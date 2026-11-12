@@ -145,9 +145,14 @@ class PostgresPaperStore:
             filters.append("FALSE")
         where = " AND ".join(filters)
         with _connection(self._pool) as conn:
+            # 등록과 목록 조회가 겹쳐도 전체 건수와 항목을 같은 시점에서 읽는다.
+            conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             total = int(conn.execute(
                 f"SELECT count(*) AS total_count FROM server_papers WHERE {where}", tuple(params)
             ).fetchone()["total_count"])
+            total_pages = (total + limit - 1) // limit
+            if page > total_pages:
+                return PaperPage((), page, limit, total, total_pages)
             rows = conn.execute(
                 f"""SELECT paper_id, title, authors, publication_year
                     FROM server_papers WHERE {where}
@@ -159,7 +164,7 @@ class PostgresPaperStore:
             authors=tuple(row["authors"]) if row["authors"] is not None else None,
             publication_year=row["publication_year"],
         ) for row in rows)
-        return PaperPage(items, page, limit, total, (total + limit - 1) // limit)
+        return PaperPage(items, page, limit, total, total_pages)
 
 
 def _payload_hash(metadata: PaperMetadata) -> bytes:

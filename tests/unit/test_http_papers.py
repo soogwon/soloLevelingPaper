@@ -43,7 +43,7 @@ class Connection:
         self.results = list(results)
         self.calls = []
 
-    def execute(self, sql, params):
+    def execute(self, sql, params=()):
         self.calls.append((" ".join(sql.split()), params))
         return self.results.pop(0)
 
@@ -197,7 +197,7 @@ def test_rejected_paper_request_never_reaches_store_or_echoes_input(change):
 def test_postgres_list_is_owner_scoped_searchable_and_stably_paginated():
     second = "00000000-0000-0000-0000-000000000202"
     pool = Pool([
-        Result({"total_count": 21}),
+        Result(), Result({"total_count": 22}),
         Result(many=[
             {"paper_id": PAPER_ID, "title": "Paper", "authors": ["A"], "publication_year": 2024},
             {"paper_id": second, "title": None, "authors": None, "publication_year": None},
@@ -210,9 +210,9 @@ def test_postgres_list_is_owner_scoped_searchable_and_stably_paginated():
     assert result == PaperPage((
         PaperListItem(PAPER_ID, "Paper", ("A",), 2024),
         PaperListItem(second, None, None, None),
-    ), 2, 20, 21, 2)
-    count_sql, count_params = pool.conn.calls[0]
-    page_sql, page_params = pool.conn.calls[1]
+    ), 2, 20, 22, 2)
+    count_sql, count_params = pool.conn.calls[1]
+    page_sql, page_params = pool.conn.calls[2]
     assert "owner_user_id = %s" in count_sql and "title ILIKE %s" in count_sql
     assert count_params == ("user-1", r"% 100\%\_\\\\test %")
     assert "ORDER BY paper_id ASC" in page_sql
@@ -220,13 +220,13 @@ def test_postgres_list_is_owner_scoped_searchable_and_stably_paginated():
 
 
 def test_unknown_learning_state_is_not_inferred_for_status_filter():
-    pool = Pool([Result({"total_count": 0}), Result(many=[])])
+    pool = Pool([Result(), Result({"total_count": 0})])
 
     result = PostgresPaperStore(pool).list_papers(
         "user-1", query=None, reading_status="reading", page=3, limit=10)
 
     assert result == PaperPage((), 3, 10, 0, 0)
-    assert "FALSE" in pool.conn.calls[0][0]
+    assert "FALSE" in pool.conn.calls[1][0]
 
 
 def test_web_list_uses_session_owner_and_preserves_out_of_range_page():
@@ -287,3 +287,21 @@ def test_openapi_exposes_protected_web_paper_page_contract():
     assert set(parameters) == {"q", "reading_status", "sort", "page", "limit"}
     assert parameters["page"]["schema"]["default"] == 1
     assert parameters["limit"]["schema"]["default"] == 20
+
+def test_page_beyond_database_offset_range_preserves_count():
+    pool = Pool([Result(), Result({"total_count": 10})])
+    page = 10**20
+    assert PostgresPaperStore(pool).list_papers("owner", query=None, reading_status=None, page=page, limit=20) == (
+        PaperPage((), page, 20, 10, 1)
+    )
+
+
+def test_nul_in_search_query_is_rejected_before_database_access():
+    store = MemoryStore()
+    principal = AuthenticatedPrincipal("user", "web_session")
+    app = create_app(token_verifier=SimpleNamespace(verify=lambda _: principal), paper_store=store)
+    with TestClient(app) as client:
+        response = client.get("/v1/papers?q=a%00b", headers={"Authorization": "Bearer web"})
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_paper_query"
+    assert not store.calls

@@ -165,7 +165,7 @@ def create_web_paper_router(require_principal: Any, store: PaperStore):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail={"code": "web_session_required"})
         normalized_query = q.strip() if q is not None else None
-        if q is not None and not normalized_query:
+        if q is not None and (not normalized_query or "\x00" in q):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                                 detail={"code": "invalid_paper_query"})
         try:
