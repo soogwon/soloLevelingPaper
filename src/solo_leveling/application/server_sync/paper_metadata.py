@@ -12,6 +12,18 @@ from solo_leveling.infrastructure.database.schema import get_connection
 from solo_leveling.infrastructure.storage.server_client import ServerConnectionRequired
 
 
+class SyncPreviewChanged(ValueError):
+    """카드에서 확인한 논문 또는 연결 계정이 달라졌다."""
+
+
+@dataclass(frozen=True)
+class PaperSyncPreview:
+    account_id: str
+    paper_id: str
+    title: str | None
+    created_at: str
+
+
 @dataclass(frozen=True)
 class SyncResult:
     operation_id: str
@@ -29,7 +41,7 @@ class PaperMetadataSyncService:
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     def grant_and_queue(self, paper_id: str, notice_version: str,
-                        operation_id: str | None = None) -> SyncResult:
+                        operation_id: str | None = None, preview: PaperSyncPreview | None = None) -> SyncResult:
         """사용자의 명시적 논문 동기화 승인과 최초 전송 작업을 함께 기록한다."""
         if not notice_version.strip():
             raise ValueError("동의 안내문 버전이 필요합니다.")
@@ -46,6 +58,10 @@ class PaperMetadataSyncService:
             conn.execute("BEGIN IMMEDIATE")
             source_id = _source_instance_id(conn)
             payload = _paper_payload(conn, paper_id, source_id)
+            if preview is not None and preview != PaperSyncPreview(
+                account_id, payload["local_paper_id"], payload["title"], payload["original_created_at"]
+            ):
+                raise SyncPreviewChanged
             digest = _payload_hash(payload)
             conn.execute(
                 """INSERT INTO server_sync_consents
@@ -70,15 +86,15 @@ class PaperMetadataSyncService:
             conn.close()
         return SyncResult(operation_id, "pending")
 
-    def preview(self, paper_id: str) -> dict[str, str | None]:
+    def preview(self, paper_id: str) -> PaperSyncPreview:
         """전송을 시작하지 않고 사용자가 확인할 최소 논문 메타데이터만 반환한다."""
-        self._client.connection_id()
+        account_id = self._client.connection_id()
         conn = get_connection(self._db_path)
         try:
-            row = conn.execute("SELECT paper_id, title FROM papers WHERE paper_id=?", (paper_id,)).fetchone()
+            row = conn.execute("SELECT paper_id, title, created_at FROM papers WHERE paper_id=?", (paper_id,)).fetchone()
             if row is None:
                 raise KeyError("논문을 찾을 수 없습니다.")
-            return {"paper_id": row["paper_id"], "title": row["title"]}
+            return PaperSyncPreview(account_id, row["paper_id"], row["title"], row["created_at"])
         finally:
             conn.close()
 

@@ -1,15 +1,23 @@
 export function mountServerSync(app, doc) {
   const el = id => doc.getElementById(id);
-  let pending = null, busy = false, generation = 0;
+  let pending = null, busy = false, generation = 0, input;
   function controls() {
     el('agree').disabled = busy || !pending;
     el('confirm').disabled = busy || !pending || !el('agree').checked;
     el('cancel').disabled = busy || !pending;
   }
-  app.ontoolresult = result => {
+  function reset() {
     ++generation; pending = null; busy = false; el('agree').checked = false;
     el('paper').textContent = ''; el('notice').textContent = '';
+    el('status').textContent = '';
+    controls();
+  }
+  app.ontoolinputpartial = app.ontoolcancelled = () => { input = null; reset(); };
+  app.ontoolinput = event => { input = event.arguments; reset(); };
+  app.ontoolresult = result => {
     const data = result?.structuredContent;
+    if (input === null || (input && input.paper_id !== data?.paper_id)) return;
+    reset();
     if (!result?.isError && data?.status === 'confirmation_required'
         && typeof data.notice === 'string' && typeof data.paper_id === 'string'
         && typeof data.operation_id === 'string'
@@ -36,7 +44,7 @@ export function mountServerSync(app, doc) {
       });
       if (current !== generation) return;
       const output = result?.structuredContent;
-      if (result?.isError || !output || (accept ? typeof output.operation_id !== 'string'
+      if (result?.isError || !output || (accept ? output.operation_id !== data.operation_id
           : output.status !== 'cancelled')) throw new Error();
       el('status').textContent = accept
         ? `동기화 작업 ID: ${output.operation_id} · 상태: ${output.status}`
@@ -44,7 +52,7 @@ export function mountServerSync(app, doc) {
     } catch {
       if (current !== generation) return;
       el('status').textContent = accept
-        ? '동기화 결과를 확인하지 못했습니다. 자동 재시도하지 않습니다.'
+        ? `동기화 결과를 확인하지 못했습니다. 작업 ID ${data.operation_id}로 상태를 조회하세요.`
         : '취소 결과를 확인하지 못했습니다.';
     }
     if (current === generation) { pending = null; busy = false; controls(); }

@@ -11,44 +11,46 @@ import anyio
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
+from solo_leveling.application.server_sync.paper_metadata import PaperSyncPreview, SyncPreviewChanged
 from solo_leveling.infrastructure.storage.server_client import ServerConnectionRequired
 
 
 SERVER_SYNC_APP_URI = "ui://solo-leveling/server-sync.html"
 SERVER_SYNC_NOTICE_VERSION = "paper-metadata-sync-v1"
-SERVER_SYNC_NOTICE = """선택한 논문의 ID, 제목, 원래 등록 시각을 연결된 Solo Leveling Paper 서버로 전송합니다.
+SERVER_SYNC_NOTICE = """로컬 설치 식별자와 선택한 논문의 ID, 제목, 원래 등록 시각을 연결된 Solo Leveling Paper 서버로 전송합니다.
 저자와 출판 연도는 현재 로컬에 없어 빈 값으로 전송합니다.
 PDF 파일, 추출 원문, 번역문, 메모, 하이라이트, 질문·답변과 로컬 파일 경로는 전송하지 않습니다.
-서버에 저장된 논문 메타데이터는 외부 웹에서 로그인한 계정으로 조회할 수 있습니다.
+메타데이터는 연결된 계정에 저장됩니다.
 취소하거나 동의하지 않으면 서버 전송 작업을 만들지 않습니다."""
 
 
 class ServerSyncService(Protocol):
-    def preview(self, paper_id: str) -> dict[str, str | None]: ...
-    def grant_and_queue(self, paper_id: str, notice_version: str, operation_id: str): ...
+    def preview(self, paper_id: str) -> PaperSyncPreview: ...
+    def grant_and_queue(self, paper_id: str, notice_version: str, operation_id: str, preview: PaperSyncPreview): ...
     def sync(self, operation_id: str): ...
     def status(self, operation_id: str): ...
 
 
 class ServerSyncGate:
     def __init__(self, *, clock=monotonic):
-        self.pending: dict[str, tuple[str, str, float]] = {}
+        self.pending: dict[str, tuple[PaperSyncPreview, str, float]] = {}
         self.clock = clock
 
-    def prepare(self, paper_id: str, operation_id: str) -> str:
+    def prepare(self, preview: PaperSyncPreview, operation_id: str) -> str:
         now = self.clock()
         self.pending = {key: value for key, value in self.pending.items() if value[2] > now}
         if len(self.pending) >= 128:
             raise ToolError("SERVER_SYNC_LIMIT: 잠시 후 동기화 안내를 다시 요청하세요.")
         token = token_urlsafe(32)
-        self.pending[token] = (paper_id, operation_id, now + 600)
+        self.pending[token] = (preview, operation_id, now + 600)
         return token
 
-    def consume(self, token: str, paper_id: str, operation_id: str) -> None:
+    def consume(self, token: str, paper_id: str, operation_id: str) -> PaperSyncPreview:
         pending = self.pending.get(token)
-        if pending is None or pending[2] <= self.clock() or pending[:2] != (paper_id, operation_id):
+        if pending is None or pending[2] <= self.clock() or (pending[0].paper_id, pending[1]) != (paper_id, operation_id):
             raise ToolError("SERVER_SYNC_CONFIRMATION_REQUIRED: 동기화 안내 카드를 다시 열어 확인하세요.")
         del self.pending[token]
+        return pending[0]
 
     def cancel(self, token: str) -> None:
         self.pending.pop(token, None)
@@ -85,10 +87,10 @@ def register_server_sync(server, service: ServerSyncService) -> None:
             raise ToolError("SERVER_CONNECTION_REQUIRED: 먼저 전용 연결 명령으로 서버 계정을 연결하세요.") from None
         operation_id = str(uuid4())
         data = {"status": "confirmation_required", "notice": SERVER_SYNC_NOTICE,
-                "operation_id": operation_id, **preview}
+                "operation_id": operation_id, "paper_id": preview.paper_id, "title": preview.title}
         return CallToolResult(
             content=[TextContent(type="text", text=SERVER_SYNC_NOTICE)], structuredContent=data,
-            _meta={"confirmation_token": gate.prepare(paper_id, operation_id)},
+            _meta={"confirmation_token": gate.prepare(preview, operation_id)},
         )
 
     @server.tool(
@@ -100,15 +102,17 @@ def register_server_sync(server, service: ServerSyncService) -> None:
     async def sync_paper_to_server(paper_id: str, operation_id: str,
                                    confirmation_token: str) -> dict[str, Any]:
         """확인 카드에서 승인한 논문의 메타데이터만 서버로 전송합니다."""
-        gate.consume(confirmation_token, paper_id, operation_id)
+        preview = gate.consume(confirmation_token, paper_id, operation_id)
         try:
             queued = await anyio.to_thread.run_sync(
-                service.grant_and_queue, paper_id, SERVER_SYNC_NOTICE_VERSION, operation_id)
+                service.grant_and_queue, paper_id, SERVER_SYNC_NOTICE_VERSION, operation_id, preview)
             return _output(await anyio.to_thread.run_sync(service.sync, queued.operation_id))
         except KeyError:
             raise ToolError("NOT_FOUND: 요청한 논문을 찾을 수 없습니다.") from None
         except ServerConnectionRequired:
             raise ToolError("SERVER_CONNECTION_REQUIRED: 먼저 전용 연결 명령으로 서버 계정을 연결하세요.") from None
+        except SyncPreviewChanged:
+            raise ToolError("SERVER_SYNC_PREVIEW_CHANGED: 논문 또는 계정이 변경되었습니다. 안내 카드를 다시 열어 주세요.") from None
         except Exception:
             raise ToolError("INTERNAL_ERROR: 서버 동기화를 시작하지 못했습니다.") from None
 

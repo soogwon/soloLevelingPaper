@@ -7,6 +7,7 @@ import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
 from solo_leveling.application.server_sync import SyncResult
+from solo_leveling.application.server_sync.paper_metadata import PaperSyncPreview
 from solo_leveling.interfaces.mcp.server import MCPServices, create_server
 from solo_leveling.interfaces.mcp.server_sync_tools import SERVER_SYNC_APP_URI, SERVER_SYNC_NOTICE_VERSION
 
@@ -17,7 +18,7 @@ def make_server(service):
 
 def test_card_approval_creates_and_sends_exactly_one_operation():
     service = Mock()
-    service.preview.return_value = {"paper_id": "paper-1", "title": "Paper"}
+    service.preview.return_value = PaperSyncPreview("account", "paper-1", "Paper", "created")
     service.grant_and_queue.return_value = SyncResult("op-1", "pending")
     service.sync.return_value = SyncResult("op-1", "synced", "server-paper-1")
     server = make_server(service)
@@ -33,7 +34,7 @@ def test_card_approval_creates_and_sends_exactly_one_operation():
         assert prepared.structuredContent["title"] == "Paper"
         operation_id = prepared.structuredContent["operation_id"]
         assert all(term in prepared.structuredContent["notice"] for term in
-                   ("제목", "PDF 파일", "추출 원문", "메모", "외부 웹"))
+                   ("제목", "PDF 파일", "추출 원문", "메모", "연결된 계정"))
         token = prepared.meta["confirmation_token"]
         result = await server.call_tool("sync_paper_to_server", {
             "paper_id": "paper-1", "operation_id": operation_id, "confirmation_token": token})
@@ -47,13 +48,14 @@ def test_card_approval_creates_and_sends_exactly_one_operation():
     service.preview.assert_called_once_with("paper-1")
     queued_args = service.grant_and_queue.call_args.args
     assert queued_args[:2] == ("paper-1", SERVER_SYNC_NOTICE_VERSION)
+    assert queued_args[3] == service.preview.return_value
     assert len(queued_args[2]) == 36
     service.sync.assert_called_once_with("op-1")
 
 
 def test_token_is_bound_to_paper_and_cancel_does_not_queue():
     service = Mock()
-    service.preview.side_effect = lambda paper_id: {"paper_id": paper_id, "title": None}
+    service.preview.side_effect = lambda paper_id: PaperSyncPreview("account", paper_id, None, "created")
     server = make_server(service)
 
     async def check():
