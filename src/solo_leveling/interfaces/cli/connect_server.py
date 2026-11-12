@@ -4,13 +4,14 @@ import argparse
 from base64 import urlsafe_b64encode
 from dataclasses import dataclass
 from hashlib import sha256
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from queue import Empty, Queue
 from secrets import token_urlsafe
 import sys
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
+from uuid import UUID
 import webbrowser
 
 from solo_leveling.infrastructure.storage.server_credentials import KeyringCredentialStore, StoredDeviceCredentials
@@ -31,6 +32,8 @@ class ConnectSettings:
             parsed = urlsplit(value)
             if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
                 raise ValueError(f"{name}은 안전한 https URL이어야 합니다.")
+        if urlsplit(self.server_url).query:
+            raise ValueError("SERVER_API_URL에는 쿼리를 지정할 수 없습니다.")
         if not self.client_id.strip() or not self.scopes.strip():
             raise ValueError("OIDC client 설정이 비어 있습니다.")
         if "openid" not in self.scopes.split():
@@ -80,7 +83,7 @@ def connect(settings: ConnectSettings, display_name: str, session, credential_st
     state = token_urlsafe(32)
     callbacks: Queue[dict[str, list[str]]] = Queue()
     handler = _callback_handler(callbacks)
-    server = HTTPServer(("127.0.0.1", 0), handler)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.timeout = 1
     redirect_uri = f"http://127.0.0.1:{server.server_port}/callback"
     try:
@@ -91,42 +94,47 @@ def connect(settings: ConnectSettings, display_name: str, session, credential_st
         server.server_close()
 
     code = query["code"][0]
-    token_response = session.post(settings.token_url, data={
+    token_response = _post(session, settings.token_url, data={
         "grant_type": "authorization_code",
         "client_id": settings.client_id,
         "code": code,
         "redirect_uri": redirect_uri,
         "code_verifier": verifier,
     }, timeout=15)
-    token_response.raise_for_status()
     web_token = _bearer_access_token(token_response.json())
     headers = {"Authorization": f"Bearer {web_token}"}
-    registered = session.post(f"{settings.server_url}/v1/devices", json={"display_name": display_name},
+    registered = _post(session, f"{settings.server_url}/v1/devices", json={"display_name": display_name},
                               headers=headers, timeout=15)
-    registered.raise_for_status()
-    device_id = _required_string(registered.json(), "device_id")
-    issued = session.post(f"{settings.server_url}/v1/devices/{device_id}/credentials",
-                          headers=headers, timeout=15)
-    issued.raise_for_status()
-    data = issued.json()
-    _bearer_access_token(data)
-    credentials = StoredDeviceCredentials(
-        server_url=settings.server_url,
-        device_id=device_id,
-        access_token=_required_string(data, "access_token"),
-        access_expires_at=_required_string(data, "access_expires_at"),
-        refresh_token=_required_string(data, "refresh_token"),
-        refresh_expires_at=_required_string(data, "refresh_expires_at"),
-    )
+    device_id = str(UUID(_required_string(registered.json(), "device_id")))
+    device_url = f"{settings.server_url}/v1/devices/{device_id}"
     try:
+        issued = _post(session, f"{device_url}/credentials", headers=headers, timeout=15)
+        data = issued.json()
+        if _required_string(data, "device_id") != device_id:
+            raise ValueError("발급 응답의 기기 ID가 등록한 기기와 다릅니다.")
+        credentials = StoredDeviceCredentials(
+            server_url=settings.server_url,
+            device_id=device_id,
+            access_token=_bearer_access_token(data),
+            access_expires_at=_required_string(data, "access_expires_at"),
+            refresh_token=_required_string(data, "refresh_token"),
+            refresh_expires_at=_required_string(data, "refresh_expires_at"),
+        )
         credential_store.save(credentials)
     except Exception:
         try:
-            session.delete(f"{settings.server_url}/v1/devices/{device_id}", headers=headers, timeout=15)
+            session.delete(device_url, headers=headers, timeout=15, allow_redirects=False)
         except Exception:
             pass
         raise
     return device_id
+
+
+def _post(session, url, **kwargs):
+    response = session.post(url, allow_redirects=False, **kwargs)
+    if not 200 <= response.status_code < 300:
+        raise ValueError("연결 요청이 성공하지 않았습니다.")
+    return response
 
 
 def _wait_for_callback(server, callbacks, expected_state: str, timeout_seconds: int):
@@ -139,7 +147,7 @@ def _wait_for_callback(server, callbacks, expected_state: str, timeout_seconds: 
             continue
         if query.get("state") != [expected_state]:
             continue
-        if "error" in query or len(query.get("code", [])) != 1:
+        if "error" in query or len(query.get("code", [])) != 1 or not query["code"][0]:
             raise ValueError("인증 제공자가 로그인을 완료하지 않았습니다.")
         return query
     raise TimeoutError("로그인 대기 시간이 끝났습니다.")
@@ -147,6 +155,8 @@ def _wait_for_callback(server, callbacks, expected_state: str, timeout_seconds: 
 
 def _callback_handler(callbacks):
     class Handler(BaseHTTPRequestHandler):
+        timeout = 5
+
         def do_GET(self):
             parsed = urlsplit(self.path)
             if parsed.path != "/callback":

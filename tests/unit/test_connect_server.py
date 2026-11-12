@@ -22,7 +22,11 @@ SETTINGS = subject.ConnectSettings(
 )
 
 
+DEVICE_ID = "00000000-0000-0000-0000-000000000001"
+
+
 class Response:
+    status_code = 200
     def __init__(self, data):
         self.data = data
 
@@ -42,8 +46,9 @@ class Session:
         if url.endswith("/token"):
             return Response({"token_type": "Bearer", "access_token": "web-access-token"})
         if url.endswith("/v1/devices"):
-            return Response({"device_id": "device-1"})
+            return Response({"device_id": DEVICE_ID})
         return Response({
+            "device_id": DEVICE_ID,
             "token_type": "Bearer",
             "access_token": "slp_at_secret",
             "access_expires_at": "2026-11-12T10:15:00Z",
@@ -92,7 +97,7 @@ def test_authorization_url_contains_state_loopback_and_s256_only():
 
 def test_connect_exchanges_code_registers_device_and_stores_only_in_keyring(monkeypatch):
     session, saved, opened = Session(), [], []
-    monkeypatch.setattr(subject, "HTTPServer", Server)
+    monkeypatch.setattr(subject, "ThreadingHTTPServer", Server)
     monkeypatch.setattr(subject, "_wait_for_callback", lambda server, queue, state, timeout_seconds: {
         "state": [state], "code": ["authorization-code"]
     })
@@ -105,7 +110,7 @@ def test_connect_exchanges_code_registers_device_and_stores_only_in_keyring(monk
         browser_open=lambda url: opened.append(url) or True,
     )
 
-    assert device_id == "device-1"
+    assert device_id == DEVICE_ID
     assert saved[0].access_token == "slp_at_secret" and saved[0].refresh_token == "slp_rt_secret"
     token_call = session.calls[0]
     assert token_call[1] == SETTINGS.token_url
@@ -119,7 +124,7 @@ def test_connect_exchanges_code_registers_device_and_stores_only_in_keyring(monk
 
 def test_keyring_failure_revokes_new_device(monkeypatch):
     session = Session()
-    monkeypatch.setattr(subject, "HTTPServer", Server)
+    monkeypatch.setattr(subject, "ThreadingHTTPServer", Server)
     monkeypatch.setattr(subject, "_wait_for_callback", lambda server, queue, state, timeout_seconds: {
         "state": [state], "code": ["code"]
     })
@@ -128,15 +133,18 @@ def test_keyring_failure_revokes_new_device(monkeypatch):
     with pytest.raises(RuntimeError, match="keyring"):
         subject.connect(SETTINGS, "My PC", session, store, browser_open=lambda url: True)
 
-    assert any(method == "DELETE" and url.endswith("/v1/devices/device-1") for method, url, _ in session.calls)
+    assert any(method == "DELETE" and url.endswith(f"/v1/devices/{DEVICE_ID}") for method, url, _ in session.calls)
 
 
 def test_keyring_store_serializes_credentials_without_using_server_url_as_username(monkeypatch):
     values = {}
-    monkeypatch.setattr("keyring.set_password", lambda service, account, payload: values.update({(service, account): payload}))
-    monkeypatch.setattr("keyring.get_password", lambda service, account: values.get((service, account)))
+    backend = SimpleNamespace(
+        set_password=lambda service, account, payload: values.update({(service, account): payload}),
+        get_password=lambda service, account: values.get((service, account)),
+    )
+    monkeypatch.setattr("solo_leveling.infrastructure.storage.server_credentials._native_keyring", lambda: backend)
     credentials = StoredDeviceCredentials(
-        "https://api.example.com", "device-1", "access", "a-exp", "refresh", "r-exp"
+        "https://api.example.com", DEVICE_ID, "access", "a-exp", "refresh", "r-exp"
     )
     store = KeyringCredentialStore()
 
@@ -178,3 +186,41 @@ def test_oidc_scope_must_include_openid():
     values["scopes"] = "profile"
     with pytest.raises(ValueError, match="openid"):
         subject.ConnectSettings(**values)
+
+@pytest.mark.parametrize("failure", ["redirect", "wrong_device", "missing_refresh"])
+def test_failed_credential_issue_cleans_up_only_registered_device(monkeypatch, failure):
+    class FailedIssue(Session):
+        def post(self, url, **kwargs):
+            response = super().post(url, **kwargs)
+            if url.endswith("/credentials"):
+                if failure == "redirect":
+                    response.status_code = 307
+                elif failure == "wrong_device":
+                    response.data["device_id"] = "other"
+                else:
+                    del response.data["refresh_token"]
+            return response
+
+    session, saved = FailedIssue(), []
+    monkeypatch.setattr(subject, "ThreadingHTTPServer", Server)
+    monkeypatch.setattr(subject, "_wait_for_callback", lambda *args, **kwargs: {"code": ["code"]})
+    with pytest.raises(ValueError):
+        subject.connect(SETTINGS, "My PC", session, SimpleNamespace(save=saved.append), lambda url: True)
+    assert saved == []
+    assert session.calls[-1][:2] == ("DELETE", f"{SETTINGS.server_url}/v1/devices/{DEVICE_ID}")
+    assert all(kwargs["allow_redirects"] is False for _, _, kwargs in session.calls)
+
+
+def test_native_keyring_ignores_configured_plugin(monkeypatch):
+    import sys
+    from solo_leveling.infrastructure.storage.server_credentials import _native_keyring
+
+    expected = {
+        "darwin": "keyring.backends.macOS",
+        "win32": "keyring.backends.Windows",
+        "linux": "keyring.backends.SecretService",
+    }
+    if sys.platform not in expected:
+        pytest.skip("지원하는 운영체제에서 실행합니다.")
+    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.null.Keyring")
+    assert type(_native_keyring()).__module__ == expected[sys.platform]
