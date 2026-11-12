@@ -15,9 +15,11 @@ from solo_leveling.interfaces.http.papers import (
     IdempotencyConflict,
     LearningRecordMetadata,
     LearningRecordRegistration,
+    PaperDetail,
     PaperListItem,
     PaperMetadata,
     PaperPage,
+    PaperSelectionConflict,
     PaperRegistration,
     PostgresPaperStore,
     _payload_hash,
@@ -137,6 +139,14 @@ class MemoryStore:
         return LearningRecordRegistration(
             "00000000-0000-0000-0000-000000000301", 1, "stored", NOW
         )
+
+    def get_paper(self, owner_user_id, paper_id, **selection):
+        self.calls.append((owner_user_id, paper_id, selection))
+        return PaperDetail(PaperListItem(
+            paper_id, "Paper", ("A",), 2024, "paper.pdf",
+            "00000000-0000-0000-0000-000000000301", "version-1",
+            {"pdf_page": 3}, NOW, "reading",
+        ))
 
 
 def endpoint(app):
@@ -294,6 +304,70 @@ def test_learning_record_route_derives_status_and_uses_device_owner():
     assert str(result.learning_record_id) == "00000000-0000-0000-0000-000000000301"
     assert store.calls[0][0:2] == ("user-1", PAPER_ID)
     assert store.calls[0][2].reading_status == "completed"
+
+
+def test_postgres_detail_selects_requested_record_in_owner_scope():
+    record_id = "00000000-0000-0000-0000-000000000301"
+    pool = Pool([
+        Result(),
+        Result({"paper_id": PAPER_ID, "title": "Paper", "authors": ["A"], "publication_year": 2024}),
+        Result({"learning_record_id": record_id, "selected_version_id": "version-1",
+                "file_name": "paper.pdf", "last_position": {"pdf_page": 3},
+                "last_studied_at": NOW, "reading_status": "reading"}),
+    ])
+
+    detail = PostgresPaperStore(pool).get_paper(
+        "user-1", PAPER_ID, learning_record_id=record_id, version_id="version-1")
+
+    assert detail.paper.selected_learning_record_id == record_id
+    assert detail.paper.last_position == {"pdf_page": 3}
+    assert pool.conn.calls[1][1] == (PAPER_ID, "user-1")
+    assert pool.conn.calls[2][1] == ("user-1", PAPER_ID, record_id)
+
+
+def test_detail_rejects_mismatched_record_and_version():
+    record_id = "00000000-0000-0000-0000-000000000301"
+    pool = Pool([
+        Result(),
+        Result({"paper_id": PAPER_ID, "title": "Paper", "authors": None, "publication_year": None}),
+        Result({"learning_record_id": record_id, "selected_version_id": "version-2",
+                "file_name": None, "last_position": None, "last_studied_at": NOW,
+                "reading_status": "reading"}),
+    ])
+
+    with pytest.raises(PaperSelectionConflict):
+        PostgresPaperStore(pool).get_paper(
+            "user-1", PAPER_ID, learning_record_id=record_id, version_id="version-1")
+
+
+def test_detail_without_learning_record_returns_basic_paper_only():
+    pool = Pool([
+        Result(),
+        Result({"paper_id": PAPER_ID, "title": None, "authors": None, "publication_year": None}),
+        Result(),
+    ])
+
+    detail = PostgresPaperStore(pool).get_paper(
+        "user-1", PAPER_ID, learning_record_id=None, version_id=None)
+
+    assert detail.paper == PaperListItem(PAPER_ID, None, None, None)
+
+
+def test_web_detail_uses_session_owner_and_reports_unavailable_dependencies():
+    store = MemoryStore()
+    principal = AuthenticatedPrincipal("web-user", "web_session")
+    route = next(route.endpoint for route in create_app(paper_store=store).routes
+                 if route.path == "/v1/papers/{paper_id}")
+    record_id = UUID("00000000-0000-0000-0000-000000000301")
+
+    result = route(UUID(PAPER_ID), principal, record_id, "version-1")
+
+    assert store.calls == [("web-user", PAPER_ID, {
+        "learning_record_id": str(record_id), "version_id": "version-1",
+    })]
+    assert result.summary is None
+    assert (result.file_access.available, result.file_access.reason) == (False, "not_uploaded")
+    assert (result.resume.available, result.resume.reason) == (False, "local_client_required")
 
 
 def test_web_list_uses_session_owner_and_preserves_out_of_range_page():

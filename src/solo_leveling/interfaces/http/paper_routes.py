@@ -11,7 +11,7 @@ from solo_leveling.domain.learning_progress import LEARNING_STEPS
 
 from .papers import (
     IdempotencyConflict, LearningRecordConflict, LearningRecordMetadata, PaperMetadata, PaperNotFound,
-    PaperStore, PaperStoreUnavailable,
+    PaperSelectionConflict, PaperStore, PaperStoreUnavailable,
 )
 
 
@@ -260,6 +260,22 @@ def create_web_paper_router(require_principal: Any, store: PaperStore):
         total_count: int
         total_pages: int
 
+    class VersionView(BaseModel):
+        version_id: str
+        file_name: str | None
+        created_at: datetime | None = None
+
+    class AvailabilityView(BaseModel):
+        available: bool
+        reason: str
+        message: str
+
+    class PaperDetailView(PaperListItemView):
+        version: VersionView | None
+        summary: dict[str, Any] | None
+        file_access: AvailabilityView
+        resume: AvailabilityView
+
     router = APIRouter(prefix="/v1/papers", tags=["web-papers"])
     Principal = Annotated[AuthenticatedPrincipal, Depends(require_principal)]
 
@@ -300,6 +316,60 @@ def create_web_paper_router(require_principal: Any, store: PaperStore):
             ) for item in result.items],
             page=result.page, page_size=result.page_size,
             total_count=result.total_count, total_pages=result.total_pages,
+        )
+
+    @router.get("/{paper_id}", response_model=PaperDetailView)
+    def get_paper(
+        paper_id: UUID,
+        principal: Principal,
+        learning_record_id: UUID | None = None,
+        version_id: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
+    ):
+        if principal.credential_type != "web_session":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail={"code": "web_session_required"})
+        if version_id is not None and ("\x00" in version_id or "/" in version_id or "\\" in version_id):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                                detail={"code": "invalid_version_id"})
+        try:
+            detail = store.get_paper(
+                principal.user_id, str(paper_id),
+                learning_record_id=str(learning_record_id) if learning_record_id else None,
+                version_id=version_id,
+            )
+        except PaperSelectionConflict:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail={"code": "paper_selection_conflict"}) from None
+        except PaperNotFound:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail={"code": "paper_not_found"}) from None
+        except PaperStoreUnavailable:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail={"code": "paper_store_unavailable"}) from None
+        item = detail.paper
+        published = ({"year": item.publication_year, "month": None, "day": None, "precision": "year"}
+                     if item.publication_year is not None else None)
+        has_record = item.selected_learning_record_id is not None
+        return PaperDetailView(
+            paper_id=item.paper_id, title=item.title,
+            authors=list(item.authors) if item.authors else None, file_name=item.file_name,
+            published=published, selected_learning_record_id=item.selected_learning_record_id,
+            selected_version_id=item.selected_version_id, last_position=item.last_position,
+            last_studied_at=item.last_studied_at, reading_status=item.reading_status,
+            collection_id=item.collection_id,
+            version=(VersionView(version_id=item.selected_version_id, file_name=item.file_name)
+                     if item.selected_version_id else None),
+            summary=None,
+            file_access=AvailabilityView(
+                available=False, reason="not_uploaded",
+                message="이 원문 버전의 PDF가 서버에 업로드되지 않았어요.",
+            ),
+            resume=AvailabilityView(
+                available=False,
+                reason="local_client_required" if has_record else "learning_record_missing",
+                message=("연결된 로컬 MCP에서 학습 준비 상태를 확인해야 해요."
+                         if has_record else "저장된 학습 기록이 없어요."),
+            ),
         )
 
     return router

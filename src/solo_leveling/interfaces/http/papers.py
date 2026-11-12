@@ -70,11 +70,20 @@ class PaperPage:
     total_pages: int
 
 
+@dataclass(frozen=True)
+class PaperDetail:
+    paper: PaperListItem
+
+
 class IdempotencyConflict(Exception):
     pass
 
 
 class LearningRecordConflict(Exception):
+    pass
+
+
+class PaperSelectionConflict(Exception):
     pass
 
 
@@ -95,6 +104,9 @@ class PaperStore(Protocol):
     def upsert_learning_record(self, owner_user_id: str, paper_id: str,
                                metadata: LearningRecordMetadata) -> LearningRecordRegistration: ...
 
+    def get_paper(self, owner_user_id: str, paper_id: str, *, learning_record_id: str | None,
+                  version_id: str | None) -> PaperDetail: ...
+
 
 class UnavailablePaperStore:
     def register(self, owner_user_id: str, key: str, metadata: PaperMetadata) -> PaperRegistration:
@@ -106,6 +118,10 @@ class UnavailablePaperStore:
 
     def upsert_learning_record(self, owner_user_id: str, paper_id: str,
                                metadata: LearningRecordMetadata) -> LearningRecordRegistration:
+        raise PaperStoreUnavailable
+
+    def get_paper(self, owner_user_id: str, paper_id: str, *, learning_record_id: str | None,
+                  version_id: str | None) -> PaperDetail:
         raise PaperStoreUnavailable
 
 
@@ -263,6 +279,52 @@ class PostgresPaperStore:
         return LearningRecordRegistration(
             str(row["learning_record_id"]), int(row["revision"]), "stored", row["updated_at"]
         )
+
+    def get_paper(self, owner_user_id: str, paper_id: str, *, learning_record_id: str | None,
+                  version_id: str | None) -> PaperDetail:
+        with _connection(self._pool) as conn:
+            conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            paper = conn.execute(
+                """SELECT paper_id, title, authors, publication_year FROM server_papers
+                   WHERE paper_id=%s AND owner_user_id=%s""", (paper_id, owner_user_id),
+            ).fetchone()
+            if paper is None:
+                raise PaperNotFound
+            params: list[Any] = [owner_user_id, paper_id]
+            condition = ""
+            if learning_record_id is not None:
+                condition = " AND learning_record_id=%s"
+                params.append(learning_record_id)
+            elif version_id is not None:
+                condition = " AND selected_version_id=%s"
+                params.append(version_id)
+            record = conn.execute(
+                f"""SELECT learning_record_id, selected_version_id, file_name, last_position,
+                            last_studied_at, reading_status
+                     FROM server_learning_records
+                     WHERE owner_user_id=%s AND paper_id=%s{condition}
+                     ORDER BY last_studied_at DESC NULLS LAST, learning_record_id ASC LIMIT 1""",
+                tuple(params),
+            ).fetchone()
+        if learning_record_id is not None and record is None:
+            raise PaperNotFound
+        if version_id is not None and record is None:
+            raise PaperNotFound
+        if (record is not None and version_id is not None
+                and record["selected_version_id"] != version_id):
+            raise PaperSelectionConflict
+        item = PaperListItem(
+            paper_id=str(paper["paper_id"]), title=paper["title"],
+            authors=tuple(paper["authors"]) if paper["authors"] is not None else None,
+            publication_year=paper["publication_year"],
+            file_name=record["file_name"] if record else None,
+            selected_learning_record_id=str(record["learning_record_id"]) if record else None,
+            selected_version_id=record["selected_version_id"] if record else None,
+            last_position=record["last_position"] if record else None,
+            last_studied_at=record["last_studied_at"] if record else None,
+            reading_status=record["reading_status"] if record else "unknown",
+        )
+        return PaperDetail(item)
 
 
 def _payload_hash(metadata: PaperMetadata) -> bytes:
