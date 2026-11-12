@@ -28,4 +28,4 @@ solo-leveling-api
 - 환경 변수 기반 host, port, environment 설정
 - 프로세스 상태 확인 API
 
-사용자 인증, 장치 등록, PostgreSQL 저장소, 동기화 API, External site용 조회 API는 아직 구현하지 않는다. 특히 임시 사용자 ID를 요청에서 받아 인증을 우회하는 엔드포인트를 추가하지 않는다. DB 연결이 추가되면 애플리케이션 lifespan과 별도의 readiness 검사를 함께 도입한다. 다음 단계에서는 인증 주체와 서버 소유권 모델을 먼저 확정한 뒤 저장소 및 API 계약을 구현한다.
+공급자 중립 인증 주체와 fail-closed Bearer 경계는 [중앙 서버 인증·소유권 경계](server-auth-boundary.md)를 따른다. 실제 인증 제공자 adapter, 장치 등록, PostgreSQL 저장소, 동기화 API, External site용 조회 API는 아직 구현하지 않는다. 특히 임시 사용자 ID를 요청에서 받아 인증을 우회하는 엔드포인트를 추가하지 않는다. DB 연결이 추가되면 애플리케이션 lifespan과 별도의 readiness 검사를 함께 도입한다.
