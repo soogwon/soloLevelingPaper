@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from solo_leveling.interfaces.http import create_app
 from solo_leveling.interfaces.http.auth import (
@@ -50,6 +51,28 @@ def test_verified_device_token_produces_principal_without_request_user_id():
 
     assert selected == principal
     assert verifier.tokens == ["verified-token"]
+
+
+def test_session_uses_supplied_verifier_even_when_its_length_is_zero():
+    class EmptyVerifier(StubVerifier):
+        def __len__(self):
+            return 0
+
+    verifier = EmptyVerifier(AuthenticatedPrincipal("user-1", "device", "device-1"))
+    with TestClient(create_app(token_verifier=verifier)) as client:
+        response = client.get("/v1/session", headers={"Authorization": "Bearer verified-token"})
+
+    assert response.status_code == 200
+    assert response.json() == {"authenticated": True, "credential_type": "device", "device_id": "device-1"}
+    assert verifier.tokens == ["verified-token"]
+
+
+def test_session_rejects_bearer_token_when_verifier_is_none():
+    with TestClient(create_app(token_verifier=None)) as client:
+        response = client.get("/v1/session", headers={"Authorization": "Bearer unverified-token"})
+
+    assert response.status_code == 401
+    assert response.headers["WWW-Authenticate"] == "Bearer"
 
 
 def test_session_response_does_not_expose_internal_user_id():

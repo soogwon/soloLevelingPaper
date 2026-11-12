@@ -26,7 +26,9 @@ def create_app(
         version="0.1.0",
     )
     app.state.settings = selected
-    require_principal = create_auth_dependency(token_verifier or RejectAllTokenVerifier())
+    if token_verifier is None:
+        token_verifier = RejectAllTokenVerifier()
+    require_principal = create_auth_dependency(token_verifier)
 
     @app.get("/health", tags=["operations"])
     def health() -> dict[str, str]:
