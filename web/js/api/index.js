@@ -1,7 +1,7 @@
 // 화면 코드는 이 파일의 api 객체만 사용한다.
 // 기본은 실제 백엔드이며 ?mock=1일 때만 메모리 예시 서버를 사용한다.
 import { CONFIG } from '../config.js';
-import { request, ApiError } from './client.js';
+import { request, ApiError, RouteNotFoundError } from './client.js';
 
 async function send(method, path, options) {
   const fn = CONFIG.USE_MOCK ? (await import('./mock-server.js')).mockRequest : request;
@@ -32,6 +32,50 @@ async function paged(promise, params = {}) {
   };
 }
 
+function emptyPage(params = {}) {
+  const normalized = page(params);
+  return {
+    items: [],
+    total_count: 0,
+    page: normalized.page,
+    page_size: normalized.limit,
+    total_pages: 1,
+  };
+}
+
+async function optionalAnnotationPage(promise, params = {}) {
+  try {
+    return await paged(promise, params);
+  } catch (error) {
+    // 메모 API가 아직 배포되지 않은 서버의 FastAPI 기본 404만 빈 목록으로 취급한다.
+    // paper_not_found 등 의미가 있는 404는 숨기지 않는다.
+    if (error instanceof RouteNotFoundError) {
+      return emptyPage(params);
+    }
+    throw error;
+  }
+}
+
+function normalizeDevices(response) {
+  const raw = Array.isArray(response) ? response : response?.items;
+  if (!Array.isArray(raw) || raw.some((device) =>
+    typeof device?.device_id !== 'string' || !device.device_id.trim())) {
+    throw new ApiError({
+      status: 200,
+      code: 'invalid_api_response',
+      message: '연결 기기 응답을 읽을 수 없어요.',
+    });
+  }
+  return {
+    items: raw.map((device) => ({
+      ...device,
+      name: device.name ?? device.display_name ?? '이름 없는 PC',
+      connected_at: device.connected_at ?? device.created_at ?? null,
+      last_active_at: device.last_active_at ?? null,
+    })),
+  };
+}
+
 export const api = {
   // ---------- 7. 회원·로그인 ----------
   /** GET /v1/me → { user_id, display_name, email } */
@@ -43,8 +87,8 @@ export const api = {
   /** 예시 데이터 전용 로그인 */
   mockLogin: () => send('POST', '/auth/mock-login'),
 
-  /** GET /v1/devices → { items: [{ device_id, name, connected_at, last_active_at }] } */
-  listDevices: () => send('GET', '/devices'),
+  /** GET /v1/devices → 배열 또는 { items }; 화면용 필드로 정규화한다. */
+  listDevices: async () => normalizeDevices(await send('GET', '/devices')),
   /** DELETE /v1/devices/{기기 ID} */
   disconnectDevice: (deviceId) => send('DELETE', `/devices/${id(deviceId)}`),
 
@@ -83,7 +127,7 @@ export const api = {
    * params: paper_id, version_id, kind(note|highlight), from, to(YYYY-MM-DD, 한국 날짜), q, sort(newest|oldest), page, limit
    * → { items: Annotation[], total_count, page, page_size, total_pages, date_counts: { 'YYYY-MM-DD' | 'unknown': n } }
    */
-  listAnnotations: (params = {}) => paged(send('GET', '/annotations', {
+  listAnnotations: (params = {}) => optionalAnnotationPage(send('GET', '/annotations', {
     query: {
       paper_id: params.paper_id,
       version_id: params.version_id,

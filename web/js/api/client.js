@@ -13,6 +13,8 @@ export class ApiError extends Error {
   }
 }
 
+export class RouteNotFoundError extends ApiError {}
+
 const DEFAULT_MESSAGES = {
   400: '입력값을 확인해 주세요.',
   401: '로그인이 필요해요.',
@@ -74,7 +76,9 @@ export async function request(method, path, { query, body, idempotencyKey } = {}
   if (!response.ok) {
     // 현재 FastAPI는 { detail: { code } }, 향후 공통 오류 envelope는 { error: {...} }를 쓴다.
     const e = data?.error ?? data?.detail ?? {};
-    throw new ApiError({
+    const ErrorType = response.status === 404 && data?.detail === 'Not Found'
+      && Object.keys(data).length === 1 ? RouteNotFoundError : ApiError;
+    throw new ErrorType({
       status: response.status,
       code: e.code ?? `http_${response.status}`,
       message: e.message ?? DEFAULT_MESSAGES[response.status] ?? '요청을 처리하지 못했어요.',

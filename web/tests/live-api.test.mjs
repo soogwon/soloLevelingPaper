@@ -65,6 +65,65 @@ test('live client preserves the current server detail error code', async () => {
   }
 });
 
+test('현재 서버의 배열형 기기 응답을 계정 화면 계약으로 정규화한다', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => ({
+    ok: true,
+    status: 200,
+    json: async () => [{
+      device_id: 'device-1',
+      display_name: 'My PC',
+      created_at: '2026-11-13T00:00:00Z',
+    }],
+  }));
+
+  assert.deepEqual(await api.listDevices(), {
+    items: [{
+      device_id: 'device-1',
+      display_name: 'My PC',
+      created_at: '2026-11-13T00:00:00Z',
+      name: 'My PC',
+      connected_at: '2026-11-13T00:00:00Z',
+      last_active_at: null,
+    }],
+  });
+});
+
+test('기기 응답 형태가 잘못되면 빈 목록으로 숨기지 않는다', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({}),
+  }));
+
+  await assert.rejects(api.listDevices(), { code: 'invalid_api_response' });
+});
+
+test('미배포 annotations 경로의 기본 404는 빈 목록으로 표시한다', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => ({
+    ok: false,
+    status: 404,
+    headers: { get: () => null },
+    json: async () => ({ detail: 'Not Found' }),
+  }));
+
+  assert.deepEqual(await api.listAnnotations({ page: 1, limit: 3 }), {
+    items: [], total_count: 0, page: 1, page_size: 3, total_pages: 1,
+  });
+});
+
+test('논문 없음처럼 의미가 있는 annotations 404는 그대로 전달한다', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => ({
+    ok: false,
+    status: 404,
+    headers: { get: () => null },
+    json: async () => ({ detail: { code: 'paper_not_found' } }),
+  }));
+
+  await assert.rejects(api.listAnnotations({ paper_id: 'missing' }), {
+    status: 404, code: 'paper_not_found',
+  });
+});
+
 test('HTML을 반환하는 정적 서버를 정상 API 응답으로 처리하지 않는다', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => new Response('<html></html>'));
   await assert.rejects(api.me(), { code: 'invalid_api_response' });
@@ -78,5 +137,23 @@ test('API 주소 끝에 슬래시가 있어도 로그인과 조회에 같은 기
     assert.equal(runtime.USE_MOCK, false);
   } finally {
     delete globalThis.SOLO_LEVELING_CONFIG;
+  }
+});
+
+
+test('프록시와 업무 오류의 404는 메모가 없는 것으로 표시하지 않는다', async (t) => {
+  const stub = t.mock.method(globalThis, 'fetch');
+  for (const body of ['<html>Not Found</html>', '{}', '{"detail":"Annotation not found"}',
+    '{"error":{"code":"http_404"}}']) {
+    stub.mock.mockImplementation(async () => new Response(body, { status: 404 }));
+    await assert.rejects(api.listAnnotations(), { status: 404, code: 'http_404' });
+  }
+});
+
+test('기기 ID가 없는 항목은 계정 화면으로 전달하지 않는다', async (t) => {
+  const stub = t.mock.method(globalThis, 'fetch');
+  for (const body of [[null], { items: [{ device_id: '  ' }] }, [{}]]) {
+    stub.mock.mockImplementation(async () => Response.json(body));
+    await assert.rejects(api.listDevices(), { code: 'invalid_api_response' });
   }
 });
