@@ -5,7 +5,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tests.fixtures.pdf_builder import write_minimal_pdf
-from solo_leveling.infrastructure.parsing.pdf_extractor import extract_pages, page_count
+from solo_leveling.infrastructure.parsing.pdf_extractor import (
+    _remove_repeated_diagram_labels, extract_pages, page_count,
+)
 
 
 def test_extract_pages_preserves_page_boundaries(tmp_path):
@@ -139,3 +141,22 @@ def test_pages_without_footer_are_unchanged(tmp_path):
     page = extract_pages(str(pdf_path))[0]
 
     assert page.text == "Only body." and page.page_number_candidate is None
+
+
+def test_repeated_short_diagram_labels_are_removed_without_dropping_prose():
+    text = (
+        'The encoder contains several layers.\n'
+        'Input-Input Layer 5\nInput-Input Layer 5\nInput-Input Layer 5\n'
+        'The decoder attends to the encoder output.'
+    )
+
+    cleaned = _remove_repeated_diagram_labels(text)
+
+    assert 'Input-Input Layer 5' not in cleaned
+    assert 'The encoder contains several layers.' in cleaned
+    assert 'The decoder attends to the encoder output.' in cleaned
+
+
+def test_repeated_complete_sentences_are_preserved():
+    repeated = 'This result is significant.'
+    assert _remove_repeated_diagram_labels('\n'.join([repeated] * 3)).count(repeated) == 3

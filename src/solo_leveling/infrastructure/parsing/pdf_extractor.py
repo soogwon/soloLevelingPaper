@@ -81,12 +81,32 @@ def _open_pdf(pdf_path: str):
 # 인식하지 못해 단어가 붙어버리는 문제가 있었다. 실측 검증 결과 1.5가
 # 안정적으로 공백을 보존함 (근거: 진단 스크립트로 1/1.5/2 모두 정상 확인).
 TEXT_X_TOLERANCE = 1.5
+# 본문 글꼴에서 위·아래 첨자는 기준선이 조금 어긋난다. pdfplumber 기본값(3)은
+# 이를 별도 줄로 분리할 수 있어, 실제 논문 수식의 첨자를 같은 텍스트 줄로 묶는다.
+TEXT_Y_TOLERANCE = 5
 
 
 # 페이지 아래 여백(맨 아래 10%)에 숫자만 있는 줄은 쪽 번호로 보고 본문에서 뺀다(#15).
 # 본문 안의 수식·표 숫자는 여백에 있지 않거나 다른 글자와 함께 있으므로 건드리지 않는다.
 FOOTER_ZONE_RATIO = 0.90
 _PAGE_NUMBER_RE = re.compile(r"\d{1,4}")
+
+
+def _remove_repeated_diagram_labels(text: str) -> str:
+    """한 페이지 그림 안에서 여러 번 복제된 짧은 레이어 라벨만 제거한다.
+
+    표와 본문의 반복을 과도하게 지우지 않도록 문장 종결 부호가 없고, 단어 수가
+    적은 동일 줄이 세 번 이상 나타나는 경우로 제한한다.
+    """
+    lines = text.splitlines()
+    normalized = [re.sub(r'\s+', ' ', line).strip().casefold() for line in lines]
+    counts = Counter(normalized)
+    noise = {
+        value for value, count in counts.items()
+        if count >= 3 and value and len(value) <= 80
+        and len(value.split()) <= 8 and not re.search(r'[.!?。！？]$', value)
+    }
+    return '\n'.join(line for line, value in zip(lines, normalized) if value not in noise)
 
 
 @dataclass
@@ -115,7 +135,9 @@ def _is_upright(obj: dict) -> bool:
 def _line_styles(page) -> list[LineStyle]:
     """페이지 각 줄의 글자 크기·굵기를 읽는다. 텍스트는 extract_text와 같은 줄 나누기를 쓴다."""
     styles = []
-    for line in page.extract_text_lines(x_tolerance=TEXT_X_TOLERANCE, return_chars=True):
+    for line in page.extract_text_lines(
+            x_tolerance=TEXT_X_TOLERANCE, y_tolerance=TEXT_Y_TOLERANCE,
+            return_chars=True):
         chars = [c for c in line["chars"] if c["text"].strip()]
         if not chars:
             continue
@@ -141,7 +163,8 @@ def split_page_number(page, text: str) -> tuple[str, str | None]:
     """
     try:
         zone = page.crop((0, page.height * FOOTER_ZONE_RATIO, page.width, page.height))
-        zone_text = (zone.extract_text(x_tolerance=TEXT_X_TOLERANCE) or "").strip()
+        zone_text = (zone.extract_text(
+            x_tolerance=TEXT_X_TOLERANCE, y_tolerance=TEXT_Y_TOLERANCE) or "").strip()
     except Exception:
         return text, None
     if not _PAGE_NUMBER_RE.fullmatch(zone_text):
@@ -177,7 +200,9 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
             chars = page.chars
             metrics = RotationMetrics(len(chars), sum(not _is_upright(char) for char in chars))
             upright_only = page.filter(_is_upright)
-            text = upright_only.extract_text(x_tolerance=TEXT_X_TOLERANCE) or ""
+            text = upright_only.extract_text(
+                x_tolerance=TEXT_X_TOLERANCE, y_tolerance=TEXT_Y_TOLERANCE) or ""
+            text = _remove_repeated_diagram_labels(text)
             text, page_number = split_page_number(upright_only, text)
             pages.append(ExtractedPage(pdf_page=i, text=text, printed_page_label=None,
                                        page_number_candidate=page_number, rotation_metrics=metrics))

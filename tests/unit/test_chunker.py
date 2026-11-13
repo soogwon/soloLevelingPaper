@@ -123,6 +123,18 @@ def test_overlap_is_still_applied_between_neighbouring_chunks():
     assert all(o > 0 for o in overlaps), "이웃 청크는 서로 겹쳐야 한다"
 
 
+def test_overlap_start_prefers_a_sentence_boundary():
+    first = 'A' * 170 + '.'
+    second = ' Second sentence has enough words to remain intact.'
+    third = ' Third sentence also remains intact and provides more context.'
+    text = first + second + third
+
+    pieces = _split_within_page(text, chunk_size=225, overlap=100)
+
+    assert len(pieces) >= 2
+    assert pieces[1].startswith('Second sentence')
+
+
 def test_unbroken_text_without_spaces_is_still_split_without_looping():
     """공백이 전혀 없는 덩어리(수식·URL)는 경계를 못 찾으므로 강제로 자르되 반드시 끝난다."""
     pieces = _split_within_page("a" * 1200, chunk_size=500, overlap=80)
