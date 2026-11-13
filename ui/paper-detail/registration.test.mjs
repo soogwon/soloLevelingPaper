@@ -46,11 +46,11 @@ test('실패 후 자동 재시도하지 않는다', async () => {
 test('등록 사이에 PDF가 사라지면 import 상대 경로를 안내한다', async () => {
   const {app, el} = setup();
   app.callServerTool = async () => ({isError: true,
-    content: [{type: 'text', text: 'SOURCE_NOT_FOUND: private server detail'}]});
+    content: [{type: 'text', text: 'SOURCE_NOT_FOUND: PDF 파일을 찾을 수 없습니다. library/incoming/<img src=x onerror=alert(1)>에 파일을 복사한 뒤 다시 시도하세요.'}]});
   el('agree').checked = true; el('agree').onchange();
   await el('confirm').onclick();
   assert.match(el('status').textContent, /PDF를 찾을 수 없습니다/);
-  assert.match(el('status').textContent, /imports\/<img src=x onerror=alert\(1\)>/);
+  assert.match(el('status').textContent, /library\/incoming\/<img src=x onerror=alert\(1\)>/);
   assert.equal(el('status').querySelector('img'), null);
   assert.doesNotMatch(el('status').textContent, /private server detail/);
 });
@@ -100,10 +100,19 @@ test('등록 안내 준비 중 PDF가 없으면 import 상대 경로를 안내�
   const args = {source: {kind: 'local_file', relative_path: 'papers/missing.pdf'}, request_key: 'r'};
   app.ontoolinput({arguments: args});
   app.callServerTool = async () => ({isError: true,
-    content: [{type: 'text', text: 'SOURCE_NOT_FOUND: hidden absolute path'}]});
+    content: [{type: 'text', text: 'SOURCE_NOT_FOUND: PDF 파일을 찾을 수 없습니다. library/incoming/papers/missing.pdf에 파일을 복사한 뒤 다시 시도하세요.'}]});
   await app.ontoolresult({content: [{type: 'text', text: '안내'}]});
   assert.equal(el('status').textContent,
-    'PDF를 찾을 수 없습니다. imports/papers/missing.pdf에 파일을 복사한 뒤 등록 안내를 다시 요청하세요.');
+    'PDF를 찾을 수 없습니다. library/incoming/papers/missing.pdf에 파일을 복사한 뒤 등록 안내를 다시 요청하세요.');
   assert.doesNotMatch(el('status').textContent, /hidden absolute path/);
   assert.equal(el('confirm').disabled, true);
+});
+
+test('서버 절대 경로나 임의 오류 문구는 카드에 표시하지 않는다', async () => {
+  const {app, el} = setup();
+  for (const detail of ['private detail', 'PDF 파일을 찾을 수 없습니다. /private/tmp/a.pdf에 파일을 복사한 뒤 다시 시도하세요.']) {
+    await app.ontoolresult({isError: true, content: [{type: 'text', text: 'SOURCE_NOT_FOUND: ' + detail}]});
+    assert.match(el('status').textContent, /설정된 import 폴더/);
+    assert.doesNotMatch(el('status').textContent, /private/);
+  }
 });

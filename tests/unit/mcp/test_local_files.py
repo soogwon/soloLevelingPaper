@@ -419,3 +419,23 @@ def test_import_closes_opened_descriptors_on_every_exit(tmp_path, monkeypatch, o
         with pytest.raises(OSError) as caught:
             os.fstat(descriptor)
         assert caught.value.errno == errno.EBADF
+
+
+@pytest.mark.parametrize('method', ['inspect_pdf', 'import_pdf'])
+def test_configured_missing_pdf_and_invalid_extension(tmp_path, method):
+    from solo_leveling.interfaces.mcp.errors import to_tool_error
+    from solo_leveling.interfaces.mcp.runtime import runtime_paths
+
+    paths = runtime_paths({'DATA_ROOT': str(tmp_path), 'IMPORT_SUBDIR': 'library/incoming'})
+    store = LocalPdfStore(paths.import_dir, paths.pdf_dir, 1024, data_root=paths.data_root)
+    read = getattr(store, method)
+    for filename, code in [('papers/absent.pdf', 'SOURCE_NOT_FOUND'), ('papers/absent.txt', 'INVALID_ARGUMENT')]:
+        with pytest.raises(InvalidArgumentError) as error:
+            read(filename)
+        message = str(to_tool_error(error.value))
+        assert message.startswith(code + ':')
+        assert str(tmp_path) not in message
+        if code == 'SOURCE_NOT_FOUND':
+            assert 'library/incoming/papers/absent.pdf' in message
+        else:
+            assert '복사' not in message

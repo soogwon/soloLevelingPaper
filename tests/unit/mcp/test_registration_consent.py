@@ -65,7 +65,7 @@ def test_prepare_validation_failure_creates_no_confirmation(error, code):
 
 def test_prepare_missing_pdf_explains_import_location_and_creates_no_confirmation():
     ingestion = Mock()
-    ingestion.validate_local_pdf.side_effect = LocalPdfNotFoundError('papers/missing.pdf')
+    ingestion.validate_local_pdf.side_effect = LocalPdfNotFoundError('imports/papers/missing.pdf')
     server = create_server(MCPServices(Mock(), Mock(), ingestion))
 
     async def check():

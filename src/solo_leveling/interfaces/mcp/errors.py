@@ -22,7 +22,7 @@ def to_tool_error(error: Exception) -> ToolError:
     if isinstance(error, LocalPdfNotFoundError):
         return ToolError(
             f'SOURCE_NOT_FOUND: PDF 파일을 찾을 수 없습니다. '
-            f'imports/{error.relative_path}에 파일을 복사한 뒤 다시 시도하세요.')
+            f'{error.relative_path}에 파일을 복사한 뒤 다시 시도하세요.')
     if isinstance(error, InvalidArgumentError):
         return ToolError('INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.')
     if isinstance(error, ResourceNotFoundError):

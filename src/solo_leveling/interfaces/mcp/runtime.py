@@ -153,7 +153,7 @@ def build_runtime_server(values: Mapping[str, str]):
             connected=semantic is not None,
             prompt_version=semantic.verifier.prompt_version if semantic is not None else None)
         ingestion = LocalIngestionManager(str(paths.db_path), str(paths.chroma_dir),
-            LocalPdfStore(paths.import_dir, paths.pdf_dir, settings.max_bytes),
+            LocalPdfStore(paths.import_dir, paths.pdf_dir, settings.max_bytes, data_root=paths.data_root),
             IngestionServices(services.translation, services.translation_settings, embedder, client),
             max_workers=settings.max_workers)
 
