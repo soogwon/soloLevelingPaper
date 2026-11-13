@@ -8,7 +8,11 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
+from solo_leveling.application.evidence_qa.ports import GenerationUnavailable
+from solo_leveling.application.evidence_qa.response_parser import GenerationFormatError
 from solo_leveling.application.quiz.attempts import QuizAttemptService
+from solo_leveling.application.quiz.service import NoSupportedQuiz, QuizService
+from solo_leveling.domain.quiz import QuizValidationError
 from solo_leveling.domain.quiz_attempt import AttemptValidationError, SubmitOutcome
 from solo_leveling.infrastructure.database import repository
 from .errors import to_tool_error
@@ -19,9 +23,10 @@ from .quiz_contracts import (
 
 
 class StoredQuizService:
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, generator: QuizService | None = None):
         self.db_path = db_path
         self.attempts = QuizAttemptService(db_path)
+        self.generator = generator
 
     def get_quiz(self, context_id, step):
         quiz = repository.get_quiz(self.db_path, context_id, step)
@@ -30,6 +35,24 @@ class StoredQuizService:
                 raise ContractError('NOT_FOUND')
             raise ContractError('QUIZ_NOT_READY')
         return quiz
+
+    def generate_quiz(self, context_id, step):
+        # 응답을 잃고 같은 요청을 다시 보내도 기존 퀴즈를 교체하거나 외부 호출을 반복하지 않는다.
+        existing = repository.get_quiz(self.db_path, context_id, step)
+        if existing is not None:
+            return existing
+        if repository.get_learning_context(self.db_path, context_id) is None:
+            raise ContractError('NOT_FOUND')
+        if self.generator is None:
+            raise ContractError('QUIZ_NOT_READY')
+        try:
+            return self.generator.generate(context_id, step).quiz
+        except ResourceNotFoundError:
+            raise ContractError('NOT_FOUND') from None
+        except (NoSupportedQuiz, QuizValidationError):
+            raise ContractError('QUIZ_NOT_READY') from None
+        except (GenerationUnavailable, GenerationFormatError):
+            raise ContractError('UPSTREAM_UNAVAILABLE') from None
 
     def submit(self, *, context_id, step, quiz_id, request_key, answers):
         try:
@@ -129,6 +152,17 @@ def register_quiz(server: FastMCP, adapter: QuizContractAdapter):
     async def get_quiz(context_id: Text, step: Step) -> PublicQuiz:
         """저장된 단계별 공개 퀴즈를 조회합니다. QUIZ_NOT_READY이면 아직 퀴즈가 없습니다."""
         return await invoke(adapter.get_quiz, dict(context_id=context_id, step=step))
+
+    @server.tool(structured_output=True, meta=card, annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+    async def generate_quiz(context_id: Text, step: Step) -> PublicQuiz:
+        """해당 단계의 퀴즈가 없으면 생성하고 저장하며, 이미 있으면 외부 호출 없이 재사용합니다.
+
+        외부 API 호출을 허용한 경우 단계에 배정된 번역문과 원문 근거를 OpenAI로 보내며
+        비용이 발생할 수 있습니다. 호출 전에 사용자에게 전송 내용을 안내하세요.
+        UPSTREAM_UNAVAILABLE이면 자동 반복 생성하지 말고 외부 생성 설정을 확인하세요.
+        """
+        return await invoke(adapter.generate_quiz, dict(context_id=context_id, step=step))
 
     @server.tool(structured_output=True, meta=card, annotations=ToolAnnotations(
         readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))

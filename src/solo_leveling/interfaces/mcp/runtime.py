@@ -16,7 +16,9 @@ from solo_leveling.infrastructure.embeddings.process_embedder import ProcessEmbe
 from solo_leveling.infrastructure.database.repository import mark_interrupted_jobs_on_startup
 from solo_leveling.infrastructure.database.schema import init_db
 from solo_leveling.infrastructure.database.dashboard_queries import DashboardReader
-from solo_leveling.infrastructure.generation.openai_generator import OpenAIGenerationSettings
+from solo_leveling.infrastructure.generation.openai_generator import (
+    OpenAIGenerationSettings, OpenAIQuizGenerator,
+)
 from solo_leveling.infrastructure.generation.semantic_verifier import SemanticSettings
 from solo_leveling.infrastructure.storage.vector_store import (
     get_client, close_client, ChromaCloseResult, restore_legacy_index_memberships,
@@ -26,6 +28,7 @@ from solo_leveling.application.paper_detail.service import PaperDetailService
 from solo_leveling.application.reflection.service import ReflectionService
 from solo_leveling.infrastructure.retrieval.paper_detail import SQLitePaperDetailReader
 from solo_leveling.application.annotations.service import AnnotationService
+from solo_leveling.application.quiz.service import QuizService
 from solo_leveling.application.server_sync import PaperMetadataSyncService
 from solo_leveling.infrastructure.storage.server_client import AuthenticatedServerClient
 from .question_card import QuestionKeys
@@ -196,7 +199,9 @@ def build_runtime_server(values: Mapping[str, str]):
             dashboard=gate.wrap(DashboardReader(str(paths.db_path))),
             reflection=gate.wrap(ReflectionService(str(paths.db_path))),
             annotations=gate.wrap(annotations),
-            quiz=gate.wrap(QuizContractAdapter(StoredQuizService(str(paths.db_path)))),
+            quiz=gate.wrap(QuizContractAdapter(StoredQuizService(
+                str(paths.db_path), QuizService(
+                    str(paths.db_path), OpenAIQuizGenerator(settings.generation))))),
             server_sync=gate.wrap(server_sync) if server_sync is not None else None,
         ), lifespan=lifespan)
         track_lifetime(lifetime)

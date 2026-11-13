@@ -26,7 +26,7 @@ from .quiz_contracts import AttemptInput, HistoryInput, QuizInput, ScoresInput, 
 _READING_TOOLS = frozenset({'get_reading_questions', 'save_reading_answer', 'get_reading_comparison'})
 READING_BEFORE_URI = 'ui://solo-leveling/reading-before.html'
 READING_COMPARISON_URI = 'ui://solo-leveling/reading-comparison.html'
-_QUIZ_INPUTS = {'get_quiz': QuizInput, 'submit_quiz': SubmitInput,
+_QUIZ_INPUTS = {'get_quiz': QuizInput, 'generate_quiz': QuizInput, 'submit_quiz': SubmitInput,
                 'get_quiz_attempt': AttemptInput, 'list_quiz_attempts': HistoryInput,
                 'get_quiz_scores': ScoresInput, 'review_quiz_attempt': AttemptInput}
 
