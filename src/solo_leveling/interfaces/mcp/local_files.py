@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path, PureWindowsPath
 
-from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
+from solo_leveling.application.evidence_qa.errors import InvalidArgumentError, LocalPdfNotFoundError
 from .errors import UnsupportedDocumentError
 from solo_leveling.infrastructure.storage.pdf_source import open_pdf_source
 from solo_leveling.infrastructure.storage.pdf_store import PdfStore
@@ -63,7 +63,7 @@ class LocalPdfStore:
         if source == self.import_root or self.import_root not in source.parents:
             raise InvalidArgumentError('파일 경로가 import 루트를 벗어났습니다.')
         if not source.is_file():
-            raise InvalidArgumentError('PDF 파일을 찾을 수 없습니다.')
+            raise LocalPdfNotFoundError(requested.as_posix())
         if requested.suffix.lower() != '.pdf' or source.suffix.lower() != '.pdf':
             raise InvalidArgumentError('PDF 확장자만 지원합니다.')
         size = source.stat().st_size

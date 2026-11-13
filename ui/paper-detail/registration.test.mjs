@@ -43,6 +43,17 @@ test('실패 후 자동 재시도하지 않는다', async () => {
   assert.equal(calls, 1); assert.match(el('status').textContent, /작업 목록/);
   assert.doesNotMatch(el('status').textContent, /private/);
 });
+test('등록 사이에 PDF가 사라지면 import 상대 경로를 안내한다', async () => {
+  const {app, el} = setup();
+  app.callServerTool = async () => ({isError: true,
+    content: [{type: 'text', text: 'SOURCE_NOT_FOUND: private server detail'}]});
+  el('agree').checked = true; el('agree').onchange();
+  await el('confirm').onclick();
+  assert.match(el('status').textContent, /PDF를 찾을 수 없습니다/);
+  assert.match(el('status').textContent, /imports\/<img src=x onerror=alert\(1\)>/);
+  assert.equal(el('status').querySelector('img'), null);
+  assert.doesNotMatch(el('status').textContent, /private server detail/);
+});
 test('잘못된 응답은 기존 확인 요청을 비활성화한다', () => {
   const {app, el} = setup(); app.ontoolresult({isError: true});
   assert.equal(el('confirm').disabled, true); assert.equal(el('notice').textContent, '');
@@ -82,4 +93,17 @@ test('입력으로 안내를 다시 준비해도 비공개 토큰이 없으면 �
   assert.equal(el('agree').disabled, true);
   assert.equal(el('confirm').disabled, true);
   assert.match(el('status').textContent, /다시 요청/);
+});
+
+test('등록 안내 준비 중 PDF가 없으면 import 상대 경로를 안내한다', async () => {
+  const {app, el} = setup();
+  const args = {source: {kind: 'local_file', relative_path: 'papers/missing.pdf'}, request_key: 'r'};
+  app.ontoolinput({arguments: args});
+  app.callServerTool = async () => ({isError: true,
+    content: [{type: 'text', text: 'SOURCE_NOT_FOUND: hidden absolute path'}]});
+  await app.ontoolresult({content: [{type: 'text', text: '안내'}]});
+  assert.equal(el('status').textContent,
+    'PDF를 찾을 수 없습니다. imports/papers/missing.pdf에 파일을 복사한 뒤 등록 안내를 다시 요청하세요.');
+  assert.doesNotMatch(el('status').textContent, /hidden absolute path/);
+  assert.equal(el('confirm').disabled, true);
 });

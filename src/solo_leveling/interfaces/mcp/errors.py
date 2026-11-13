@@ -4,7 +4,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 from solo_leveling.application.evidence_qa.answer import AnswerGenerationError
 from solo_leveling.application.evidence_qa.errors import (
-    DataIntegrityError, InvalidArgumentError, ResourceNotFoundError,
+    DataIntegrityError, InvalidArgumentError, LocalPdfNotFoundError, ResourceNotFoundError,
 )
 from solo_leveling.domain.context import ContextNotReadyError
 from solo_leveling.domain.models import RequestConflictError
@@ -19,6 +19,10 @@ def to_tool_error(error: Exception) -> ToolError:
         return ToolError('SERVER_SHUTTING_DOWN: 서버 종료 중에는 새 요청을 시작할 수 없습니다.')
     if isinstance(error, EmbeddingProcessError):
         return ToolError(f'UPSTREAM_UNAVAILABLE: {error.code.value}: 임베딩 처리를 완료하지 못했습니다.')
+    if isinstance(error, LocalPdfNotFoundError):
+        return ToolError(
+            f'SOURCE_NOT_FOUND: PDF 파일을 찾을 수 없습니다. '
+            f'imports/{error.relative_path}에 파일을 복사한 뒤 다시 시도하세요.')
     if isinstance(error, InvalidArgumentError):
         return ToolError('INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.')
     if isinstance(error, ResourceNotFoundError):

@@ -14,6 +14,16 @@ function validInput(data) {
     && data.source.relative_path.length > 0 && typeof data.request_key === 'string' && data.request_key.length > 0;
 }
 
+function sourceNotFound(result) {
+  return result?.isError && (result.content || []).some(part =>
+    part.type === 'text' && typeof part.text === 'string' && part.text.startsWith('SOURCE_NOT_FOUND:'));
+}
+
+function missingSourceMessage(relativePath) {
+  const normalized = relativePath.replaceAll('\\', '/');
+  return `PDF를 찾을 수 없습니다. imports/${normalized}에 파일을 복사한 뒤 등록 안내를 다시 요청하세요.`;
+}
+
 export function mountRegistration(app, doc) {
   const el = id => doc.getElementById(id);
   let pending = null, busy = false, generation = 0;
@@ -70,7 +80,9 @@ export function mountRegistration(app, doc) {
       el('status').textContent = '아직 등록하지 않았습니다. 내용을 확인한 뒤 동의 여부를 선택하세요.';
     } catch {
       if (current !== generation) return;
-      el('status').textContent = '안내를 불러오지 못했습니다. 등록 안내를 다시 요청하세요.';
+      el('status').textContent = sourceNotFound(result) && args
+        ? missingSourceMessage(args.source.relative_path)
+        : '안내를 불러오지 못했습니다. 등록 안내를 다시 요청하세요.';
     }
     controls();
   };
@@ -81,8 +93,9 @@ export function mountRegistration(app, doc) {
     busy = true;
     controls();
     el('status').textContent = accept ? '등록 요청 중입니다.' : '취소 중입니다.';
+    let result;
     try {
-      const result = await app.callServerTool({
+      result = await app.callServerTool({
         name: accept ? 'add_paper' : 'cancel_paper_registration',
         arguments: accept ? {source: data.source, request_key: data.request_key,
           confirmation_token: data.confirmation_token} : {confirmation_token: data.confirmation_token},
@@ -95,7 +108,9 @@ export function mountRegistration(app, doc) {
         : '취소했습니다. 등록 작업을 시작하지 않았습니다.';
     } catch {
       if (current !== generation) return;
-      el('status').textContent = accept
+      el('status').textContent = accept && sourceNotFound(result)
+        ? missingSourceMessage(data.source.relative_path)
+        : accept
         ? '등록 결과를 확인하지 못했습니다. 자동 재시도하지 않습니다. 작업 목록을 먼저 조회하세요.'
         : '취소 확인을 받지 못했습니다. 등록 버튼을 누르지 않았다면 작업은 시작되지 않습니다.';
     }
