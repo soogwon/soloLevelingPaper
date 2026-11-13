@@ -112,25 +112,16 @@ class TranslationService:
         batch_id = str(uuid4())
         for chunk_number, request in enumerate(requests):
             try:
-                try:
-                    text = self._translate_one(request, settings, budget, batch_id, chunk_number)
-                except TranslationProviderUnavailable:
-                    results.append(ChunkTranslationResult(
-                        request, None, TranslationFailureCode.PROVIDER_UNAVAILABLE,
-                    ))
-                    continue
+                text = self._translate_one(request, settings, budget, batch_id, chunk_number)
+            except TranslationProviderUnavailable:
+                result = ChunkTranslationResult(request, None, TranslationFailureCode.PROVIDER_UNAVAILABLE)
+            else:
                 if not isinstance(text, str):
                     raise TypeError("translation provider must return str")
-                if not text.strip():
-                    results.append(ChunkTranslationResult(
-                        request, None, TranslationFailureCode.EMPTY_TRANSLATION,
-                    ))
-                else:
-                    failure = translation_quality_failure(request.original_text, text)
-                    results.append(ChunkTranslationResult(
-                        request, None, failure) if failure else
-                        ChunkTranslationResult(request, text))
-            finally:
-                if on_progress is not None:
-                    on_progress(chunk_number + 1, len(requests))
+                failure = (translation_quality_failure(request.original_text, text)
+                           if text.strip() else TranslationFailureCode.EMPTY_TRANSLATION)
+                result = ChunkTranslationResult(request, None if failure else text, failure)
+            results.append(result)
+            if on_progress is not None:
+                on_progress(chunk_number + 1, len(requests))
         return TranslationBatchResult(revision, settings, tuple(results))
