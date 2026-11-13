@@ -6,6 +6,8 @@ from unittest.mock import Mock
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
+from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
+from solo_leveling.domain.models import RequestConflictError
 from solo_leveling.interfaces.mcp.registration_consent import RegistrationGate, REGISTRATION_APP_URI
 from solo_leveling.interfaces.mcp.server import MCPServices, create_server
 
@@ -21,6 +23,7 @@ def test_registration_card_then_confirmation():
         assert tools['prepare_paper_registration'].meta['ui']['resourceUri'] == REGISTRATION_APP_URI
         args = {'source': {'kind': 'local_file', 'relative_path': 'paper.pdf'}, 'request_key': 'r'}
         prepared = await server.call_tool('prepare_paper_registration', args)
+        ingestion.validate_local_pdf.assert_called_once_with('paper.pdf', 'r')
         ingestion.add_local_pdf.assert_not_called()
         assert 'confirmation_token' not in prepared.structuredContent
         assert json.loads(prepared.content[0].text) == prepared.structuredContent
@@ -38,6 +41,26 @@ def test_registration_card_then_confirmation():
             await server.call_tool('add_paper', confirmed)
     asyncio.run(check())
     ingestion.add_local_pdf.assert_called_once_with('paper.pdf', 'r')
+
+
+@pytest.mark.parametrize('error,code', [
+    (InvalidArgumentError('private path'), 'INVALID_ARGUMENT'),
+    (RequestConflictError('private request'), 'CONFLICT'),
+])
+def test_prepare_validation_failure_creates_no_confirmation(error, code):
+    ingestion = Mock()
+    ingestion.validate_local_pdf.side_effect = error
+    server = create_server(MCPServices(Mock(), Mock(), ingestion))
+
+    async def check():
+        with pytest.raises(ToolError, match=code):
+            await server.call_tool('prepare_paper_registration', {
+                'source': {'kind': 'local_file', 'relative_path': '../private.pdf'},
+                'request_key': 'request',
+            })
+        ingestion.add_local_pdf.assert_not_called()
+
+    asyncio.run(check())
 
 
 def test_token_is_bound_to_source_and_request():

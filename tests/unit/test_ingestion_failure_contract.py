@@ -117,7 +117,10 @@ def test_malformed_first_record_is_not_skipped_for_a_later_valid_one():
     assert result['failure_code'] == 'translation_failed'
 
 
-@pytest.mark.parametrize('code', ['provider_unavailable', 'empty_translation'])
+@pytest.mark.parametrize('code', [
+    'provider_unavailable', 'empty_translation', 'unchanged_translation',
+    'target_language_mismatch',
+])
 def test_well_formed_record_keeps_its_registered_code(code):
     assert describe_outcome('ready', 'index', [f'translation_failed:{CHUNK}:{code}'])['failure_code'] == code
 

@@ -193,6 +193,108 @@ def test_partial_translation_indexes_only_successes(tmp_path, chroma_client_fact
     assert collection.get()['ids'] == [chunks[0].chunk_id]
 
 
+def test_unchanged_translation_is_recoverable_and_returns_to_default_search(
+        tmp_path, monkeypatch, chroma_client_factory):
+    from solo_leveling.application.evidence_qa.search import ContextSearchService
+    from solo_leveling.infrastructure.retrieval.sqlite_chroma import (
+        SQLiteChromaRetriever, SQLiteContextReader,
+    )
+    from solo_leveling.workers.translation_recovery import TranslationRecoveryService
+
+    core = (
+        'Multi-head attention allows the model to jointly attend to information '
+        'from different representation subspaces at different positions.'
+    )
+    recovered_core = (
+        '멀티 헤드 어텐션은 서로 다른 위치의 여러 표현 부분공간 정보를 '
+        '동시에 살필 수 있게 한다.'
+    )
+
+    class RecoveringProvider:
+        def __init__(self):
+            self.core_calls = 0
+
+        def translate(self, request, settings):
+            if 'Multi-head attention' not in request.original_text:
+                return '배경 설명을 번역한 문장이다.'
+            self.core_calls += 1
+            return request.original_text if self.core_calls == 1 else recovered_core
+
+    def semantic_embeddings(texts, model_name=None):
+        return [
+            [1.0, 0.0] if ('표현 부분공간' in text or '여러 헤드' in text)
+            else [0.0, 1.0]
+            for text in texts
+        ]
+
+    monkeypatch.setattr(ingestion_module, 'embed_texts', semantic_embeddings)
+    monkeypatch.setattr(ingestion_module, 'embedding_dimension', lambda model_name=None: 2)
+    pdf = tmp_path / 'attention.pdf'
+    write_minimal_pdf(str(pdf), ['General transformer background.', core])
+    db, vectors = str(tmp_path / 'data.sqlite'), str(tmp_path / 'chroma')
+    client = chroma_client_factory(vectors)
+    provider = RecoveringProvider()
+    settings = TranslationSettings('fake', 'fixture', 'prompt1')
+    result = register_and_ingest(
+        db, vectors, str(pdf), translation_service=TranslationService(provider),
+        translation_settings=settings, chroma_client=client)
+
+    assert result['status'] == 'ready'
+    assert result['chunk_count'] == 1
+    assert any('unchanged_translation' in item for item in result['limitations'])
+    service = TranslationRecoveryService(
+        db, vectors, translation_service=TranslationService(provider),
+        translation_settings=settings, embedder=semantic_embeddings,
+        chroma_client=client)
+    preview = service.preview(result['version_id'])
+    assert preview['status'] == 'AVAILABLE'
+    assert preview['target_count'] == 1
+    accepted = service.prepare(
+        result['version_id'], result['embedding_set_id'], 'recover-core-evidence')
+    recovered = service.run(accepted.job_id)
+    assert recovered.status == 'COMPLETED'
+    assert recovered.outcome == 'FULL'
+
+    context = repo.get_or_create_default_context(db, result['version_id'])
+    search = ContextSearchService(
+        SQLiteContextReader(db),
+        SQLiteChromaRetriever(db, client, embedder=semantic_embeddings),
+    ).search('여러 헤드가 표현 부분공간을 사용하는 이유', context.context_id, 1)
+    assert search.items[0].chunk.original_text == core
+    assert search.items[0].chunk.text == recovered_core
+
+
+@pytest.mark.parametrize('interrupt', [False, True])
+def test_translation_progress_visible_in_job_listing(tmp_path, interrupt):
+    from solo_leveling.infrastructure.database.job_queries import list_paper_jobs
+
+    db = str(tmp_path / 'data.sqlite')
+    pdf = tmp_path / 'heartbeat.pdf'
+    write_minimal_pdf(str(pdf), ['First page.', 'Second page.', 'Third page.'])
+    observed = []
+
+    class ObservingProvider:
+        def translate(self, request, settings):
+            job, = list_paper_jobs(db)['jobs']
+            observed.append(job)
+            if interrupt:
+                repo.mark_interrupted_jobs_on_startup(db)
+            return '번역 결과' if len(observed) != 2 else ''
+
+    result = register_and_ingest(db, str(tmp_path / 'chroma'), str(pdf),
+                                 translation_service=TranslationService(ObservingProvider()))
+    if interrupt:
+        assert len(observed) == 1
+        assert result['status'] == 'interrupted'
+        assert list_paper_jobs(db)['jobs'][0]['status'] == 'interrupted'
+    else:
+        assert result['status'] == 'ready'
+        assert len(observed) == 3
+        assert all(job['status'] == 'processing' and job['stage'] == 'translate' for job in observed)
+        first, second, third = (job['updated_at'] for job in observed)
+        assert first < second < third
+
+
 def test_index_failure_preserves_translation_and_retry_skips_provider(
         tmp_path, monkeypatch, chroma_client_factory):
     pdf = tmp_path / 'index-failure.pdf'
