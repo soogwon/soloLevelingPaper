@@ -11,6 +11,7 @@ from solo_leveling.application.translation.service import TranslationService
 from solo_leveling.domain.models import IngestionDisposition, JobStatus
 from solo_leveling.domain.translation import TranslationSettings
 from solo_leveling.infrastructure.database import repository as repo
+from solo_leveling.infrastructure.database.schema import init_db
 from solo_leveling.workers.ingestion import (
     get_ingestion_status, prepare_local_ingestion, run_prepared_local_ingestion,
 )
@@ -81,11 +82,25 @@ class LocalIngestionManager:
     def _paper_id(file_hash: str) -> str:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f'solo-leveling:local:{file_hash}'))
 
-    def add_local_pdf(self, relative_path: str, request_key: str) -> dict:
+    @staticmethod
+    def _validate_request_key(request_key: str) -> None:
         if (not isinstance(request_key, str) or not request_key.strip()
                 or len(request_key) > 200):
             from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
             raise InvalidArgumentError('request_key가 필요합니다.')
+
+    def validate_local_pdf(self, relative_path: str, request_key: str) -> None:
+        """동의 요청 전에 파일과 기존 멱등 키의 입력 일치를 확인한다."""
+        self._validate_request_key(request_key)
+        inspected = self.pdf_store.inspect_pdf(relative_path)
+        init_db(self.db_path)
+        existing = repo.get_ingestion_request(self.db_path, request_key)
+        if existing is not None and existing['input_fingerprint'] != inspected.input_fingerprint:
+            from solo_leveling.domain.models import RequestConflictError
+            raise RequestConflictError('같은 request_key가 다른 입력에 사용되었습니다.')
+
+    def add_local_pdf(self, relative_path: str, request_key: str) -> dict:
+        self._validate_request_key(request_key)
         # 한 프로세스 안에서는 복사·요청 등록·작업 제출 순서를 고정한다.
         with self.lock:
             if not self._accepting:

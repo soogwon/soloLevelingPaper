@@ -132,7 +132,7 @@ class ReadingSessionOutput(TypedDict):
     total: int
     written: int
     completed: int
-    status: Literal['not_started', 'in_progress', 'completed']
+    status: Literal['not_applicable', 'not_started', 'in_progress', 'completed']
 
 
 class ReadingGroupOutput(TypedDict):

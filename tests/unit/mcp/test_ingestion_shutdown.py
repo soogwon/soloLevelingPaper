@@ -14,6 +14,7 @@ from solo_leveling.interfaces.mcp.errors import to_tool_error
 @pytest.fixture
 def manager(monkeypatch):
     store = Mock()
+    store.inspect_pdf.return_value = SimpleNamespace(input_fingerprint='fingerprint')
     store.import_pdf.return_value = SimpleNamespace(
         path='sample.pdf', original_filename='sample.pdf', file_hash='hash',
         input_fingerprint='fingerprint')
@@ -22,11 +23,27 @@ def manager(monkeypatch):
     monkeypatch.setattr(module, 'prepare_local_ingestion', Mock(return_value=prepared))
     monkeypatch.setattr(module, 'get_ingestion_status', Mock(return_value={}))
     monkeypatch.setattr(module.repo, 'mark_job_cancelled_before_start', Mock(return_value=True))
+    monkeypatch.setattr(module, 'init_db', Mock())
+    monkeypatch.setattr(module.repo, 'get_ingestion_request', Mock(return_value=None))
     instance = module.LocalIngestionManager('db', 'vectors', store,
         module.IngestionServices(None, None))
     yield instance
     instance.begin_shutdown()
     instance.executor.shutdown(wait=True)
+
+
+def test_prepare_validation_rejects_request_key_reused_for_other_source(manager):
+    module.repo.get_ingestion_request.return_value = {'input_fingerprint': 'other'}
+    with pytest.raises(Exception, match='request_key'):
+        manager.validate_local_pdf('sample.pdf', 'request')
+    manager.pdf_store.inspect_pdf.assert_called_once_with('sample.pdf')
+    manager.pdf_store.import_pdf.assert_not_called()
+
+
+def test_prepare_validation_accepts_same_request_input(manager):
+    module.repo.get_ingestion_request.return_value = {'input_fingerprint': 'fingerprint'}
+    manager.validate_local_pdf('sample.pdf', 'request')
+    manager.pdf_store.import_pdf.assert_not_called()
 
 
 def test_shutdown_rejects_before_file_or_database_access(manager):

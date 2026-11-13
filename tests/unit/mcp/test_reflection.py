@@ -81,7 +81,7 @@ def test_filter_counts_and_context_isolation(ctx):
     assert call(server, 'get_reading_questions', context_id='other')['written'] == 0
     filtered = call(server, 'get_reading_questions', context_id=context_id, step='review')
     assert filtered['items'] == [] and filtered['total'] == 0
-    assert filtered['status'] == 'not_started'
+    assert filtered['status'] == 'not_applicable'
     assert call(server, 'get_reading_questions', context_id=context_id, step='preview')['completed'] == 3
 
 
