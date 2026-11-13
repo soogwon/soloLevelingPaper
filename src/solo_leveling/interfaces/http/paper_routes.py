@@ -466,6 +466,8 @@ def create_web_paper_router(require_principal: Any, store: PaperStore):
         principal: Principal,
         q: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
         reading_status: Literal["not_started", "reading", "completed", "unknown"] | None = None,
+        collection_id: UUID | None = None,
+        unassigned: bool = False,
         sort: Literal["recent"] = "recent",
         page: Annotated[int, Query(ge=1)] = 1,
         limit: Annotated[int, Query(ge=1, le=100)] = 20,
@@ -477,10 +479,19 @@ def create_web_paper_router(require_principal: Any, store: PaperStore):
         if q is not None and (not normalized_query or "\x00" in q):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                                 detail={"code": "invalid_paper_query"})
+        if collection_id is not None and unassigned:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                                detail={"code": "collection_filter_conflict"})
         try:
+            collection_filters = {}
+            if collection_id is not None:
+                collection_filters["collection_id"] = str(collection_id)
+            if unassigned:
+                collection_filters["unassigned"] = True
             result = store.list_papers(
                 principal.user_id, query=normalized_query, reading_status=reading_status,
                 page=page, limit=limit,
+                **collection_filters,
             )
         except PaperStoreUnavailable:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

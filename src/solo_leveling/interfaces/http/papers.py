@@ -190,7 +190,8 @@ class PaperStore(Protocol):
     def register(self, owner_user_id: str, key: str, metadata: PaperMetadata) -> PaperRegistration: ...
 
     def list_papers(self, owner_user_id: str, *, query: str | None,
-                    reading_status: str | None, page: int, limit: int) -> PaperPage: ...
+                    reading_status: str | None, page: int, limit: int,
+                    collection_id: str | None = None, unassigned: bool = False) -> PaperPage: ...
 
     def upsert_learning_record(self, owner_user_id: str, paper_id: str,
                                metadata: LearningRecordMetadata) -> LearningRecordRegistration: ...
@@ -217,7 +218,8 @@ class UnavailablePaperStore:
         raise PaperStoreUnavailable
 
     def list_papers(self, owner_user_id: str, *, query: str | None,
-                    reading_status: str | None, page: int, limit: int) -> PaperPage:
+                    reading_status: str | None, page: int, limit: int,
+                    collection_id: str | None = None, unassigned: bool = False) -> PaperPage:
         raise PaperStoreUnavailable
 
     def upsert_learning_record(self, owner_user_id: str, paper_id: str,
@@ -310,16 +312,22 @@ class PostgresPaperStore:
             return result
 
     def list_papers(self, owner_user_id: str, *, query: str | None,
-                    reading_status: str | None, page: int, limit: int) -> PaperPage:
+                    reading_status: str | None, page: int, limit: int,
+                    collection_id: str | None = None, unassigned: bool = False) -> PaperPage:
         """웹 목록용 offset 페이지를 소유권 범위에서 안정적인 순서로 조회한다."""
-        filters = ["owner_user_id = %s"]
+        filters = ["p.owner_user_id = %s"]
         params: list[Any] = [owner_user_id]
         if query is not None:
-            filters.append("title ILIKE %s ESCAPE '\\'")
+            filters.append("p.title ILIKE %s ESCAPE '\\'")
             params.append(f"%{_escape_like(query)}%")
         if reading_status is not None:
             filters.append("COALESCE(r.reading_status, 'unknown') = %s")
             params.append(reading_status)
+        if collection_id is not None:
+            filters.append("cp.collection_id = %s")
+            params.append(collection_id)
+        elif unassigned:
+            filters.append("cp.collection_id IS NULL")
         where = " AND ".join(filters)
         latest = """LEFT JOIN LATERAL (
             SELECT learning_record_id, selected_version_id, file_name, last_position,
@@ -327,7 +335,8 @@ class PostgresPaperStore:
             FROM server_learning_records
             WHERE owner_user_id=p.owner_user_id AND paper_id=p.paper_id
             ORDER BY last_studied_at DESC NULLS LAST, learning_record_id ASC LIMIT 1
-        ) r ON TRUE"""
+        ) r ON TRUE LEFT JOIN server_collection_papers cp
+          ON cp.owner_user_id=p.owner_user_id AND cp.paper_id=p.paper_id"""
         with _connection(self._pool) as conn:
             # 등록과 목록 조회가 겹쳐도 전체 건수와 항목을 같은 시점에서 읽는다.
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
@@ -340,7 +349,7 @@ class PostgresPaperStore:
             rows = conn.execute(
                 f"""SELECT p.paper_id, p.title, p.authors, p.publication_year,
                            r.learning_record_id, r.selected_version_id, r.file_name,
-                           r.last_position, r.last_studied_at, r.reading_status
+                           r.last_position, r.last_studied_at, r.reading_status, cp.collection_id
                     FROM server_papers p {latest} WHERE {where}
                     ORDER BY r.last_studied_at DESC NULLS LAST, p.paper_id ASC LIMIT %s OFFSET %s""",
                 (*params, limit, (page - 1) * limit),
@@ -354,6 +363,7 @@ class PostgresPaperStore:
                                          if row.get("learning_record_id") is not None else None),
             selected_version_id=row.get("selected_version_id"), last_position=row.get("last_position"),
             last_studied_at=row.get("last_studied_at"), reading_status=row.get("reading_status") or "unknown",
+            collection_id=(str(row.get("collection_id")) if row.get("collection_id") else None),
         ) for row in rows)
         return PaperPage(items, page, limit, total, total_pages)
 
