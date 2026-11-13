@@ -7,6 +7,7 @@ from uuid import uuid4
 from typing_extensions import TypedDict
 
 from mcp.types import ToolAnnotations
+from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
 from solo_leveling.domain.ask_execution import KEY_RETENTION_DAYS
 from .errors import to_tool_error
 
@@ -52,7 +53,7 @@ class QuestionKeys:
             return [dict(request_key=key, created_at=created) for key, created in rows]
 
 
-def register_question_card(server, keys):
+def register_question_card(server, keys, contexts):
     @server.resource(CARD_URI, name='question-card', title='논문 질문과 결과 복원',
                      mime_type='text/html;profile=mcp-app',
                      meta={'ui': {'csp': {'connectDomains': [], 'resourceDomains': []}}})
@@ -63,7 +64,12 @@ def register_question_card(server, keys):
                  annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
     def open_paper_question_card(context_id: str) -> CardContext:
         """해당 학습 맥락의 질문 카드를 엽니다. 재시작 후에도 같은 context_id로 열어 기존 결과를 조회하세요."""
-        return {'context_id': context_id}
+        try:
+            if contexts is None or contexts.get_context(context_id) is None:
+                raise ResourceNotFoundError('학습 맥락을 찾을 수 없습니다.')
+            return {'context_id': context_id}
+        except Exception as error:
+            raise to_tool_error(error) from None
 
     @server.tool(structured_output=True, meta={'ui': {'visibility': ['app']}},
                  annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))

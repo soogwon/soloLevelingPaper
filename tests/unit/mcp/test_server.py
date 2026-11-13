@@ -312,6 +312,28 @@ def test_start_learning_returns_context_for_selected_goal_and_concepts():
     )
 
 
+def test_start_learning_lists_all_configured_learning_tools():
+    contexts = Mock()
+    contexts.get_or_create_learning_context.return_value = LearningContext(
+        'context', 'version', 'parse', 'translation', embedding_set_id='embedding')
+    services = MCPServices(
+        Mock(), Mock(), contexts=contexts, dashboard=Mock(), reflection=Mock(),
+        quiz=Mock(), executions=Mock(), annotations=Mock())
+    server = create_server(services)
+
+    result = payload(run(server.call_tool('start_learning', {'version_id': 'version'})))
+
+    assert result['capabilities'] == [
+        'ask_paper', 'get_evidence',
+        'submit_paper_question', 'get_paper_question_status',
+        'create_annotation', 'get_annotation', 'list_annotations',
+        'update_annotation', 'delete_annotation',
+        'get_reading_questions', 'save_reading_answer', 'get_reading_comparison',
+        'get_quiz', 'submit_quiz', 'get_quiz_attempt', 'list_quiz_attempts',
+        'get_quiz_scores', 'review_quiz_attempt', 'get_learning_dashboard',
+    ]
+
+
 def test_start_learning_rejects_blank_version_without_storage_call():
     contexts = Mock()
     server, _, _ = make_server(contexts=contexts)

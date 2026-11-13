@@ -9,11 +9,13 @@ import pytest
 
 from solo_leveling.application.evidence_qa.entry import SearchEntryService
 from solo_leveling.domain.context import ContextNotReadyError
-from solo_leveling.domain.evidence_qa import RetrievalMethod, SearchResult
+from solo_leveling.domain.evidence_qa import RetrievalMethod, SearchResult, SearchScope
 from solo_leveling.domain.models import JobStatus, LearningContext, PaperVersion, ProcessingJob
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.database.schema import get_connection, init_db
 from solo_leveling.infrastructure.retrieval.sqlite_chroma import SQLiteContextReader
+from solo_leveling.infrastructure.retrieval.sqlite_chroma import SQLiteChromaRetriever
+from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
 from tests.unit.test_learning_persistence import setup_db, publish
 
 
@@ -171,3 +173,13 @@ def test_entry_does_not_search_while_registration_is_processing(setup_db):
     with pytest.raises(ContextNotReadyError):
         service.search('질문', version_id='v1')
     assert searches == []
+
+
+def test_sqlite_retriever_rejects_page_beyond_parse_revision(setup_db):
+    db, chunks = setup_db
+    context = publish(db, chunks)
+    scope = SearchScope(
+        context.version_id, context.parse_revision_id, context.translation_revision_id,
+        pdf_pages=(3,), embedding_set_id=context.embedding_set_id)
+    with pytest.raises(InvalidArgumentError):
+        SQLiteChromaRetriever(db, client=None).search('질문', scope, 5)

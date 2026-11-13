@@ -1417,8 +1417,9 @@ def get_or_create_recovery_context(
             'SELECT * FROM translation_recovery_requests WHERE request_key=?',
             (request_key,),
         ).fetchone()
-        if (request is None
-                or request['job_id'] != job_id
+        if request is None:
+            raise ResourceNotFoundError('translation recovery request not found')
+        if (request['job_id'] != job_id
                 or request['version_id'] != version_id
                 or request['new_embedding_set_id'] != embedding_set_id):
             raise ValueError('recovery result does not match selection')
