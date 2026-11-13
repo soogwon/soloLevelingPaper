@@ -76,6 +76,25 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(result.items[0].text, translated)
         self.assertIsNone(result.items[0].failure_code)
 
+    def test_unchanged_formula_or_korean_source_is_allowed(self):
+        for original in (
+            'softmax(x) = exp(x) / sum(exp(x))',
+            '이 모델은 Multi Head Attention을 사용한다.',
+        ):
+            with self.subTest(original=original):
+                result = TranslationService(FakeTranslationProvider({original: original})).translate(
+                    (Chunk('c', 'p', 0, original),), self.settings)
+                self.assertEqual(result.items[0].text, original)
+                self.assertIsNone(result.items[0].failure_code)
+
+    def test_short_english_prose_returned_unchanged_is_failure(self):
+        original = 'Results improve.'
+        result = TranslationService(FakeTranslationProvider({original: original})).translate(
+            (Chunk('c', 'p', 0, original),), self.settings)
+        self.assertEqual(
+            result.items[0].failure_code,
+            TranslationFailureCode.UNCHANGED_TRANSLATION)
+
     def test_invalid_batch_makes_no_calls(self):
         bad_batches = ((), (self.chunks[0], self.chunks[0]),
                        (self.chunks[0], replace(self.chunks[1], parse_revision_id="p2")),

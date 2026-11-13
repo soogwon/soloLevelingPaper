@@ -102,6 +102,36 @@ def test_partial_then_full_recovery_preserves_all_previous_contexts(db, setup):
     assert len(provider.calls) == 3
 
 
+def test_legacy_unchanged_success_is_discovered_and_retranslated_without_reregistration(
+        db, setup):
+    service, provider, _, _ = setup
+    with closing(repo.get_connection(db)) as conn, conn:
+        conn.execute(
+            "UPDATE chunks SET original_text='Original result improves.' WHERE chunk_id='c2'")
+        conn.execute(
+            "UPDATE translation_results SET translated_text='Original result improves.' "
+            "WHERE translation_revision_id='t1' AND chunk_id='c2'")
+
+    preview = service.preview('v1')
+    assert preview['status'] == 'AVAILABLE'
+    assert preview['target_count'] == 3
+    result = execute(service)
+
+    assert result.status == 'COMPLETED'
+    assert result.outcome == 'FULL'
+    assert result.target_count == result.recovered_count == 3
+    assert provider.calls == ['c2', 'c3', 'c7']
+    current = repo.get_search_index(db, 'v1')
+    recovered = {c.chunk_id: c.text for c in repo.get_translated_chunks(
+        db, 'p1', current['translation_revision_id'])}
+    assert recovered['c2'] == '복구 c2'
+    with closing(repo.get_connection(db)) as conn:
+        old = conn.execute(
+            "SELECT translated_text FROM translation_results "
+            "WHERE translation_revision_id='t1' AND chunk_id='c2'").fetchone()
+    assert old['translated_text'] == 'Original result improves.'
+
+
 def test_zero_success_does_not_embed_publish_or_retry(db, setup):
     service, provider, embeddings, client = setup
     provider.failures = {'c3', 'c7'}
