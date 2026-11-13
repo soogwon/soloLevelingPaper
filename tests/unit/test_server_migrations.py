@@ -12,6 +12,9 @@ class Result:
     def __init__(self, rows=()):
         self.rows = rows
 
+    def fetchone(self):
+        return self.rows[0]
+
     def fetchall(self):
         return self.rows
 
@@ -23,6 +26,8 @@ class Connection:
 
     def execute(self, sql, params=()):
         self.calls.append((sql, params))
+        if sql.startswith("SELECT to_regclass"):
+            return Result([(bool(self.applied),)])
         if sql.startswith("SELECT version"):
             return Result(self.applied)
         return Result()
@@ -73,7 +78,7 @@ def test_check_reports_pending_without_executing_migration_sql():
                      connector=lambda _: nullcontext(conn))
 
     assert result.pending == (item.name,)
-    assert all(sql != item.sql for sql, _ in conn.calls)
+    assert all(sql != item.sql and "CREATE TABLE" not in sql for sql, _ in conn.calls)
 
 
 def test_accepts_psycopg_default_tuple_rows():
@@ -94,3 +99,12 @@ def test_rejects_changed_or_unknown_applied_history():
     unknown = Connection([{"version": "9999", "name": "9999_unknown.sql", "checksum": "0" * 64}])
     with pytest.raises(MigrationError, match="코드에 없는"):
         migrate("postgresql://secret", (item,), connector=lambda _: nullcontext(unknown))
+
+
+@pytest.mark.parametrize("check", [True, False])
+def test_incomplete_history_blocks_check_and_apply(check):
+    first, second = migration("0001"), migration("0002")
+    conn = Connection([(second.version, second.name, second.checksum)])
+    with pytest.raises(MigrationError, match="누락"):
+        migrate("unused", (first, second), check=check, connector=lambda _: nullcontext(conn))
+    assert (first.sql, ()) not in conn.calls

@@ -65,15 +65,24 @@ def migrate(dsn: str, migrations: Sequence[Migration], *, check: bool = False,
         from psycopg import connect
         connector = connect
     with connector(dsn) as conn:
+        if check:
+            conn.execute("SET TRANSACTION READ ONLY")
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (_LOCK_ID,))
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS server_schema_migrations (
-                   version varchar(4) PRIMARY KEY,
-                   name text NOT NULL UNIQUE,
-                   checksum varchar(64) NOT NULL,
-                   applied_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
-               )"""
-        )
+        if check:
+            exists = conn.execute(
+                "SELECT to_regclass('server_schema_migrations') IS NOT NULL"
+            ).fetchone()[0]
+            if not exists:
+                return MigrationResult((), tuple(item.name for item in migrations))
+        else:
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS server_schema_migrations (
+                       version varchar(4) PRIMARY KEY,
+                       name text NOT NULL UNIQUE,
+                       checksum varchar(64) NOT NULL,
+                       applied_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+                   )"""
+            )
         rows = conn.execute(
             "SELECT version, name, checksum FROM server_schema_migrations ORDER BY version"
         ).fetchall()
@@ -90,6 +99,8 @@ def migrate(dsn: str, migrations: Sequence[Migration], *, check: bool = False,
             item = available[version]
             if row["name"] != item.name or row["checksum"] != item.checksum:
                 raise MigrationError(f"이미 적용된 마이그레이션이 변경되었습니다: {item.name}")
+        if set(known) != {item.version for item in migrations[:len(known)]}:
+            raise MigrationError("적용 이력 중간에 누락된 버전이 있습니다.")
         pending = tuple(item for item in migrations if item.version not in known)
         if check:
             return MigrationResult((), tuple(item.name for item in pending))
@@ -105,7 +116,7 @@ def migrate(dsn: str, migrations: Sequence[Migration], *, check: bool = False,
 
 
 def _default_directory() -> Path:
-    return Path(__file__).resolve().parents[4] / "migrations" / "server"
+    return Path.cwd() / "migrations" / "server"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -113,11 +124,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="미적용 파일만 확인하고 DB를 변경하지 않습니다.")
     parser.add_argument("--migrations-dir", type=Path, default=_default_directory())
     args = parser.parse_args(argv)
-    settings = load_database_settings()
+    try:
+        settings = load_database_settings()
+    except ValueError:
+        parser.error("DATABASE_URL 형식이 올바르지 않습니다.")
     if settings is None:
         parser.error("DATABASE_URL이 필요합니다.")
     try:
+        from psycopg import Error as DatabaseError
+    except ImportError:
+        parser.exit(1, "서버 의존성(패키지의 server 옵션)을 설치하세요.\n")
+    try:
         result = migrate(settings.dsn, discover_migrations(args.migrations_dir), check=args.check)
+    except DatabaseError as exc:
+        parser.exit(1, f"DB 마이그레이션 실패 (SQLSTATE {exc.sqlstate or '없음'}).\n")
+    except OSError:
+        parser.exit(1, "마이그레이션 파일을 읽지 못했습니다.\n")
     except MigrationError as exc:
         parser.exit(1, f"migration error: {exc}\n")
     if args.check:
