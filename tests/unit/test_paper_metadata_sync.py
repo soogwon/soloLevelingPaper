@@ -14,6 +14,7 @@ NOW = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
 SERVER_PAPER_ID = "10000000-0000-0000-0000-000000000001"
 SERVER_RECORD_ID = "10000000-0000-0000-0000-000000000002"
 SERVER_SUMMARY_ID = "10000000-0000-0000-0000-000000000003"
+SERVER_ANNOTATION_ID = "10000000-0000-0000-0000-000000000004"
 
 
 class Response:
@@ -85,6 +86,47 @@ def add_summary(database):
             "summary-1", "context-1", "paper", NOW.isoformat()))
         conn.execute("INSERT INTO summary_items VALUES (?,?,?,?,?)", (
             "summary-1", 0, "claim", "핵심 주장", '["evidence-1"]'))
+
+
+def add_annotation(database):
+    add_learning_record(database)
+    with get_connection(database) as conn:
+        conn.execute("INSERT INTO annotations VALUES (?,?,?,?,?,?,?,?)", (
+            "annotation-1", "context-1", "highlight", "중요", "deep_read", 1,
+            NOW.isoformat(), NOW.isoformat()))
+        conn.execute("INSERT INTO annotation_segments VALUES (?,?,?,?,?,?,?,?,?)", (
+            "annotation-1", 0, "chunk-1", "parse-1", "original", None, 0, 4, "text"))
+
+
+def test_annotation_syncs_after_learning_record_without_local_path(database):
+    add_annotation(database)
+    responses = [Response(), Response(200, {
+        "learning_record_id": SERVER_RECORD_ID, "revision": 1, "sync_status": "stored",
+        "server_updated_at": NOW.isoformat(),
+    }), Response(200, {
+        "annotation_id": SERVER_ANNOTATION_ID, "revision": 1, "sync_status": "stored",
+        "server_updated_at": NOW.isoformat(),
+    })]
+    client = Client(responses)
+    service = PaperMetadataSyncService(database, client, now=lambda: NOW)
+    preview = service.preview("paper-local-1")
+    assert preview.annotation_count == 1 and preview.annotation_hash
+
+    operation = service.grant_and_queue(
+        "paper-local-1", "paper-learning-summary-annotation-sync-v4", preview=preview,
+    ).operation_id
+    assert service.sync(operation).status == "synced"
+
+    assert [call[1] for call in client.calls] == [
+        "/v1/mcp/papers",
+        f"/v1/mcp/papers/{SERVER_PAPER_ID}/learning-records/context-1",
+        f"/v1/mcp/papers/{SERVER_PAPER_ID}/learning-records/context-1/annotations/annotation-1",
+    ]
+    body = client.calls[-1][2]["json"]
+    assert body["body"] == "중요" and body["segments"][0]["quote_snapshot"] == "text"
+    assert body["segments"][0]["parse_revision_id"] == "parse-1"
+    assert body["segments"][0]["translation_revision_id"] is None
+    assert "original_filename" not in body and r"C:\private" not in str(body)
 
 
 def test_explicit_consent_queues_without_sending_or_storing_payload(database):
@@ -239,7 +281,7 @@ def test_approved_summary_syncs_after_learning_record_with_explicit_content(data
 
     assert preview.summary_count == 1 and preview.summary_hash
     operation = service.grant_and_queue(
-        "paper-local-1", "paper-learning-summary-sync-v3", preview=preview).operation_id
+        "paper-local-1", "paper-learning-summary-annotation-sync-v4", preview=preview).operation_id
     result = service.sync(operation)
 
     assert result == SyncResult(operation, "synced", SERVER_PAPER_ID)
@@ -273,7 +315,7 @@ def test_summary_change_after_approval_conflicts_without_upload(database, change
     })])
     service = PaperMetadataSyncService(database, client, now=lambda: NOW)
     operation = service.grant_and_queue(
-        "paper-local-1", "paper-learning-summary-sync-v3").operation_id
+        "paper-local-1", "paper-learning-summary-annotation-sync-v4").operation_id
     with get_connection(database) as conn:
         if change == "text":
             conn.execute("UPDATE summary_items SET text='승인 뒤 변경된 주장'")
@@ -444,7 +486,7 @@ def test_same_summary_count_does_not_hide_changed_summary_preview(database):
         conn.execute("UPDATE summary_items SET text='카드가 열린 뒤 바뀐 요약'")
 
     with pytest.raises(SyncPreviewChanged):
-        service.grant_and_queue("paper-local-1", "paper-learning-summary-sync-v3", preview=preview)
+        service.grant_and_queue("paper-local-1", "paper-learning-summary-annotation-sync-v4", preview=preview)
 
     with get_connection(database) as conn:
         assert conn.execute("SELECT COUNT(*) FROM sync_outbox").fetchone()[0] == 0
