@@ -581,7 +581,7 @@ def _paper_row(conn: sqlite3.Connection, paper_id: str):
 def _effective_title(row) -> str | None:
     title = row["title"]
     if isinstance(title, str) and title.strip():
-        return title.strip()
+        return title
     if row["original_filename"] is None:
         return None
     raw_name = str(row["original_filename"])

@@ -122,6 +122,19 @@ def test_preview_does_not_create_server_identity(database):
         assert conn.execute("SELECT count(*) FROM server_sync_identity").fetchone()[0] == 0
 
 
+def test_existing_title_keeps_whitespace_in_preview_and_sync(database):
+    title = "  Real title  "
+    with get_connection(database) as conn:
+        conn.execute("UPDATE papers SET title=? WHERE paper_id='paper-local-1'", (title,))
+    client = Client()
+    service = PaperMetadataSyncService(database, client)
+    preview = service.preview("paper-local-1")
+    assert preview.title == title
+    operation = service.grant_and_queue("paper-local-1", "paper-sync-v1", preview=preview)
+    assert service.sync(operation.operation_id).status == "synced"
+    assert client.calls[0][2]["json"]["title"] == title
+
+
 def test_missing_title_falls_back_to_latest_original_filename(database):
     with get_connection(database) as conn:
         conn.execute("UPDATE papers SET title=NULL WHERE paper_id='paper-local-1'")
