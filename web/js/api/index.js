@@ -1,12 +1,10 @@
 // 화면 코드는 이 파일의 api 객체만 사용한다.
-// 실제 백엔드와 연결할 때는 config.js의 USE_MOCK을 false로 바꾸고,
-// 경로·필드 이름이 요청서와 달라지면 이 파일에서만 맞춘다.
+// 기본은 실제 백엔드이며 ?mock=1일 때만 메모리 예시 서버를 사용한다.
 import { CONFIG } from '../config.js';
 import { request, ApiError } from './client.js';
-import { mockRequest } from './mock-server.js';
 
 async function send(method, path, options) {
-  const fn = CONFIG.USE_MOCK ? mockRequest : request;
+  const fn = CONFIG.USE_MOCK ? (await import('./mock-server.js')).mockRequest : request;
   try {
     return await fn(method, path, options);
   } catch (error) {
