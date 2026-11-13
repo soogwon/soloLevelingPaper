@@ -15,6 +15,7 @@ from solo_leveling.infrastructure.database import repository as repo
 SESSION_NOT_STARTED = 'not_started'
 SESSION_IN_PROGRESS = 'in_progress'
 SESSION_COMPLETED = 'completed'
+SESSION_NOT_APPLICABLE = 'not_applicable'
 
 
 @dataclass(frozen=True)
@@ -31,7 +32,7 @@ class ReflectionSession:
     total: int
     written: int      # 답변이 저장된(작성 중 포함) 질문 수
     completed: int    # 작성 완료로 표시한 질문 수
-    status: str       # not_started / in_progress / completed
+    status: str       # not_applicable / not_started / in_progress / completed
 
 
 class ReflectionService:
@@ -75,7 +76,9 @@ def _build_session(context_id: str, phase: str, templates: Tuple[QuestionTemplat
     written = sum(1 for item in items if item.answer is not None)
     completed = sum(1 for item in items if item.answer is not None and item.answer.status == STATUS_COMPLETED)
     total = len(items)
-    if total and completed == total:
+    if not total:
+        status = SESSION_NOT_APPLICABLE
+    elif completed == total:
         status = SESSION_COMPLETED
     elif written:
         status = SESSION_IN_PROGRESS

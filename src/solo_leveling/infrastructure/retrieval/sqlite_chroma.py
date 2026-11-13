@@ -13,7 +13,9 @@ from solo_leveling.domain.models import Chunk, RequestConflictError
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.database.schema import get_connection
 from solo_leveling.infrastructure.embeddings.embedder import embed_texts
-from solo_leveling.application.evidence_qa.errors import DataIntegrityError, ResourceNotFoundError
+from solo_leveling.application.evidence_qa.errors import (
+    DataIntegrityError, InvalidArgumentError, ResourceNotFoundError,
+)
 from solo_leveling.domain.context import ContextNotReadyError
 
 
@@ -58,6 +60,8 @@ class SQLiteContextReader:
             )
         except RequestConflictError:
             raise
+        except ResourceNotFoundError:
+            raise
         except ValueError:
             raise DataIntegrityError('복구 학습 맥락의 저장 정보가 올바르지 않습니다.') from None
 
@@ -91,7 +95,7 @@ class SQLiteChromaRetriever:
         with closing(get_connection(self.db_path)) as conn, conn:
             conn.execute('BEGIN')
             row = conn.execute('''
-                SELECT s.*, v.paper_id, e.model_name, e.dimension
+                SELECT s.*, v.paper_id, p.page_count, e.model_name, e.dimension
                 FROM search_indexes s
                 JOIN paper_versions v ON v.version_id=s.version_id
                 JOIN parse_revisions p ON p.parse_revision_id=s.parse_revision_id AND p.version_id=v.version_id
@@ -108,6 +112,8 @@ class SQLiteChromaRetriever:
                 raise ValueError('검색 범위에 일치하는 게시 완료 색인이 없습니다.')
             chunks = repo.read_translated_chunks(conn, scope.parse_revision_id, scope.translation_revision_id)
         index = dict(row)
+        if any(page > index['page_count'] for page in scope.pdf_pages):
+            raise InvalidArgumentError('PDF 페이지가 문서 범위를 벗어났습니다.')
         positive_int(index['dimension'], 'dimension')
         require_text(index['model_name'], 'model_name')
         if not chunks or len(chunks) != index['chunk_count']:

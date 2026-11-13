@@ -1,5 +1,6 @@
 """로컬 PDF 가져오기 경계와 관리 복사본을 검증한다."""
 
+from io import BytesIO
 import errno
 import os
 from pathlib import Path
@@ -28,6 +29,47 @@ def test_import_copies_pdf_and_reuses_content_file(tmp_path):
     assert first.path.read_bytes() == source.read_bytes()
     assert first.path.parent == (tmp_path / 'pdfs').resolve()
     assert source.is_file()
+
+
+def test_inspect_validates_and_fingerprints_without_copying(tmp_path):
+    pdfs, imports = store(tmp_path)
+    source = imports / 'paper.pdf'
+    source.write_bytes(b'%PDF-1.7\ntest')
+    inspected = pdfs.inspect_pdf('paper.pdf')
+    imported = pdfs.import_pdf('paper.pdf')
+    assert inspected.original_filename == imported.original_filename
+    assert inspected.file_hash == imported.file_hash
+    assert inspected.input_fingerprint == imported.input_fingerprint
+    assert imported.path.is_file()
+
+
+@pytest.mark.parametrize('path', ['../paper.pdf', '/paper.pdf', 'missing.pdf', 'paper.txt'])
+def test_inspect_rejects_invalid_source_without_managed_copy(tmp_path, path):
+    pdfs, imports = store(tmp_path)
+    (imports / 'paper.txt').write_bytes(b'%PDF-1.7')
+    with pytest.raises(InvalidArgumentError):
+        pdfs.inspect_pdf(path)
+    assert not (tmp_path / 'pdfs').exists()
+
+
+@pytest.mark.parametrize('content', [b'%PDF-' + b'x' * 65532, b'%PDF', b''],
+                         ids=['over-limit', 'short-header', 'empty'])
+def test_inspect_checks_actual_bytes_after_open(tmp_path, monkeypatch, content):
+    pdfs, imports = store(tmp_path, max_bytes=65536)
+    (imports / 'paper.pdf').write_bytes(b'%PDF-original')
+    # 초기 크기 검사 뒤 실제로 읽히는 내용이 달라지는 경우를 재현한다.
+    monkeypatch.setattr(pdfs, '_open_source', lambda source: BytesIO(content))
+    with pytest.raises(UnsupportedDocumentError):
+        pdfs.inspect_pdf('paper.pdf')
+    assert not (tmp_path / 'pdfs').exists()
+
+
+def test_inspect_rejects_non_pdf_content_without_managed_copy(tmp_path):
+    pdfs, imports = store(tmp_path)
+    (imports / 'paper.pdf').write_bytes(b'not-a-pdf')
+    with pytest.raises(UnsupportedDocumentError):
+        pdfs.inspect_pdf('paper.pdf')
+    assert not (tmp_path / 'pdfs').exists()
 
 
 @pytest.mark.parametrize('path', [
@@ -161,13 +203,14 @@ def test_exact_size_limit_is_allowed(tmp_path):
     assert pdfs.import_pdf('paper.pdf').path.read_bytes() == b'%PDF-123'
 
 
-@pytest.mark.parametrize(('name', 'content'), [
-    ('paper.txt', b'%PDF-1.7'), ('paper.pdf', b'not-a-pdf'),
+@pytest.mark.parametrize(('name', 'content', 'error'), [
+    ('paper.txt', b'%PDF-1.7', InvalidArgumentError),
+    ('paper.pdf', b'not-a-pdf', UnsupportedDocumentError),
 ])
-def test_unsupported_documents_are_rejected(tmp_path, name, content):
+def test_invalid_documents_are_rejected(tmp_path, name, content, error):
     pdfs, imports = store(tmp_path)
     (imports / name).write_bytes(content)
-    with pytest.raises(UnsupportedDocumentError):
+    with pytest.raises(error):
         pdfs.import_pdf(name)
 
 

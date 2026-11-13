@@ -11,7 +11,7 @@ from uuid import uuid4
 from solo_leveling.domain.models import Chunk, TranslationRevision
 from solo_leveling.domain.translation import (
     ChunkTranslationResult, TranslationBatchResult, TranslationFailureCode,
-    TranslationRequest, TranslationSettings, require_text,
+    TranslationRequest, TranslationSettings, require_text, translation_quality_failure,
 )
 from .ports import TranslationProvider, TranslationProviderUnavailable
 from .retry import RetryBudget, TranslationRetryPolicy
@@ -83,9 +83,12 @@ class TranslationService:
 
     def translate(
         self, chunks: Sequence[Chunk], settings: TranslationSettings,
+        *, on_progress: Callable[[int, int], None] | None = None,
     ) -> TranslationBatchResult:
         if not isinstance(settings, TranslationSettings):
             raise ValueError("settings must be TranslationSettings")
+        if on_progress is not None and not callable(on_progress):
+            raise ValueError("on_progress must be callable")
         inputs = tuple(chunks)
         if not inputs or any(not isinstance(c, Chunk) for c in inputs):
             raise ValueError("a nonempty sequence of Chunk is required")
@@ -111,16 +114,14 @@ class TranslationService:
             try:
                 text = self._translate_one(request, settings, budget, batch_id, chunk_number)
             except TranslationProviderUnavailable:
-                results.append(ChunkTranslationResult(
-                    request, None, TranslationFailureCode.PROVIDER_UNAVAILABLE,
-                ))
-                continue
-            if not isinstance(text, str):
-                raise TypeError("translation provider must return str")
-            if not text.strip():
-                results.append(ChunkTranslationResult(
-                    request, None, TranslationFailureCode.EMPTY_TRANSLATION,
-                ))
+                result = ChunkTranslationResult(request, None, TranslationFailureCode.PROVIDER_UNAVAILABLE)
             else:
-                results.append(ChunkTranslationResult(request, text))
+                if not isinstance(text, str):
+                    raise TypeError("translation provider must return str")
+                failure = (translation_quality_failure(request.original_text, text)
+                           if text.strip() else TranslationFailureCode.EMPTY_TRANSLATION)
+                result = ChunkTranslationResult(request, None if failure else text, failure)
+            results.append(result)
+            if on_progress is not None:
+                on_progress(chunk_number + 1, len(requests))
         return TranslationBatchResult(revision, settings, tuple(results))

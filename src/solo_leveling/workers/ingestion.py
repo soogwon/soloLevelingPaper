@@ -185,6 +185,10 @@ def _empty_page_limitations(page_count: int, chunks) -> list[str]:
     return [f'empty_pages:{shown}{extra}']
 
 
+class _TranslationJobInactive(Exception):
+    """번역 중 작업의 상태가 외부에서 변경되었다."""
+
+
 def _ingest_pages(
     db_path: str, chroma_dir: str, pages_provider: Callable[[], list],
     version_id: str, job: ProcessingJob, paper_id: str, reused: bool,
@@ -243,7 +247,11 @@ def _ingest_pages(
             else:
                 service = translation_service
             if pending:
-                batch = service.translate(pending, translation_settings)
+                def record_progress(_completed, _total):
+                    if not repo.touch_translation_job(db_path, job.job_id):
+                        raise _TranslationJobInactive()
+
+                batch = service.translate(pending, translation_settings, on_progress=record_progress)
                 repo.save_translation_batch(db_path, batch)
                 translation_id = batch.revision.translation_revision_id
             if translation_id is None:
@@ -287,6 +295,8 @@ def _ingest_pages(
             'chunk_count': 0, 'reused_existing': reused, 'limitations': limitations,
             **describe_outcome('failed', JobStage.TRANSLATE.value, limitations),
         }
+    except _TranslationJobInactive:
+        return get_ingestion_status(db_path, job.job_id)
     except Exception as error:
         if not published:
             if client is not None and embedding_set is not None:

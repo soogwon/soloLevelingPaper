@@ -39,9 +39,12 @@ class WorkflowIngestion:
             'stage': 'index', 'created_at': '2026-01-01', 'updated_at': '2026-01-01',
         }], 'next_cursor': None}
 
-    def add_local_pdf(self, relative_path: str, request_key: str) -> dict:
+    def validate_local_pdf(self, relative_path: str, request_key: str) -> None:
         assert relative_path == 'paper.pdf'
         assert request_key == 'request-1'
+
+    def add_local_pdf(self, relative_path: str, request_key: str) -> dict:
+        self.validate_local_pdf(relative_path, request_key)
         return {
             'paper_id': 'paper-1',
             'version_id': 'version-1',
