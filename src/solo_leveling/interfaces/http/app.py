@@ -27,6 +27,7 @@ def create_app(
     from fastapi import Depends, FastAPI
 
     from .auth import RejectAllTokenVerifier, create_auth_dependency
+    from .annotation_routes import create_annotation_router
     from .device_auth import DeviceAuthorizingTokenVerifier, RejectAllDeviceRegistry
     from .device_routes import create_device_router, create_device_token_router
     from .device_tokens import OpaqueDeviceTokenVerifier, RoutingAccessTokenVerifier
@@ -122,6 +123,7 @@ def create_app(
     app.include_router(create_device_token_router(selected_store))
     app.include_router(create_paper_router(require_principal, selected_paper_store))
     app.include_router(create_web_paper_router(require_principal, selected_paper_store))
+    app.include_router(create_annotation_router(require_principal, selected_paper_store))
     if web_auth_flow is not None and web_session_store is not None:
         app.include_router(create_web_auth_router(web_auth_flow, web_session_store))
 

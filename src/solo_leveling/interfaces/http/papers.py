@@ -2,7 +2,7 @@
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
 from typing import Any, Protocol
@@ -90,6 +90,37 @@ class AnnotationRegistration:
 
 
 @dataclass(frozen=True)
+class StoredAnnotation:
+    annotation_id: str
+    paper_id: str
+    paper_title: str | None
+    learning_record_id: str
+    selected_version_id: str | None
+    kind: str
+    body: str
+    step: str | None
+    segments: tuple[dict[str, Any], ...]
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class AnnotationDateCount:
+    date: date
+    count: int
+
+
+@dataclass(frozen=True)
+class AnnotationPage:
+    items: tuple[StoredAnnotation, ...]
+    date_counts: tuple[AnnotationDateCount, ...]
+    page: int
+    page_size: int
+    total_count: int
+    total_pages: int
+
+
+@dataclass(frozen=True)
 class StoredSummary:
     summary_id: str
     created_at: datetime
@@ -170,6 +201,13 @@ class PaperStore(Protocol):
     def upsert_annotation(self, owner_user_id: str, paper_id: str,
                           metadata: AnnotationMetadata) -> AnnotationRegistration: ...
 
+    def list_annotations(self, owner_user_id: str, *, kind: str | None,
+                         start_date: date | None, end_date: date | None, query: str | None,
+                         sort: str, paper_id: str | None, version_id: str | None,
+                         page: int, limit: int) -> AnnotationPage: ...
+
+    def get_annotation(self, owner_user_id: str, annotation_id: str) -> StoredAnnotation: ...
+
     def get_paper(self, owner_user_id: str, paper_id: str, *, learning_record_id: str | None,
                   version_id: str | None) -> PaperDetail: ...
 
@@ -192,6 +230,12 @@ class UnavailablePaperStore:
 
     def upsert_annotation(self, owner_user_id: str, paper_id: str,
                           metadata: AnnotationMetadata) -> AnnotationRegistration:
+        raise PaperStoreUnavailable
+
+    def list_annotations(self, owner_user_id: str, **filters) -> AnnotationPage:
+        raise PaperStoreUnavailable
+
+    def get_annotation(self, owner_user_id: str, annotation_id: str) -> StoredAnnotation:
         raise PaperStoreUnavailable
 
     def get_paper(self, owner_user_id: str, paper_id: str, *, learning_record_id: str | None,
@@ -489,6 +533,80 @@ class PostgresPaperStore:
         return AnnotationRegistration(str(row["annotation_id"]), int(row["revision"]),
                                       "stored", row["updated_at"])
 
+    def list_annotations(self, owner_user_id: str, *, kind: str | None,
+                         start_date: date | None, end_date: date | None, query: str | None,
+                         sort: str, paper_id: str | None, version_id: str | None,
+                         page: int, limit: int) -> AnnotationPage:
+        if sort not in ("newest", "oldest"):
+            raise ValueError("지원하지 않는 메모 정렬입니다.")
+        conditions = ["a.owner_user_id=%s"]
+        params: list[Any] = [owner_user_id]
+        if kind is not None:
+            conditions.append("a.kind=%s")
+            params.append(kind)
+        if start_date is not None:
+            conditions.append("a.original_created_at >= (%s::date::timestamp AT TIME ZONE 'Asia/Seoul')")
+            params.append(start_date)
+        if end_date is not None:
+            conditions.append("a.original_created_at < ((%s::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul')")
+            params.append(end_date)
+        if paper_id is not None:
+            conditions.append("a.paper_id=%s")
+            params.append(paper_id)
+        if version_id is not None:
+            conditions.append("a.selected_version_id=%s")
+            params.append(version_id)
+        if query is not None:
+            pattern = f"%{_escape_like(query)}%"
+            conditions.append(
+                """(a.body ILIKE %s ESCAPE '\\' OR p.title ILIKE %s ESCAPE '\\'
+                    OR EXISTS (SELECT 1 FROM jsonb_array_elements(a.segments) segment
+                               WHERE segment->>'quote_snapshot' ILIKE %s ESCAPE '\\'))"""
+            )
+            params.extend((pattern, pattern, pattern))
+        where = " AND ".join(conditions)
+        direction = "ASC" if sort == "oldest" else "DESC"
+        base = "FROM server_annotations a JOIN server_papers p ON p.paper_id=a.paper_id"
+        with _connection(self._pool) as conn:
+            conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            total = int(conn.execute(
+                f"SELECT count(*) AS total_count {base} WHERE {where}", tuple(params),
+            ).fetchone()["total_count"])
+            total_pages = (total + limit - 1) // limit
+            counts = conn.execute(
+                f"""SELECT (a.original_created_at AT TIME ZONE 'Asia/Seoul')::date AS created_date,
+                           count(*) AS item_count {base} WHERE {where}
+                    GROUP BY created_date ORDER BY created_date {direction}""", tuple(params),
+            ).fetchall()
+            rows = [] if page > total_pages else conn.execute(
+                f"""SELECT a.annotation_id, a.paper_id, p.title AS paper_title,
+                           a.learning_record_id, a.selected_version_id, a.kind, a.body, a.step,
+                           a.segments, a.original_created_at, a.source_updated_at AS updated_at
+                    {base} WHERE {where}
+                    ORDER BY a.original_created_at {direction}, a.annotation_id {direction}
+                    LIMIT %s OFFSET %s""", (*params, limit, (page - 1) * limit),
+            ).fetchall()
+        return AnnotationPage(
+            tuple(_stored_annotation(row) for row in rows),
+            tuple(AnnotationDateCount(row["created_date"], int(row["item_count"])) for row in counts),
+            page, limit, total, total_pages,
+        )
+
+    def get_annotation(self, owner_user_id: str, annotation_id: str) -> StoredAnnotation:
+        with _connection(self._pool) as conn:
+            conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            row = conn.execute(
+                """SELECT a.annotation_id, a.paper_id, p.title AS paper_title,
+                          a.learning_record_id, a.selected_version_id, a.kind, a.body, a.step,
+                          a.segments, a.original_created_at, a.source_updated_at AS updated_at
+                   FROM server_annotations a JOIN server_papers p ON p.paper_id=a.paper_id
+                   WHERE a.owner_user_id=%s AND a.annotation_id=%s""",
+                (owner_user_id, annotation_id),
+            ).fetchone()
+        if row is None:
+            raise PaperNotFound
+        return _stored_annotation(row)
+
     def get_paper(self, owner_user_id: str, paper_id: str, *, learning_record_id: str | None,
                   version_id: str | None) -> PaperDetail:
         with _connection(self._pool) as conn:
@@ -556,6 +674,15 @@ def _payload_hash(metadata: PaperMetadata) -> bytes:
     payload["original_created_at"] = metadata.original_created_at.astimezone(timezone.utc).isoformat()
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return sha256(canonical.encode("utf-8")).digest()
+
+
+def _stored_annotation(row) -> StoredAnnotation:
+    return StoredAnnotation(
+        str(row["annotation_id"]), str(row["paper_id"]), row["paper_title"],
+        str(row["learning_record_id"]), row["selected_version_id"], row["kind"],
+        row["body"], row["step"], tuple(row["segments"]), row["original_created_at"],
+        row["updated_at"],
+    )
 
 
 def _escape_like(value: str) -> str:
