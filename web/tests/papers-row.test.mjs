@@ -42,3 +42,21 @@ test('위치 없이 마지막 학습 시각만 있으면 위치 미저장과 날
   assert.match(output, /학습 위치가 저장되지 않았어요/);
   assert.match(output, /마지막 학습 2026\.11\.13/);
 });
+
+for (const [status, badge, position, expected] of [
+  ['reading', '읽는 중', { chunk_id: 'chunk-2' }, '청크 chunk-2'],
+  ['completed', '읽기 완료', { pdf_page: 3 }, 'PDF 3페이지'],
+  ['reading', '읽는 중', { printed_page_label: 'iv' }, '인쇄 페이지 iv'],
+  ['completed', '읽기 완료', { section_id: 'sec-2' }, '섹션 sec-2'],
+]) {
+  test(`${badge} 기록의 ${expected} 위치와 상세 링크를 시각 없이 표시한다`, () => {
+    const output = String(paperRow({
+      ...paper, reading_status: status, selected_learning_record_id: 'record-1',
+      last_position: position, last_studied_at: null,
+    }));
+    assert.ok(output.includes(expected));
+    assert.ok(output.includes(badge));
+    assert.match(output, /record=record-1&amp;version=version-1/);
+    assert.doesNotMatch(output, /마지막 학습|저장된 학습 위치가 없어요/);
+  });
+}
