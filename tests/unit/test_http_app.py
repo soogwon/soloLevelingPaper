@@ -79,6 +79,7 @@ def test_web_auth_settings_are_all_or_none_and_https():
         "WEB_OIDC_CLIENT_ID": "client", "WEB_OIDC_CLIENT_SECRET": "secret",
         "WEB_APP_ORIGIN": "https://app.example",
         "WEB_OIDC_REDIRECT_URI": "https://app.example/v1/auth/callback",
+        "OIDC_AUDIENCE": "https://api.example/solo-leveling",
     }
     assert load_web_auth_settings(values).client_id == "client"
     with pytest.raises(ValueError):
@@ -87,6 +88,8 @@ def test_web_auth_settings_are_all_or_none_and_https():
         load_web_auth_settings(values | {"WEB_APP_ORIGIN": "http://app.example"})
     with pytest.raises(ValueError):
         load_web_auth_settings(values | {"WEB_OIDC_REDIRECT_URI": "https://api.example/v1/auth/callback"})
+    with pytest.raises(ValueError, match="OIDC_AUDIENCE"):
+        load_web_auth_settings({key: value for key, value in values.items() if key != "OIDC_AUDIENCE"})
 
 
 def test_static_web_root_is_validated_and_mounted_after_api_routes(tmp_path, monkeypatch):

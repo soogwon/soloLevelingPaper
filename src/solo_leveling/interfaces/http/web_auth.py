@@ -141,6 +141,7 @@ class OidcWebAuthFlow:
         self.store.begin_login(state, verifier, safe_return, self.now() + timedelta(minutes=10))
         params = {"response_type": "code", "client_id": self.settings.client_id,
                   "redirect_uri": self.settings.redirect_uri, "scope": self.settings.scopes,
+                  "audience": self.settings.audience,
                   "state": state, "code_challenge": challenge, "code_challenge_method": "S256"}
         return f"{self.settings.authorization_url}{'&' if '?' in self.settings.authorization_url else '?'}{urlencode(params)}", state
 

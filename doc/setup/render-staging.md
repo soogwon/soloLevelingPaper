@@ -33,6 +33,8 @@
 | `WEB_OIDC_CLIENT_ID`, `WEB_OIDC_CLIENT_SECRET` | confidential web client |
 
 OIDC 공급자에는 `https://solo-leveling-staging.soogyung.com/v1/auth/callback`을 허용 callback으로 등록합니다.
+Auth0를 사용할 때 `OIDC_AUDIENCE`에는 Custom API의 Identifier를 입력하고, 해당 API는 RS256과
+RFC 9068 access-token profile을 사용해야 합니다. 자세한 설정은 [Auth0 설정](auth0.md)을 따릅니다.
 
 ## 도메인 연결
 

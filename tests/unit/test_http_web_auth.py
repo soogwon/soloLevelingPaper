@@ -21,6 +21,7 @@ SETTINGS = WebAuthSettings(
     "https://identity.example.com/authorize", "https://identity.example.com/token",
     "https://identity.example.com/userinfo", "web-client", "secret",
     "https://app.example.com/v1/auth/callback", "https://app.example.com",
+    "https://api.example.com/solo-leveling",
 )
 
 
@@ -98,6 +99,7 @@ def test_login_uses_pkce_one_time_state_and_rejects_open_redirect():
     url, _ = selected.start("https://app.example.com/#/papers")
     query = parse_qs(urlsplit(url).query)
     assert query["response_type"] == ["code"]
+    assert query["audience"] == ["https://api.example.com/solo-leveling"]
     assert query["code_challenge_method"] == ["S256"]
     assert query["state"] == [store.logins[0][0]]
     assert store.logins[0][2] == "https://app.example.com/#/papers"

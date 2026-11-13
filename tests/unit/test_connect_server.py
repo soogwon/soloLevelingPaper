@@ -62,9 +62,9 @@ class Session:
 
 
 class Server:
-    server_port = 54321
-
-    def __init__(self, *args):
+    def __init__(self, address, handler):
+        self.server_port = address[1]
+        self.address = address
         self.timeout = None
         self.closed = False
 
@@ -120,6 +120,7 @@ def test_connect_exchanges_code_registers_device_and_stores_only_in_keyring(monk
     assert session.calls[1][2]["headers"] == {"Authorization": "Bearer web-access-token"}
     assert "slp_at_secret" not in repr(session.calls)
     assert opened and "code_challenge_method=S256" in opened[0]
+    assert "redirect_uri=http%3A%2F%2F127.0.0.1%3A8765%2Fcallback" in opened[0]
 
 
 def test_keyring_failure_revokes_new_device(monkeypatch):
@@ -186,6 +187,24 @@ def test_oidc_scope_must_include_openid():
     values["scopes"] = "profile"
     with pytest.raises(ValueError, match="openid"):
         subject.ConnectSettings(**values)
+
+
+def test_auth0_redirect_port_is_fixed_configurable_and_validated():
+    assert subject.load_settings({
+        "OIDC_AUTHORIZATION_URL": SETTINGS.authorization_url,
+        "OIDC_TOKEN_URL": SETTINGS.token_url,
+        "OIDC_CLIENT_ID": SETTINGS.client_id,
+        "SERVER_API_URL": SETTINGS.server_url,
+        "OIDC_REDIRECT_PORT": "9123",
+    }).redirect_port == 9123
+    with pytest.raises(ValueError, match="OIDC_REDIRECT_PORT"):
+        subject.load_settings({
+            "OIDC_AUTHORIZATION_URL": SETTINGS.authorization_url,
+            "OIDC_TOKEN_URL": SETTINGS.token_url,
+            "OIDC_CLIENT_ID": SETTINGS.client_id,
+            "SERVER_API_URL": SETTINGS.server_url,
+            "OIDC_REDIRECT_PORT": "random",
+        })
 
 @pytest.mark.parametrize("failure", ["redirect", "wrong_device", "missing_refresh"])
 def test_failed_credential_issue_cleans_up_only_registered_device(monkeypatch, failure):

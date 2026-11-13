@@ -4,7 +4,7 @@
 
 ## 인증 제공자 설정
 
-인증 제공자에는 public/native client와 `http://127.0.0.1:{임의 포트}/callback` 형태의 loopback redirect를 허용해야 한다. API용 access token은 서버 인증 계약의 issuer, audience, `typ=at+jwt` 요구를 충족해야 한다.
+인증 제공자에는 public/native client와 `http://127.0.0.1:8765/callback` 형태의 loopback redirect를 허용해야 한다. API용 access token은 서버 인증 계약의 issuer, audience, `typ=at+jwt` 요구를 충족해야 한다. Auth0는 callback URL을 정확히 비교하므로 고정 포트를 사용하며, 충돌할 때는 Auth0와 `OIDC_REDIRECT_PORT`를 같은 값으로 바꾼다.
 
 ```powershell
 $env:OIDC_AUTHORIZATION_URL = "https://identity.example.com/authorize"
@@ -12,12 +12,13 @@ $env:OIDC_TOKEN_URL = "https://identity.example.com/token"
 $env:OIDC_CLIENT_ID = "public-client-id"
 $env:OIDC_CLIENT_SCOPES = "openid profile"
 $env:OIDC_AUTHORIZATION_AUDIENCE = "solo-leveling-api"
+$env:OIDC_REDIRECT_PORT = "8765"
 $env:SERVER_API_URL = "https://api.example.com"
 
 solo-leveling-connect --device-name "My PC"
 ```
 
-authorization, token, 서버 API URL은 HTTPS만 허용한다. OAuth callback만 OS가 할당한 `127.0.0.1` 임시 포트의 HTTP를 사용한다. `state`가 일치하지 않는 callback은 무시하며 code verifier는 요청마다 새로 생성한다.
+authorization, token, 서버 API URL은 HTTPS만 허용한다. OAuth callback만 등록된 `127.0.0.1` 고정 포트의 HTTP를 사용한다. `state`가 일치하지 않는 callback은 무시하며 code verifier는 요청마다 새로 생성한다.
 
 ## 자격 보관
 

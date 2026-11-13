@@ -25,6 +25,7 @@ class ConnectSettings:
     scopes: str
     server_url: str
     audience: str | None = None
+    redirect_port: int = 8765
 
     def __post_init__(self) -> None:
         for name, value in (("OIDC_AUTHORIZATION_URL", self.authorization_url),
@@ -38,6 +39,8 @@ class ConnectSettings:
             raise ValueError("OIDC client 설정이 비어 있습니다.")
         if "openid" not in self.scopes.split():
             raise ValueError("OIDC_CLIENT_SCOPES에는 openid가 필요합니다.")
+        if not 1 <= self.redirect_port <= 65535:
+            raise ValueError("OIDC_REDIRECT_PORT는 1에서 65535 사이여야 합니다.")
 
 
 def load_settings(source=None) -> ConnectSettings:
@@ -53,6 +56,7 @@ def load_settings(source=None) -> ConnectSettings:
         values.get("OIDC_CLIENT_SCOPES", "openid profile").strip(),
         values["SERVER_API_URL"].strip().rstrip("/"),
         values.get("OIDC_AUTHORIZATION_AUDIENCE", "").strip() or None,
+        _redirect_port(values.get("OIDC_REDIRECT_PORT", "8765")),
     )
 
 
@@ -83,7 +87,7 @@ def connect(settings: ConnectSettings, display_name: str, session, credential_st
     state = token_urlsafe(32)
     callbacks: Queue[dict[str, list[str]]] = Queue()
     handler = _callback_handler(callbacks)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server = ThreadingHTTPServer(("127.0.0.1", settings.redirect_port), handler)
     server.timeout = 1
     redirect_uri = f"http://127.0.0.1:{server.server_port}/callback"
     try:
@@ -189,6 +193,13 @@ def _bearer_access_token(data):
     if token_type.lower() != "bearer":
         raise ValueError("지원하지 않는 token_type입니다.")
     return _required_string(data, "access_token")
+
+
+def _redirect_port(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError("OIDC_REDIRECT_PORT는 정수여야 합니다.") from exc
 
 
 def main(argv=None):
