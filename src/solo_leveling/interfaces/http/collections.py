@@ -61,6 +61,10 @@ class CollectionPaperNotFound(Exception):
     pass
 
 
+class CollectionMembershipConflict(Exception):
+    pass
+
+
 class CollectionNameConflict(Exception):
     pass
 
@@ -249,15 +253,22 @@ class PostgresCollectionStore:
                    SELECT p.paper_id, c.collection_id, c.owner_user_id
                    FROM server_papers p JOIN server_collections c ON c.owner_user_id=p.owner_user_id
                    WHERE p.owner_user_id=%s AND p.paper_id=%s AND c.collection_id=%s
-                   ON CONFLICT(paper_id) DO UPDATE SET collection_id=excluded.collection_id,
-                     added_at=CASE WHEN server_collection_papers.collection_id<>excluded.collection_id
-                                   THEN CURRENT_TIMESTAMP ELSE server_collection_papers.added_at END
-                   WHERE server_collection_papers.owner_user_id=excluded.owner_user_id
+                   ON CONFLICT(paper_id) DO NOTHING
                    RETURNING collection_id, paper_id""",
                 (owner_user_id, paper_id, collection_id),
             ).fetchone()
             if row is None:
-                self._raise_missing(conn, owner_user_id, collection_id, paper_id)
+                current = conn.execute(
+                    """SELECT collection_id, paper_id FROM server_collection_papers
+                       WHERE owner_user_id=%s AND paper_id=%s""",
+                    (owner_user_id, paper_id),
+                ).fetchone()
+                if current is not None:
+                    if str(current["collection_id"]) != collection_id:
+                        raise CollectionMembershipConflict
+                    row = current
+                else:
+                    self._raise_missing(conn, owner_user_id, collection_id, paper_id)
             count = conn.execute(
                 """SELECT count(*) AS paper_count FROM server_collection_papers
                    WHERE owner_user_id=%s AND collection_id=%s""",
@@ -331,7 +342,8 @@ def _connection(pool: Any):
     try:
         with pool.connection() as conn:
             yield conn
-    except (CollectionNotFound, CollectionPaperNotFound, CollectionNameConflict,
+    except (CollectionNotFound, CollectionPaperNotFound, CollectionMembershipConflict,
+            CollectionNameConflict,
             CollectionIdempotencyConflict, CollectionStoreUnavailable):
         raise
     except Exception as exc:

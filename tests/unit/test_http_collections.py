@@ -8,7 +8,8 @@ from solo_leveling.interfaces.http import create_app
 from solo_leveling.interfaces.http.auth import AuthenticatedPrincipal
 from solo_leveling.interfaces.http.collection_routes import _normalize_name
 from solo_leveling.interfaces.http.collections import (
-    CollectionItem, CollectionMembership, CollectionPage, CollectionPaperPage,
+    CollectionItem, CollectionMembership, CollectionMembershipConflict, CollectionPage,
+    CollectionPaperItem, CollectionPaperPage,
     PostgresCollectionStore,
 )
 
@@ -114,16 +115,39 @@ def test_name_normalization_uses_nfc():
     assert _normalize_name("  Cafe\u0301  ") == ("Café", "café")
 
 
-def test_add_paper_moves_existing_membership_and_counts_target_collection():
+def test_collection_paper_response_matches_external_site_published_shape():
+    class PaperStore(Store):
+        def list_papers(self, owner, collection_id, *, page, limit):
+            item = CollectionPaperItem(PAPER_ID, "Paper", "paper.pdf", ("Author",), 2024, NOW)
+            return CollectionPaperPage((item,), page, limit, 1, 1)
+
+    route = endpoint(PaperStore(), "/v1/collections/{collection_id}/papers", "GET")
+    result = route(COLLECTION_ID, AuthenticatedPrincipal("user-1", "web_session"), 1, 20)
+    assert result.items[0].published.model_dump() == {
+        "year": 2024, "month": None, "day": None, "precision": "year"
+    }
+
+
+def test_add_paper_creates_membership_and_counts_target_collection():
     pool = Pool([
         Result({"collection_id": COLLECTION_ID, "paper_id": PAPER_ID}),
         Result({"paper_count": 3}),
     ])
     result = PostgresCollectionStore(pool).add_paper("user-1", COLLECTION_ID, PAPER_ID)
     sql, params = pool.conn.calls[0]
-    assert "ON CONFLICT(paper_id) DO UPDATE SET collection_id=excluded.collection_id" in sql
+    assert "ON CONFLICT(paper_id) DO NOTHING" in sql
     assert params == ("user-1", PAPER_ID, COLLECTION_ID)
     assert result == CollectionMembership(COLLECTION_ID, PAPER_ID, 3)
+
+
+def test_add_paper_rejects_membership_in_another_collection():
+    other = "00000000-0000-0000-0000-000000000302"
+    pool = Pool([
+        Result(), Result({"collection_id": other, "paper_id": PAPER_ID}),
+    ])
+    import pytest
+    with pytest.raises(CollectionMembershipConflict):
+        PostgresCollectionStore(pool).add_paper("user-1", COLLECTION_ID, PAPER_ID)
 
 
 def test_collection_listing_uses_owner_scope_and_stable_pagination():

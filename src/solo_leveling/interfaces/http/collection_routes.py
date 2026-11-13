@@ -8,7 +8,7 @@ from uuid import UUID
 
 from .auth import AuthenticatedPrincipal
 from .collections import (
-    CollectionIdempotencyConflict, CollectionNameConflict, CollectionNotFound,
+    CollectionIdempotencyConflict, CollectionMembershipConflict, CollectionNameConflict, CollectionNotFound,
     CollectionPaperNotFound, CollectionStore, CollectionStoreUnavailable,
 )
 
@@ -36,12 +36,18 @@ def create_collection_router(require_principal: Any, store: CollectionStore):
         total_count: int
         total_pages: int
 
+    class PublishedView(BaseModel):
+        year: int
+        month: None = None
+        day: None = None
+        precision: str = "year"
+
     class PaperView(BaseModel):
         paper_id: str
         title: str | None
         file_name: str | None
         authors: list[str] | None
-        publication_year: int | None
+        published: PublishedView | None
         added_at: datetime
 
     class PaperPageView(BaseModel):
@@ -70,6 +76,8 @@ def create_collection_router(require_principal: Any, store: CollectionStore):
             raise HTTPException(status_code=404, detail={"code": "collection_not_found"}) from None
         except CollectionPaperNotFound:
             raise HTTPException(status_code=404, detail={"code": "collection_paper_not_found"}) from None
+        except CollectionMembershipConflict:
+            raise HTTPException(status_code=409, detail={"code": "collection_membership_conflict"}) from None
         except CollectionNameConflict:
             raise HTTPException(status_code=409, detail={"code": "collection_name_conflict"}) from None
         except CollectionIdempotencyConflict:
@@ -121,7 +129,9 @@ def create_collection_router(require_principal: Any, store: CollectionStore):
         return PaperPageView(items=[PaperView(
             paper_id=item.paper_id, title=item.title, file_name=item.file_name,
             authors=list(item.authors) if item.authors else None,
-            publication_year=item.publication_year, added_at=item.added_at,
+            published=({"year": item.publication_year, "month": None, "day": None,
+                        "precision": "year"} if item.publication_year is not None else None),
+            added_at=item.added_at,
         ) for item in result.items], page=result.page, page_size=result.page_size,
             total_count=result.total_count, total_pages=result.total_pages)
 
