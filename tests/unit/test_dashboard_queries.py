@@ -72,7 +72,7 @@ def test_saved_data_and_score_order_match_existing_service(setup_db):
 def test_unknown_context_and_missing_database_do_not_create_data(setup_db, tmp_path):
     db, _ = setup_db
     with pytest.raises(ResourceNotFoundError):
-        DashboardReader(db).get('unknown')
+        DashboardReader(db).get('00000000-0000-4000-8000-000000000001')
     with pytest.raises(InvalidArgumentError):
         DashboardReader(db).get('  ')
     missing = tmp_path / 'missing.sqlite'

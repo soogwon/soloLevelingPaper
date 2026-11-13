@@ -4,6 +4,7 @@ from contextlib import closing
 import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import sqlite3
+from uuid import UUID
 
 from solo_leveling.application.evidence_qa.errors import (
     DataIntegrityError, InvalidArgumentError, ResourceNotFoundError,
@@ -27,6 +28,11 @@ class DashboardReader:
             context = conn.execute('SELECT * FROM learning_contexts WHERE context_id=?',
                                    (context_id,)).fetchone()
             if context is None:
+                # 이미 저장된 레거시 ID는 유지하고 없는 값만 UUID 형식으로 구분한다.
+                try:
+                    UUID(context_id)
+                except ValueError:
+                    raise InvalidArgumentError('학습 맥락 ID 형식이 올바르지 않습니다.') from None
                 raise ResourceNotFoundError('학습 맥락을 찾을 수 없습니다.')
             row = conn.execute('''SELECT p.paper_id, p.title, v.original_filename,
                 j.job_id, j.status, j.stage, j.limitations

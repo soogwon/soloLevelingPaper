@@ -1,14 +1,21 @@
 """저장된 퀴즈 조회와 요청 키 기반 제출을 MCP로 연결한다."""
 
+from hashlib import sha256
 from importlib.resources import files
+from pathlib import Path
 
 import anyio
+from filelock import FileLock
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
+from solo_leveling.application.evidence_qa.ports import GenerationUnavailable
+from solo_leveling.application.evidence_qa.response_parser import GenerationFormatError
 from solo_leveling.application.quiz.attempts import QuizAttemptService
+from solo_leveling.application.quiz.service import NoSupportedQuiz, QuizService
+from solo_leveling.domain.quiz import QuizValidationError
 from solo_leveling.domain.quiz_attempt import AttemptValidationError, SubmitOutcome
 from solo_leveling.infrastructure.database import repository
 from .errors import to_tool_error
@@ -19,9 +26,10 @@ from .quiz_contracts import (
 
 
 class StoredQuizService:
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, generator: QuizService | None = None):
         self.db_path = db_path
         self.attempts = QuizAttemptService(db_path)
+        self.generator = generator
 
     def get_quiz(self, context_id, step):
         quiz = repository.get_quiz(self.db_path, context_id, step)
@@ -30,6 +38,36 @@ class StoredQuizService:
                 raise ContractError('NOT_FOUND')
             raise ContractError('QUIZ_NOT_READY')
         return quiz
+
+    def generate_quiz(self, context_id, step):
+        # 응답을 잃고 같은 요청을 다시 보내도 기존 퀴즈를 교체하거나 외부 호출을 반복하지 않는다.
+        existing = repository.get_quiz(self.db_path, context_id, step)
+        if existing is not None:
+            return existing
+        if repository.get_learning_context(self.db_path, context_id) is None:
+            raise ContractError('NOT_FOUND')
+        if self.generator is None:
+            raise ContractError('QUIZ_NOT_READY')
+        # 같은 DB를 쓰는 서버끼리도 같은 맥락·단계의 외부 호출은 한 번만 시작한다.
+        db = Path(self.db_path).resolve()
+        directory = db.with_name(db.name + '.quiz-locks')
+        directory.mkdir(exist_ok=True)
+        key = sha256(f'{context_id}:{step}'.encode()).hexdigest()
+        with FileLock(directory / f'{key}.lock'):
+            existing = repository.get_quiz(self.db_path, context_id, step)
+            if existing is not None:
+                return existing
+            return self._generate(context_id, step)
+
+    def _generate(self, context_id, step):
+        try:
+            return self.generator.generate(context_id, step).quiz
+        except ResourceNotFoundError:
+            raise ContractError('NOT_FOUND') from None
+        except (NoSupportedQuiz, QuizValidationError):
+            raise ContractError('QUIZ_NOT_READY') from None
+        except (GenerationUnavailable, GenerationFormatError):
+            raise ContractError('UPSTREAM_UNAVAILABLE') from None
 
     def submit(self, *, context_id, step, quiz_id, request_key, answers):
         try:
@@ -99,7 +137,8 @@ def register_quiz(server: FastMCP, adapter: QuizContractAdapter):
                 'NOT_FOUND': 'NOT_FOUND: 요청한 자료를 찾을 수 없습니다.',
                 'QUIZ_NOT_READY': 'QUIZ_NOT_READY: 아직 생성된 퀴즈가 없습니다.',
                 'QUIZ_CHANGED': 'QUIZ_CHANGED: 조회한 퀴즈가 변경되었습니다.',
-                'REQUEST_CONFLICT': 'CONFLICT: request_key가 이전 요청과 일치하지 않습니다.',
+                'REQUEST_CONFLICT': 'REQUEST_CONFLICT: request_key가 이전 요청과 일치하지 않습니다.',
+                'UPSTREAM_UNAVAILABLE': 'UPSTREAM_UNAVAILABLE: 퀴즈 생성 서비스를 사용할 수 없습니다.',
                 'INTERNAL_ERROR': 'INTERNAL_ERROR: 요청을 처리하지 못했습니다.',
             }
             raise ToolError(messages[error.code]) from None
@@ -135,8 +174,24 @@ def register_quiz(server: FastMCP, adapter: QuizContractAdapter):
     @server.tool(structured_output=True, meta=card, annotations=ToolAnnotations(
         readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     async def get_quiz(context_id: Text, step: Step) -> PublicQuiz:
-        """저장된 단계별 공개 퀴즈를 조회합니다. QUIZ_NOT_READY이면 아직 퀴즈가 없습니다."""
-        return await invoke(adapter.get_quiz, dict(context_id=context_id, step=step))
+        """저장된 단계별 공개 퀴즈를 조회합니다. QUIZ_NOT_READY이면 전송 내용을 안내한 뒤 generate_quiz로 생성하세요."""
+        try:
+            return await invoke(adapter.get_quiz, dict(context_id=context_id, step=step))
+        except ToolError as error:
+            if str(error).partition(':')[0] == 'QUIZ_NOT_READY':
+                raise ToolError('QUIZ_NOT_READY: 전송 내용을 안내한 뒤 generate_quiz로 생성하세요.') from None
+            raise
+
+    @server.tool(structured_output=True, meta=card, annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+    async def generate_quiz(context_id: Text, step: Step) -> PublicQuiz:
+        """해당 단계의 퀴즈가 없으면 생성하고 저장하며, 이미 있으면 외부 호출 없이 재사용합니다.
+
+        외부 API 호출을 허용한 경우 단계에 배정된 번역문과 원문 근거를 OpenAI로 보내며
+        비용이 발생할 수 있습니다. 호출 전에 사용자에게 전송 내용을 안내하세요.
+        UPSTREAM_UNAVAILABLE이면 자동 반복 생성하지 말고 외부 생성 설정을 확인하세요.
+        """
+        return await invoke(adapter.generate_quiz, dict(context_id=context_id, step=step))
 
     @server.tool(structured_output=True, meta=card, annotations=ToolAnnotations(
         readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))

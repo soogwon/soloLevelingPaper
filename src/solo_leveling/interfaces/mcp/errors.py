@@ -20,7 +20,7 @@ def to_tool_error(error: Exception) -> ToolError:
     if isinstance(error, EmbeddingProcessError):
         return ToolError(f'UPSTREAM_UNAVAILABLE: {error.code.value}: 임베딩 처리를 완료하지 못했습니다.')
     if isinstance(error, InvalidArgumentError):
-        return ToolError('INVALID_ARGUMENT: 입력값을 확인해주세요.')
+        return ToolError('INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.')
     if isinstance(error, ResourceNotFoundError):
         return ToolError('NOT_FOUND: 요청한 자료를 찾을 수 없습니다.')
     if isinstance(error, RequestConflictError):

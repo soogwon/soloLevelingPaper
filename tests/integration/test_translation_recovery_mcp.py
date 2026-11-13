@@ -36,6 +36,18 @@ def connected(service_setup, db):
         assert manager.wait_for_idle(15)
 
 
+def test_missing_recovery_has_public_not_found_error(connected):
+    server, *_ = connected
+
+    async def check():
+        async with create_connected_server_and_client_session(server) as session:
+            result = await session.call_tool('get_translation_recovery', ARGS)
+            assert result.isError and result.structuredContent is None
+            assert [part.text for part in result.content] == ['NOT_FOUND: 요청한 자료를 찾을 수 없습니다.']
+
+    asyncio.run(check())
+
+
 def test_preview_cancellation_and_forged_or_swapped_tokens_do_not_execute(db, connected):
     server, manager, provider, embeddings, _ = connected
     async def check():

@@ -4,7 +4,6 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolRequest, CallToolResult, ServerResult, TextContent
 from pydantic import ValidationError
-from pydantic_core import PydanticSerializationError
 from jsonschema import validate, ValidationError as SchemaValidationError
 
 from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
@@ -22,9 +21,9 @@ class SafeInputServer(FastMCP):
             # SDK는 미등록 도구 이름을 경고 로그에 넣으므로 그보다 먼저 차단한다.
             try:
                 self._find_tool(request.params.name)
-            except ToolError:
+            except ToolError as error:
                 return ServerResult(CallToolResult(isError=True, content=[TextContent(
-                    type='text', text='INVALID_ARGUMENT: 입력값을 확인해주세요.')]))
+                    type='text', text=str(error))]))
             return await handler(request)
 
         self._mcp_server.request_handlers[CallToolRequest] = safe_handler
@@ -40,11 +39,11 @@ class SafeInputServer(FastMCP):
     def _invalid_input(error: Exception, tool=None) -> ToolError:
         """입력값을 노출하지 않고 공개 스키마의 필드명만 오류에 포함한다."""
         if isinstance(error, ValidationError) and tool is not None:
-            properties = set((tool.input_schema or {}).get('properties', {}))
+            properties = set(tool.parameters.get('properties', {}))
             for issue in error.errors(include_url=False, include_context=False, include_input=False):
-                field = next((part for part in issue.get('loc', ())
-                              if isinstance(part, str) and part in properties), None)
-                if field is not None:
+                location = issue.get('loc', ())
+                if location and location[0] in properties:
+                    field = location[0]
                     return ToolError(
                         f'INVALID_ARGUMENT: INVALID_INPUT: field={field}: 입력값을 확인해주세요.')
         reason = 'INVALID_JSON' if not isinstance(error, ValidationError) else 'INVALID_INPUT'
@@ -65,9 +64,9 @@ class SafeInputServer(FastMCP):
         except ToolError as error:
             # 입력 검사를 통과한 뒤 SDK 출력 검증·직렬화가 실패한 경우다.
             # 기존 서비스의 고정 오류 코드는 그대로 유지한다.
-            if isinstance(error.__cause__, (ValidationError, PydanticSerializationError)):
-                raise to_tool_error(RuntimeError()) from None
-            raise
+            if isinstance(error.__cause__, ToolError):
+                raise error.__cause__ from None
+            raise to_tool_error(RuntimeError()) from None
 
         if tool.output_schema is not None:
             # 하위 프로토콜 계층도 출력 JSON 스키마를 검사한다. 그 계층이

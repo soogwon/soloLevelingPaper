@@ -76,15 +76,16 @@ class TranslationRecoveryService:
         if base is None or job is None:
             return RecoveryResult('UNKNOWN', version, base_id, job_id,
                                   reason_code='RECOVERY_STATE_UNAVAILABLE')
-        target = len(repo.get_translation_failures(self.db_path, base['translation_revision_id']))
+        target = len(repo.get_translation_recovery_targets(self.db_path, base['translation_revision_id']))
         published = repo.get_search_index_for_job(self.db_path, job_id)
         if published is not None:
             if (published['version_id'] != version
                     or published['parse_revision_id'] != base['parse_revision_id']):
                 return RecoveryResult('UNKNOWN', version, base_id, job_id,
                                       reason_code='RECOVERY_STATE_UNAVAILABLE')
-            remaining = len(repo.get_translation_failures(self.db_path, published['translation_revision_id']))
-            recovered = published['chunk_count'] - base['chunk_count']
+            remaining = len(repo.get_translation_recovery_targets(
+                self.db_path, published['translation_revision_id']))
+            recovered = target - remaining
             if recovered < 1 or recovered + remaining != target:
                 return RecoveryResult('UNKNOWN', version, base_id, job_id,
                                       reason_code='RECOVERY_STATE_UNAVAILABLE')
@@ -121,7 +122,7 @@ class TranslationRecoveryService:
             return {'status': 'BASE_CHANGED', 'target_count': None, 'translated_count': None,
                     'base_embedding_set_id': base_embedding_set_id}
         base_id = base['embedding_set_id']
-        count = len(repo.get_translation_failures(self.db_path, base['translation_revision_id']))
+        count = len(repo.get_translation_recovery_targets(self.db_path, base['translation_revision_id']))
         if not count:
             return {'status': 'NO_TARGET', 'target_count': 0, 'translated_count': base['chunk_count'],
                     'base_embedding_set_id': base_id}
@@ -142,7 +143,7 @@ class TranslationRecoveryService:
             current = repo.get_search_index(self.db_path, version_id)
             if base is None or current is None or current['embedding_set_id'] != base_embedding_set_id:
                 return RecoveryResult('BASE_CHANGED', version_id, base_embedding_set_id)
-            target = len(repo.get_translation_failures(self.db_path, base['translation_revision_id']))
+            target = len(repo.get_translation_recovery_targets(self.db_path, base['translation_revision_id']))
             if target:
                 self._validate_base(base)
             registration = repo.prepare_translation_recovery(self.db_path,
@@ -221,7 +222,8 @@ class TranslationRecoveryService:
                 code = 'RECOVERY_BASE_CHANGED'
                 raise RuntimeError(code)
             self._validate_base(base)
-            failed = {r['chunk_id'] for r in repo.get_translation_failures(self.db_path, base['translation_revision_id'])}
+            failed = {r['chunk_id'] for r in repo.get_translation_recovery_targets(
+                self.db_path, base['translation_revision_id'])}
             chunks = [c for c in repo.get_chunks_by_parse_revision(self.db_path, base['parse_revision_id'])
                       if c.chunk_id in failed]
             with stage('recovery_translation'):
@@ -261,7 +263,8 @@ class TranslationRecoveryService:
                     if isinstance(value, str) and value != 'translation_failed'
                     and not value.startswith('translation_failed:')]
                 limitations.extend(f"translation_failed:{r['chunk_id']}:{r['failure_code']}" for r in
-                    repo.get_translation_failures(self.db_path, batch.revision.translation_revision_id))
+                    repo.get_translation_recovery_targets(
+                        self.db_path, batch.revision.translation_revision_id))
                 repo.publish_recovered_index(self.db_path, job_id, embedding, ids, limitations)
             return self._result(request)
         except Exception:

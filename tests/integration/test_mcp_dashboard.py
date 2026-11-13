@@ -76,7 +76,7 @@ def test_dashboard_reads_saved_context_over_stdio(setup_db, tmp_path, with_catal
                     assert not other.isError
                     assert other.structuredContent['progress']['recorded'] is False
                     assert other.structuredContent['summary'] is None
-                    bad = await session.call_tool('get_learning_dashboard', {'context_id': 'missing'})
+                    bad = await session.call_tool('get_learning_dashboard', {'context_id': '00000000-0000-4000-8000-000000000001'})
                     assert bad.isError and 'NOT_FOUND' in bad.content[0].text
                     assert Path(db).read_bytes() == before
 

@@ -45,6 +45,16 @@ def test_public_quiz_excludes_answers_and_evidence_in_json(prepared):
     assert 'secret' not in result.model_dump_json()
 
 
+def test_generate_quiz_uses_same_public_contract(prepared):
+    adapter, service, _ = prepared
+    service.generate_quiz.return_value = service.get_quiz.return_value
+    result = adapter.generate_quiz({'context_id': 'ctx', 'step': 'preview'})
+    assert result.quiz_id == 'q1'
+    assert set(result.model_dump()['questions'][0]) == {
+        'question_index', 'question_type', 'prompt', 'choices'}
+    service.generate_quiz.assert_called_once_with(context_id='ctx', step='preview')
+
+
 def test_public_multiple_choice_hides_correct_index_and_keeps_choices(prepared):
     adapter, service, _ = prepared
     service.get_quiz.return_value = Quiz('q1', 'ctx', 'preview', (
@@ -197,5 +207,5 @@ def test_blank_policy_can_preserve_input_when_explicitly_allowed(prepared):
 def test_server_without_quiz_service_omits_quiz_tools():
     server = create_server(MCPServices(Mock(), Mock()))
     names = {tool.name for tool in asyncio.run(server.list_tools())}
-    assert not names.intersection({'get_quiz', 'submit_quiz', 'get_quiz_attempt',
+    assert not names.intersection({'get_quiz', 'generate_quiz', 'submit_quiz', 'get_quiz_attempt',
                                    'list_quiz_attempts', 'get_quiz_scores', 'review_quiz_attempt'})
