@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path, PureWindowsPath
 
-from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
+from solo_leveling.application.evidence_qa.errors import InvalidArgumentError, LocalPdfNotFoundError
 from .errors import UnsupportedDocumentError
 from solo_leveling.infrastructure.storage.pdf_source import open_pdf_source
 from solo_leveling.infrastructure.storage.pdf_store import PdfStore
@@ -29,8 +29,11 @@ class InspectedPdf:
 
 
 class LocalPdfStore:
-    def __init__(self, import_root: Path, managed_root: Path, max_bytes: int):
+    def __init__(self, import_root: Path, managed_root: Path, max_bytes: int, *,
+                 data_root: Path | None = None):
         self.import_root = import_root.resolve()
+        self.import_subdir = (self.import_root.relative_to(data_root.resolve())
+                              if data_root is not None else Path(self.import_root.name))
         self.managed_root = managed_root.resolve()
         if type(max_bytes) is not int or max_bytes < 1:
             raise ValueError('MAX_UPLOAD_BYTES는 양의 정수여야 합니다.')
@@ -62,10 +65,10 @@ class LocalPdfStore:
         source = (self.import_root / requested).resolve()
         if source == self.import_root or self.import_root not in source.parents:
             raise InvalidArgumentError('파일 경로가 import 루트를 벗어났습니다.')
-        if not source.is_file():
-            raise InvalidArgumentError('PDF 파일을 찾을 수 없습니다.')
         if requested.suffix.lower() != '.pdf' or source.suffix.lower() != '.pdf':
             raise InvalidArgumentError('PDF 확장자만 지원합니다.')
+        if not source.is_file():
+            raise LocalPdfNotFoundError((self.import_subdir / requested).as_posix())
         size = source.stat().st_size
         if size < 5 or size > self.max_bytes:
             raise UnsupportedDocumentError('PDF 파일 크기가 허용 범위를 벗어났습니다.')

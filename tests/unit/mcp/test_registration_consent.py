@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
-from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
+from solo_leveling.application.evidence_qa.errors import InvalidArgumentError, LocalPdfNotFoundError
 from solo_leveling.domain.models import RequestConflictError
 from solo_leveling.interfaces.mcp.registration_consent import RegistrationGate, REGISTRATION_APP_URI
 from solo_leveling.interfaces.mcp.server import MCPServices, create_server
@@ -56,6 +56,22 @@ def test_prepare_validation_failure_creates_no_confirmation(error, code):
         with pytest.raises(ToolError, match=code):
             await server.call_tool('prepare_paper_registration', {
                 'source': {'kind': 'local_file', 'relative_path': '../private.pdf'},
+                'request_key': 'request',
+            })
+        ingestion.add_local_pdf.assert_not_called()
+
+    asyncio.run(check())
+
+
+def test_prepare_missing_pdf_explains_import_location_and_creates_no_confirmation():
+    ingestion = Mock()
+    ingestion.validate_local_pdf.side_effect = LocalPdfNotFoundError('imports/papers/missing.pdf')
+    server = create_server(MCPServices(Mock(), Mock(), ingestion))
+
+    async def check():
+        with pytest.raises(ToolError, match=r'SOURCE_NOT_FOUND:.*imports/papers/missing\.pdf'):
+            await server.call_tool('prepare_paper_registration', {
+                'source': {'kind': 'local_file', 'relative_path': 'papers/missing.pdf'},
                 'request_key': 'request',
             })
         ingestion.add_local_pdf.assert_not_called()

@@ -43,6 +43,17 @@ test('실패 후 자동 재시도하지 않는다', async () => {
   assert.equal(calls, 1); assert.match(el('status').textContent, /작업 목록/);
   assert.doesNotMatch(el('status').textContent, /private/);
 });
+test('등록 사이에 PDF가 사라지면 import 상대 경로를 안내한다', async () => {
+  const {app, el} = setup();
+  app.callServerTool = async () => ({isError: true,
+    content: [{type: 'text', text: 'SOURCE_NOT_FOUND: PDF 파일을 찾을 수 없습니다. library/incoming/<img src=x onerror=alert(1)>에 파일을 복사한 뒤 다시 시도하세요.'}]});
+  el('agree').checked = true; el('agree').onchange();
+  await el('confirm').onclick();
+  assert.match(el('status').textContent, /PDF를 찾을 수 없습니다/);
+  assert.match(el('status').textContent, /library\/incoming\/<img src=x onerror=alert\(1\)>/);
+  assert.equal(el('status').querySelector('img'), null);
+  assert.doesNotMatch(el('status').textContent, /private server detail/);
+});
 test('잘못된 응답은 기존 확인 요청을 비활성화한다', () => {
   const {app, el} = setup(); app.ontoolresult({isError: true});
   assert.equal(el('confirm').disabled, true); assert.equal(el('notice').textContent, '');
@@ -82,4 +93,26 @@ test('입력으로 안내를 다시 준비해도 비공개 토큰이 없으면 �
   assert.equal(el('agree').disabled, true);
   assert.equal(el('confirm').disabled, true);
   assert.match(el('status').textContent, /다시 요청/);
+});
+
+test('등록 안내 준비 중 PDF가 없으면 import 상대 경로를 안내한다', async () => {
+  const {app, el} = setup();
+  const args = {source: {kind: 'local_file', relative_path: 'papers/missing.pdf'}, request_key: 'r'};
+  app.ontoolinput({arguments: args});
+  app.callServerTool = async () => ({isError: true,
+    content: [{type: 'text', text: 'SOURCE_NOT_FOUND: PDF 파일을 찾을 수 없습니다. library/incoming/papers/missing.pdf에 파일을 복사한 뒤 다시 시도하세요.'}]});
+  await app.ontoolresult({content: [{type: 'text', text: '안내'}]});
+  assert.equal(el('status').textContent,
+    'PDF를 찾을 수 없습니다. library/incoming/papers/missing.pdf에 파일을 복사한 뒤 등록 안내를 다시 요청하세요.');
+  assert.doesNotMatch(el('status').textContent, /hidden absolute path/);
+  assert.equal(el('confirm').disabled, true);
+});
+
+test('서버 절대 경로나 임의 오류 문구는 카드에 표시하지 않는다', async () => {
+  const {app, el} = setup();
+  for (const detail of ['private detail', 'PDF 파일을 찾을 수 없습니다. /private/tmp/a.pdf에 파일을 복사한 뒤 다시 시도하세요.']) {
+    await app.ontoolresult({isError: true, content: [{type: 'text', text: 'SOURCE_NOT_FOUND: ' + detail}]});
+    assert.match(el('status').textContent, /설정된 import 폴더/);
+    assert.doesNotMatch(el('status').textContent, /private/);
+  }
 });
