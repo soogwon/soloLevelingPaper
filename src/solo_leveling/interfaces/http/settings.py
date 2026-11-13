@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from os import environ
+from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlsplit
 
@@ -84,7 +85,7 @@ def load_http_settings(source: Mapping[str, str] | None = None) -> HttpSettings:
     """프로세스 환경 또는 전달된 매핑에서 HTTP 설정을 구성한다."""
 
     values = environ if source is None else source
-    raw_port = values.get("API_PORT", "8000")
+    raw_port = values.get("API_PORT") or values.get("PORT", "8000")
     try:
         port = int(raw_port)
     except ValueError as exc:
@@ -94,6 +95,23 @@ def load_http_settings(source: Mapping[str, str] | None = None) -> HttpSettings:
         host=values.get("API_HOST", "127.0.0.1"),
         port=port,
     )
+
+
+def load_web_static_root(source: Mapping[str, str] | None = None) -> Path | None:
+    """같은 origin에서 제공할 외부 사이트 디렉터리를 읽고 검증한다."""
+
+    values = environ if source is None else source
+    raw = values.get("WEB_STATIC_ROOT", "").strip()
+    if not raw:
+        return None
+    root = Path(raw)
+    if not root.is_absolute():
+        raise ValueError("WEB_STATIC_ROOT는 절대 경로여야 합니다.")
+    if not root.is_dir():
+        raise ValueError("WEB_STATIC_ROOT 디렉터리를 찾을 수 없습니다.")
+    if not (root / "index.html").is_file():
+        raise ValueError("WEB_STATIC_ROOT에 index.html이 필요합니다.")
+    return root
 
 
 def load_oidc_settings(source: Mapping[str, str] | None = None) -> OidcSettings | None:
