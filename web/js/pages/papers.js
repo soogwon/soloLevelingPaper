@@ -12,10 +12,15 @@ export function paperRow(p) {
     record: p.selected_learning_record_id,
     version: p.selected_version_id,
   });
-  let line;
-  if (p.last_position && formatPosition(p.last_position)) line = `${formatPosition(p.last_position)} · 마지막 학습 ${formatDate(p.last_studied_at)}`;
-  else if (p.last_studied_at) line = `학습 위치가 저장되지 않았어요 · 마지막 학습 ${formatDate(p.last_studied_at)}`;
-  else line = '아직 저장된 학습 기록이 없어요';
+  const position = formatPosition(p.last_position);
+  const date = formatDate(p.last_studied_at);
+  let line = position;
+  if (!line) {
+    if (date) line = '학습 위치가 저장되지 않았어요';
+    else if (p.selected_learning_record_id) line = '아직 저장된 학습 위치가 없어요';
+    else line = '아직 저장된 학습 기록이 없어요';
+  }
+  if (date) line += ` · 마지막 학습 ${date}`;
 
   return html`<a class="row" href="${href}">
     <span class="row-icon">${icons.file()}</span>

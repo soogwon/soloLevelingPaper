@@ -117,7 +117,11 @@ export function formatPosition(position) {
   if (position.pdf_page !== null && position.pdf_page !== undefined) out.push(`PDF ${position.pdf_page}페이지`);
   const section = [position.section_number ? `${position.section_number}절` : null, position.section_title].filter(Boolean).join(' ');
   if (section) out.push(section);
-  return out.length ? out.join(' · ') : null;
+  if (out.length) return out.join(' · ');
+  if (position.printed_page_label) return `인쇄 페이지 ${position.printed_page_label}`;
+  if (position.section_id) return `섹션 ${position.section_id}`;
+  if (position.chunk_id) return `청크 ${position.chunk_id}`;
+  return null;
 }
 
 export const SUMMARY_KINDS = [
