@@ -17,7 +17,10 @@ Idempotency-Key: <stable operation key>
 
 같은 멱등 키에 다른 payload를 보내면 `409 idempotency_conflict`로 거부한다. 다른 사용자는 같은 source/local ID 또는 같은 멱등 키를 사용해도 별도 범위에 저장된다. 제목이나 저자만 같다는 이유로 자동 병합하지 않는다.
 
-현재 API는 최초 등록만 수행하며 기존 논문의 메타데이터를 자동 갱신하지 않는다. 수정은 서버 revision을 조건으로 검사하는 별도 API에서 구현한다.
+등록 제목이 비어 있으면 로컬의 최신 원본 파일명을 제목 fallback으로 전송한다. 이미 등록된 서버 논문의
+제목이 NULL인 경우에는 이후의 새 동기화 작업이 이 fallback 제목만 채우고 revision을 증가시킨다.
+기존에 값이 있는 제목이나 다른 메타데이터는 등록 API가 자동으로 덮어쓰지 않는다. 일반적인 수정은
+서버 revision을 조건으로 검사하는 별도 API에서 구현한다.
 
 로컬 세로 조각은 SQLite의 `server_sync_consents`, `sync_outbox`,
 `server_object_mappings`를 사용한다. 명시적인 논문별 승인으로 작업을 만든 뒤

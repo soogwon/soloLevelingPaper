@@ -122,6 +122,27 @@ def test_preview_does_not_create_server_identity(database):
         assert conn.execute("SELECT count(*) FROM server_sync_identity").fetchone()[0] == 0
 
 
+def test_missing_title_falls_back_to_latest_original_filename(database):
+    with get_connection(database) as conn:
+        conn.execute("UPDATE papers SET title=NULL WHERE paper_id='paper-local-1'")
+        conn.execute("INSERT INTO paper_versions VALUES (?,?,?,?,?,?)", (
+            "version-old", "paper-local-1", "hash-old", "/private/old.pdf", "old.pdf",
+            "2026-11-01T00:00:00Z"))
+        conn.execute("INSERT INTO paper_versions VALUES (?,?,?,?,?,?)", (
+            "version-new", "paper-local-1", "hash-new", r"C:\private\attention.pdf",
+            r"papers\attention is all you need.pdf", "2026-11-02T00:00:00Z"))
+    client = Client()
+    service = PaperMetadataSyncService(database, client, now=lambda: NOW)
+
+    preview = service.preview("paper-local-1")
+    operation = service.grant_and_queue(
+        "paper-local-1", "paper-sync-v1", preview=preview).operation_id
+    service.sync(operation)
+
+    assert preview.title == "attention is all you need.pdf"
+    assert client.calls[0][2]["json"]["title"] == "attention is all you need.pdf"
+
+
 def test_caller_supplied_operation_id_is_persisted_for_response_recovery(database):
     operation_id = "20000000-0000-0000-0000-000000000002"
     service = PaperMetadataSyncService(database, Client(), now=lambda: NOW)

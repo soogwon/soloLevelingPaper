@@ -131,13 +131,13 @@ class PaperMetadataSyncService:
         conn = get_connection(self._db_path)
         try:
             conn.execute("BEGIN")
-            row = conn.execute("SELECT paper_id, title, created_at FROM papers WHERE paper_id=?", (paper_id,)).fetchone()
+            row = _paper_row(conn, paper_id)
             if row is None:
                 raise KeyError("논문을 찾을 수 없습니다.")
             records = _learning_payloads(conn, paper_id, "")
             summaries = _summary_payloads(conn, paper_id, "")
             return PaperSyncPreview(
-                account_id, row["paper_id"], row["title"], row["created_at"],
+                account_id, row["paper_id"], _effective_title(row), row["created_at"],
                 len(records), _latest_timestamp(item["last_studied_at"] for item in records),
                 _learning_hash(records),
                 len(summaries), _summary_hash(summaries),
@@ -558,13 +558,35 @@ def _source_instance_id(conn: sqlite3.Connection) -> str:
 
 
 def _paper_payload(conn: sqlite3.Connection, paper_id: str, source_id: str) -> dict[str, Any]:
-    row = conn.execute("SELECT paper_id, title, created_at FROM papers WHERE paper_id=?", (paper_id,)).fetchone()
+    row = _paper_row(conn, paper_id)
     if row is None:
         raise KeyError("논문을 찾을 수 없습니다.")
     return {
-        "source_instance_id": source_id, "local_paper_id": row["paper_id"], "title": row["title"],
+        "source_instance_id": source_id, "local_paper_id": row["paper_id"], "title": _effective_title(row),
         "authors": None, "publication_year": None, "original_created_at": row["created_at"],
     }
+
+
+def _paper_row(conn: sqlite3.Connection, paper_id: str):
+    return conn.execute(
+        """SELECT p.paper_id, p.title, p.created_at,
+                  (SELECT v.original_filename FROM paper_versions v
+                   WHERE v.paper_id=p.paper_id
+                   ORDER BY v.created_at DESC, v.version_id DESC LIMIT 1) AS original_filename
+           FROM papers p WHERE p.paper_id=?""",
+        (paper_id,),
+    ).fetchone()
+
+
+def _effective_title(row) -> str | None:
+    title = row["title"]
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    if row["original_filename"] is None:
+        return None
+    raw_name = str(row["original_filename"])
+    file_name = PurePosixPath(PureWindowsPath(raw_name).name).name.strip()
+    return file_name or None
 
 
 def _learning_hash(records) -> str | None:
