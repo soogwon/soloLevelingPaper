@@ -64,7 +64,8 @@ export async function request(method, path, { query, body, idempotencyKey } = {}
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    const e = data?.error ?? {};
+    // 현재 FastAPI는 { detail: { code } }, 향후 공통 오류 envelope는 { error: {...} }를 쓴다.
+    const e = data?.error ?? data?.detail ?? {};
     throw new ApiError({
       status: response.status,
       code: e.code ?? `http_${response.status}`,

@@ -1,0 +1,8 @@
+{
+  "name": "solo-leveling-external-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}
