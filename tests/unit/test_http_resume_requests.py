@@ -159,3 +159,24 @@ def test_store_rejects_expired_code_without_changing_learning_state():
 
     assert len(store._pool.conn.calls) == 1
     assert store._pool.conn.calls[0][0].lstrip().startswith("SELECT")
+
+
+@pytest.mark.parametrize("same_payload", [True, False])
+def test_store_handles_concurrent_idempotency_winner(same_payload):
+    from solo_leveling.interfaces.http.resume_requests import _payload_hash
+
+    winner = {
+        "payload_hash": _payload_hash(PAPER, "v1" if same_payload else "v2", RECORD, None),
+        "resume_request_id": "winner", "code": "winning_code",
+        "expires_at": datetime.now(timezone.utc), "prompt_text": "prompt",
+        "status": "created", "reason": None,
+    }
+    pool = Pool([None, {"file_name": "paper.pdf"}, winner])
+    store = PostgresResumeRequestStore(pool)
+    args = dict(paper_id=PAPER, version_id="v1", learning_record_id=RECORD, annotation_id=None)
+    if same_payload:
+        assert store.create("user-1", "resume-request-0001", **args).code == "winning_code"
+    else:
+        with pytest.raises(ResumeRequestConflict):
+            store.create("user-1", "resume-request-0001", **args)
+    assert "ON CONFLICT (owner_user_id, idempotency_key) DO NOTHING" in pool.conn.calls[2][0]

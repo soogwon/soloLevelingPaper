@@ -542,6 +542,7 @@ def test_web_detail_serializes_synced_summary():
 
     result = route(UUID(PAPER_ID), AuthenticatedPrincipal("web-user", "web_session"), None, None)
 
+    assert (result.resume.available, result.resume.reason) == (False, "version_missing")
     assert result.summary["author_type"] == "mcp"
     assert result.summary["items"][0]["evidence_ids"] == ["e1"]
 

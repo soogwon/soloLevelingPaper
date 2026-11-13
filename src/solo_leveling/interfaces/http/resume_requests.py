@@ -83,17 +83,23 @@ class PostgresResumeRequestStore:
         prompt = f"Solo Leveling에 저장된 학습 기록을 이어서 공부할게. 이어하기 코드: {code}"
         try:
             with _connection(self._pool) as conn:
-                previous = conn.execute(
-                    """SELECT payload_hash, resume_request_id, code, expires_at, prompt_text,
+                def previous_request():
+                    return conn.execute(
+                        """SELECT payload_hash, resume_request_id, code, expires_at, prompt_text,
                               status, reason
                        FROM server_resume_requests
-                       WHERE owner_user_id=%s AND idempotency_key=%s FOR UPDATE""",
-                    (owner_user_id, idempotency_key),
-                ).fetchone()
-                if previous is not None:
-                    if bytes(previous["payload_hash"]) != payload_hash:
+                       WHERE owner_user_id=%s AND idempotency_key=%s""",
+                        (owner_user_id, idempotency_key),
+                    ).fetchone()
+
+                def replay(row):
+                    if bytes(row["payload_hash"]) != payload_hash:
                         raise ResumeRequestConflict
-                    return _result(previous)
+                    return _result(row)
+
+                previous = previous_request()
+                if previous is not None:
+                    return replay(previous)
                 record = conn.execute(
                     """SELECT p.title, r.last_position, r.file_name
                        FROM server_learning_records r
@@ -113,15 +119,19 @@ class PostgresResumeRequestStore:
                     ).fetchone()
                     if annotation is None:
                         raise ResumeRequestNotFound
-                conn.execute(
+                inserted = conn.execute(
                     """INSERT INTO server_resume_requests
                        (resume_request_id, owner_user_id, idempotency_key, payload_hash, code,
                         paper_id, version_id, learning_record_id, annotation_id, expires_at,
                         prompt_text, status, reason)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'created','local_client_required')""",
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'created','local_client_required')
+                       ON CONFLICT (owner_user_id, idempotency_key) DO NOTHING
+                       RETURNING resume_request_id""",
                     (request_id, owner_user_id, idempotency_key, payload_hash, code, paper_id,
                      version_id, learning_record_id, annotation_id, expires_at, prompt),
-                )
+                ).fetchone()
+                if inserted is None:
+                    return replay(previous_request())
         except (ResumeRequestConflict, ResumeRequestNotFound):
             raise
         except Exception as exc:

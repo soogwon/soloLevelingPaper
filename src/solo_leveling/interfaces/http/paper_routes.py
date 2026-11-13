@@ -545,6 +545,15 @@ def create_web_paper_router(require_principal: Any, store: PaperStore):
         published = ({"year": item.publication_year, "month": None, "day": None, "precision": "year"}
                      if item.publication_year is not None else None)
         has_record = item.selected_learning_record_id is not None
+        if not has_record:
+            resume = AvailabilityView(available=False, reason="learning_record_missing",
+                                      message="저장된 학습 기록이 없어요.")
+        elif not item.selected_version_id:
+            resume = AvailabilityView(available=False, reason="version_missing",
+                                      message="학습 기록에 원문 버전이 없어요.")
+        else:
+            resume = AvailabilityView(available=True, reason="resume_code_available",
+                                      message="이어하기 코드를 만든 뒤 연결된 로컬 MCP에서 준비 상태를 확인하세요.")
         return PaperDetailView(
             paper_id=item.paper_id, title=item.title,
             authors=list(item.authors) if item.authors else None, file_name=item.file_name,
@@ -564,12 +573,7 @@ def create_web_paper_router(require_principal: Any, store: PaperStore):
                 available=False, reason="not_uploaded",
                 message="이 원문 버전의 PDF가 서버에 업로드되지 않았어요.",
             ),
-            resume=AvailabilityView(
-                available=has_record,
-                reason="resume_code_available" if has_record else "learning_record_missing",
-                message=("이어하기 코드를 만든 뒤 연결된 로컬 MCP에서 준비 상태를 확인하세요."
-                         if has_record else "저장된 학습 기록이 없어요."),
-            ),
+            resume=resume,
         )
 
     return router
