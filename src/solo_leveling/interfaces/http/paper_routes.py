@@ -565,9 +565,9 @@ def create_web_paper_router(require_principal: Any, store: PaperStore):
                 message="이 원문 버전의 PDF가 서버에 업로드되지 않았어요.",
             ),
             resume=AvailabilityView(
-                available=False,
-                reason="local_client_required" if has_record else "learning_record_missing",
-                message=("연결된 로컬 MCP에서 학습 준비 상태를 확인해야 해요."
+                available=has_record,
+                reason="resume_code_available" if has_record else "learning_record_missing",
+                message=("이어하기 코드를 만든 뒤 연결된 로컬 MCP에서 준비 상태를 확인하세요."
                          if has_record else "저장된 학습 기록이 없어요."),
             ),
         )

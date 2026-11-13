@@ -523,7 +523,7 @@ def test_web_detail_uses_session_owner_and_reports_unavailable_dependencies():
     })]
     assert result.summary is None
     assert (result.file_access.available, result.file_access.reason) == (False, "not_uploaded")
-    assert (result.resume.available, result.resume.reason) == (False, "local_client_required")
+    assert (result.resume.available, result.resume.reason) == (True, "resume_code_available")
 
 
 def test_web_detail_serializes_synced_summary():
