@@ -645,3 +645,26 @@ def test_summary_rejects_missing_record_or_changed_version_before_write(record, 
     with pytest.raises(PaperNotFound if error == "missing" else SummaryConflict):
         PostgresPaperStore(pool).upsert_summary("user-1", PAPER_ID, item)
     assert len(pool.conn.calls) == 1
+
+
+@pytest.mark.parametrize('change,expected', [
+    ({}, 200), ({'end_offset': 2}, 422), ({'translation_revision_id': None}, 422),
+    ({'quote_snapshot': 'x' * 2001, 'end_offset': 2001}, 422),
+])
+def test_translation_annotation_http_contract(change, expected):
+    store = MemoryStore()
+    device = AuthenticatedPrincipal("user-1", "device", SOURCE_ID)
+    app = create_app(token_verifier=SimpleNamespace(verify=lambda _: device),
+                     device_registry=SimpleNamespace(is_active=lambda *_: True), paper_store=store)
+    segment = dict(chunk_id="c", parse_revision_id="p", translation_revision_id="t",
+                   target="translation", start_offset=0, end_offset=1, quote_snapshot="글") | change
+    body = dict(source_instance_id=SOURCE_ID, selected_version_id="v1", kind="highlight",
+                segments=[segment], original_created_at=NOW.isoformat(), source_updated_at=NOW.isoformat())
+    with TestClient(app) as client:
+        result = client.put(f"/v1/mcp/papers/{PAPER_ID}/learning-records/r/annotations/a",
+                            headers={"Authorization": "Bearer test"}, json=body)
+    assert result.status_code == expected
+    if expected == 200:
+        assert store.calls[0][2].segments == (segment,)
+    else:
+        assert not store.calls

@@ -124,6 +124,8 @@ def test_annotation_syncs_after_learning_record_without_local_path(database):
     ]
     body = client.calls[-1][2]["json"]
     assert body["body"] == "중요" and body["segments"][0]["quote_snapshot"] == "text"
+    assert body["segments"][0]["parse_revision_id"] == "parse-1"
+    assert body["segments"][0]["translation_revision_id"] is None
     assert "original_filename" not in body and r"C:\private" not in str(body)
 
 

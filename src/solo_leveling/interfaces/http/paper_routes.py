@@ -8,6 +8,10 @@ from uuid import UUID
 
 from .auth import AuthenticatedPrincipal
 from solo_leveling.domain.learning_progress import LEARNING_STEPS
+from solo_leveling.domain.annotation import (
+    MAX_BODY_LENGTH, MAX_QUOTE_LENGTH, MAX_SEGMENTS, SegmentInput,
+    validate_annotation_fields, validate_segments,
+)
 
 from .papers import (
     AnnotationConflict, AnnotationMetadata, IdempotencyConflict, LearningRecordConflict,
@@ -215,16 +219,12 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         model_config = ConfigDict(extra="forbid")
 
         chunk_id: str = Field(min_length=1, max_length=128)
+        parse_revision_id: str = Field(min_length=1, max_length=128)
+        translation_revision_id: str | None = Field(default=None, min_length=1, max_length=128)
         target: Literal["original", "translation"]
-        start_offset: int = Field(ge=0)
-        end_offset: int = Field(gt=0)
-        quote_snapshot: str = Field(min_length=1, max_length=20000)
-
-        @model_validator(mode="after")
-        def validate_offsets(self):
-            if self.end_offset <= self.start_offset:
-                raise ValueError("선택 구간 끝은 시작보다 커야 합니다.")
-            return self
+        start_offset: int = Field(strict=True, ge=0)
+        end_offset: int = Field(strict=True, gt=0)
+        quote_snapshot: str = Field(min_length=1, max_length=MAX_QUOTE_LENGTH)
 
     class AnnotationUpsert(BaseModel):
         model_config = ConfigDict(extra="forbid")
@@ -232,9 +232,9 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         source_instance_id: UUID
         selected_version_id: str | None = Field(default=None, max_length=128)
         kind: Literal["note", "highlight"]
-        body: str = Field(default="", max_length=100000)
+        body: str = Field(default="", max_length=MAX_BODY_LENGTH)
         step: str | None = Field(default=None, max_length=128)
-        segments: list[AnnotationSegmentUpsert] = Field(default_factory=list, max_length=100)
+        segments: list[AnnotationSegmentUpsert] = Field(default_factory=list, max_length=MAX_SEGMENTS)
         original_created_at: datetime
         source_updated_at: datetime
 
@@ -251,10 +251,9 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         def validate_annotation(self):
             if self.original_created_at > self.source_updated_at:
                 raise ValueError("메모 생성 시각은 갱신 시각보다 늦을 수 없습니다.")
-            if self.kind == "note" and not self.body.strip():
-                raise ValueError("메모 본문이 필요합니다.")
-            if self.kind == "highlight" and not self.segments:
-                raise ValueError("하이라이트 선택 구간이 필요합니다.")
+            validate_annotation_fields(self.kind, self.body, self.step, len(self.segments))
+            validate_segments([SegmentInput(**segment.model_dump(exclude={"parse_revision_id"}))
+                               for segment in self.segments])
             return self
 
     class AnnotationView(BaseModel):

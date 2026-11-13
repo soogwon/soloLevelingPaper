@@ -351,7 +351,9 @@ class PostgresPaperStore:
                     (owner_user_id, metadata.source_instance_id,
                      metadata.local_learning_record_id, paper_id),
                 ).fetchone()
-                if row is not None and row["source_updated_at"] == metadata.source_updated_at:
+                if row is not None:
+                    if row["source_updated_at"] != metadata.source_updated_at:
+                        raise AnnotationConflict
                     fields = ("selected_version_id", "file_name", "last_position", "last_studied_at", "reading_status")
                     if any(row[field] != getattr(metadata, field) for field in fields):
                         raise LearningRecordConflict
@@ -409,7 +411,9 @@ class PostgresPaperStore:
                                         or row["selected_version_id"] != metadata.selected_version_id
                                         or row["local_learning_record_id"] != metadata.local_learning_record_id):
                     raise SummaryConflict
-                if row is not None and row["source_updated_at"] == metadata.source_updated_at:
+                if row is not None:
+                    if row["source_updated_at"] != metadata.source_updated_at:
+                        raise AnnotationConflict
                     expected = (metadata.scope, metadata.author_type, list(metadata.items),
                                 metadata.original_created_at)
                     actual = (row["scope"], row["author_type"], row["items"], row["original_created_at"])
@@ -446,6 +450,7 @@ class PostgresPaperStore:
                    WHERE excluded.paper_id=server_annotations.paper_id
                      AND excluded.learning_record_id=server_annotations.learning_record_id
                      AND excluded.selected_version_id IS NOT DISTINCT FROM server_annotations.selected_version_id
+                     AND excluded.original_created_at=server_annotations.original_created_at
                      AND excluded.source_updated_at>server_annotations.source_updated_at
                    RETURNING annotation_id, revision, updated_at""",
                 (str(uuid4()), owner_user_id, paper_id, record["learning_record_id"],
@@ -470,7 +475,9 @@ class PostgresPaperStore:
                                         or row["selected_version_id"] != metadata.selected_version_id
                                         or row["local_learning_record_id"] != metadata.local_learning_record_id):
                     raise AnnotationConflict
-                if row is not None and row["source_updated_at"] == metadata.source_updated_at:
+                if row is not None:
+                    if row["source_updated_at"] != metadata.source_updated_at:
+                        raise AnnotationConflict
                     expected = (metadata.kind, metadata.body, metadata.step,
                                 list(metadata.segments), metadata.original_created_at)
                     actual = (row["kind"], row["body"], row["step"], row["segments"],

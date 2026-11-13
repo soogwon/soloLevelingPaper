@@ -113,7 +113,7 @@ def register_server_sync(server, service: ServerSyncService) -> None:
     )
     async def sync_paper_to_server(paper_id: str, operation_id: str,
                                    confirmation_token: str) -> dict[str, Any]:
-        """확인 카드에서 승인한 논문의 메타데이터, 학습 기록과 저장 요약을 서버로 전송합니다."""
+        """확인 카드에서 승인한 논문의 메타데이터, 학습 기록, 저장 요약과 메모·하이라이트를 서버로 전송합니다."""
         preview = gate.consume(confirmation_token, paper_id, operation_id)
         try:
             queued = await anyio.to_thread.run_sync(

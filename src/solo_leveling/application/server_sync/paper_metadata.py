@@ -914,7 +914,7 @@ def _annotation_payload(conn: sqlite3.Connection, paper_id: str, annotation_id: 
     if row is None:
         return None
     segments = [dict(item) for item in conn.execute(
-        """SELECT chunk_id, target, start_offset, end_offset, quote_snapshot
+        """SELECT chunk_id, parse_revision_id, translation_revision_id, target, start_offset, end_offset, quote_snapshot
            FROM annotation_segments WHERE annotation_id=? ORDER BY position""", (annotation_id,),
     ).fetchall()]
     return {
