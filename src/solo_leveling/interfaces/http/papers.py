@@ -2,7 +2,7 @@
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
 from typing import Any, Protocol
@@ -537,7 +537,7 @@ class PostgresPaperStore:
                          start_date: date | None, end_date: date | None, query: str | None,
                          sort: str, paper_id: str | None, version_id: str | None,
                          page: int, limit: int) -> AnnotationPage:
-        if sort not in ("recent", "oldest"):
+        if sort not in ("newest", "oldest"):
             raise ValueError("지원하지 않는 메모 정렬입니다.")
         conditions = ["a.owner_user_id=%s"]
         params: list[Any] = [owner_user_id]
@@ -545,11 +545,11 @@ class PostgresPaperStore:
             conditions.append("a.kind=%s")
             params.append(kind)
         if start_date is not None:
-            conditions.append("a.original_created_at >= %s")
-            params.append(datetime.combine(start_date, time.min, timezone.utc))
+            conditions.append("a.original_created_at >= (%s::date::timestamp AT TIME ZONE 'Asia/Seoul')")
+            params.append(start_date)
         if end_date is not None:
-            conditions.append("a.original_created_at < %s")
-            params.append(datetime.combine(end_date + timedelta(days=1), time.min, timezone.utc))
+            conditions.append("a.original_created_at < ((%s::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul')")
+            params.append(end_date)
         if paper_id is not None:
             conditions.append("a.paper_id=%s")
             params.append(paper_id)
@@ -574,14 +574,14 @@ class PostgresPaperStore:
             ).fetchone()["total_count"])
             total_pages = (total + limit - 1) // limit
             counts = conn.execute(
-                f"""SELECT (a.original_created_at AT TIME ZONE 'UTC')::date AS created_date,
+                f"""SELECT (a.original_created_at AT TIME ZONE 'Asia/Seoul')::date AS created_date,
                            count(*) AS item_count {base} WHERE {where}
                     GROUP BY created_date ORDER BY created_date {direction}""", tuple(params),
             ).fetchall()
             rows = [] if page > total_pages else conn.execute(
                 f"""SELECT a.annotation_id, a.paper_id, p.title AS paper_title,
                            a.learning_record_id, a.selected_version_id, a.kind, a.body, a.step,
-                           a.segments, a.original_created_at, a.updated_at
+                           a.segments, a.original_created_at, a.source_updated_at AS updated_at
                     {base} WHERE {where}
                     ORDER BY a.original_created_at {direction}, a.annotation_id {direction}
                     LIMIT %s OFFSET %s""", (*params, limit, (page - 1) * limit),
@@ -598,7 +598,7 @@ class PostgresPaperStore:
             row = conn.execute(
                 """SELECT a.annotation_id, a.paper_id, p.title AS paper_title,
                           a.learning_record_id, a.selected_version_id, a.kind, a.body, a.step,
-                          a.segments, a.original_created_at, a.updated_at
+                          a.segments, a.original_created_at, a.source_updated_at AS updated_at
                    FROM server_annotations a JOIN server_papers p ON p.paper_id=a.paper_id
                    WHERE a.owner_user_id=%s AND a.annotation_id=%s""",
                 (owner_user_id, annotation_id),

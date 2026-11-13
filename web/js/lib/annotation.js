@@ -10,6 +10,9 @@ function firstPosition(annotation) {
   for (const s of annotation.segments ?? []) {
     const text = formatPosition(s.position);
     if (text) return text;
+    if (s.chunk_id && Number.isInteger(s.start_offset) && Number.isInteger(s.end_offset)) {
+      return `청크 ${s.chunk_id} · 문자 구간 [${s.start_offset}, ${s.end_offset})`;
+    }
   }
   return null;
 }

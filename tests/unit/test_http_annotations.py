@@ -80,7 +80,7 @@ def test_postgres_list_uses_owner_scope_full_date_counts_and_stable_order():
 
     page = PostgresPaperStore(pool).list_annotations(
         "user-1", kind="highlight", start_date=date(2026, 11, 14),
-        end_date=date(2026, 11, 14), query="문장", sort="recent", paper_id=PAPER_ID,
+        end_date=date(2026, 11, 14), query="문장", sort="newest", paper_id=PAPER_ID,
         version_id="version-1", page=2, limit=20,
     )
 
@@ -143,10 +143,10 @@ def test_web_routes_serialize_translation_segment_as_unverified():
     listing, detail = routes(Store())
     principal = AuthenticatedPrincipal("user-1", "web_session", None)
 
-    page = listing(principal, None, None, None, None, "recent", None, None, 1, 20)
+    page = listing(principal, None, None, None, None, "newest", None, None, 1, 20)
     item = detail(UUID(ANNOTATION_ID), principal)
 
-    assert page.total_count == 1 and page.date_counts[0].count == 1
+    assert page.total_count == 1 and page.date_counts == {date(2026, 11, 14): 1}
     assert item.segments[0].target == "translation"
     assert item.segments[0].translation_revision_id == "translation-1"
     assert item.segments[0].text_match_verified is False
@@ -157,7 +157,7 @@ def test_device_credentials_cannot_read_web_annotations():
     principal = AuthenticatedPrincipal("user-1", "device", "device-1")
 
     with pytest.raises(HTTPException) as error:
-        listing(principal, None, None, None, None, "recent", None, None, 1, 20)
+        listing(principal, None, None, None, None, "newest", None, None, 1, 20)
 
     assert error.value.status_code == 403
 
@@ -168,7 +168,7 @@ def test_invalid_date_range_is_rejected_before_store_access():
 
     with pytest.raises(HTTPException) as error:
         listing(principal, None, date(2026, 11, 15), date(2026, 11, 14),
-                None, "recent", None, None, 1, 20)
+                None, "newest", None, None, 1, 20)
 
     assert error.value.status_code == 422
     assert error.value.detail == {"code": "invalid_annotation_date_range"}
@@ -183,3 +183,26 @@ def test_missing_annotation_returns_fixed_404_code():
 
     assert error.value.status_code == 404
     assert error.value.detail == {"code": "annotation_not_found"}
+
+
+def test_web_list_query_and_card_fields():
+    from fastapi.testclient import TestClient
+
+    class CaptureStore(Store):
+        def list_annotations(self, owner_user_id, **filters):
+            assert filters["start_date"] == filters["end_date"] == date(2026, 11, 14)
+            assert filters["sort"] == "newest"
+            return super().list_annotations(owner_user_id, **filters)
+
+    principal = AuthenticatedPrincipal("user-1", "web_session")
+    app = create_app(paper_store=CaptureStore(), token_verifier=SimpleNamespace(verify=lambda _: principal))
+    with TestClient(app) as client:
+        result = client.get("/v1/annotations?from=2026-11-14&to=2026-11-14&sort=newest",
+                            headers={"Authorization": "Bearer test"})
+    assert result.status_code == 200
+    page = result.json()
+    assert page["date_counts"] == {"2026-11-14": 1}
+    item, = page["items"]
+    assert item["paper"] == {"paper_id": PAPER_ID, "title": "Paper"}
+    assert item["version_id"] == "version-1"
+    assert item["segments"][0]["quote"] == row()["segments"][0]["quote_snapshot"]

@@ -19,15 +19,18 @@ def create_annotation_router(require_principal: Any, store: PaperStore):
         translation_revision_id: str | None
         start_offset: int
         end_offset: int
-        quote_snapshot: str
+        quote: str
         text_match_verified: bool = False
+
+    class PaperRef(BaseModel):
+        paper_id: UUID
+        title: str | None
 
     class AnnotationView(BaseModel):
         annotation_id: UUID
-        paper_id: UUID
-        paper_title: str | None
+        paper: PaperRef
         learning_record_id: UUID
-        selected_version_id: str | None
+        version_id: str | None
         kind: Literal["note", "highlight"]
         body: str
         step: str | None
@@ -35,13 +38,9 @@ def create_annotation_router(require_principal: Any, store: PaperStore):
         created_at: datetime
         updated_at: datetime
 
-    class DateCountView(BaseModel):
-        date: date
-        count: int
-
     class AnnotationPageView(BaseModel):
         items: list[AnnotationView]
-        date_counts: list[DateCountView]
+        date_counts: dict[date, int]
         page: int
         page_size: int
         total_count: int
@@ -63,12 +62,12 @@ def create_annotation_router(require_principal: Any, store: PaperStore):
                 target=segment["target"],
                 translation_revision_id=segment.get("translation_revision_id"),
                 start_offset=segment["start_offset"], end_offset=segment["end_offset"],
-                quote_snapshot=segment["quote_snapshot"], text_match_verified=False,
+                quote=segment["quote_snapshot"], text_match_verified=False,
             ))
         return AnnotationView(
-            annotation_id=item.annotation_id, paper_id=item.paper_id,
-            paper_title=item.paper_title, learning_record_id=item.learning_record_id,
-            selected_version_id=item.selected_version_id, kind=item.kind, body=item.body,
+            annotation_id=item.annotation_id, paper=PaperRef(paper_id=item.paper_id, title=item.paper_title),
+            learning_record_id=item.learning_record_id,
+            version_id=item.selected_version_id, kind=item.kind, body=item.body,
             step=item.step, segments=segments, created_at=item.created_at,
             updated_at=item.updated_at,
         )
@@ -77,10 +76,10 @@ def create_annotation_router(require_principal: Any, store: PaperStore):
     def list_annotations(
         principal: Principal,
         kind: Literal["note", "highlight"] | None = None,
-        start_date: date | None = None,
-        end_date: date | None = None,
+        start_date: Annotated[date | None, Query(alias="from")] = None,
+        end_date: Annotated[date | None, Query(alias="to")] = None,
         q: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
-        sort: Literal["recent", "oldest"] = "recent",
+        sort: Literal["newest", "oldest"] = "newest",
         paper_id: UUID | None = None,
         version_id: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
         page: Annotated[int, Query(ge=1)] = 1,
@@ -88,8 +87,6 @@ def create_annotation_router(require_principal: Any, store: PaperStore):
     ):
         require_web(principal)
         if start_date is not None and end_date is not None and start_date > end_date:
-            raise HTTPException(status_code=422, detail={"code": "invalid_annotation_date_range"})
-        if end_date == date.max:
             raise HTTPException(status_code=422, detail={"code": "invalid_annotation_date_range"})
         normalized_query = q.strip() if q is not None else None
         if q is not None and (not normalized_query or "\x00" in q):
@@ -110,8 +107,7 @@ def create_annotation_router(require_principal: Any, store: PaperStore):
                                 detail={"code": "annotation_store_unavailable"}) from None
         return AnnotationPageView(
             items=[view(item) for item in result.items],
-            date_counts=[DateCountView(date=item.date, count=item.count)
-                         for item in result.date_counts],
+            date_counts={item.date: item.count for item in result.date_counts},
             page=result.page, page_size=result.page_size,
             total_count=result.total_count, total_pages=result.total_pages,
         )
