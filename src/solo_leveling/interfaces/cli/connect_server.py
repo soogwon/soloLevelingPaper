@@ -1,6 +1,7 @@
 """시스템 브라우저 PKCE 로그인으로 로컬 설치를 중앙 서버 기기에 연결한다."""
 
 import argparse
+import errno
 from base64 import urlsafe_b64encode
 from dataclasses import dataclass
 from hashlib import sha256
@@ -17,6 +18,10 @@ import webbrowser
 from solo_leveling.infrastructure.storage.server_credentials import KeyringCredentialStore, StoredDeviceCredentials
 
 
+class CallbackPortInUse(RuntimeError):
+    """등록된 로컬 콜백 포트를 다른 프로세스가 사용 중이다."""
+
+
 @dataclass(frozen=True)
 class ConnectSettings:
     authorization_url: str
@@ -25,6 +30,7 @@ class ConnectSettings:
     scopes: str
     server_url: str
     audience: str | None = None
+    redirect_port: int = 8765
 
     def __post_init__(self) -> None:
         for name, value in (("OIDC_AUTHORIZATION_URL", self.authorization_url),
@@ -38,6 +44,8 @@ class ConnectSettings:
             raise ValueError("OIDC client 설정이 비어 있습니다.")
         if "openid" not in self.scopes.split():
             raise ValueError("OIDC_CLIENT_SCOPES에는 openid가 필요합니다.")
+        if not 1 <= self.redirect_port <= 65535:
+            raise ValueError("OIDC_REDIRECT_PORT는 1에서 65535 사이여야 합니다.")
 
 
 def load_settings(source=None) -> ConnectSettings:
@@ -52,7 +60,8 @@ def load_settings(source=None) -> ConnectSettings:
         values["OIDC_CLIENT_ID"].strip(),
         values.get("OIDC_CLIENT_SCOPES", "openid profile").strip(),
         values["SERVER_API_URL"].strip().rstrip("/"),
-        values.get("OIDC_AUTHORIZATION_AUDIENCE", "").strip() or None,
+        values.get("OIDC_AUTHORIZATION_AUDIENCE", "").strip() or values.get("OIDC_AUDIENCE", "").strip() or None,
+        _redirect_port(values.get("OIDC_REDIRECT_PORT", "8765")),
     )
 
 
@@ -83,7 +92,15 @@ def connect(settings: ConnectSettings, display_name: str, session, credential_st
     state = token_urlsafe(32)
     callbacks: Queue[dict[str, list[str]]] = Queue()
     handler = _callback_handler(callbacks)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", settings.redirect_port), handler)
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE and getattr(exc, "winerror", None) != 10048:
+            raise
+        raise CallbackPortInUse(
+            f"콜백 포트 {settings.redirect_port}를 사용 중입니다. 사용 중인 프로그램을 종료하거나 "
+            "OIDC_REDIRECT_PORT와 인증 제공자에 등록한 콜백 포트를 함께 변경하세요."
+        ) from None
     server.timeout = 1
     redirect_uri = f"http://127.0.0.1:{server.server_port}/callback"
     try:
@@ -191,6 +208,13 @@ def _bearer_access_token(data):
     return _required_string(data, "access_token")
 
 
+def _redirect_port(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError("OIDC_REDIRECT_PORT는 정수여야 합니다.") from exc
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="중앙 서버 계정에 이 로컬 설치 연결")
     parser.add_argument("--device-name", required=True)
@@ -201,6 +225,9 @@ def main(argv=None):
         device_id = connect(load_settings(), args.device_name, requests.Session(), KeyringCredentialStore())
         print(f"서버 연결 완료: device_id={device_id}")
         return 0
+    except CallbackPortInUse as exc:
+        print(f"SERVER_CONNECT_FAILED: {exc}", file=sys.stderr)
+        return 1
     except Exception:
         print("SERVER_CONNECT_FAILED: 로그인·서버 설정·OS 자격 증명 저장소를 확인하세요.", file=sys.stderr)
         return 1

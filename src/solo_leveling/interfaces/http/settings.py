@@ -58,6 +58,7 @@ class WebAuthSettings:
     client_secret: str
     redirect_uri: str
     app_origin: str
+    audience: str
     scopes: str = "openid profile email"
 
     def __post_init__(self) -> None:
@@ -69,6 +70,8 @@ class WebAuthSettings:
             _validate_https_url(name, value)
         if not self.client_id.strip() or not self.client_secret.strip():
             raise ValueError("웹 OIDC client 설정이 비어 있습니다.")
+        if not self.audience.strip():
+            raise ValueError("웹 OIDC API audience가 비어 있습니다.")
         if "openid" not in self.scopes.split():
             raise ValueError("WEB_OIDC_SCOPES에는 openid가 필요합니다.")
         redirect = urlsplit(self.redirect_uri)
@@ -141,7 +144,14 @@ def load_web_auth_settings(source: Mapping[str, str] | None = None) -> WebAuthSe
         return None
     if not all(raw):
         raise ValueError("웹 OIDC와 WEB_APP_ORIGIN 설정을 모두 지정해야 합니다.")
-    return WebAuthSettings(*raw, values.get("WEB_OIDC_SCOPES", "openid profile email").strip())
+    audience = values.get("OIDC_AUDIENCE", "").strip()
+    if not audience:
+        raise ValueError("웹 OIDC에는 OIDC_AUDIENCE가 필요합니다.")
+    return WebAuthSettings(
+        *raw,
+        audience,
+        values.get("WEB_OIDC_SCOPES", "openid profile email").strip(),
+    )
 
 
 def _validate_https_url(name: str, value: str) -> None:
