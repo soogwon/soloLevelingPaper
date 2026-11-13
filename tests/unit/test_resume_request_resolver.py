@@ -53,7 +53,7 @@ def test_resolver_posts_code_and_returns_validated_selection():
     result = ResumeRequestResolver(client).resolve("resume_code")
     assert result["last_position"] == {"pdf_page": 3}
     assert client.calls == [(('POST', '/v1/mcp/resume-requests/resolve'), {
-        'json': {'code': 'resume_code'}, 'timeout': 15,
+        'json': {'code': 'resume_code'}, 'timeout': 15, 'expected_connection_id': None,
     })]
     assert response.closed
 
@@ -107,7 +107,7 @@ def test_resolver_reports_same_pc_file_without_claiming_search_ready(tmp_path):
     pdf.write_bytes(b"%PDF fixture")
     db = local_database(tmp_path, stored_path=pdf)
 
-    result = ResumeRequestResolver(Client(Response(200, payload())), str(db)).resolve("resume_code")
+    result = ResumeRequestResolver(Client(Response(200, payload())), str(db), tmp_path).resolve("resume_code")
 
     assert result["file_access_status"] == "local_file_ready"
     assert result["status"] == "prepared"
@@ -122,7 +122,7 @@ def test_resolver_reports_missing_mapping_on_a_different_pc(tmp_path):
     conn.commit()
     conn.close()
 
-    result = ResumeRequestResolver(Client(Response(200, payload())), str(db)).resolve("resume_code")
+    result = ResumeRequestResolver(Client(Response(200, payload())), str(db), tmp_path).resolve("resume_code")
 
     assert result["file_access_status"] == "local_mapping_missing"
     assert result["status"] == "action_required"
@@ -139,8 +139,39 @@ def test_resolver_reports_local_file_blockers(tmp_path, version_id, has_file, ex
         pdf.write_bytes(b"%PDF fixture")
     db = local_database(tmp_path, version_id=version_id, stored_path=pdf)
 
-    result = ResumeRequestResolver(Client(Response(200, payload())), str(db)).resolve("resume_code")
+    result = ResumeRequestResolver(Client(Response(200, payload())), str(db), tmp_path).resolve("resume_code")
 
     assert result["file_access_status"] == expected
     assert result["status"] == "action_required"
     assert result["reason"] == expected
+
+
+def test_relative_pdf_uses_configured_root_and_request_connection(tmp_path, monkeypatch):
+    class SwitchingClient(Client):
+        active = "device-account"
+
+        def connection_id(self):
+            return self.active
+
+        def request(self, *args, expected_connection_id, **kwargs):
+            assert expected_connection_id == self.active
+            self.active = "other-device"
+            return self.response
+
+    root = tmp_path / "pdfs"
+    root.mkdir()
+    (root / "paper.pdf").write_bytes(b"%PDF-1.7")
+    monkeypatch.chdir(tmp_path)
+    db = local_database(tmp_path, stored_path="paper.pdf")
+    result = ResumeRequestResolver(SwitchingClient(Response(200, payload())), str(db), root)
+    assert result.resolve("resume_code")["file_access_status"] == "local_file_ready"
+
+
+def test_file_outside_managed_root_is_unavailable(tmp_path):
+    root = tmp_path / "pdfs"
+    root.mkdir()
+    other = tmp_path / "paper.pdf"
+    other.write_bytes(b"%PDF-1.7")
+    db = local_database(tmp_path, stored_path=other)
+    resolver = ResumeRequestResolver(Client(Response(200, payload())), str(db), root)
+    assert resolver.resolve("resume_code")["file_access_status"] == "local_file_missing"
