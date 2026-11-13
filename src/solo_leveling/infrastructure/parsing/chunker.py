@@ -59,11 +59,15 @@ def _find_break_point(text: str, start: int, end: int, chunk_size: int) -> Optio
 
 
 def _find_next_boundary(text: str, pos: int, limit: int) -> int:
-    """pos 이후 가장 가까운 공백을 찾아 그 다음 위치(=새 단어 시작)를 반환한다.
+    """pos 이후 문장 시작을 우선하고, 없으면 가장 가까운 단어 시작을 반환한다.
 
-    limit 전에 공백을 못 찾으면(=공백 없는 긴 덩어리) pos를 그대로 반환해
+    overlap 범위에 문장 경계가 있으면 다음 청크가 문장 중간에서 시작하지 않게
+    그 경계를 사용한다. limit 전에 공백도 못 찾으면 pos를 그대로 반환해
     호출부가 기존처럼 그 자리에서 시작하게 한다(예외 규칙).
     """
+    sentence = _SENTENCE_END_RE.search(text, pos, limit)
+    if sentence:
+        return sentence.end()
     match = _WHITESPACE_RE.search(text, pos, limit)
     if match:
         return match.end()

@@ -225,6 +225,12 @@ def test_attention_pdf_splits_visualizations_from_references():
     assert (by_title['Attention Visualizations'].start_pdf_page,
             by_title['Attention Visualizations'].end_pdf_page) == (13, 15)
     assert all(not section.title.lower().startswith(('figure ', 'table ')) for section in sections)
+    by_page = {n: [c.original_text for c in chunks if c.pdf_page == n] for n in (5, 7, 15)}
+    assert any('dk = dv = dmodel/h = 64' in c for c in by_page[5])
+    assert any('β1 = 0.9, β2 = 0.98 and ϵ = 10−9' in c for c in by_page[7])
+    assert not any(c.original_text.startswith(('section, but no', 'model.')) for c in chunks)
+    assert 'Input-Input Layer5' not in pages[14].text
+    assert any('Figure 5:' in c for c in by_page[15])
     assert chunks
 
 
