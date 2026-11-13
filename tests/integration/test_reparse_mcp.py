@@ -24,11 +24,16 @@ def test_card_consent_restore_and_explicit_context_selection(data):
             token = preview.meta['confirmation_token']
             assert token not in str(preview.content)
             assert preview.structuredContent['status'] == 'AVAILABLE'
+            prepared = await client.call_tool('get_paper_reparse', args)
+            assert prepared.structuredContent['status'] == 'PREPARED'
+            missing = await client.call_tool('get_paper_reparse', dict(args, request_key='never-used'))
+            assert missing.isError and missing.content[0].text == 'NOT_FOUND: 요청한 자료를 찾을 수 없습니다.'
             assert not provider.calls and not count(data, 'reparse_requests')
             assert (await client.call_tool('submit_paper_reparse',
                 dict(args, request_key='other', confirmation_token=token))).isError
             cancelled = await client.call_tool('cancel_paper_reparse', {'confirmation_token': token})
             assert not cancelled.isError
+            assert (await client.call_tool('get_paper_reparse', args)).isError
             assert (await client.call_tool('submit_paper_reparse', dict(args, confirmation_token=token))).isError
             preview = await client.call_tool('prepare_paper_reparse', args)
             submit = dict(args, confirmation_token=preview.meta['confirmation_token'])

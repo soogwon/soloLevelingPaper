@@ -511,7 +511,7 @@ def test_answer_status_is_not_a_tool_error(status, reason):
 
 
 @pytest.mark.parametrize(('error', 'message'), [
-    (InvalidArgumentError('secret'), 'INVALID_ARGUMENT: 입력값을 확인해주세요.'),
+    (InvalidArgumentError('secret'), 'INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.'),
     (ResourceNotFoundError('secret'), 'NOT_FOUND: 요청한 자료를 찾을 수 없습니다.'),
     (RequestConflictError('secret'), 'CONFLICT: request_key가 이전 요청과 일치하지 않습니다.'),
     (UnsupportedDocumentError('secret'), 'UNSUPPORTED_DOCUMENT: 지원하는 PDF 파일인지 확인해주세요.'),

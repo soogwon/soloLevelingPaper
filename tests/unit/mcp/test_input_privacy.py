@@ -12,7 +12,6 @@ from solo_leveling.interfaces.mcp.server import MCPServices, create_server
 
 
 MARKER = 'SYNTHETIC_PRIVATE_ISSUE64'
-SAFE_ERROR = 'INVALID_ARGUMENT: 입력값을 확인해주세요.'
 INTERNAL_ERROR = 'INTERNAL_ERROR: 요청을 처리하지 못했습니다.'
 
 
@@ -39,7 +38,9 @@ def test_protocol_input_error_is_safe_and_session_survives(name, arguments, capl
         ) as client:
             result = await client.call_tool(name, arguments)
             assert result.isError
-            assert [item.text for item in result.content] == [SAFE_ERROR]
+            assert len(result.content) == 1
+            reason = 'INVALID_JSON' if name == 'ask_paper' and arguments.get('top_k') else 'INVALID_INPUT'
+            assert result.content[0].text.startswith(f'INVALID_ARGUMENT: {reason}:')
             assert MARKER not in result.model_dump_json()
             answer.answer.assert_not_called()
             evidence.get.assert_not_called()
@@ -141,7 +142,7 @@ def test_service_error_code_is_preserved(caplog, capsys):
         async with create_connected_server_and_client_session(server) as client:
             result = await client.call_tool('list_paper_jobs', {})
             assert result.isError
-            assert 'NOT_FOUND: 요청한 자료를 찾을 수 없습니다.' in result.content[0].text
+            assert result.content[0].text == 'NOT_FOUND: 요청한 자료를 찾을 수 없습니다.'
             assert 'INTERNAL_ERROR' not in result.content[0].text
             assert MARKER not in result.model_dump_json()
 
@@ -168,3 +169,18 @@ def test_protocol_preserves_sdk_json_string_conversion():
 
     asyncio.run(scenario())
 
+
+def test_protocol_input_error_names_only_the_public_field():
+    from solo_leveling.interfaces.mcp.input_privacy import SafeInputServer
+
+    server = SafeInputServer('synthetic')
+
+    @server.tool()
+    def lookup(context_id: str, limit: int = 10) -> dict:
+        return {'context_id': context_id, 'limit': limit}
+
+    with pytest.raises(Exception) as error:
+        asyncio.run(server.call_tool('lookup', {'context_id': MARKER, 'limit': MARKER}))
+    message = str(error.value)
+    assert message == 'INVALID_ARGUMENT: INVALID_INPUT: field=limit: 입력값을 확인해주세요.'
+    assert MARKER not in message

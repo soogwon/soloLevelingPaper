@@ -39,7 +39,7 @@ def test_dashboard_contract_and_same_text_payload(setup_db):
 def test_dashboard_missing_context_and_errors_are_safe(setup_db):
     db, _ = setup_db
     server = create_server(MCPServices(Mock(), Mock(), dashboard=DashboardReader(db)))
-    for context_id, code in [('missing', 'NOT_FOUND'), (' ', 'INVALID_ARGUMENT')]:
+    for context_id, code in [('not-a-uuid', 'INVALID_ARGUMENT'), ('00000000-0000-4000-8000-000000000001', 'NOT_FOUND'), (' ', 'INVALID_ARGUMENT')]:
         with pytest.raises(ToolError, match=code):
             asyncio.run(server.call_tool('get_learning_dashboard', {'context_id': context_id}))
     reader = Mock()

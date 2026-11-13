@@ -27,6 +27,11 @@ class RegistrationGate:
         self.pending[token] = (path, request_key, now + 600)
         return token
 
+    def is_prepared(self, path: str, request_key: str) -> bool:
+        now = self.clock()
+        return any(scope == path and key == request_key and expires > now
+                   for scope, key, expires in self.pending.values())
+
     def consume(self, token: str, path: str, request_key: str) -> None:
         pending = self.pending.get(token)
         if pending is None or pending[2] <= self.clock() or pending[:2] != (path, request_key):

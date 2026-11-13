@@ -49,9 +49,9 @@ class ReparseManager:
         return dict(context_id=context_id, request_key=request_key,
                     **(asdict(result) if result else {'status': 'NOT_FOUND'}))
 
-    def preview(self, context_id, request_key):
+    def preview(self, context_id, request_key, *, result=None):
         context = self._context(context_id)
-        result = self.lookup(context_id, request_key)
+        result = self.lookup(context_id, request_key) if result is None else result
         if result['status'] == 'NOT_FOUND':
             index = repo.get_search_index(self.db, context.version_id)
             if not index or (index['parse_revision_id'], index['embedding_set_id']) != (
@@ -172,7 +172,13 @@ def register_reparse(server, manager):
     @_public_errors
     def get_paper_reparse(context_id: str, request_key: str) -> dict[str, Any]:
         """응답 유실·재시작 시 같은 기존 맥락과 요청 키로 조회합니다. 새로운 작업을 시작하지 않습니다."""
-        return manager.lookup(context_id, request_key)
+        result = manager.lookup(context_id, request_key)
+        if result['status'] != 'NOT_FOUND':
+            return result
+        data = manager.preview(context_id, request_key, result=result)
+        if data['status'] == 'AVAILABLE' and gate.is_prepared(scope(data), request_key):
+            return dict(context_id=context_id, request_key=request_key, status='PREPARED')
+        raise ToolError('NOT_FOUND: 요청한 자료를 찾을 수 없습니다.')
 
     @server.tool(meta=app_only)
     @_public_errors

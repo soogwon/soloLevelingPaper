@@ -203,7 +203,7 @@ def test_protocol_rejects_unsafe_input_before_service(ctx, name, changes, capsys
         async with create_connected_server_and_client_session(server) as client:
             result = await client.call_tool(name, args)
             assert result.isError
-            assert result.content[0].text == 'INVALID_ARGUMENT: 입력값을 확인해주세요.'
+            assert result.content[0].text == 'INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.'
             assert result.structuredContent is None
             spy.get_session.assert_not_called()
             spy.save_answer.assert_not_called()
@@ -229,7 +229,7 @@ def test_missing_required_field_is_safe_without_calling_service(ctx):
                 'context_id': context_id, 'template_id': 'before.background',
             })
             assert result.isError
-            assert result.content[0].text == 'INVALID_ARGUMENT: 입력값을 확인해주세요.'
+            assert result.content[0].text == 'INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.'
             spy.save_answer.assert_not_called()
             spy.get_comparison.assert_not_called()
 
