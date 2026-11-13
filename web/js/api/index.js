@@ -1,7 +1,7 @@
 // 화면 코드는 이 파일의 api 객체만 사용한다.
 // 기본은 실제 백엔드이며 ?mock=1일 때만 메모리 예시 서버를 사용한다.
 import { CONFIG } from '../config.js';
-import { request, ApiError } from './client.js';
+import { request, ApiError, RouteNotFoundError } from './client.js';
 
 async function send(method, path, options) {
   const fn = CONFIG.USE_MOCK ? (await import('./mock-server.js')).mockRequest : request;
@@ -49,7 +49,7 @@ async function optionalAnnotationPage(promise, params = {}) {
   } catch (error) {
     // 메모 API가 아직 배포되지 않은 서버의 FastAPI 기본 404만 빈 목록으로 취급한다.
     // paper_not_found 등 의미가 있는 404는 숨기지 않는다.
-    if (error instanceof ApiError && error.status === 404 && error.code === 'http_404') {
+    if (error instanceof RouteNotFoundError) {
       return emptyPage(params);
     }
     throw error;
@@ -58,7 +58,8 @@ async function optionalAnnotationPage(promise, params = {}) {
 
 function normalizeDevices(response) {
   const raw = Array.isArray(response) ? response : response?.items;
-  if (!Array.isArray(raw)) {
+  if (!Array.isArray(raw) || raw.some((device) =>
+    typeof device?.device_id !== 'string' || !device.device_id.trim())) {
     throw new ApiError({
       status: 200,
       code: 'invalid_api_response',

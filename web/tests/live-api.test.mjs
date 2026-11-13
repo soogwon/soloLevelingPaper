@@ -139,3 +139,21 @@ test('API 주소 끝에 슬래시가 있어도 로그인과 조회에 같은 기
     delete globalThis.SOLO_LEVELING_CONFIG;
   }
 });
+
+
+test('프록시와 업무 오류의 404는 메모가 없는 것으로 표시하지 않는다', async (t) => {
+  const stub = t.mock.method(globalThis, 'fetch');
+  for (const body of ['<html>Not Found</html>', '{}', '{"detail":"Annotation not found"}',
+    '{"error":{"code":"http_404"}}']) {
+    stub.mock.mockImplementation(async () => new Response(body, { status: 404 }));
+    await assert.rejects(api.listAnnotations(), { status: 404, code: 'http_404' });
+  }
+});
+
+test('기기 ID가 없는 항목은 계정 화면으로 전달하지 않는다', async (t) => {
+  const stub = t.mock.method(globalThis, 'fetch');
+  for (const body of [[null], { items: [{ device_id: '  ' }] }, [{}]]) {
+    stub.mock.mockImplementation(async () => Response.json(body));
+    await assert.rejects(api.listDevices(), { code: 'invalid_api_response' });
+  }
+});
