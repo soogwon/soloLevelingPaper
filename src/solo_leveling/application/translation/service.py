@@ -11,7 +11,7 @@ from uuid import uuid4
 from solo_leveling.domain.models import Chunk, TranslationRevision
 from solo_leveling.domain.translation import (
     ChunkTranslationResult, TranslationBatchResult, TranslationFailureCode,
-    TranslationRequest, TranslationSettings, require_text,
+    TranslationRequest, TranslationSettings, require_text, translation_quality_failure,
 )
 from .ports import TranslationProvider, TranslationProviderUnavailable
 from .retry import RetryBudget, TranslationRetryPolicy
@@ -122,5 +122,8 @@ class TranslationService:
                     request, None, TranslationFailureCode.EMPTY_TRANSLATION,
                 ))
             else:
-                results.append(ChunkTranslationResult(request, text))
+                failure = translation_quality_failure(request.original_text, text)
+                results.append(ChunkTranslationResult(
+                    request, None, failure) if failure else
+                    ChunkTranslationResult(request, text))
         return TranslationBatchResult(revision, settings, tuple(results))

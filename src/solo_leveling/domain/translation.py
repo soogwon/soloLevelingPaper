@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 from enum import Enum
+import re
+import unicodedata
 
 from solo_leveling.domain.models import TranslationRevision
 
@@ -14,6 +16,28 @@ def require_text(value: str, name: str) -> None:
 class TranslationFailureCode(str, Enum):
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     EMPTY_TRANSLATION = "empty_translation"
+    UNCHANGED_TRANSLATION = "unchanged_translation"
+    TARGET_LANGUAGE_MISMATCH = "target_language_mismatch"
+
+
+def translation_quality_failure(
+        original_text: str, translated_text: str) -> TranslationFailureCode | None:
+    """한국어 번역 결과의 명백한 미번역만 보수적으로 판정한다."""
+    original = ' '.join(unicodedata.normalize('NFKC', original_text).split())
+    translated = ' '.join(unicodedata.normalize('NFKC', translated_text).split())
+    words = re.findall(r"[A-Za-z]{2,}", original)
+    visible = re.sub(r'\s+', '', original)
+    alpha_ratio = sum(map(len, words)) / max(1, len(visible))
+    prose = len(words) >= 2 and sum(map(len, words)) >= 10 and alpha_ratio >= .65
+    original_has_korean = re.search(r'[\uac00-\ud7a3]', original) is not None
+    translated_has_korean = re.search(r'[\uac00-\ud7a3]', translated) is not None
+    if original.casefold() == translated.casefold():
+        if original_has_korean or not prose:
+            return None
+        return TranslationFailureCode.UNCHANGED_TRANSLATION
+    if prose and not translated_has_korean:
+        return TranslationFailureCode.TARGET_LANGUAGE_MISMATCH
+    return None
 
 
 @dataclass(frozen=True)

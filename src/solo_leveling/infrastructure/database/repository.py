@@ -35,7 +35,9 @@ from solo_leveling.domain.models import (
     TranslationRecoveryDisposition,
     TranslationRecoveryRegistration,
 )
-from solo_leveling.domain.translation import TranslationBatchResult
+from solo_leveling.domain.translation import (
+    TranslationBatchResult, TranslationFailureCode, translation_quality_failure,
+)
 from solo_leveling.domain.context import ContextNotReadyError
 
 from solo_leveling.domain.paper_summary import (
@@ -456,6 +458,32 @@ def get_translation_failures(db_path: str, translation_revision_id: str) -> list
             'SELECT chunk_id, failure_code FROM translation_results WHERE translation_revision_id=? AND failure_code IS NOT NULL ORDER BY chunk_id',
             (translation_revision_id,),
         )]
+
+
+def _translation_recovery_targets(conn, translation_revision_id: str) -> list[dict]:
+    rows = conn.execute(
+        '''SELECT r.chunk_id, r.failure_code, r.translated_text, c.original_text
+           FROM translation_results r JOIN chunks c ON c.chunk_id=r.chunk_id
+           WHERE r.translation_revision_id=? ORDER BY c.chunk_index''',
+        (translation_revision_id,),
+    ).fetchall()
+    targets = []
+    for row in rows:
+        code = row['failure_code']
+        if code is None and not row['translated_text']:
+            code = TranslationFailureCode.EMPTY_TRANSLATION.value
+        if code is None:
+            failure = translation_quality_failure(row['original_text'], row['translated_text'])
+            code = failure.value if failure else None
+        if code is not None:
+            targets.append({'chunk_id': row['chunk_id'], 'failure_code': code})
+    return targets
+
+
+def get_translation_recovery_targets(db_path: str, translation_revision_id: str) -> list[dict]:
+    """기존 성공 행의 명백한 미번역도 저장 행을 바꾸지 않고 복구 대상으로 본다."""
+    with closing(get_connection(db_path)) as conn:
+        return _translation_recovery_targets(conn, translation_revision_id)
 
 
 def get_translated_chunks(db_path: str, parse_revision_id: str, translation_revision_id: str) -> List[Chunk]:
@@ -1064,9 +1092,8 @@ def save_recovery_translation(db_path: str, job_id: str, batch: TranslationBatch
                 'SELECT 1 FROM translation_revisions WHERE translation_revision_id=?',
                 (rev.translation_revision_id,)).fetchone():
             raise ValueError('recovery translation already saved')
-        failed = {r['chunk_id'] for r in conn.execute(
-            'SELECT chunk_id FROM translation_results WHERE translation_revision_id=? AND failure_code IS NOT NULL',
-            (base['translation_revision_id'],))}
+        failed = {r['chunk_id'] for r in _translation_recovery_targets(
+            conn, base['translation_revision_id'])}
         if {item.request.chunk_id for item in batch.items} != failed or len(batch.items) != len(failed):
             raise ValueError('recovery must cover exactly the failed chunks')
         for item in batch.items:
@@ -1079,10 +1106,16 @@ def save_recovery_translation(db_path: str, job_id: str, batch: TranslationBatch
                      'prompt_version, target_language, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
                      (rev.translation_revision_id, rev.parse_revision_id, settings.provider, settings.model,
                       settings.prompt_version, settings.target_language, rev.created_at))
-        conn.execute('INSERT INTO translation_results (translation_revision_id, chunk_id, failure_code, translated_text) '
-                     'SELECT ?, chunk_id, NULL, translated_text FROM translation_results '
-                     'WHERE translation_revision_id=? AND failure_code IS NULL',
-                     (rev.translation_revision_id, base['translation_revision_id']))
+        for row in conn.execute(
+                'SELECT chunk_id, translated_text FROM translation_results '
+                'WHERE translation_revision_id=? AND failure_code IS NULL',
+                (base['translation_revision_id'],)):
+            if row['chunk_id'] not in failed:
+                conn.execute(
+                    'INSERT INTO translation_results '
+                    '(translation_revision_id, chunk_id, failure_code, translated_text) '
+                    'VALUES (?, ?, NULL, ?)',
+                    (rev.translation_revision_id, row['chunk_id'], row['translated_text']))
         for item in batch.items:
             conn.execute('INSERT INTO translation_results (translation_revision_id, chunk_id, failure_code, '
                          'translated_text) VALUES (?, ?, ?, ?)',
@@ -1097,8 +1130,7 @@ def publish_recovered_index(db_path: str, job_id: str, embedding_set: EmbeddingS
                             limitations: list[str]) -> None:
     """복구한 번역의 새 색인을 게시하고 기본 색인을 바꾸고 복구 작업을 완료한다. 모두 한 트랜잭션이다.
 
-    하나라도 맞지 않으면 아무것도 바꾸지 않아 기존 색인이 계속 기본으로 남는다. 새 색인이 기존 색인보다
-    청크가 늘지 않았다면(복구가 모두 실패했다면) 게시하지 않는다.
+    기존 정상 번역을 보존하고 복구 대상이 실제로 줄어든 경우에만 새 기본 색인을 게시한다.
     """
     if type(embedding_set.dimension) is not int or embedding_set.dimension < 1:
         raise ValueError('positive embedding dimension required')
@@ -1119,8 +1151,23 @@ def publish_recovered_index(db_path: str, job_id: str, embedding_set: EmbeddingS
         published_chunk_ids = _validated_published_chunk_ids(
             conn, old['parse_revision_id'], embedding_set.translation_revision_id, chunk_ids)
         chunk_count = len(published_chunk_ids)
-        if chunk_count <= old['chunk_count']:
-            raise ValueError('recovered index must cover more translated chunks than the current one')
+        old_targets = {r['chunk_id'] for r in _translation_recovery_targets(
+            conn, old['translation_revision_id'])}
+        new_targets = {r['chunk_id'] for r in _translation_recovery_targets(
+            conn, embedding_set.translation_revision_id)}
+        if not new_targets < old_targets:
+            raise ValueError('recovered index must reduce translation recovery targets')
+        # 복구 대상 밖의 번역은 새 리비전에서도 같은 내용으로 검색할 수 있어야 한다.
+        changed = conn.execute(
+            'SELECT chunk_id, translated_text FROM translation_results '
+            'WHERE translation_revision_id=? AND failure_code IS NULL '
+            'EXCEPT SELECT chunk_id, translated_text FROM translation_results '
+            'WHERE translation_revision_id=? AND failure_code IS NULL',
+            (old['translation_revision_id'], embedding_set.translation_revision_id))
+        if any(row['chunk_id'] not in old_targets for row in changed):
+            raise ValueError('recovery must preserve previously valid translations')
+        if not (old_targets - new_targets).issubset(published_chunk_ids):
+            raise ValueError('recovered chunks must be present in the published index')
         conn.execute('INSERT INTO embedding_sets VALUES (?, ?, ?, ?, ?)',
                      (embedding_set.embedding_set_id, embedding_set.translation_revision_id,
                       embedding_set.model_name, embedding_set.dimension, embedding_set.created_at))
