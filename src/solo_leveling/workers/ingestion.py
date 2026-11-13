@@ -243,7 +243,11 @@ def _ingest_pages(
             else:
                 service = translation_service
             if pending:
-                batch = service.translate(pending, translation_settings)
+                batch = service.translate(
+                    pending, translation_settings,
+                    on_progress=lambda _completed, _total: repo.update_job_status(
+                        db_path, job.job_id, JobStatus.PROCESSING, JobStage.TRANSLATE),
+                )
                 repo.save_translation_batch(db_path, batch)
                 translation_id = batch.revision.translation_revision_id
             if translation_id is None:

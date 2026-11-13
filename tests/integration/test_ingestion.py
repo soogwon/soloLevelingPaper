@@ -14,7 +14,7 @@ from solo_leveling.application.translation.ports import TranslationProviderUnava
 from solo_leveling.domain.translation import TranslationSettings
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.storage.vector_store import query_similar
-from solo_leveling.domain.models import JobStatus, LearningContext, Evidence
+from solo_leveling.domain.models import JobStage, JobStatus, LearningContext, Evidence
 
 
 class FixtureProvider:
@@ -262,6 +262,27 @@ def test_unchanged_translation_is_recoverable_and_returns_to_default_search(
     ).search('여러 헤드가 표현 부분공간을 사용하는 이유', context.context_id, 1)
     assert search.items[0].chunk.original_text == core
     assert search.items[0].chunk.text == recovered_core
+
+
+def test_translation_progress_refreshes_job_timestamp_per_chunk(tmp_path, monkeypatch):
+    pdf = tmp_path / 'heartbeat.pdf'
+    write_minimal_pdf(str(pdf), ['First page.', 'Second page.'])
+    updates = []
+    original = repo.update_job_status
+
+    def record_update(db_path, job_id, status, stage=None, limitations=None, updated_at=None):
+        if stage == JobStage.TRANSLATE:
+            updates.append((job_id, status, stage))
+        return original(db_path, job_id, status, stage, limitations, updated_at)
+
+    monkeypatch.setattr(repo, 'update_job_status', record_update)
+    result = register_and_ingest(
+        str(tmp_path / 'data.sqlite'), str(tmp_path / 'chroma'), str(pdf))
+
+    assert result['status'] == 'ready'
+    # 번역 단계 진입 1회 + 완료한 각 청크의 heartbeat 2회
+    assert len(updates) == 3
+    assert len({job_id for job_id, _, _ in updates}) == 1
 
 
 def test_index_failure_preserves_translation_and_retry_skips_provider(

@@ -95,6 +95,18 @@ class ServiceTests(unittest.TestCase):
             result.items[0].failure_code,
             TranslationFailureCode.UNCHANGED_TRANSLATION)
 
+    def test_progress_is_reported_after_every_attempt(self):
+        provider = FakeTranslationProvider({
+            self.chunks[0].original_text: "번역 1",
+            self.chunks[1].original_text: "번역 2",
+        })
+        progress = []
+        TranslationService(provider).translate(
+            self.chunks, self.settings,
+            on_progress=lambda completed, total: progress.append((completed, total)),
+        )
+        self.assertEqual(progress, [(1, 2), (2, 2)])
+
     def test_invalid_batch_makes_no_calls(self):
         bad_batches = ((), (self.chunks[0], self.chunks[0]),
                        (self.chunks[0], replace(self.chunks[1], parse_revision_id="p2")),
