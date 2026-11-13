@@ -21,6 +21,13 @@ class ManagedPdf:
     input_fingerprint: str
 
 
+@dataclass(frozen=True)
+class InspectedPdf:
+    original_filename: str
+    file_hash: str
+    input_fingerprint: str
+
+
 class LocalPdfStore:
     def __init__(self, import_root: Path, managed_root: Path, max_bytes: int):
         self.import_root = import_root.resolve()
@@ -41,7 +48,7 @@ class LocalPdfStore:
                 raise UnsupportedDocumentError('PDF 파일 크기가 허용 범위를 벗어났습니다.')
             yield reader
 
-    def import_pdf(self, relative_path: str) -> ManagedPdf:
+    def _resolve_source(self, relative_path: str) -> tuple[Path, Path]:
         if not isinstance(relative_path, str) or not relative_path.strip():
             raise InvalidArgumentError('상대 PDF 경로가 필요합니다.')
         # OS별 경로 해석 차이와 Windows 대체 데이터 스트림 접근을 차단한다.
@@ -62,11 +69,34 @@ class LocalPdfStore:
         size = source.stat().st_size
         if size < 5 or size > self.max_bytes:
             raise UnsupportedDocumentError('PDF 파일 크기가 허용 범위를 벗어났습니다.')
+        return requested, source
+
+    @staticmethod
+    def _fingerprint(requested: Path, file_hash: str) -> str:
+        return hashlib.sha256(json.dumps({
+            'kind': 'local_file', 'relative_path': requested.as_posix(),
+            'file_hash': file_hash,
+        }, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+
+    def inspect_pdf(self, relative_path: str) -> InspectedPdf:
+        """동의 카드 전에 파일을 복사하지 않고 등록 입력과 동일하게 검사한다."""
+        requested, source = self._resolve_source(relative_path)
+        digest = hashlib.sha256()
+        header = b''
+        with self._open_source(source) as reader:
+            for block in iter(lambda: reader.read(65536), b''):
+                header = (header + block[:5])[:5]
+                if len(header) == 5 and header != b'%PDF-':
+                    raise UnsupportedDocumentError('PDF 헤더를 확인할 수 없습니다.')
+                digest.update(block)
+        file_hash = digest.hexdigest()
+        return InspectedPdf(source.name, file_hash,
+                            self._fingerprint(requested, file_hash))
+
+    def import_pdf(self, relative_path: str) -> ManagedPdf:
+        requested, source = self._resolve_source(relative_path)
 
         with self._open_source(source) as reader:
             stored = PdfStore(self.managed_root, self.max_bytes).save_stream(reader)
-        normalized = requested.as_posix()
-        fingerprint = hashlib.sha256(json.dumps({
-            'kind': 'local_file', 'relative_path': normalized, 'file_hash': stored.file_hash,
-        }, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
-        return ManagedPdf(stored.path, source.name, stored.file_hash, fingerprint)
+        return ManagedPdf(stored.path, source.name, stored.file_hash,
+                          self._fingerprint(requested, stored.file_hash))

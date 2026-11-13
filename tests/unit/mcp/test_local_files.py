@@ -30,6 +30,35 @@ def test_import_copies_pdf_and_reuses_content_file(tmp_path):
     assert source.is_file()
 
 
+def test_inspect_validates_and_fingerprints_without_copying(tmp_path):
+    pdfs, imports = store(tmp_path)
+    source = imports / 'paper.pdf'
+    source.write_bytes(b'%PDF-1.7\ntest')
+    inspected = pdfs.inspect_pdf('paper.pdf')
+    imported = pdfs.import_pdf('paper.pdf')
+    assert inspected.original_filename == imported.original_filename
+    assert inspected.file_hash == imported.file_hash
+    assert inspected.input_fingerprint == imported.input_fingerprint
+    assert imported.path.is_file()
+
+
+@pytest.mark.parametrize('path', ['../paper.pdf', '/paper.pdf', 'missing.pdf', 'paper.txt'])
+def test_inspect_rejects_invalid_source_without_managed_copy(tmp_path, path):
+    pdfs, imports = store(tmp_path)
+    (imports / 'paper.txt').write_bytes(b'%PDF-1.7')
+    with pytest.raises((InvalidArgumentError, UnsupportedDocumentError)):
+        pdfs.inspect_pdf(path)
+    assert not (tmp_path / 'pdfs').exists()
+
+
+def test_inspect_rejects_non_pdf_content_without_managed_copy(tmp_path):
+    pdfs, imports = store(tmp_path)
+    (imports / 'paper.pdf').write_bytes(b'not-a-pdf')
+    with pytest.raises(UnsupportedDocumentError):
+        pdfs.inspect_pdf('paper.pdf')
+    assert not (tmp_path / 'pdfs').exists()
+
+
 @pytest.mark.parametrize('path', [
     '', ' ', '../paper.pdf', '/paper.pdf', 'D:/paper.pdf',
     r'D:\paper.pdf', 'D:paper.pdf', r'\paper.pdf',

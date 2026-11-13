@@ -6,6 +6,7 @@ import sqlite3
 
 import pytest
 
+from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
 from solo_leveling.domain.models import (
     Chunk, EmbeddingSet, JobStage, JobStatus, Paper, PaperVersion, ParseRevision, ProcessingJob,
     RequestConflictError, TranslationRecoveryDisposition, TranslationRevision,
@@ -200,6 +201,12 @@ def test_recovery_context_selection_does_not_reuse_existing_learning_data(db):
 
 
 def test_recovery_context_selection_requires_matching_completed_request(db):
+    missing = dict(selection_key='select-missing', request_key='missing', job_id='j2',
+                   version_id='v1', embedding_set_id='e2', goal='understand',
+                   known_concepts=[])
+    with pytest.raises(ResourceNotFoundError):
+        repo.get_or_create_recovery_context(db, **missing)
+
     repo.prepare_translation_recovery(db, recovery_job(), 'request-1', 'hash-1', 'e1')
     args = dict(selection_key='select-1', request_key='request-1', job_id='j2',
                 version_id='v1', embedding_set_id='e2', goal='understand', known_concepts=[])
