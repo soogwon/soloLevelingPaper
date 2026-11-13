@@ -264,6 +264,37 @@ def test_unchanged_translation_is_recoverable_and_returns_to_default_search(
     assert search.items[0].chunk.text == recovered_core
 
 
+@pytest.mark.parametrize('interrupt', [False, True])
+def test_translation_progress_visible_in_job_listing(tmp_path, interrupt):
+    from solo_leveling.infrastructure.database.job_queries import list_paper_jobs
+
+    db = str(tmp_path / 'data.sqlite')
+    pdf = tmp_path / 'heartbeat.pdf'
+    write_minimal_pdf(str(pdf), ['First page.', 'Second page.', 'Third page.'])
+    observed = []
+
+    class ObservingProvider:
+        def translate(self, request, settings):
+            job, = list_paper_jobs(db)['jobs']
+            observed.append(job)
+            if interrupt:
+                repo.mark_interrupted_jobs_on_startup(db)
+            return '번역 결과' if len(observed) != 2 else ''
+
+    result = register_and_ingest(db, str(tmp_path / 'chroma'), str(pdf),
+                                 translation_service=TranslationService(ObservingProvider()))
+    if interrupt:
+        assert len(observed) == 1
+        assert result['status'] == 'interrupted'
+        assert list_paper_jobs(db)['jobs'][0]['status'] == 'interrupted'
+    else:
+        assert result['status'] == 'ready'
+        assert len(observed) == 3
+        assert all(job['status'] == 'processing' and job['stage'] == 'translate' for job in observed)
+        first, second, third = (job['updated_at'] for job in observed)
+        assert first < second < third
+
+
 def test_index_failure_preserves_translation_and_retry_skips_provider(
         tmp_path, monkeypatch, chroma_client_factory):
     pdf = tmp_path / 'index-failure.pdf'

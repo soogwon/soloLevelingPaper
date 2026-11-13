@@ -291,6 +291,16 @@ def update_job_status(
     conn.close()
 
 
+def touch_translation_job(db_path: str, job_id: str) -> bool:
+    """번역 중인 작업의 시각만 갱신한다."""
+    with closing(get_connection(db_path)) as conn, conn:
+        updated = conn.execute(
+            "UPDATE processing_jobs SET updated_at=? "
+            "WHERE job_id=? AND status='processing' AND stage='translate'",
+            (now_iso(), job_id))
+        return updated.rowcount == 1
+
+
 def get_job(db_path: str, job_id: str) -> Optional[ProcessingJob]:
     conn = get_connection(db_path)
     row = conn.execute("SELECT * FROM processing_jobs WHERE job_id = ?", (job_id,)).fetchone()
