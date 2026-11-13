@@ -61,7 +61,15 @@ export async function request(method, path, { query, body, idempotencyKey } = {}
   }
 
   if (response.status === 204) return null;
-  const data = await response.json().catch(() => null);
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    if (response.ok) {
+      throw new ApiError({ status: response.status, code: 'invalid_api_response',
+        message: '서버 응답을 읽을 수 없어요. API 연결 설정을 확인해 주세요.' });
+    }
+  }
 
   if (!response.ok) {
     // 현재 FastAPI는 { detail: { code } }, 향후 공통 오류 envelope는 { error: {...} }를 쓴다.

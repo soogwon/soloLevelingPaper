@@ -4,9 +4,9 @@ const runtime = globalThis.SOLO_LEVELING_CONFIG ?? {};
 
 export const CONFIG = Object.freeze({
   // 요청서의 /v1 버전 경로. 프론트와 API가 같은 도메인이면 '/v1', 다르면 'https://api.example.com/v1'.
-  API_BASE_URL: runtime.API_BASE_URL ?? '/v1',
-  // 운영 기본값은 false다. ?mock=1 또는 명시적 런타임 설정에서만 예시 데이터를 사용한다.
-  USE_MOCK: runtime.USE_MOCK === true || query.get('mock') === '1',
+  API_BASE_URL: (runtime.API_BASE_URL ?? '/v1').replace(/\/+$/, ''),
+  // 주소에 ?mock=1이 있을 때만 예시 데이터를 사용한다.
+  USE_MOCK: query.get('mock') === '1',
   MOCK_LATENCY_MS: 250,
   // 한 페이지에 보여줄 개수. 요청할 때 limit으로 보낸다 (서버 기본값 20, 최대 100: 요청서 1.5).
   PAGE_SIZE: 5,

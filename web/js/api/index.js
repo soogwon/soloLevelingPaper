@@ -2,10 +2,9 @@
 // 기본은 실제 백엔드이며 ?mock=1일 때만 메모리 예시 서버를 사용한다.
 import { CONFIG } from '../config.js';
 import { request, ApiError } from './client.js';
-import { mockRequest } from './mock-server.js';
 
 async function send(method, path, options) {
-  const fn = CONFIG.USE_MOCK ? mockRequest : request;
+  const fn = CONFIG.USE_MOCK ? (await import('./mock-server.js')).mockRequest : request;
   try {
     return await fn(method, path, options);
   } catch (error) {

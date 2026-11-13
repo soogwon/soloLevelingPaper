@@ -64,3 +64,19 @@ test('live client preserves the current server detail error code', async () => {
     globalThis.fetch = previous;
   }
 });
+
+test('HTML을 반환하는 정적 서버를 정상 API 응답으로 처리하지 않는다', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => new Response('<html></html>'));
+  await assert.rejects(api.me(), { code: 'invalid_api_response' });
+});
+
+test('API 주소 끝에 슬래시가 있어도 로그인과 조회에 같은 기본 주소를 쓴다', async () => {
+  globalThis.SOLO_LEVELING_CONFIG = { API_BASE_URL: 'https://api.example.com/v1/', USE_MOCK: true };
+  try {
+    const { CONFIG: runtime } = await import('../js/config.js?runtime-test');
+    assert.equal(runtime.API_BASE_URL, 'https://api.example.com/v1');
+    assert.equal(runtime.USE_MOCK, false);
+  } finally {
+    delete globalThis.SOLO_LEVELING_CONFIG;
+  }
+});
