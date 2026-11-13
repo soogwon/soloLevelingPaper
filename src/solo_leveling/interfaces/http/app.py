@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from .devices import DeviceStore
     from .papers import PaperStore
     from .collections import CollectionStore
+    from .resume_requests import ResumeRequestStore
 
 
 def create_app(
@@ -21,6 +22,7 @@ def create_app(
     device_store: "DeviceStore | None" = None,
     paper_store: "PaperStore | None" = None,
     collection_store: "CollectionStore | None" = None,
+    resume_store: "ResumeRequestStore | None" = None,
     web_auth_flow=None,
     web_session_store=None,
 ) -> "FastAPI":
@@ -39,6 +41,8 @@ def create_app(
     from .oidc import OidcAccessTokenVerifier
     from .paper_routes import create_paper_router, create_web_paper_router
     from .papers import PostgresPaperStore, UnavailablePaperStore
+    from .resume_requests import PostgresResumeRequestStore, UnavailableResumeRequestStore
+    from .resume_routes import create_resume_router
     from .settings import (
         load_database_settings,
         load_oidc_settings,
@@ -63,6 +67,9 @@ def create_app(
         collection_store = PostgresCollectionStore(managed_store.connection_pool)
     selected_collection_store = (collection_store if collection_store is not None
                                  else UnavailableCollectionStore())
+    if resume_store is None and managed_store is not None:
+        resume_store = PostgresResumeRequestStore(managed_store.connection_pool)
+    selected_resume_store = resume_store if resume_store is not None else UnavailableResumeRequestStore()
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -133,6 +140,7 @@ def create_app(
     app.include_router(create_web_paper_router(require_principal, selected_paper_store))
     app.include_router(create_annotation_router(require_principal, selected_paper_store))
     app.include_router(create_collection_router(require_principal, selected_collection_store))
+    app.include_router(create_resume_router(require_principal, selected_resume_store))
     if web_auth_flow is not None and web_session_store is not None:
         app.include_router(create_web_auth_router(web_auth_flow, web_session_store))
 

@@ -186,9 +186,12 @@ def build_runtime_server(values: Mapping[str, str]):
 
         annotations = AnnotationService(str(paths.db_path))
         server_sync = None
+        resume = None
         if settings.server_api_url is not None:
             server_client = AuthenticatedServerClient.from_keyring(settings.server_api_url)
             server_sync = PaperMetadataSyncService(str(paths.db_path), server_client)
+            from solo_leveling.application.server_sync.resume import ResumeRequestResolver
+            resume = ResumeRequestResolver(server_client)
         server = create_server(MCPServices(
             recovery=gate.wrap(recovery), reparse=gate.wrap(reparse),
             question_keys=gate.wrap(QuestionKeys(paths.data_root.resolve() / 'card-question-keys.sqlite3')),
@@ -203,6 +206,7 @@ def build_runtime_server(values: Mapping[str, str]):
                 str(paths.db_path), QuizService(
                     str(paths.db_path), OpenAIQuizGenerator(settings.generation))))),
             server_sync=gate.wrap(server_sync) if server_sync is not None else None,
+            resume=gate.wrap(resume) if resume is not None else None,
         ), lifespan=lifespan)
         track_lifetime(lifetime)
         return server

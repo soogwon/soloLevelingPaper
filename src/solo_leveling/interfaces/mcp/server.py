@@ -34,6 +34,7 @@ from solo_leveling.domain.annotation import Annotation
 from .annotation_tools import register_annotations
 from .quiz_tools import QuizContractAdapter, register_quiz
 from .server_sync_tools import register_server_sync
+from .resume_tools import register_resume
 
 
 HOST_INSTRUCTIONS = '''등록된 논문에서 한국어 근거 답변과 원문 근거를 조회합니다.
@@ -94,7 +95,10 @@ FULL/PARTIAL 완료 뒤에도 새 context 선택은 사용자에게 별도로 �
 외부 웹 표시를 위한 논문 동기화는 prepare_paper_server_sync 안내 카드에서 사용자가 승인한
 경우에만 시작합니다. 계정 연결이나 논문 등록을 동기화 동의로 해석하지 마세요.
 sync_paper_to_server와 cancel_paper_server_sync는 카드 전용입니다. 응답을 확인하지 못하면
-새 작업을 만들지 말고 기존 operation_id로 get_paper_server_sync를 조회하세요.'''
+새 작업을 만들지 말고 기존 operation_id로 get_paper_server_sync를 조회하세요.
+사용자가 외부 웹의 이어하기 코드를 제공하면 resolve_resume_request로 같은 계정의 기록을 조회하세요.
+조회 결과는 현재 PC의 PDF·검색 데이터 준비 완료를 뜻하지 않으며, file_access_status와 제한 사유를
+그대로 안내하세요. 코드 조회만으로 새 학습 기록을 만들거나 읽기 상태를 변경하지 마세요.'''
 
 
 class AnswerService(Protocol):
@@ -132,6 +136,7 @@ class MCPServices:
     recovery: object | None = None
     reparse: object | None = None
     server_sync: object | None = None
+    resume: object | None = None
 
 
 class Focus(BaseModel):
@@ -428,6 +433,8 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         register_quiz(server, services.quiz)
     if services.server_sync is not None:
         register_server_sync(server, services.server_sync)
+    if services.resume is not None:
+        register_resume(server, services.resume)
 
     if services.ingestion is not None:
         register_status_app(server)
