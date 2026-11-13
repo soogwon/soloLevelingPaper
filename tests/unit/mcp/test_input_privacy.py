@@ -12,7 +12,7 @@ from solo_leveling.interfaces.mcp.server import MCPServices, create_server
 
 
 MARKER = 'SYNTHETIC_PRIVATE_ISSUE64'
-SAFE_ERROR = 'INVALID_ARGUMENT: 입력값을 확인해주세요.'
+SAFE_ERROR_PREFIX = 'INVALID_ARGUMENT:'
 INTERNAL_ERROR = 'INTERNAL_ERROR: 요청을 처리하지 못했습니다.'
 
 
@@ -39,7 +39,9 @@ def test_protocol_input_error_is_safe_and_session_survives(name, arguments, capl
         ) as client:
             result = await client.call_tool(name, arguments)
             assert result.isError
-            assert [item.text for item in result.content] == [SAFE_ERROR]
+            assert len(result.content) == 1
+            assert result.content[0].text.startswith(SAFE_ERROR_PREFIX)
+            assert 'INVALID_INPUT' in result.content[0].text
             assert MARKER not in result.model_dump_json()
             answer.answer.assert_not_called()
             evidence.get.assert_not_called()
@@ -167,4 +169,20 @@ def test_protocol_preserves_sdk_json_string_conversion():
             assert json.loads(result.content[0].text) == {'values': ['synthetic']}
 
     asyncio.run(scenario())
+
+
+def test_protocol_input_error_names_only_the_public_field():
+    from solo_leveling.interfaces.mcp.input_privacy import SafeInputServer
+
+    server = SafeInputServer('synthetic')
+
+    @server.tool()
+    def lookup(context_id: str, limit: int = 10) -> dict:
+        return {'context_id': context_id, 'limit': limit}
+
+    with pytest.raises(Exception) as error:
+        asyncio.run(server.call_tool('lookup', {'context_id': MARKER, 'limit': MARKER}))
+    message = str(error.value)
+    assert message == 'INVALID_ARGUMENT: INVALID_INPUT: field=limit: 입력값을 확인해주세요.'
+    assert MARKER not in message
 

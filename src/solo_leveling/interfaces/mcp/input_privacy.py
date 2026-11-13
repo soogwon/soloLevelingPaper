@@ -36,6 +36,20 @@ class SafeInputServer(FastMCP):
             raise to_tool_error(InvalidArgumentError('잘못된 도구입니다.')) from None
         return tool
 
+    @staticmethod
+    def _invalid_input(error: Exception, tool=None) -> ToolError:
+        """입력값을 노출하지 않고 공개 스키마의 필드명만 오류에 포함한다."""
+        if isinstance(error, ValidationError) and tool is not None:
+            properties = set((tool.input_schema or {}).get('properties', {}))
+            for issue in error.errors(include_url=False, include_context=False, include_input=False):
+                field = next((part for part in issue.get('loc', ())
+                              if isinstance(part, str) and part in properties), None)
+                if field is not None:
+                    return ToolError(
+                        f'INVALID_ARGUMENT: INVALID_INPUT: field={field}: 입력값을 확인해주세요.')
+        reason = 'INVALID_JSON' if not isinstance(error, ValidationError) else 'INVALID_INPUT'
+        return ToolError(f'INVALID_ARGUMENT: {reason}: 입력값을 확인해주세요.')
+
     async def call_tool(self, name, arguments):
         tool = self._find_tool(name)
         try:
@@ -43,9 +57,9 @@ class SafeInputServer(FastMCP):
             # 서비스나 출력 검증은 실행하지 않으므로 입력 오류와 혼동하지 않는다.
             parsed = tool.fn_metadata.pre_parse_json(arguments)
             tool.fn_metadata.arg_model.model_validate(parsed)
-        except ValueError:
+        except ValueError as error:
             # JSON 정수 변환 한도 초과와 Pydantic 검증 실패를 같은 입력 오류로 처리한다.
-            raise to_tool_error(InvalidArgumentError('잘못된 입력입니다.')) from None
+            raise self._invalid_input(error, tool) from None
         try:
             result = await super().call_tool(name, arguments)
         except ToolError as error:

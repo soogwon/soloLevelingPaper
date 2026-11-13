@@ -79,7 +79,8 @@ def test_quiz_protocol_with_persisted_replay(ctx):
                         answers=[{'question_index': 0, 'selected_index': 1}])
             invalid = await client.call_tool('submit_quiz', dict(args, answers=[
                 {'question_index': False, 'text': 'PRIVATE_MARKER'}]))
-            assert invalid.isError and 'INVALID_ARGUMENT' in invalid.content[0].text
+            assert invalid.isError
+            assert 'INVALID_ARGUMENT: INVALID_INPUT:' in invalid.content[0].text
             assert 'INVALID_INPUT' in invalid.content[0].text
             assert 'PRIVATE_MARKER' not in invalid.content[0].text
             for answers in (
@@ -111,7 +112,8 @@ def test_quiz_protocol_with_persisted_replay(ctx):
             detail = await client.call_tool('get_quiz_attempt', detail_args)
             assert detail.structuredContent == {k: v for k, v in first.items() if k != 'reused'}
             denied = await client.call_tool('get_quiz_attempt', dict(detail_args, context_id='other'))
-            assert denied.isError and 'NOT_FOUND' in denied.content[0].text
+            assert denied.isError
+            assert denied.content[0].text == 'NOT_FOUND: 요청한 자료를 찾을 수 없습니다.'
             current = repository.get_quiz(db, cid, 'preview')
             second = await client.call_tool('submit_quiz', dict(args, quiz_id=current.quiz_id, request_key='k2',
                 answers=[{'question_index': 0, 'selected_index': 0}]))

@@ -94,7 +94,15 @@ def register_quiz(server: FastMCP, adapter: QuizContractAdapter):
         try:
             return await anyio.to_thread.run_sync(method, payload)
         except ContractError as error:
-            raise ToolError(error.code) from None
+            messages = {
+                'INVALID_ARGUMENT': 'INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.',
+                'NOT_FOUND': 'NOT_FOUND: 요청한 자료를 찾을 수 없습니다.',
+                'QUIZ_NOT_READY': 'QUIZ_NOT_READY: 아직 생성된 퀴즈가 없습니다.',
+                'QUIZ_CHANGED': 'QUIZ_CHANGED: 조회한 퀴즈가 변경되었습니다.',
+                'REQUEST_CONFLICT': 'CONFLICT: request_key가 이전 요청과 일치하지 않습니다.',
+                'INTERNAL_ERROR': 'INTERNAL_ERROR: 요청을 처리하지 못했습니다.',
+            }
+            raise ToolError(messages[error.code]) from None
         except Exception as error:
             raise to_tool_error(error) from None
 
