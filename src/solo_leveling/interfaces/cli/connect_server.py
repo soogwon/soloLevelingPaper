@@ -1,6 +1,7 @@
 """시스템 브라우저 PKCE 로그인으로 로컬 설치를 중앙 서버 기기에 연결한다."""
 
 import argparse
+import errno
 from base64 import urlsafe_b64encode
 from dataclasses import dataclass
 from hashlib import sha256
@@ -15,6 +16,10 @@ from uuid import UUID
 import webbrowser
 
 from solo_leveling.infrastructure.storage.server_credentials import KeyringCredentialStore, StoredDeviceCredentials
+
+
+class CallbackPortInUse(RuntimeError):
+    """등록된 로컬 콜백 포트를 다른 프로세스가 사용 중이다."""
 
 
 @dataclass(frozen=True)
@@ -55,7 +60,7 @@ def load_settings(source=None) -> ConnectSettings:
         values["OIDC_CLIENT_ID"].strip(),
         values.get("OIDC_CLIENT_SCOPES", "openid profile").strip(),
         values["SERVER_API_URL"].strip().rstrip("/"),
-        values.get("OIDC_AUTHORIZATION_AUDIENCE", "").strip() or None,
+        values.get("OIDC_AUTHORIZATION_AUDIENCE", "").strip() or values.get("OIDC_AUDIENCE", "").strip() or None,
         _redirect_port(values.get("OIDC_REDIRECT_PORT", "8765")),
     )
 
@@ -87,7 +92,15 @@ def connect(settings: ConnectSettings, display_name: str, session, credential_st
     state = token_urlsafe(32)
     callbacks: Queue[dict[str, list[str]]] = Queue()
     handler = _callback_handler(callbacks)
-    server = ThreadingHTTPServer(("127.0.0.1", settings.redirect_port), handler)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", settings.redirect_port), handler)
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE and getattr(exc, "winerror", None) != 10048:
+            raise
+        raise CallbackPortInUse(
+            f"콜백 포트 {settings.redirect_port}를 사용 중입니다. 사용 중인 프로그램을 종료하거나 "
+            "OIDC_REDIRECT_PORT와 인증 제공자에 등록한 콜백 포트를 함께 변경하세요."
+        ) from None
     server.timeout = 1
     redirect_uri = f"http://127.0.0.1:{server.server_port}/callback"
     try:
@@ -212,6 +225,9 @@ def main(argv=None):
         device_id = connect(load_settings(), args.device_name, requests.Session(), KeyringCredentialStore())
         print(f"서버 연결 완료: device_id={device_id}")
         return 0
+    except CallbackPortInUse as exc:
+        print(f"SERVER_CONNECT_FAILED: {exc}", file=sys.stderr)
+        return 1
     except Exception:
         print("SERVER_CONNECT_FAILED: 로그인·서버 설정·OS 자격 증명 저장소를 확인하세요.", file=sys.stderr)
         return 1

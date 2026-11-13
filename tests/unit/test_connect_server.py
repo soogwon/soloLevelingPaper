@@ -243,3 +243,30 @@ def test_native_keyring_ignores_configured_plugin(monkeypatch):
         pytest.skip("지원하는 운영체제에서 실행합니다.")
     monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.null.Keyring")
     assert type(_native_keyring()).__module__ == expected[sys.platform]
+
+
+@pytest.mark.parametrize(("override", "expected"), [("", "shared"), ("native", "native")])
+def test_native_authorization_uses_configured_api_audience(override, expected):
+    settings = subject.load_settings({
+        "OIDC_AUTHORIZATION_URL": SETTINGS.authorization_url,
+        "OIDC_TOKEN_URL": SETTINGS.token_url,
+        "OIDC_CLIENT_ID": SETTINGS.client_id,
+        "SERVER_API_URL": SETTINGS.server_url,
+        "OIDC_AUDIENCE": "shared",
+        "OIDC_AUTHORIZATION_AUDIENCE": override,
+    })
+    url = subject.authorization_url(settings, "http://127.0.0.1:8765/callback", "state", "challenge")
+    assert parse_qs(urlsplit(url).query)["audience"] == [expected]
+
+
+def test_busy_callback_port_fails_before_opening_browser(monkeypatch, capsys):
+    from errno import EADDRINUSE
+
+    def busy(*args):
+        raise OSError(EADDRINUSE, "occupied")
+
+    monkeypatch.setattr(subject, "load_settings", lambda: SETTINGS)
+    monkeypatch.setattr(subject, "ThreadingHTTPServer", busy)
+    assert subject.main(["--device-name", "test"]) == 1
+    message = capsys.readouterr().err
+    assert "8765" in message and "OIDC_REDIRECT_PORT" in message

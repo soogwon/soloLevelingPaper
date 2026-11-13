@@ -39,7 +39,8 @@ Secret을 Render 환경 변수에 입력하고 secret은 저장소나 로그에 
 
 Native client에는 client secret을 발급·배포하지 않습니다. Auth0는 callback을 정확히 비교하므로
 로컬 연결 명령은 기본 고정 loopback 포트 `8765`를 열고 `audience`로 위 Custom API Identifier를
-요청합니다. 포트가 이미 사용 중이면 Auth0 callback과 `OIDC_REDIRECT_PORT`를 함께 다른 값으로
+요청합니다. 로컬에서는 `OIDC_AUTHORIZATION_AUDIENCE`를 우선 사용하고, 비어 있으면
+`OIDC_AUDIENCE`를 사용합니다. 포트가 이미 사용 중이면 Auth0 callback과 `OIDC_REDIRECT_PORT`를 함께 다른 값으로
 바꿉니다. Auth0의 non-verifiable callback 확인 화면은 보안상 비활성화하지 않는 것을 권장합니다.
 
 ## 4. Render 환경 변수
