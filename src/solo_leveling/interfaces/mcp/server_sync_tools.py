@@ -11,16 +11,18 @@ import anyio
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
-from solo_leveling.application.server_sync.paper_metadata import PaperSyncPreview, SyncPreviewChanged
+from solo_leveling.application.server_sync.paper_metadata import (
+    SERVER_SYNC_NOTICE_VERSION, PaperSyncPreview, SyncPreviewChanged,
+)
 from solo_leveling.infrastructure.storage.server_client import ServerConnectionRequired
 
 
 SERVER_SYNC_APP_URI = "ui://solo-leveling/server-sync.html"
-SERVER_SYNC_NOTICE_VERSION = "paper-learning-sync-v2"
 SERVER_SYNC_NOTICE = """로컬 설치 식별자와 선택한 논문의 ID, 제목, 원래 등록 시각을 연결된 Solo Leveling Paper 서버로 전송합니다.
 이 논문의 학습 맥락 ID, 원문 버전 ID, 파일명, 마지막 학습 위치·시각과 완료한 학습 단계도 함께 전송합니다.
+저장된 전체 논문 요약의 항목 종류, 요약 본문, 근거 ID와 생성 시각도 함께 전송합니다.
 저자와 출판 연도는 현재 로컬에 없어 빈 값으로 전송합니다.
-PDF 파일, 추출 원문, 번역문, 메모, 하이라이트, 질문·답변과 로컬 파일 경로는 전송하지 않습니다.
+PDF 파일, 추출 원문, 번역문, 근거 본문, 메모, 하이라이트, 질문·답변과 로컬 파일 경로는 전송하지 않습니다.
 메타데이터는 연결된 계정에 저장됩니다.
 취소하거나 동의하지 않으면 서버 전송 작업을 만들지 않습니다."""
 
@@ -88,10 +90,12 @@ def register_server_sync(server, service: ServerSyncService) -> None:
             raise ToolError("SERVER_CONNECTION_REQUIRED: 먼저 전용 연결 명령으로 서버 계정을 연결하세요.") from None
         operation_id = str(uuid4())
         notice = (f"{SERVER_SYNC_NOTICE}\n학습 기록 {preview.learning_record_count}건 · "
+                  f"저장된 전체 논문 요약 {preview.summary_count}건 · "
                   f"마지막 학습 시각 {preview.last_studied_at or '기록 없음'}")
         data = {"status": "confirmation_required", "notice": notice,
                 "operation_id": operation_id, "paper_id": preview.paper_id, "title": preview.title,
                 "learning_record_count": preview.learning_record_count,
+                "summary_count": preview.summary_count,
                 "last_studied_at": preview.last_studied_at}
         return CallToolResult(
             content=[TextContent(type="text", text=notice)], structuredContent=data,
@@ -106,7 +110,7 @@ def register_server_sync(server, service: ServerSyncService) -> None:
     )
     async def sync_paper_to_server(paper_id: str, operation_id: str,
                                    confirmation_token: str) -> dict[str, Any]:
-        """확인 카드에서 승인한 논문의 메타데이터와 학습 기록을 서버로 전송합니다."""
+        """확인 카드에서 승인한 논문의 메타데이터, 학습 기록과 저장 요약을 서버로 전송합니다."""
         preview = gate.consume(confirmation_token, paper_id, operation_id)
         try:
             queued = await anyio.to_thread.run_sync(

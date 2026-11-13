@@ -13,6 +13,7 @@ from solo_leveling.infrastructure.database.schema import get_connection, init_db
 NOW = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
 SERVER_PAPER_ID = "10000000-0000-0000-0000-000000000001"
 SERVER_RECORD_ID = "10000000-0000-0000-0000-000000000002"
+SERVER_SUMMARY_ID = "10000000-0000-0000-0000-000000000003"
 
 
 class Response:
@@ -75,6 +76,15 @@ def add_learning_record(database):
         conn.execute("INSERT INTO learning_progress VALUES (?,?,?,?,?,?)", (
             "context-1", "deep_read", '["preview","structure"]',
             '{"chunk_id":"chunk-1","pdf_page":3}', NOW.isoformat(), NOW.isoformat()))
+
+
+def add_summary(database):
+    add_learning_record(database)
+    with get_connection(database) as conn:
+        conn.execute("INSERT INTO summaries VALUES (?,?,?,?)", (
+            "summary-1", "context-1", "paper", NOW.isoformat()))
+        conn.execute("INSERT INTO summary_items VALUES (?,?,?,?,?)", (
+            "summary-1", 0, "claim", "핵심 주장", '["evidence-1"]'))
 
 
 def test_explicit_consent_queues_without_sending_or_storing_payload(database):
@@ -177,6 +187,75 @@ def test_approved_paper_queues_and_sends_learning_record_without_local_path(data
     assert [(row["object_type"], row["status"]) for row in statuses] == [
         ("learning_record", "synced"), ("paper", "synced")]
     assert (mapping["local_subobject_id"], mapping["server_object_id"]) == ("context-1", SERVER_RECORD_ID)
+
+
+def test_approved_summary_syncs_after_learning_record_with_explicit_content(database):
+    add_summary(database)
+    learning_response = Response(200, {
+        "learning_record_id": SERVER_RECORD_ID, "revision": 1, "sync_status": "stored",
+        "server_updated_at": NOW.isoformat(),
+    })
+    summary_response = Response(200, {
+        "summary_id": SERVER_SUMMARY_ID, "revision": 1, "sync_status": "stored",
+        "server_updated_at": NOW.isoformat(),
+    })
+    client = Client([Response(), learning_response, summary_response])
+    service = PaperMetadataSyncService(database, client, now=lambda: NOW)
+    preview = service.preview("paper-local-1")
+
+    assert preview.summary_count == 1 and preview.summary_hash
+    operation = service.grant_and_queue(
+        "paper-local-1", "paper-learning-summary-sync-v3", preview=preview).operation_id
+    result = service.sync(operation)
+
+    assert result == SyncResult(operation, "synced", SERVER_PAPER_ID)
+    assert [call[0] for call in client.calls] == ["POST", "PUT", "PUT"]
+    assert client.calls[2][1].endswith(
+        f"/learning-records/context-1/summaries/summary-1")
+    body = client.calls[2][2]["json"]
+    assert body == {
+        "source_instance_id": body["source_instance_id"],
+        "selected_version_id": "version-1", "scope": "paper", "author_type": "mcp",
+        "items": [{"kind": "claim", "text": "핵심 주장", "evidence_ids": ["evidence-1"]}],
+        "original_created_at": NOW.isoformat(), "source_updated_at": NOW.isoformat(),
+    }
+    assert "근거 본문" not in str(body)
+    with get_connection(database) as conn:
+        rows = conn.execute(
+            "SELECT object_type, status FROM sync_outbox ORDER BY object_type").fetchall()
+        mapping = conn.execute(
+            "SELECT * FROM server_subobject_mappings WHERE object_type='summary'").fetchone()
+    assert [(row["object_type"], row["status"]) for row in rows] == [
+        ("learning_record", "synced"), ("paper", "synced"), ("summary", "synced")]
+    assert mapping["server_object_id"] == SERVER_SUMMARY_ID
+
+
+@pytest.mark.parametrize("change", ["text", "invalid_evidence", "removed_items"])
+def test_summary_change_after_approval_conflicts_without_upload(database, change):
+    add_summary(database)
+    client = Client([Response(), Response(200, {
+        "learning_record_id": SERVER_RECORD_ID, "revision": 1, "sync_status": "stored",
+        "server_updated_at": NOW.isoformat(),
+    })])
+    service = PaperMetadataSyncService(database, client, now=lambda: NOW)
+    operation = service.grant_and_queue(
+        "paper-local-1", "paper-learning-summary-sync-v3").operation_id
+    with get_connection(database) as conn:
+        if change == "text":
+            conn.execute("UPDATE summary_items SET text='승인 뒤 변경된 주장'")
+        elif change == "invalid_evidence":
+            conn.execute("UPDATE summary_items SET evidence_ids='invalid'")
+        else:
+            conn.execute("DELETE FROM summary_items")
+
+    result = service.sync(operation)
+
+    assert result.status == "conflict" and result.error_code == "payload_changed"
+    assert len(client.calls) == 2
+    with get_connection(database) as conn:
+        summary = conn.execute(
+            "SELECT status, last_error_code FROM sync_outbox WHERE object_type='summary'").fetchone()
+    assert dict(summary) == {"status": "conflict", "last_error_code": "payload_changed"}
 
 
 def test_learning_change_after_approval_conflicts_without_sending_changed_payload(database):
@@ -319,3 +398,30 @@ def test_same_count_and_study_time_do_not_hide_changed_preview(database):
         service.grant_and_queue("paper-local-1", "v2", preview=preview)
     with get_connection(database) as conn:
         assert conn.execute("SELECT COUNT(*) FROM sync_outbox").fetchone()[0] == 0
+
+
+def test_same_summary_count_does_not_hide_changed_summary_preview(database):
+    from solo_leveling.application.server_sync.paper_metadata import SyncPreviewChanged
+
+    add_summary(database)
+    service = PaperMetadataSyncService(database, Client())
+    preview = service.preview("paper-local-1")
+    with get_connection(database) as conn:
+        conn.execute("UPDATE summary_items SET text='카드가 열린 뒤 바뀐 요약'")
+
+    with pytest.raises(SyncPreviewChanged):
+        service.grant_and_queue("paper-local-1", "paper-learning-summary-sync-v3", preview=preview)
+
+    with get_connection(database) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM sync_outbox").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM server_sync_consents").fetchone()[0] == 0
+
+
+def test_previous_learning_notice_never_queues_summary(database):
+    add_summary(database)
+    service = PaperMetadataSyncService(database, Client())
+    service.grant_and_queue("paper-local-1", "paper-learning-sync-v2")
+    with get_connection(database) as conn:
+        assert {r[0] for r in conn.execute("SELECT object_type FROM sync_outbox")} == {
+            "paper", "learning_record",
+        }
