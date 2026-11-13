@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field, replace
 import json
+import re
 from typing import Callable
 from uuid import uuid4
 from solo_leveling.diagnostics import traced, stage, evidence_diagnostic
@@ -52,6 +53,21 @@ class _DraftValidationError(ValueError):
         self.code = code
         self.claim_number = claim_number
         super().__init__(code)
+
+
+_ABSTENTION_PATTERNS = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
+    r'(?:정보|내용|근거).{0,20}(?:없|찾을 수 없|확인할 수 없|제공되지|언급되지)',
+    r'(?:알|확인)\s*수\s*없',
+    r'답(?:변)?할\s*수\s*없',
+    r'no\s+(?:relevant\s+)?(?:information|evidence|details?)',
+    r'(?:cannot|can\s+not|unable\s+to)\s+(?:determine|answer|verify|find)',
+    r'(?:is|are|was|were)\s+not\s+(?:provided|mentioned|reported|found)',
+))
+
+
+def _is_abstention_claim(text: str) -> bool:
+    """검색 실패 안내를 논문 내용에 관한 검증된 주장으로 취급하지 않는다."""
+    return any(pattern.search(text) for pattern in _ABSTENTION_PATTERNS)
 
 
 def _validate_draft(draft, evidence_by_id):
@@ -228,6 +244,11 @@ class AnswerService:
             draft = _validate_draft(draft, evidence_by_id)
             if not draft.claims:
                 return insufficient(ReasonCode.EVIDENCE_NOT_FOUND, '검색된 근거로 답변 초안을 구성하지 못했습니다.')
+            if any(_is_abstention_claim(claim.text) for claim in draft.claims):
+                return insufficient(
+                    ReasonCode.EVIDENCE_NOT_FOUND,
+                    '검색된 근거에서 질문에 답할 정보를 확인하지 못했습니다.',
+                )
         except (ValueError, TypeError, AttributeError) as error:
             log_verification_failure(error, 0)
             return insufficient(ReasonCode.VERIFICATION_FAILED, '생성된 답변의 근거 연결을 확인하지 못했습니다.')
