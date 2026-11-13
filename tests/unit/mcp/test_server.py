@@ -329,7 +329,7 @@ def test_start_learning_lists_all_configured_learning_tools():
         'create_annotation', 'get_annotation', 'list_annotations',
         'update_annotation', 'delete_annotation',
         'get_reading_questions', 'save_reading_answer', 'get_reading_comparison',
-        'get_quiz', 'submit_quiz', 'get_quiz_attempt', 'list_quiz_attempts',
+        'get_quiz', 'generate_quiz', 'submit_quiz', 'get_quiz_attempt', 'list_quiz_attempts',
         'get_quiz_scores', 'review_quiz_attempt', 'get_learning_dashboard',
     ]
 

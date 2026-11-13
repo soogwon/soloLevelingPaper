@@ -177,6 +177,8 @@ class QuizServicePort(Protocol):
 
     def get_quiz(self, context_id: str, step: str) -> Quiz: ...
 
+    def generate_quiz(self, context_id: str, step: str) -> Quiz: ...
+
     def submit(self, *, context_id: str, step: str, quiz_id: str,
                request_key: str, answers: dict[int, int | str]) -> SubmissionResult: ...
 
@@ -196,7 +198,7 @@ class ContractError(Exception):
 
     def __init__(self, code: str):
         allowed = {'INVALID_ARGUMENT', 'NOT_FOUND', 'QUIZ_NOT_READY', 'QUIZ_CHANGED',
-                   'REQUEST_CONFLICT', 'INTERNAL_ERROR'}
+                   'REQUEST_CONFLICT', 'UPSTREAM_UNAVAILABLE', 'INTERNAL_ERROR'}
         self.code = code if code in allowed else 'INTERNAL_ERROR'
         super().__init__(self.code)
 
@@ -231,6 +233,16 @@ class QuizContractAdapter:
         if (quiz.context_id, quiz.step) != (request.context_id, request.step):
             raise ContractError('INTERNAL_ERROR')
         # 정답·채점 기준·근거를 포함하는 도메인 객체 전체를 직렬화하지 않는다.
+        return self._call(serialize_quiz, quiz=quiz)
+
+    def generate_quiz(self, payload) -> PublicQuiz:
+        request = self._input(QuizInput, payload)
+        quiz = self._call(
+            self.service.generate_quiz, context_id=request.context_id, step=request.step)
+        if not isinstance(quiz, Quiz):
+            raise ContractError('INTERNAL_ERROR')
+        if (quiz.context_id, quiz.step) != (request.context_id, request.step):
+            raise ContractError('INTERNAL_ERROR')
         return self._call(serialize_quiz, quiz=quiz)
 
     def submit(self, payload) -> SubmitOutput:

@@ -1,5 +1,7 @@
 """임시 SQLite와 MCP 세션으로 퀴즈 조회·제출·재전송을 검증한다."""
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, local
 import asyncio
 import json
 from unittest.mock import Mock
@@ -9,10 +11,13 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from pydantic import ValidationError
 
 from solo_leveling.infrastructure.database import repository
+from solo_leveling.application.evidence_qa.ports import GenerationUnavailable
+from solo_leveling.application.quiz.service import DraftQuestion, QuizService
 from solo_leveling.interfaces.mcp.quiz_contracts import QuizContractAdapter, SubmitInput
 from solo_leveling.interfaces.mcp.quiz_tools import StoredQuizService
 from solo_leveling.interfaces.mcp.server import MCPServices, create_server
 from tests.unit.test_quiz_submit_once import counts, ctx, question, setup_db, submit  # noqa: F401
+from tests.unit.test_learning_persistence import publish
 
 
 def test_submission_accepts_inclusive_limits_and_counts_utf8_bytes():
@@ -62,7 +67,7 @@ def test_quiz_protocol_with_persisted_replay(ctx):
     async def scenario():
         async with create_connected_server_and_client_session(server()) as client:
             tools = (await client.list_tools()).tools
-            for name in ('get_quiz', 'submit_quiz', 'get_quiz_attempt'):
+            for name in ('get_quiz', 'generate_quiz', 'submit_quiz', 'get_quiz_attempt'):
                 tool = next(tool for tool in tools if tool.name == name)
                 assert tool.meta['ui']['resourceUri'] == 'ui://solo-leveling/quiz.html'
                 assert '$ref' not in json.dumps(tool.inputSchema)
@@ -165,3 +170,81 @@ def test_quiz_accepts_json_string_answers(ctx):
             assert result.structuredContent['score'] == 1
 
     asyncio.run(scenario())
+
+
+def test_generate_quiz_creates_once_and_get_reuses_it(setup_db):
+    db, chunks = setup_db
+    cid = publish(db, chunks).context_id
+    generator = Mock()
+
+    def generate(step, evidence):
+        return [DraftQuestion(
+            'multiple_choice', '첫 문장은?', (evidence[0].evidence_id,),
+            ('첫째', '둘째'), 0,
+        )]
+
+    generator.generate_quiz.side_effect = generate
+    adapter = QuizContractAdapter(StoredQuizService(
+        db, QuizService(db, generator, id_factory=lambda: 'evidence')))
+    quiz_server = create_server(MCPServices(Mock(), Mock(), quiz=adapter))
+
+    async def scenario():
+        async with create_connected_server_and_client_session(quiz_server) as client:
+            missing = await client.call_tool('get_quiz', {'context_id': cid, 'step': 'preview'})
+            assert missing.isError and 'generate_quiz' in missing.content[0].text
+            first = await client.call_tool(
+                'generate_quiz', {'context_id': cid, 'step': 'preview'})
+            replay = await client.call_tool(
+                'generate_quiz', {'context_id': cid, 'step': 'preview'})
+            stored = await client.call_tool(
+                'get_quiz', {'context_id': cid, 'step': 'preview'})
+            assert not first.isError
+            assert first.structuredContent == replay.structuredContent == stored.structuredContent
+            assert first.structuredContent['questions'][0]['prompt'] == '첫 문장은?'
+
+    asyncio.run(scenario())
+    generator.generate_quiz.assert_called_once()
+
+
+def test_generate_quiz_reports_unavailable_provider(setup_db):
+    db, chunks = setup_db
+    cid = publish(db, chunks).context_id
+    generator = Mock()
+    generator.generate_quiz.side_effect = GenerationUnavailable('private provider detail')
+    adapter = QuizContractAdapter(StoredQuizService(db, QuizService(db, generator)))
+    quiz_server = create_server(MCPServices(Mock(), Mock(), quiz=adapter))
+
+    async def scenario():
+        async with create_connected_server_and_client_session(quiz_server) as client:
+            result = await client.call_tool(
+                'generate_quiz', {'context_id': cid, 'step': 'preview'})
+            assert result.isError
+            assert result.content[0].text.split(': ')[-1] == 'UPSTREAM_UNAVAILABLE'
+            assert 'private' not in str(result)
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_generation_reuses_quiz_across_servers(setup_db, monkeypatch):
+    db, chunks = setup_db
+    cid = publish(db, chunks).context_id
+    generator = Mock()
+    generator.generate_quiz.side_effect = lambda step, evidence: [DraftQuestion(
+        'multiple_choice', '첫 문장은?', (evidence[0].evidence_id,), ('첫째', '둘째'), 0)]
+    services = [StoredQuizService(db, QuizService(db, generator)) for _ in range(2)]
+    get_quiz = repository.get_quiz
+    readers = Barrier(2)
+    state = local()
+
+    def simultaneous_lookup(*args):
+        quiz = get_quiz(*args)
+        if not getattr(state, 'started', False):
+            state.started = True
+            readers.wait(timeout=5)
+        return quiz
+
+    monkeypatch.setattr(repository, 'get_quiz', simultaneous_lookup)
+    with ThreadPoolExecutor(2) as pool:
+        quizzes = list(pool.map(lambda service: service.generate_quiz(cid, 'preview'), services))
+    generator.generate_quiz.assert_called_once()
+    assert quizzes[0].quiz_id == quizzes[1].quiz_id == get_quiz(db, cid, 'preview').quiz_id
