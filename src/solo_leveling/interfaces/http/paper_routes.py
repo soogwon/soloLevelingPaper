@@ -10,8 +10,9 @@ from .auth import AuthenticatedPrincipal
 from solo_leveling.domain.learning_progress import LEARNING_STEPS
 
 from .papers import (
-    IdempotencyConflict, LearningRecordConflict, LearningRecordMetadata, PaperMetadata, PaperNotFound,
-    PaperSelectionConflict, PaperStore, PaperStoreUnavailable, SummaryConflict, SummaryMetadata,
+    AnnotationConflict, AnnotationMetadata, IdempotencyConflict, LearningRecordConflict,
+    LearningRecordMetadata, PaperMetadata, PaperNotFound, PaperSelectionConflict, PaperStore,
+    PaperStoreUnavailable, SummaryConflict, SummaryMetadata,
 )
 
 
@@ -210,6 +211,58 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         sync_status: Literal["stored"]
         server_updated_at: datetime
 
+    class AnnotationSegmentUpsert(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        chunk_id: str = Field(min_length=1, max_length=128)
+        target: Literal["original", "translation"]
+        start_offset: int = Field(ge=0)
+        end_offset: int = Field(gt=0)
+        quote_snapshot: str = Field(min_length=1, max_length=20000)
+
+        @model_validator(mode="after")
+        def validate_offsets(self):
+            if self.end_offset <= self.start_offset:
+                raise ValueError("선택 구간 끝은 시작보다 커야 합니다.")
+            return self
+
+    class AnnotationUpsert(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        source_instance_id: UUID
+        selected_version_id: str | None = Field(default=None, max_length=128)
+        kind: Literal["note", "highlight"]
+        body: str = Field(default="", max_length=100000)
+        step: str | None = Field(default=None, max_length=128)
+        segments: list[AnnotationSegmentUpsert] = Field(default_factory=list, max_length=100)
+        original_created_at: datetime
+        source_updated_at: datetime
+
+        _version_id = field_validator("selected_version_id")(_normalize_file_or_version)
+
+        @field_validator("original_created_at", "source_updated_at")
+        @classmethod
+        def require_annotation_timezone(cls, value):
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError("메모 시각에는 시간대가 필요합니다.")
+            return value.astimezone(timezone.utc)
+
+        @model_validator(mode="after")
+        def validate_annotation(self):
+            if self.original_created_at > self.source_updated_at:
+                raise ValueError("메모 생성 시각은 갱신 시각보다 늦을 수 없습니다.")
+            if self.kind == "note" and not self.body.strip():
+                raise ValueError("메모 본문이 필요합니다.")
+            if self.kind == "highlight" and not self.segments:
+                raise ValueError("하이라이트 선택 구간이 필요합니다.")
+            return self
+
+    class AnnotationView(BaseModel):
+        annotation_id: UUID
+        revision: int
+        sync_status: Literal["stored"]
+        server_updated_at: datetime
+
     class PaperRoute(APIRoute):
         def get_route_handler(self):
             handle = super().get_route_handler()
@@ -322,6 +375,39 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         except PaperStoreUnavailable:
             raise HTTPException(status_code=503, detail={"code": "paper_store_unavailable"}) from None
         return SummaryView(**result.__dict__)
+
+    @router.put(
+        "/{paper_id}/learning-records/{local_record_id}/annotations/{local_annotation_id}",
+        response_model=AnnotationView,
+    )
+    def upsert_annotation(
+        paper_id: UUID,
+        local_record_id: str,
+        local_annotation_id: str,
+        payload: AnnotationUpsert,
+        principal: Principal,
+    ):
+        if principal.credential_type != "device":
+            raise HTTPException(status_code=403, detail={"code": "device_credential_required"})
+        identifiers = (local_record_id.strip(), local_annotation_id.strip())
+        if any(not value or len(value) > 128 or "\x00" in value or "/" in value or "\\" in value
+               or PureWindowsPath(value).drive for value in identifiers):
+            raise HTTPException(status_code=422, detail={"code": "invalid_annotation_identity"})
+        metadata = AnnotationMetadata(
+            str(payload.source_instance_id), identifiers[0], identifiers[1],
+            payload.selected_version_id, payload.kind, payload.body, payload.step,
+            tuple(item.model_dump() for item in payload.segments), payload.original_created_at,
+            payload.source_updated_at,
+        )
+        try:
+            result = store.upsert_annotation(principal.user_id, str(paper_id), metadata)
+        except AnnotationConflict:
+            raise HTTPException(status_code=409, detail={"code": "annotation_conflict"}) from None
+        except PaperNotFound:
+            raise HTTPException(status_code=404, detail={"code": "learning_record_not_found"}) from None
+        except PaperStoreUnavailable:
+            raise HTTPException(status_code=503, detail={"code": "paper_store_unavailable"}) from None
+        return AnnotationView(**result.__dict__)
 
     return router
 

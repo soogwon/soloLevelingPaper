@@ -68,6 +68,28 @@ class SummaryRegistration:
 
 
 @dataclass(frozen=True)
+class AnnotationMetadata:
+    source_instance_id: str
+    local_learning_record_id: str
+    local_annotation_id: str
+    selected_version_id: str | None
+    kind: str
+    body: str
+    step: str | None
+    segments: tuple[dict[str, Any], ...]
+    original_created_at: datetime
+    source_updated_at: datetime
+
+
+@dataclass(frozen=True)
+class AnnotationRegistration:
+    annotation_id: str
+    revision: int
+    sync_status: str
+    server_updated_at: datetime
+
+
+@dataclass(frozen=True)
 class StoredSummary:
     summary_id: str
     created_at: datetime
@@ -117,6 +139,10 @@ class SummaryConflict(Exception):
     pass
 
 
+class AnnotationConflict(Exception):
+    pass
+
+
 class PaperSelectionConflict(Exception):
     pass
 
@@ -141,6 +167,9 @@ class PaperStore(Protocol):
     def upsert_summary(self, owner_user_id: str, paper_id: str,
                        metadata: SummaryMetadata) -> SummaryRegistration: ...
 
+    def upsert_annotation(self, owner_user_id: str, paper_id: str,
+                          metadata: AnnotationMetadata) -> AnnotationRegistration: ...
+
     def get_paper(self, owner_user_id: str, paper_id: str, *, learning_record_id: str | None,
                   version_id: str | None) -> PaperDetail: ...
 
@@ -159,6 +188,10 @@ class UnavailablePaperStore:
 
     def upsert_summary(self, owner_user_id: str, paper_id: str,
                        metadata: SummaryMetadata) -> SummaryRegistration:
+        raise PaperStoreUnavailable
+
+    def upsert_annotation(self, owner_user_id: str, paper_id: str,
+                          metadata: AnnotationMetadata) -> AnnotationRegistration:
         raise PaperStoreUnavailable
 
     def get_paper(self, owner_user_id: str, paper_id: str, *, learning_record_id: str | None,
@@ -385,6 +418,69 @@ class PostgresPaperStore:
             if row is None:
                 raise PaperNotFound
         return SummaryRegistration(str(row["summary_id"]), int(row["revision"]), "stored", row["updated_at"])
+
+    def upsert_annotation(self, owner_user_id: str, paper_id: str,
+                          metadata: AnnotationMetadata) -> AnnotationRegistration:
+        with _connection(self._pool) as conn:
+            record = conn.execute(
+                """SELECT learning_record_id, selected_version_id FROM server_learning_records
+                   WHERE paper_id=%s AND owner_user_id=%s AND source_instance_id=%s
+                     AND local_learning_record_id=%s FOR SHARE""",
+                (paper_id, owner_user_id, metadata.source_instance_id,
+                 metadata.local_learning_record_id),
+            ).fetchone()
+            if record is None:
+                raise PaperNotFound
+            if record["selected_version_id"] != metadata.selected_version_id:
+                raise AnnotationConflict
+            row = conn.execute(
+                """INSERT INTO server_annotations
+                   (annotation_id, owner_user_id, paper_id, learning_record_id, source_instance_id,
+                    local_annotation_id, selected_version_id, kind, body, step, segments,
+                    original_created_at, source_updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
+                   ON CONFLICT(owner_user_id, source_instance_id, local_annotation_id)
+                   DO UPDATE SET kind=excluded.kind, body=excluded.body, step=excluded.step,
+                     segments=excluded.segments, source_updated_at=excluded.source_updated_at,
+                     revision=server_annotations.revision+1, updated_at=CURRENT_TIMESTAMP
+                   WHERE excluded.paper_id=server_annotations.paper_id
+                     AND excluded.learning_record_id=server_annotations.learning_record_id
+                     AND excluded.selected_version_id IS NOT DISTINCT FROM server_annotations.selected_version_id
+                     AND excluded.source_updated_at>server_annotations.source_updated_at
+                   RETURNING annotation_id, revision, updated_at""",
+                (str(uuid4()), owner_user_id, paper_id, record["learning_record_id"],
+                 metadata.source_instance_id, metadata.local_annotation_id,
+                 metadata.selected_version_id, metadata.kind, metadata.body, metadata.step,
+                 json.dumps(metadata.segments, ensure_ascii=False), metadata.original_created_at,
+                 metadata.source_updated_at),
+            ).fetchone()
+            if row is None:
+                row = conn.execute(
+                    """SELECT a.annotation_id, a.revision, a.updated_at, a.paper_id,
+                              a.learning_record_id, a.selected_version_id, a.kind, a.body,
+                              a.step, a.segments, a.original_created_at, a.source_updated_at,
+                              r.local_learning_record_id
+                       FROM server_annotations a JOIN server_learning_records r
+                         ON r.learning_record_id=a.learning_record_id
+                       WHERE a.owner_user_id=%s AND a.source_instance_id=%s
+                         AND a.local_annotation_id=%s""",
+                    (owner_user_id, metadata.source_instance_id, metadata.local_annotation_id),
+                ).fetchone()
+                if row is not None and (str(row["paper_id"]) != paper_id
+                                        or row["selected_version_id"] != metadata.selected_version_id
+                                        or row["local_learning_record_id"] != metadata.local_learning_record_id):
+                    raise AnnotationConflict
+                if row is not None and row["source_updated_at"] == metadata.source_updated_at:
+                    expected = (metadata.kind, metadata.body, metadata.step,
+                                list(metadata.segments), metadata.original_created_at)
+                    actual = (row["kind"], row["body"], row["step"], row["segments"],
+                              row["original_created_at"])
+                    if actual != expected:
+                        raise AnnotationConflict
+            if row is None:
+                raise PaperNotFound
+        return AnnotationRegistration(str(row["annotation_id"]), int(row["revision"]),
+                                      "stored", row["updated_at"])
 
     def get_paper(self, owner_user_id: str, paper_id: str, *, learning_record_id: str | None,
                   version_id: str | None) -> PaperDetail:

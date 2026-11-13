@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 from solo_leveling.interfaces.http import create_app
 from solo_leveling.interfaces.http.auth import AuthenticatedPrincipal
 from solo_leveling.interfaces.http.papers import (
+    AnnotationMetadata,
+    AnnotationRegistration,
     IdempotencyConflict,
     LearningRecordMetadata,
     LearningRecordRegistration,
@@ -165,6 +167,10 @@ class MemoryStore:
     def upsert_summary(self, owner_user_id, paper_id, item):
         self.calls.append((owner_user_id, paper_id, item))
         return SummaryRegistration("00000000-0000-0000-0000-000000000401", 1, "stored", NOW)
+
+    def upsert_annotation(self, owner_user_id, paper_id, item):
+        self.calls.append((owner_user_id, paper_id, item))
+        return AnnotationRegistration("00000000-0000-0000-0000-000000000501", 1, "stored", NOW)
 
     def get_paper(self, owner_user_id, paper_id, **selection):
         self.calls.append((owner_user_id, paper_id, selection))
@@ -353,6 +359,28 @@ def test_summary_route_uses_device_owner_and_preserves_evidence_links():
     assert sent.items[0]["evidence_ids"] == ["e1"]
 
 
+def test_annotation_route_uses_device_owner_and_preserves_segments():
+    store = MemoryStore()
+    route = next(route.endpoint for route in create_app(paper_store=store).routes
+                 if route.path.endswith("/annotations/{local_annotation_id}"))
+    payload = SimpleNamespace(
+        source_instance_id=UUID(SOURCE_ID), selected_version_id="v1", kind="highlight",
+        body="중요", step="deep_read",
+        segments=[SimpleNamespace(model_dump=lambda: {
+            "chunk_id": "chunk-1", "target": "original", "start_offset": 0,
+            "end_offset": 4, "quote_snapshot": "text",
+        })], original_created_at=NOW, source_updated_at=NOW,
+    )
+    principal = AuthenticatedPrincipal("user-1", "device", SOURCE_ID)
+
+    result = route(UUID(PAPER_ID), "context-1", "annotation-1", payload, principal)
+
+    assert str(result.annotation_id) == "00000000-0000-0000-0000-000000000501"
+    sent = store.calls[0][2]
+    assert sent.local_learning_record_id == "context-1"
+    assert sent.segments[0]["quote_snapshot"] == "text"
+
+
 def test_postgres_detail_selects_requested_record_in_owner_scope():
     record_id = "00000000-0000-0000-0000-000000000301"
     pool = Pool([
@@ -418,6 +446,24 @@ def test_postgres_summary_upsert_requires_owned_paper_and_learning_record():
     assert "FROM server_learning_records" in sql
     assert "owner_user_id=%s AND source_instance_id=%s" in sql
     assert params[-4:] == (PAPER_ID, "user-1", SOURCE_ID, "context-1")
+
+
+def test_postgres_annotation_upsert_requires_owned_learning_record():
+    annotation_id = "00000000-0000-0000-0000-000000000501"
+    pool = Pool([Result({"learning_record_id": PAPER_ID, "selected_version_id": "v1"}),
+                 Result({"annotation_id": annotation_id, "revision": 1, "updated_at": NOW})])
+    item = AnnotationMetadata(
+        SOURCE_ID, "context-1", "annotation-1", "v1", "highlight", "중요", "deep_read",
+        ({"chunk_id": "chunk-1", "target": "original", "start_offset": 0,
+          "end_offset": 4, "quote_snapshot": "text"},), NOW, NOW,
+    )
+
+    result = PostgresPaperStore(pool).upsert_annotation("user-1", PAPER_ID, item)
+
+    assert result == AnnotationRegistration(annotation_id, 1, "stored", NOW)
+    sql, params = pool.conn.calls[0]
+    assert "FROM server_learning_records" in sql
+    assert params == (PAPER_ID, "user-1", SOURCE_ID, "context-1")
 
 
 def test_detail_returns_paper_scope_summary_for_selected_record():
