@@ -11,7 +11,7 @@ from solo_leveling.domain.learning_progress import LEARNING_STEPS
 
 from .papers import (
     IdempotencyConflict, LearningRecordConflict, LearningRecordMetadata, PaperMetadata, PaperNotFound,
-    PaperSelectionConflict, PaperStore, PaperStoreUnavailable,
+    PaperSelectionConflict, PaperStore, PaperStoreUnavailable, SummaryConflict, SummaryMetadata,
 )
 
 
@@ -151,6 +151,65 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         sync_status: Literal["stored"]
         server_updated_at: datetime
 
+    class SummaryItemUpsert(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        kind: Literal["claim", "method", "result", "limitation"]
+        text: str = Field(min_length=1, max_length=10000)
+        evidence_ids: list[str] = Field(min_length=1, max_length=100)
+
+        @field_validator("text")
+        @classmethod
+        def normalize_text(cls, value):
+            if "\x00" in value or not value.strip():
+                raise ValueError("요약 본문이 올바르지 않습니다.")
+            return value.strip()
+
+        @field_validator("evidence_ids")
+        @classmethod
+        def validate_evidence_ids(cls, values):
+            if any(not value.strip() or "\x00" in value or len(value) > 128 for value in values):
+                raise ValueError("evidence_id가 올바르지 않습니다.")
+            normalized = [value.strip() for value in values]
+            if len(set(normalized)) != len(normalized):
+                raise ValueError("evidence_id가 중복되었습니다.")
+            return normalized
+
+    class SummaryUpsert(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        source_instance_id: UUID
+        selected_version_id: str | None = Field(max_length=128)
+        scope: Literal["paper"]
+        author_type: Literal["mcp", "user"]
+        items: list[SummaryItemUpsert] = Field(min_length=1, max_length=100)
+        original_created_at: datetime
+        source_updated_at: datetime
+
+        _version_id = field_validator("selected_version_id")(_normalize_file_or_version)
+
+        @field_validator("original_created_at", "source_updated_at")
+        @classmethod
+        def require_summary_timezone(cls, value):
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError("요약 시각에는 시간대가 필요합니다.")
+            try:
+                return value.astimezone(timezone.utc)
+            except OverflowError:
+                raise ValueError("UTC로 변환할 수 없는 요약 시각입니다.") from None
+
+        @model_validator(mode="after")
+        def validate_summary_times(self):
+            if self.original_created_at > self.source_updated_at:
+                raise ValueError("요약 생성 시각은 원본 갱신 시각보다 늦을 수 없습니다.")
+            return self
+
+    class SummaryView(BaseModel):
+        summary_id: UUID
+        revision: int
+        sync_status: Literal["stored"]
+        server_updated_at: datetime
+
     class PaperRoute(APIRoute):
         def get_route_handler(self):
             handle = super().get_route_handler()
@@ -229,6 +288,40 @@ def create_paper_router(require_principal: Any, store: PaperStore):
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                                 detail={"code": "paper_store_unavailable"}) from None
         return LearningRecordView(**result.__dict__)
+
+    @router.put(
+        "/{paper_id}/learning-records/{local_record_id}/summaries/{local_summary_id}",
+        response_model=SummaryView,
+    )
+    def upsert_summary(
+        paper_id: UUID,
+        local_record_id: str,
+        local_summary_id: str,
+        payload: SummaryUpsert,
+        principal: Principal,
+    ):
+        if principal.credential_type != "device":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail={"code": "device_credential_required"})
+        identifiers = (local_record_id.strip(), local_summary_id.strip())
+        if any(not value or len(value) > 128 or "\x00" in value or "/" in value or "\\" in value
+               or PureWindowsPath(value).drive for value in identifiers):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                                detail={"code": "invalid_summary_identity"})
+        metadata = SummaryMetadata(
+            str(payload.source_instance_id), identifiers[0], identifiers[1], payload.scope,
+            payload.author_type, tuple(item.model_dump() for item in payload.items),
+            payload.original_created_at, payload.source_updated_at, payload.selected_version_id,
+        )
+        try:
+            result = store.upsert_summary(principal.user_id, str(paper_id), metadata)
+        except SummaryConflict:
+            raise HTTPException(status_code=409, detail={"code": "summary_conflict"}) from None
+        except PaperNotFound:
+            raise HTTPException(status_code=404, detail={"code": "learning_record_not_found"}) from None
+        except PaperStoreUnavailable:
+            raise HTTPException(status_code=503, detail={"code": "paper_store_unavailable"}) from None
+        return SummaryView(**result.__dict__)
 
     return router
 
@@ -365,7 +458,12 @@ def create_web_paper_router(require_principal: Any, store: PaperStore):
             collection_id=item.collection_id,
             version=(VersionView(version_id=item.selected_version_id, file_name=item.file_name)
                      if item.selected_version_id else None),
-            summary=None,
+            summary=({
+                "summary_id": detail.summary.summary_id,
+                "created_at": detail.summary.created_at,
+                "author_type": detail.summary.author_type,
+                "items": list(detail.summary.items),
+            } if detail.summary is not None else None),
             file_access=AvailabilityView(
                 available=False, reason="not_uploaded",
                 message="이 원문 버전의 PDF가 서버에 업로드되지 않았어요.",

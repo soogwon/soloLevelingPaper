@@ -47,6 +47,35 @@ class LearningRecordRegistration:
 
 
 @dataclass(frozen=True)
+class SummaryMetadata:
+    source_instance_id: str
+    local_learning_record_id: str
+    local_summary_id: str
+    scope: str
+    author_type: str
+    items: tuple[dict[str, Any], ...]
+    original_created_at: datetime
+    source_updated_at: datetime
+    selected_version_id: str | None
+
+
+@dataclass(frozen=True)
+class SummaryRegistration:
+    summary_id: str
+    revision: int
+    sync_status: str
+    server_updated_at: datetime
+
+
+@dataclass(frozen=True)
+class StoredSummary:
+    summary_id: str
+    created_at: datetime
+    author_type: str
+    items: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
 class PaperListItem:
     paper_id: str
     title: str | None
@@ -73,6 +102,7 @@ class PaperPage:
 @dataclass(frozen=True)
 class PaperDetail:
     paper: PaperListItem
+    summary: StoredSummary | None = None
 
 
 class IdempotencyConflict(Exception):
@@ -80,6 +110,10 @@ class IdempotencyConflict(Exception):
 
 
 class LearningRecordConflict(Exception):
+    pass
+
+
+class SummaryConflict(Exception):
     pass
 
 
@@ -104,6 +138,9 @@ class PaperStore(Protocol):
     def upsert_learning_record(self, owner_user_id: str, paper_id: str,
                                metadata: LearningRecordMetadata) -> LearningRecordRegistration: ...
 
+    def upsert_summary(self, owner_user_id: str, paper_id: str,
+                       metadata: SummaryMetadata) -> SummaryRegistration: ...
+
     def get_paper(self, owner_user_id: str, paper_id: str, *, learning_record_id: str | None,
                   version_id: str | None) -> PaperDetail: ...
 
@@ -118,6 +155,10 @@ class UnavailablePaperStore:
 
     def upsert_learning_record(self, owner_user_id: str, paper_id: str,
                                metadata: LearningRecordMetadata) -> LearningRecordRegistration:
+        raise PaperStoreUnavailable
+
+    def upsert_summary(self, owner_user_id: str, paper_id: str,
+                       metadata: SummaryMetadata) -> SummaryRegistration:
         raise PaperStoreUnavailable
 
     def get_paper(self, owner_user_id: str, paper_id: str, *, learning_record_id: str | None,
@@ -280,6 +321,64 @@ class PostgresPaperStore:
             str(row["learning_record_id"]), int(row["revision"]), "stored", row["updated_at"]
         )
 
+    def upsert_summary(self, owner_user_id: str, paper_id: str,
+                       metadata: SummaryMetadata) -> SummaryRegistration:
+        with _connection(self._pool) as conn:
+            record = conn.execute(
+                """SELECT learning_record_id, selected_version_id FROM server_learning_records
+                   WHERE paper_id=%s AND owner_user_id=%s AND source_instance_id=%s
+                     AND local_learning_record_id=%s FOR SHARE""",
+                (paper_id, owner_user_id, metadata.source_instance_id, metadata.local_learning_record_id),
+            ).fetchone()
+            if record is None:
+                raise PaperNotFound
+            if record["selected_version_id"] != metadata.selected_version_id:
+                raise SummaryConflict
+            row = conn.execute(
+                """INSERT INTO server_summaries
+                   (summary_id, owner_user_id, paper_id, learning_record_id, source_instance_id,
+                    local_summary_id, scope, author_type, items, original_created_at, source_updated_at,
+                    selected_version_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
+                   ON CONFLICT(owner_user_id, source_instance_id, local_summary_id)
+                   DO UPDATE SET scope=excluded.scope, author_type=excluded.author_type,
+                     items=excluded.items, original_created_at=excluded.original_created_at,
+                     source_updated_at=excluded.source_updated_at,
+                     revision=server_summaries.revision+1, updated_at=CURRENT_TIMESTAMP
+                   WHERE excluded.paper_id=server_summaries.paper_id
+                     AND excluded.selected_version_id IS NOT DISTINCT FROM server_summaries.selected_version_id
+                     AND excluded.learning_record_id=server_summaries.learning_record_id
+                     AND excluded.source_updated_at>server_summaries.source_updated_at
+                   RETURNING summary_id, revision, updated_at""",
+                (str(uuid4()), owner_user_id, paper_id, record["learning_record_id"], metadata.source_instance_id,
+                 metadata.local_summary_id,
+                 metadata.scope, metadata.author_type, json.dumps(metadata.items, ensure_ascii=False),
+                 metadata.original_created_at, metadata.source_updated_at, metadata.selected_version_id),
+            ).fetchone()
+            if row is None:
+                row = conn.execute(
+                    """SELECT s.summary_id, s.revision, s.updated_at, s.paper_id, s.learning_record_id,
+                              s.selected_version_id, s.scope, s.author_type, s.items, s.original_created_at, s.source_updated_at,
+                              r.local_learning_record_id
+                       FROM server_summaries s JOIN server_learning_records r
+                         ON r.learning_record_id=s.learning_record_id
+                       WHERE s.owner_user_id=%s AND s.source_instance_id=%s AND s.local_summary_id=%s""",
+                    (owner_user_id, metadata.source_instance_id, metadata.local_summary_id),
+                ).fetchone()
+                if row is not None and (str(row["paper_id"]) != paper_id
+                                        or row["selected_version_id"] != metadata.selected_version_id
+                                        or row["local_learning_record_id"] != metadata.local_learning_record_id):
+                    raise SummaryConflict
+                if row is not None and row["source_updated_at"] == metadata.source_updated_at:
+                    expected = (metadata.scope, metadata.author_type, list(metadata.items),
+                                metadata.original_created_at)
+                    actual = (row["scope"], row["author_type"], row["items"], row["original_created_at"])
+                    if actual != expected:
+                        raise SummaryConflict
+            if row is None:
+                raise PaperNotFound
+        return SummaryRegistration(str(row["summary_id"]), int(row["revision"]), "stored", row["updated_at"])
+
     def get_paper(self, owner_user_id: str, paper_id: str, *, learning_record_id: str | None,
                   version_id: str | None) -> PaperDetail:
         with _connection(self._pool) as conn:
@@ -306,6 +405,16 @@ class PostgresPaperStore:
                      ORDER BY last_studied_at DESC NULLS LAST, learning_record_id ASC LIMIT 1""",
                 tuple(params),
             ).fetchone()
+            summary = None
+            if record is not None:
+                summary = conn.execute(
+                    """SELECT summary_id, author_type, items, original_created_at
+                       FROM server_summaries
+                       WHERE owner_user_id=%s AND paper_id=%s AND learning_record_id=%s AND scope='paper'
+                         AND selected_version_id IS NOT DISTINCT FROM %s
+                       ORDER BY source_updated_at DESC, summary_id ASC LIMIT 1""",
+                    (owner_user_id, paper_id, record["learning_record_id"], record["selected_version_id"]),
+                ).fetchone()
         if learning_record_id is not None and record is None:
             raise PaperNotFound
         if version_id is not None and record is None:
@@ -324,7 +433,11 @@ class PostgresPaperStore:
             last_studied_at=record["last_studied_at"] if record else None,
             reading_status=record["reading_status"] if record else "unknown",
         )
-        return PaperDetail(item)
+        stored_summary = (StoredSummary(
+            str(summary["summary_id"]), summary["original_created_at"], summary["author_type"],
+            tuple(summary["items"]),
+        ) if summary is not None else None)
+        return PaperDetail(item, stored_summary)
 
 
 def _payload_hash(metadata: PaperMetadata) -> bytes:
