@@ -64,8 +64,8 @@ class LocalPdfStore:
             raise InvalidArgumentError('파일 경로가 import 루트를 벗어났습니다.')
         if not source.is_file():
             raise InvalidArgumentError('PDF 파일을 찾을 수 없습니다.')
-        if source.suffix.lower() != '.pdf':
-            raise UnsupportedDocumentError('PDF 확장자만 지원합니다.')
+        if requested.suffix.lower() != '.pdf' or source.suffix.lower() != '.pdf':
+            raise InvalidArgumentError('PDF 확장자만 지원합니다.')
         size = source.stat().st_size
         if size < 5 or size > self.max_bytes:
             raise UnsupportedDocumentError('PDF 파일 크기가 허용 범위를 벗어났습니다.')
@@ -82,13 +82,19 @@ class LocalPdfStore:
         """동의 카드 전에 파일을 복사하지 않고 등록 입력과 동일하게 검사한다."""
         requested, source = self._resolve_source(relative_path)
         digest = hashlib.sha256()
+        bytes_read = 0
         header = b''
         with self._open_source(source) as reader:
             for block in iter(lambda: reader.read(65536), b''):
+                bytes_read += len(block)
+                if bytes_read > self.max_bytes:
+                    raise UnsupportedDocumentError('PDF 파일 크기가 허용 범위를 벗어났습니다.')
                 header = (header + block[:5])[:5]
                 if len(header) == 5 and header != b'%PDF-':
                     raise UnsupportedDocumentError('PDF 헤더를 확인할 수 없습니다.')
                 digest.update(block)
+        if bytes_read < 5:
+            raise UnsupportedDocumentError('PDF 파일 크기가 허용 범위를 벗어났습니다.')
         file_hash = digest.hexdigest()
         return InspectedPdf(source.name, file_hash,
                             self._fingerprint(requested, file_hash))
