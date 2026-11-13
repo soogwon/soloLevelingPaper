@@ -27,6 +27,8 @@ class PaperSyncPreview:
     learning_record_count: int = 0
     last_studied_at: str | None = None
     learning_hash: str | None = None
+    summary_count: int = 0
+    summary_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,11 +66,13 @@ class PaperMetadataSyncService:
             source_id = _source_instance_id(conn)
             payload = _paper_payload(conn, paper_id, source_id)
             learning_payloads = _learning_payloads(conn, paper_id, source_id)
+            summary_payloads = _summary_payloads(conn, paper_id, source_id)
             if preview is not None and preview != PaperSyncPreview(
                 account_id, payload["local_paper_id"], payload["title"], payload["original_created_at"],
                 len(learning_payloads), _latest_timestamp(
                     item["last_studied_at"] for item in learning_payloads),
                 _learning_hash(learning_payloads),
+                len(summary_payloads), _summary_hash(summary_payloads),
             ):
                 raise SyncPreviewChanged
             digest = _payload_hash(payload)
@@ -98,6 +102,17 @@ class PaperMetadataSyncService:
                     (str(uuid4()), account_id, consent_id, paper_id,
                      learning["local_learning_record_id"], _payload_hash(learning), now, now),
                 )
+            for summary in summary_payloads:
+                conn.execute(
+                    """INSERT INTO sync_outbox
+                       (operation_id, account_id, consent_scope_id, object_type, local_object_id,
+                        local_subobject_id, operation, payload_hash, status, attempt_count,
+                        next_attempt_at, last_error_code, created_at, updated_at)
+                       VALUES (?, ?, ?, 'summary', ?, ?, 'upsert', ?, 'pending', 0,
+                               NULL, NULL, ?, ?)""",
+                    (str(uuid4()), account_id, consent_id, paper_id,
+                     summary["local_summary_id"], _payload_hash(summary), now, now),
+                )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -116,10 +131,12 @@ class PaperMetadataSyncService:
             if row is None:
                 raise KeyError("논문을 찾을 수 없습니다.")
             records = _learning_payloads(conn, paper_id, "")
+            summaries = _summary_payloads(conn, paper_id, "")
             return PaperSyncPreview(
                 account_id, row["paper_id"], row["title"], row["created_at"],
                 len(records), _latest_timestamp(item["last_studied_at"] for item in records),
                 _learning_hash(records),
+                len(summaries), _summary_hash(summaries),
             )
         finally:
             conn.close()
@@ -142,7 +159,7 @@ class PaperMetadataSyncService:
             if result.status == "synced":
                 child = conn.execute(
                     """SELECT status, last_error_code FROM sync_outbox WHERE consent_scope_id=?
-                       AND object_type='learning_record' AND status!='synced'
+                       AND object_type IN ('learning_record', 'summary') AND status!='synced'
                        ORDER BY CASE status WHEN 'conflict' THEN 0 WHEN 'action_required' THEN 1
                            WHEN 'retryable_failure' THEN 2 ELSE 3 END, operation_id LIMIT 1""",
                     (row["consent_scope_id"],),
@@ -172,6 +189,7 @@ class PaperMetadataSyncService:
         finally:
             conn.close()
         self._sync_learning_records(account_id, parent["consent_scope_id"], source_id, result.server_object_id)
+        self._sync_summaries(account_id, parent["consent_scope_id"], source_id, result.server_object_id)
         return self.status(operation_id)
 
     def _sync_paper(self, operation_id: str, account_id: str) -> SyncResult:
@@ -399,6 +417,129 @@ class PaperMetadataSyncService:
         finally:
             conn.close()
 
+    def _sync_summaries(self, account_id: str, consent_id: str,
+                        source_id: str, server_paper_id: str) -> None:
+        conn = get_connection(self._db_path)
+        try:
+            rows = conn.execute(
+                """SELECT operation_id FROM sync_outbox
+                   WHERE account_id=? AND object_type='summary' AND consent_scope_id=?
+                     AND status IN ('pending', 'retryable_failure', 'syncing') ORDER BY created_at, operation_id""",
+                (account_id, consent_id),
+            ).fetchall()
+        finally:
+            conn.close()
+        for pending in rows:
+            self._sync_summary(pending["operation_id"], account_id, source_id, server_paper_id)
+
+    def _sync_summary(self, operation_id: str, account_id: str,
+                      source_id: str, server_paper_id: str) -> None:
+        conn = get_connection(self._db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """SELECT o.*, c.revoked_at FROM sync_outbox o
+                   JOIN server_sync_consents c USING(consent_scope_id)
+                   WHERE o.operation_id=? AND o.account_id=? AND o.object_type='summary'""",
+                (operation_id, account_id),
+            ).fetchone()
+            if row is None or row["status"] in ("synced", "conflict", "action_required"):
+                return
+            if row["revoked_at"] is not None:
+                _finish(conn, row, "action_required", "consent_revoked", self._now())
+                return
+            payload = _summary_payload(conn, row["local_object_id"], row["local_subobject_id"], source_id)
+            if payload is None or _payload_hash(payload) != row["payload_hash"]:
+                _finish(conn, row, "conflict", "payload_changed", self._now())
+                return
+            dependency = conn.execute(
+                """SELECT status FROM sync_outbox WHERE account_id=? AND consent_scope_id=?
+                   AND object_type='learning_record' AND local_subobject_id=?""",
+                (account_id, row["consent_scope_id"], payload["local_learning_record_id"]),
+            ).fetchone()
+            if dependency is None or dependency["status"] != "synced":
+                return
+            attempt = row["attempt_count"] + 1
+            conn.execute(
+                """UPDATE sync_outbox SET status='syncing', attempt_count=attempt_count+1,
+                   last_error_code=NULL, updated_at=? WHERE operation_id=?""",
+                (_iso(self._now()), operation_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        path = (f"/v1/mcp/papers/{server_paper_id}/learning-records/"
+                f"{quote(payload['local_learning_record_id'], safe='')}/summaries/"
+                f"{quote(payload['local_summary_id'], safe='')}")
+        body = {key: value for key, value in payload.items()
+                if key not in ("local_learning_record_id", "local_summary_id")}
+        try:
+            response = self._client.request(
+                "PUT", path, json=body, expected_connection_id=account_id,
+            )
+        except ServerConnectionRequired:
+            self._record_failure(operation_id, account_id, attempt, "action_required", "reauthentication_required")
+            return
+        except Exception as exc:
+            if not _is_transport_failure(exc):
+                raise
+            self._record_failure(operation_id, account_id, attempt, "retryable_failure",
+                                 "server_unavailable", retry=True)
+            return
+        try:
+            if response.status_code == 409:
+                self._record_failure(operation_id, account_id, attempt, "conflict", "server_conflict")
+                return
+            if response.status_code in (404, 422):
+                self._record_failure(operation_id, account_id, attempt, "action_required", "invalid_summary")
+                return
+            if response.status_code >= 500:
+                self._record_failure(operation_id, account_id, attempt, "retryable_failure",
+                                     "server_unavailable", retry=True)
+                return
+            if response.status_code != 200:
+                self._record_failure(operation_id, account_id, attempt, "action_required",
+                                     "unexpected_server_response")
+                return
+            result = _validated_summary_response(response.json())
+        except (ValueError, TypeError, KeyError):
+            self._record_failure(operation_id, account_id, attempt, "action_required", "invalid_server_response")
+            return
+        finally:
+            response.close()
+        conn = get_connection(self._db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                "SELECT * FROM sync_outbox WHERE operation_id=? AND account_id=?",
+                (operation_id, account_id),
+            ).fetchone()
+            if current is None or current["attempt_count"] != attempt or current["status"] != "syncing":
+                return
+            now = _iso(self._now())
+            conn.execute(
+                """INSERT INTO server_subobject_mappings
+                   (account_id, source_instance_id, object_type, local_object_id, local_subobject_id,
+                    server_object_id, server_revision, synced_at)
+                   VALUES (?, ?, 'summary', ?, ?, ?, ?, ?)
+                   ON CONFLICT(account_id, source_instance_id, object_type, local_object_id, local_subobject_id)
+                   DO UPDATE SET server_object_id=excluded.server_object_id,
+                     server_revision=excluded.server_revision, synced_at=excluded.synced_at""",
+                (account_id, source_id, current["local_object_id"], current["local_subobject_id"],
+                 result["summary_id"], result["revision"], now),
+            )
+            conn.execute(
+                """UPDATE sync_outbox SET status='synced', next_attempt_at=NULL,
+                   last_error_code=NULL, updated_at=? WHERE operation_id=?""",
+                (now, operation_id),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
 
 def _source_instance_id(conn: sqlite3.Connection) -> str:
     row = conn.execute("SELECT source_instance_id FROM server_sync_identity WHERE singleton=1").fetchone()
@@ -425,6 +566,15 @@ def _learning_hash(records) -> str | None:
     return _payload_hash({"records": [
         {key: value for key, value in record.items() if key != "source_instance_id"}
         for record in records
+    ]})
+
+
+def _summary_hash(summaries) -> str | None:
+    if not summaries:
+        return None
+    return _payload_hash({"summaries": [
+        {key: value for key, value in summary.items() if key != "source_instance_id"}
+        for summary in summaries
     ]})
 
 
@@ -508,6 +658,55 @@ def _learning_payload(conn: sqlite3.Connection, paper_id: str, context_id: str,
     }
 
 
+def _summary_payloads(conn: sqlite3.Connection, paper_id: str,
+                      source_id: str) -> list[dict[str, Any]]:
+    summary_ids = [row["summary_id"] for row in conn.execute(
+        """SELECT s.summary_id FROM summaries s
+           JOIN learning_contexts c USING(context_id)
+           JOIN paper_versions v USING(version_id)
+           WHERE v.paper_id=? AND s.scope='paper' ORDER BY s.summary_id""",
+        (paper_id,),
+    ).fetchall()]
+    return [payload for summary_id in summary_ids
+            if (payload := _summary_payload(conn, paper_id, summary_id, source_id)) is not None]
+
+
+def _summary_payload(conn: sqlite3.Connection, paper_id: str, summary_id: str,
+                     source_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """SELECT s.summary_id, s.context_id, s.scope, s.created_at, c.version_id
+           FROM summaries s JOIN learning_contexts c USING(context_id)
+           JOIN paper_versions v USING(version_id)
+           WHERE v.paper_id=? AND s.summary_id=? AND s.scope='paper'""",
+        (paper_id, summary_id),
+    ).fetchone()
+    if row is None:
+        return None
+    items = []
+    for item in conn.execute(
+        """SELECT kind, text, evidence_ids FROM summary_items
+           WHERE summary_id=? ORDER BY position""", (summary_id,),
+    ).fetchall():
+        evidence_ids = json.loads(item["evidence_ids"])
+        if (not isinstance(evidence_ids, list) or not evidence_ids
+                or any(not isinstance(value, str) or not value for value in evidence_ids)):
+            raise ValueError("저장된 요약 근거 ID가 올바르지 않습니다.")
+        items.append({"kind": item["kind"], "text": item["text"], "evidence_ids": evidence_ids})
+    if not items:
+        raise ValueError("저장된 요약 항목이 없습니다.")
+    return {
+        "source_instance_id": source_id,
+        "selected_version_id": row["version_id"],
+        "scope": row["scope"],
+        "author_type": "mcp",
+        "items": items,
+        "original_created_at": row["created_at"],
+        "source_updated_at": row["created_at"],
+        "local_learning_record_id": row["context_id"],
+        "local_summary_id": row["summary_id"],
+    }
+
+
 def _payload_hash(payload: dict[str, Any]) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return sha256(canonical.encode("utf-8")).hexdigest()
@@ -542,16 +741,31 @@ def _validated_learning_response(data: Any) -> dict[str, Any]:
     return data
 
 
+def _validated_summary_response(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict) or data.get("sync_status") != "stored":
+        raise ValueError
+    if not isinstance(data.get("summary_id"), str) or not isinstance(data.get("server_updated_at"), str):
+        raise ValueError
+    UUID(data["summary_id"])
+    if (not isinstance(data.get("revision"), int) or isinstance(data["revision"], bool)
+            or not 1 <= data["revision"] <= 2**63 - 1):
+        raise ValueError
+    value = datetime.fromisoformat(data["server_updated_at"].replace("Z", "+00:00"))
+    if value.tzinfo is None:
+        raise ValueError
+    return data
+
+
 def _current_result(conn, row):
     if row["status"] != "synced":
         return SyncResult(row["operation_id"], row["status"], error_code=row["last_error_code"])
-    if row["object_type"] == "learning_record":
+    if row["object_type"] in ("learning_record", "summary"):
         mapping = conn.execute(
             """SELECT server_object_id FROM server_subobject_mappings
-               WHERE account_id=? AND object_type='learning_record' AND local_object_id=?
+               WHERE account_id=? AND object_type=? AND local_object_id=?
                AND local_subobject_id=? AND source_instance_id=(
                    SELECT source_instance_id FROM server_sync_identity WHERE singleton=1)""",
-            (row["account_id"], row["local_object_id"], row["local_subobject_id"]),
+            (row["account_id"], row["object_type"], row["local_object_id"], row["local_subobject_id"]),
         ).fetchone()
         return SyncResult(row["operation_id"], "synced", mapping["server_object_id"])
     mapping = conn.execute(

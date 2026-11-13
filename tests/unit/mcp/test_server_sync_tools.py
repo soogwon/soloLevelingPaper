@@ -34,9 +34,11 @@ def test_card_approval_creates_and_sends_exactly_one_operation():
         assert prepared.structuredContent["title"] == "Paper"
         operation_id = prepared.structuredContent["operation_id"]
         assert all(term in prepared.structuredContent["notice"] for term in
-                   ("제목", "학습 위치", "완료한 학습 단계", "PDF 파일", "추출 원문", "메모", "연결된 계정"))
+                   ("제목", "학습 위치", "완료한 학습 단계", "요약 본문", "근거 ID",
+                    "PDF 파일", "추출 원문", "근거 본문", "메모", "연결된 계정"))
         assert prepared.structuredContent["learning_record_count"] == 0
-        assert "학습 기록 0건 · 마지막 학습 시각 기록 없음" in prepared.structuredContent["notice"]
+        assert prepared.structuredContent["summary_count"] == 0
+        assert "학습 기록 0건 · 저장된 전체 논문 요약 0건" in prepared.structuredContent["notice"]
         token = prepared.meta["confirmation_token"]
         result = await server.call_tool("sync_paper_to_server", {
             "paper_id": "paper-1", "operation_id": operation_id, "confirmation_token": token})
