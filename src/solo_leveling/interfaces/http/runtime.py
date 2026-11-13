@@ -12,6 +12,7 @@ def main() -> None:
     uvicorn.run(
         "solo_leveling.interfaces.http.app:create_app",
         factory=True,
+        access_log=False,  # 로그인 콜백의 인증 코드와 상태값을 기록하지 않는다.
         host=settings.host,
         port=settings.port,
     )

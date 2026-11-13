@@ -14,3 +14,7 @@ cache
 logs
 mini-projects
 tests
+
+test_data
+**/*.pdf
+**/node_modules

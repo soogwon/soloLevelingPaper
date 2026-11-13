@@ -64,6 +64,7 @@ def test_runtime_starts_application_factory_with_environment(monkeypatch):
 
     assert calls == [(('solo_leveling.interfaces.http.app:create_app',), {
         "factory": True,
+        "access_log": False,
         "host": "0.0.0.0",
         "port": 8080,
     })]
