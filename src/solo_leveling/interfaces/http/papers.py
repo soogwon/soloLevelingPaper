@@ -200,7 +200,14 @@ class PostgresPaperStore:
                    (paper_id, owner_user_id, source_instance_id, local_paper_id, title, authors,
                     publication_year, original_created_at)
                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s)
-                   ON CONFLICT (owner_user_id, source_instance_id, local_paper_id) DO NOTHING
+                   ON CONFLICT (owner_user_id, source_instance_id, local_paper_id) DO UPDATE SET
+                       title = COALESCE(server_papers.title, EXCLUDED.title),
+                       revision = CASE
+                           WHEN server_papers.title IS NULL AND EXCLUDED.title IS NOT NULL
+                           THEN server_papers.revision + 1 ELSE server_papers.revision END,
+                       updated_at = CASE
+                           WHEN server_papers.title IS NULL AND EXCLUDED.title IS NOT NULL
+                           THEN CURRENT_TIMESTAMP ELSE server_papers.updated_at END
                    RETURNING paper_id, revision, updated_at""",
                 (
                     str(uuid4()), owner_user_id, metadata.source_instance_id, metadata.local_paper_id,

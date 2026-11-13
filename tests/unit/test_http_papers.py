@@ -83,7 +83,8 @@ def test_first_registration_uses_owner_scope_and_stores_idempotent_response():
     assert pool.conn.calls[0][1][:3] == ("user-1", "register_paper", "operation-key-0001")
     assert pool.conn.calls[1][1] == ("user-1", "register_paper", "operation-key-0001")
     insert = pool.conn.calls[2]
-    assert "ON CONFLICT (owner_user_id, source_instance_id, local_paper_id) DO NOTHING" in insert[0]
+    assert "ON CONFLICT (owner_user_id, source_instance_id, local_paper_id) DO UPDATE SET" in insert[0]
+    assert "title = COALESCE(server_papers.title, EXCLUDED.title)" in insert[0]
     assert insert[1][1:4] == ("user-1", SOURCE_ID, "local-paper-1")
     assert pool.conn.calls[3][1][1:] == ("user-1", "register_paper", "operation-key-0001")
 
@@ -100,6 +101,24 @@ def test_same_key_and_payload_replays_saved_response_without_touching_papers():
 
     assert result.paper_id == PAPER_ID
     assert len(pool.conn.calls) == 2
+
+
+def test_new_operation_can_fill_only_a_missing_existing_title():
+    item = metadata(title="attention is all you need.pdf")
+    row = {"paper_id": PAPER_ID, "revision": 2, "updated_at": NOW}
+    pool = Pool([
+        Result(),
+        Result({"payload_hash": _payload_hash(item), "response_status": None, "response_body": None}),
+        Result(row),
+        Result(),
+    ])
+
+    result = PostgresPaperStore(pool).register("user-1", "operation-key-0002", item)
+
+    insert_sql = pool.conn.calls[2][0]
+    assert result.revision == 2
+    assert "server_papers.title IS NULL AND EXCLUDED.title IS NOT NULL" in insert_sql
+    assert "authors =" not in insert_sql
 
 
 def test_same_key_with_different_payload_is_conflict_before_paper_access():
