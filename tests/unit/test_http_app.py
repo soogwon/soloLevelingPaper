@@ -9,7 +9,12 @@ import pytest
 
 from solo_leveling.interfaces.http import create_app
 from solo_leveling.interfaces.http import runtime
-from solo_leveling.interfaces.http.settings import HttpSettings, load_http_settings, load_web_auth_settings
+from solo_leveling.interfaces.http.settings import (
+    HttpSettings,
+    load_http_settings,
+    load_web_auth_settings,
+    load_web_static_root,
+)
 
 
 def test_package_import_without_server_dependencies():
@@ -38,6 +43,11 @@ def test_http_settings_are_loaded_from_environment_mapping():
     assert settings == HttpSettings(environment="staging", host="0.0.0.0", port=8080)
 
 
+def test_render_port_is_used_when_api_port_is_absent():
+    assert load_http_settings({"PORT": "10000"}).port == 10000
+    assert load_http_settings({"PORT": "10000", "API_PORT": "8080"}).port == 8080
+
+
 @pytest.mark.parametrize("port", ["zero", "0", "65536"])
 def test_invalid_api_port_is_rejected(port):
     with pytest.raises(ValueError, match="API_PORT"):
@@ -54,6 +64,7 @@ def test_runtime_starts_application_factory_with_environment(monkeypatch):
 
     assert calls == [(('solo_leveling.interfaces.http.app:create_app',), {
         "factory": True,
+        "access_log": False,
         "host": "0.0.0.0",
         "port": 8080,
     })]
@@ -76,3 +87,22 @@ def test_web_auth_settings_are_all_or_none_and_https():
         load_web_auth_settings(values | {"WEB_APP_ORIGIN": "http://app.example"})
     with pytest.raises(ValueError):
         load_web_auth_settings(values | {"WEB_OIDC_REDIRECT_URI": "https://api.example/v1/auth/callback"})
+
+
+def test_static_web_root_is_validated_and_mounted_after_api_routes(tmp_path, monkeypatch):
+    web_root = tmp_path / "web"
+    web_root.mkdir()
+    (web_root / "index.html").write_text("<!doctype html><title>test</title>", encoding="utf-8")
+    monkeypatch.setenv("WEB_STATIC_ROOT", str(web_root))
+
+    assert load_web_static_root() == web_root
+    app = create_app(HttpSettings(environment="test"))
+    route_names = [route.name for route in app.routes]
+
+    assert route_names.index("health") < route_names.index("external-site")
+    assert app.routes[-1].name == "external-site"
+
+
+def test_static_web_root_rejects_missing_index(tmp_path):
+    with pytest.raises(ValueError, match="index.html"):
+        load_web_static_root({"WEB_STATIC_ROOT": str(tmp_path)})

@@ -1,0 +1,33 @@
+name: Render 배포 이미지 검증
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - deploy/render-start.sh
+      - src/solo_leveling/interfaces/http/**
+      - .github/workflows/render-image.yml
+permissions:
+  contents: read
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 배포 이미지 빌드
+        run: docker build -t slp-render-test .
+      - name: 이미지에 포함된 실행 파일과 제외 대상 확인
+        run: |
+          docker run --rm slp-render-test sh -ec '
+            test "$(id -u)" != 0
+            test -x deploy/render-start.sh
+            test -f web/index.html
+            test -f migrations/server/0007_server_summaries.sql
+            test ! -e test_data
+            test ! -e tests
+            test ! -e web/tests
+            test -z "$(find /app -iname "*.pdf" -print -quit)"
+            solo-leveling-server-migrate --help
+            WEB_STATIC_ROOT=/app/web python -c "from solo_leveling.interfaces.http import create_app; create_app()"
+          '

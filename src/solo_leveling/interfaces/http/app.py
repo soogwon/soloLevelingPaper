@@ -34,7 +34,12 @@ def create_app(
     from .oidc import OidcAccessTokenVerifier
     from .paper_routes import create_paper_router, create_web_paper_router
     from .papers import PostgresPaperStore, UnavailablePaperStore
-    from .settings import load_database_settings, load_oidc_settings, load_web_auth_settings
+    from .settings import (
+        load_database_settings,
+        load_oidc_settings,
+        load_web_auth_settings,
+        load_web_static_root,
+    )
     from .web_auth import OidcWebAuthFlow, PostgresWebSessionStore, WebSessionVerifier
     from .web_auth_routes import create_web_auth_router
 
@@ -119,5 +124,11 @@ def create_app(
     app.include_router(create_web_paper_router(require_principal, selected_paper_store))
     if web_auth_flow is not None and web_session_store is not None:
         app.include_router(create_web_auth_router(web_auth_flow, web_session_store))
+
+    web_static_root = load_web_static_root()
+    if web_static_root is not None:
+        from fastapi.staticfiles import StaticFiles
+        # 루트 mount는 반드시 API route 등록 뒤에 둬야 /v1과 /health를 가리지 않는다.
+        app.mount("/", StaticFiles(directory=web_static_root, html=True), name="external-site")
 
     return app
