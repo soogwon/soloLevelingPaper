@@ -92,21 +92,24 @@ FOOTER_ZONE_RATIO = 0.90
 _PAGE_NUMBER_RE = re.compile(r"\d{1,4}")
 
 
-def _remove_repeated_diagram_labels(text: str) -> str:
-    """한 페이지 그림 안에서 여러 번 복제된 짧은 레이어 라벨만 제거한다.
+_FIGURE_CAPTION = re.compile(r'^\s*(?:Fig(?:ure)?\.?|그림)\s*\d+', re.IGNORECASE)
+_LAYER_LABEL = re.compile(r'(?:[\w]+(?:[-–][\w]+)*\s+){0,3}(?:Layer|계층)\s*\d+', re.IGNORECASE)
 
-    표와 본문의 반복을 과도하게 지우지 않도록 문장 종결 부호가 없고, 단어 수가
-    적은 동일 줄이 세 번 이상 나타나는 경우로 제한한다.
-    """
-    lines = text.splitlines()
-    normalized = [re.sub(r'\s+', ' ', line).strip().casefold() for line in lines]
-    counts = Counter(normalized)
-    noise = {
-        value for value, count in counts.items()
-        if count >= 3 and value and len(value) <= 80
-        and len(value.split()) <= 8 and not re.search(r'[.!?。！？]$', value)
-    }
-    return '\n'.join(line for line, value in zip(lines, normalized) if value not in noise)
+
+def _remove_repeated_diagram_labels(text: str) -> str:
+    """그림 설명 바로 앞에서 연속으로 반복되는 같은 레이어 라벨만 제거한다."""
+    kept = []
+    for line in text.splitlines():
+        if _FIGURE_CAPTION.match(line) and kept:
+            label = kept[-1].strip().casefold()
+            if _LAYER_LABEL.fullmatch(label):
+                start = len(kept) - 1
+                while start and kept[start - 1].strip().casefold() == label:
+                    start -= 1
+                if len(kept) - start >= 2:
+                    del kept[start:]
+        kept.append(line)
+    return '\n'.join(kept)
 
 
 @dataclass

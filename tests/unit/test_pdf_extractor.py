@@ -147,16 +147,25 @@ def test_repeated_short_diagram_labels_are_removed_without_dropping_prose():
     text = (
         'The encoder contains several layers.\n'
         'Input-Input Layer 5\nInput-Input Layer 5\nInput-Input Layer 5\n'
-        'The decoder attends to the encoder output.'
+        'Figure 5: The decoder attends to the encoder output.'
     )
 
     cleaned = _remove_repeated_diagram_labels(text)
 
     assert 'Input-Input Layer 5' not in cleaned
     assert 'The encoder contains several layers.' in cleaned
-    assert 'The decoder attends to the encoder output.' in cleaned
+    assert 'Figure 5: The decoder attends to the encoder output.' in cleaned
 
 
 def test_repeated_complete_sentences_are_preserved():
     repeated = 'This result is significant.'
     assert _remove_repeated_diagram_labels('\n'.join([repeated] * 3)).count(repeated) == 3
+
+def test_repeated_table_rows_and_labels_outside_a_figure_are_preserved():
+    table = 'Layer 5\n0 1 0\n' * 3
+    assert _remove_repeated_diagram_labels(table.rstrip()) == table.rstrip()
+
+
+def test_repeated_table_values_before_figure_caption_are_preserved():
+    text = '0 1 0\n0 1 0\n0 1 0\nFigure 5: Example.'
+    assert _remove_repeated_diagram_labels(text) == text
