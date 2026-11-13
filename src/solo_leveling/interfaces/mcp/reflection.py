@@ -1,5 +1,6 @@
 """읽기 전후 질문·답변과 비교 화면을 저장 서비스에 연결한다."""
 
+from copy import deepcopy
 from dataclasses import asdict
 from importlib.resources import files
 from typing import Annotated, Literal
@@ -7,6 +8,7 @@ from typing import Annotated, Literal
 import anyio
 from jsonschema import Draft202012Validator, ValidationError
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 from pydantic import ValidationError as ModelValidationError
@@ -29,6 +31,29 @@ _QUIZ_INPUTS = {'get_quiz': QuizInput, 'submit_quiz': SubmitInput,
                 'get_quiz_scores': ScoresInput, 'review_quiz_attempt': AttemptInput}
 
 
+def _inline_local_refs(schema: dict) -> dict:
+    """클라이언트가 ``$defs``를 버려도 사용할 수 있도록 로컬 참조를 펼친다."""
+    document = deepcopy(schema)
+    definitions = document.get('$defs', {})
+
+    def expand(value, resolving=frozenset()):
+        if isinstance(value, list):
+            return [expand(item, resolving) for item in value]
+        if not isinstance(value, dict):
+            return value
+        reference = value.get('$ref')
+        if isinstance(reference, str) and reference.startswith('#/$defs/'):
+            name = reference.removeprefix('#/$defs/')
+            if name in definitions and name not in resolving:
+                resolved = expand(definitions[name], resolving | {name})
+                siblings = {key: item for key, item in value.items() if key != '$ref'}
+                return {**resolved, **expand(siblings, resolving)}
+        return {key: expand(item, resolving) for key, item in value.items()
+                if key != '$defs'}
+
+    return expand(document)
+
+
 class ReflectionInputServer(SafeInputServer):
     """읽기 질문·퀴즈·메모 도구의 입력을 SDK 오류 직렬화 전에 검증한다."""
 
@@ -40,9 +65,17 @@ class ReflectionInputServer(SafeInputServer):
                 tool.inputSchema = {**tool.inputSchema, 'additionalProperties': False}
             elif tool.name in _QUIZ_INPUTS:
                 tool.inputSchema = _QUIZ_INPUTS[tool.name].model_json_schema()
+            if tool.name in ANNOTATION_INPUTS or tool.name in _QUIZ_INPUTS:
+                tool.inputSchema = _inline_local_refs(tool.inputSchema)
         return tools
 
     async def call_tool(self, name, arguments):
+        if name in ANNOTATION_INPUTS or name in _QUIZ_INPUTS:
+            try:
+                arguments = self._find_tool(name).fn_metadata.pre_parse_json(arguments)
+            except ValueError:
+                raise ToolError(
+                    'INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.') from None
         if name in ANNOTATION_INPUTS:
             try:
                 model = ANNOTATION_INPUTS[name]
@@ -50,12 +83,14 @@ class ReflectionInputServer(SafeInputServer):
                     raise ValueError('invalid request')
                 model.model_validate(arguments['request'])
             except ValueError:
-                raise to_tool_error(InvalidArgumentError('입력값을 확인해주세요.')) from None
+                raise ToolError(
+                    'INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.') from None
         if name in _QUIZ_INPUTS:
             try:
                 _QUIZ_INPUTS[name].model_validate(arguments)
             except ModelValidationError:
-                raise to_tool_error(InvalidArgumentError('입력값을 확인해주세요.')) from None
+                raise ToolError(
+                    'INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.') from None
         if name in _READING_TOOLS:
             tool = next((tool for tool in await self.list_tools() if tool.name == name), None)
             if tool is not None:

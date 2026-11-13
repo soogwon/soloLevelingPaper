@@ -183,11 +183,49 @@ def test_public_schema_and_unknown_field_do_not_expose_input(environment, caplog
             assert tools['delete_annotation'].annotations.destructiveHint is True
             for name in ('create_annotation', 'get_annotation', 'list_annotations', 'update_annotation', 'delete_annotation'):
                 assert tools[name].inputSchema['additionalProperties'] is False
+                assert '$ref' not in json.dumps(tools[name].inputSchema)
+                assert '$defs' not in tools[name].inputSchema
             result = await client.call_tool('create_annotation', {
                 'request': {'context_id': context, 'kind': 'note', 'body': 'PRIVATE_MARKER'},
                 'PRIVATE_MARKER': 'PRIVATE_MARKER'})
             assert result.isError and 'PRIVATE_MARKER' not in str(result)
             assert (await call(client, 'list_annotations', {'context_id': context}))['items'] == []
+    asyncio.run(scenario())
+    captured = capsys.readouterr()
+    assert 'PRIVATE_MARKER' not in caplog.text + captured.out + captured.err
+
+
+def test_annotation_accepts_json_string_request(environment):
+    db, context = environment
+
+    async def scenario():
+        async with create_connected_server_and_client_session(server(db)) as client:
+            request = json.dumps({
+                'context_id': context, 'kind': 'note', 'body': '문자열 JSON 메모',
+                'segments': [{
+                    'chunk_id': 'c1', 'start_offset': 0, 'end_offset': 5,
+                    'quote_snapshot': 'First',
+                }],
+            })
+            result = await client.call_tool('create_annotation', {'request': request})
+            assert not result.isError
+            assert result.structuredContent['annotation']['body'] == '문자열 JSON 메모'
+
+    asyncio.run(scenario())
+
+
+def test_invalid_annotation_json_returns_safe_reason(environment, caplog, capsys):
+    db, _ = environment
+
+    async def scenario():
+        async with create_connected_server_and_client_session(server(db)) as client:
+            result = await client.call_tool(
+                'create_annotation', {'request': '{"body":"PRIVATE_MARKER"'})
+            assert result.isError
+            assert result.content[0].text == (
+                'INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.')
+            assert 'PRIVATE_MARKER' not in str(result)
+
     asyncio.run(scenario())
     captured = capsys.readouterr()
     assert 'PRIVATE_MARKER' not in caplog.text + captured.out + captured.err

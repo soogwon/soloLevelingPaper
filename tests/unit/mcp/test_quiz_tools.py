@@ -65,6 +65,8 @@ def test_quiz_protocol_with_persisted_replay(ctx):
             for name in ('get_quiz', 'submit_quiz', 'get_quiz_attempt'):
                 tool = next(tool for tool in tools if tool.name == name)
                 assert tool.meta['ui']['resourceUri'] == 'ui://solo-leveling/quiz.html'
+                assert '$ref' not in json.dumps(tool.inputSchema)
+                assert '$defs' not in tool.inputSchema
             resource = await client.read_resource('ui://solo-leveling/quiz.html')
             assert resource.contents[0].mimeType == 'text/html;profile=mcp-app'
             assert '논문 학습 퀴즈' in resource.contents[0].text
@@ -78,6 +80,7 @@ def test_quiz_protocol_with_persisted_replay(ctx):
             invalid = await client.call_tool('submit_quiz', dict(args, answers=[
                 {'question_index': False, 'text': 'PRIVATE_MARKER'}]))
             assert invalid.isError and 'INVALID_ARGUMENT' in invalid.content[0].text
+            assert 'INVALID_INPUT' in invalid.content[0].text
             assert 'PRIVATE_MARKER' not in invalid.content[0].text
             for answers in (
                 [{'question_index': 0, 'selected_index': 99}],
@@ -142,5 +145,23 @@ def test_quiz_protocol_with_persisted_replay(ctx):
             assert empty.structuredContent == dict(context_id=cid, items=[], next_cursor=None)
             invalid = await client.call_tool('list_quiz_attempts', dict(page_args, step='review', cursor=newest))
             assert invalid.isError and 'INVALID_ARGUMENT' in invalid.content[0].text
+
+    asyncio.run(scenario())
+
+
+def test_quiz_accepts_json_string_answers(ctx):
+    db, cid, qid = ctx
+    quiz_server = create_server(MCPServices(
+        Mock(), Mock(), quiz=QuizContractAdapter(StoredQuizService(db))))
+
+    async def scenario():
+        async with create_connected_server_and_client_session(quiz_server) as client:
+            result = await client.call_tool('submit_quiz', {
+                'context_id': cid, 'step': 'preview', 'quiz_id': qid,
+                'request_key': 'json-string',
+                'answers': json.dumps([{'question_index': 0, 'selected_index': 1}]),
+            })
+            assert not result.isError
+            assert result.structuredContent['score'] == 1
 
     asyncio.run(scenario())
