@@ -263,7 +263,7 @@ def test_postgres_list_is_owner_scoped_searchable_and_stably_paginated():
     ), 2, 20, 22, 2)
     count_sql, count_params = pool.conn.calls[1]
     page_sql, page_params = pool.conn.calls[2]
-    assert "owner_user_id = %s" in count_sql and "title ILIKE %s" in count_sql
+    assert "p.owner_user_id = %s" in count_sql and "p.title ILIKE %s" in count_sql
     assert count_params == ("user-1", r"% 100\%\_\\\\test %")
     assert "ORDER BY r.last_studied_at DESC NULLS LAST, p.paper_id ASC" in page_sql
     assert page_params == (*count_params, 20, 20)
@@ -278,6 +278,28 @@ def test_status_filter_uses_synced_record_and_excludes_unknown_papers():
     assert result == PaperPage((), 3, 10, 0, 0)
     assert "COALESCE(r.reading_status, 'unknown') = %s" in pool.conn.calls[1][0]
     assert pool.conn.calls[1][1] == ("user-1", "reading")
+
+
+def test_collection_filters_use_owned_membership_join():
+    pool = Pool([Result(), Result({"total_count": 0})])
+    collection_id = "00000000-0000-0000-0000-000000000301"
+
+    result = PostgresPaperStore(pool).list_papers(
+        "user-1", query=None, reading_status=None, page=1, limit=20,
+        collection_id=collection_id)
+
+    assert result == PaperPage((), 1, 20, 0, 0)
+    sql, params = pool.conn.calls[1]
+    assert "cp.owner_user_id=p.owner_user_id AND cp.paper_id=p.paper_id" in sql
+    assert "cp.collection_id = %s" in sql
+    assert params == ("user-1", collection_id)
+
+
+def test_unassigned_filter_requires_missing_membership():
+    pool = Pool([Result(), Result({"total_count": 0})])
+    PostgresPaperStore(pool).list_papers(
+        "user-1", query=None, reading_status=None, page=1, limit=20, unassigned=True)
+    assert "cp.collection_id IS NULL" in pool.conn.calls[1][0]
 
 
 def test_list_returns_latest_synced_learning_record_fields():
@@ -579,7 +601,9 @@ def test_openapi_exposes_protected_web_paper_page_contract():
     operation = create_app().openapi()["paths"]["/v1/papers"]["get"]
     assert operation["security"] == [{"ServerAccessToken": []}]
     parameters = {item["name"]: item for item in operation["parameters"]}
-    assert set(parameters) == {"q", "reading_status", "sort", "page", "limit"}
+    assert set(parameters) == {
+        "q", "reading_status", "collection_id", "unassigned", "sort", "page", "limit"
+    }
     assert parameters["page"]["schema"]["default"] == 1
     assert parameters["limit"]["schema"]["default"] == 20
 

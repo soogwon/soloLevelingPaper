@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from .device_auth import DeviceRegistry
     from .devices import DeviceStore
     from .papers import PaperStore
+    from .collections import CollectionStore
 
 
 def create_app(
@@ -19,6 +20,7 @@ def create_app(
     device_registry: "DeviceRegistry | None" = None,
     device_store: "DeviceStore | None" = None,
     paper_store: "PaperStore | None" = None,
+    collection_store: "CollectionStore | None" = None,
     web_auth_flow=None,
     web_session_store=None,
 ) -> "FastAPI":
@@ -28,6 +30,8 @@ def create_app(
 
     from .auth import RejectAllTokenVerifier, create_auth_dependency
     from .annotation_routes import create_annotation_router
+    from .collection_routes import create_collection_router
+    from .collections import PostgresCollectionStore, UnavailableCollectionStore
     from .device_auth import DeviceAuthorizingTokenVerifier, RejectAllDeviceRegistry
     from .device_routes import create_device_router, create_device_token_router
     from .device_tokens import OpaqueDeviceTokenVerifier, RoutingAccessTokenVerifier
@@ -55,6 +59,10 @@ def create_app(
     if paper_store is None and managed_store is not None:
         paper_store = PostgresPaperStore(managed_store.connection_pool)
     selected_paper_store = paper_store if paper_store is not None else UnavailablePaperStore()
+    if collection_store is None and managed_store is not None:
+        collection_store = PostgresCollectionStore(managed_store.connection_pool)
+    selected_collection_store = (collection_store if collection_store is not None
+                                 else UnavailableCollectionStore())
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -83,7 +91,7 @@ def create_app(
             CORSMiddleware,
             allow_origins=[web_settings.app_origin.rstrip("/")],
             allow_credentials=True,
-            allow_methods=["GET", "POST"],
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
             allow_headers=["Content-Type", "X-CSRF-Token", "Idempotency-Key"],
         )
     if web_session_store is None and managed_store is not None and web_settings is not None:
@@ -124,6 +132,7 @@ def create_app(
     app.include_router(create_paper_router(require_principal, selected_paper_store))
     app.include_router(create_web_paper_router(require_principal, selected_paper_store))
     app.include_router(create_annotation_router(require_principal, selected_paper_store))
+    app.include_router(create_collection_router(require_principal, selected_collection_store))
     if web_auth_flow is not None and web_session_store is not None:
         app.include_router(create_web_auth_router(web_auth_flow, web_session_store))
 
