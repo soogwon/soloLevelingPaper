@@ -3,8 +3,10 @@
 from dataclasses import replace
 import json
 import random
+import re
 import sys
 import time
+import unicodedata
 from typing import Callable, Sequence
 from uuid import uuid4
 
@@ -81,6 +83,21 @@ class TranslationService:
                     raise
                 budget.retries += 1
 
+    @staticmethod
+    def _translation_quality(request: TranslationRequest, text: str):
+        """수식 위주 청크는 허용하고 번역 가능한 영문 산문의 미번역만 판정한다."""
+        original = ' '.join(unicodedata.normalize('NFKC', request.original_text).split())
+        translated = ' '.join(unicodedata.normalize('NFKC', text).split())
+        words = re.findall(r"[A-Za-z]{2,}", original)
+        translatable_prose = len(words) >= 3 and sum(map(len, words)) >= 12
+        if not translatable_prose:
+            return None
+        if original.casefold() == translated.casefold():
+            return TranslationFailureCode.UNCHANGED_TRANSLATION
+        if not re.search(r'[\uac00-\ud7a3]', translated):
+            return TranslationFailureCode.TARGET_LANGUAGE_MISMATCH
+        return None
+
     def translate(
         self, chunks: Sequence[Chunk], settings: TranslationSettings,
     ) -> TranslationBatchResult:
@@ -122,5 +139,8 @@ class TranslationService:
                     request, None, TranslationFailureCode.EMPTY_TRANSLATION,
                 ))
             else:
-                results.append(ChunkTranslationResult(request, text))
+                failure = self._translation_quality(request, text)
+                results.append(ChunkTranslationResult(
+                    request, None, failure) if failure else
+                    ChunkTranslationResult(request, text))
         return TranslationBatchResult(revision, settings, tuple(results))

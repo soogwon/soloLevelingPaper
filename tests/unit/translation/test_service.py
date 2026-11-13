@@ -46,6 +46,36 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(result.items[0].failure_code, TranslationFailureCode.EMPTY_TRANSLATION)
         self.assertIsNone(result.items[0].text)
 
+    def test_unchanged_english_prose_is_failure(self):
+        original = "Multi-head attention uses different representation subspaces."
+        provider = FakeTranslationProvider({original: f"  {original}\n"})
+        result = TranslationService(provider).translate(
+            (Chunk("c", "p", 0, original),), self.settings)
+        self.assertEqual(
+            result.items[0].failure_code,
+            TranslationFailureCode.UNCHANGED_TRANSLATION)
+        self.assertIsNone(result.items[0].text)
+
+    def test_non_korean_english_paraphrase_is_failure(self):
+        original = "Multi-head attention uses different representation subspaces."
+        provider = FakeTranslationProvider({
+            original: "Several attention heads operate across distinct representation spaces."})
+        result = TranslationService(provider).translate(
+            (Chunk("c", "p", 0, original),), self.settings)
+        self.assertEqual(
+            result.items[0].failure_code,
+            TranslationFailureCode.TARGET_LANGUAGE_MISMATCH)
+        self.assertIsNone(result.items[0].text)
+
+    def test_korean_translation_with_preserved_terms_is_success(self):
+        original = "Multi-head attention uses different representation subspaces."
+        translated = "Multi-head attention은 서로 다른 representation subspace를 사용한다."
+        provider = FakeTranslationProvider({original: translated})
+        result = TranslationService(provider).translate(
+            (Chunk("c", "p", 0, original),), self.settings)
+        self.assertEqual(result.items[0].text, translated)
+        self.assertIsNone(result.items[0].failure_code)
+
     def test_invalid_batch_makes_no_calls(self):
         bad_batches = ((), (self.chunks[0], self.chunks[0]),
                        (self.chunks[0], replace(self.chunks[1], parse_revision_id="p2")),

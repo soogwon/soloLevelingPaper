@@ -14,6 +14,8 @@ def require_text(value: str, name: str) -> None:
 class TranslationFailureCode(str, Enum):
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     EMPTY_TRANSLATION = "empty_translation"
+    UNCHANGED_TRANSLATION = "unchanged_translation"
+    TARGET_LANGUAGE_MISMATCH = "target_language_mismatch"
 
 
 @dataclass(frozen=True)
