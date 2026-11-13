@@ -207,5 +207,5 @@ def test_blank_policy_can_preserve_input_when_explicitly_allowed(prepared):
 def test_server_without_quiz_service_omits_quiz_tools():
     server = create_server(MCPServices(Mock(), Mock()))
     names = {tool.name for tool in asyncio.run(server.list_tools())}
-    assert not names.intersection({'get_quiz', 'submit_quiz', 'get_quiz_attempt',
+    assert not names.intersection({'get_quiz', 'generate_quiz', 'submit_quiz', 'get_quiz_attempt',
                                    'list_quiz_attempts', 'get_quiz_scores', 'review_quiz_attempt'})

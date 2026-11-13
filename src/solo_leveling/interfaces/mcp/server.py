@@ -592,7 +592,7 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                     ]
                 if services.quiz is not None:
                     capabilities += [
-                        'get_quiz', 'submit_quiz', 'get_quiz_attempt',
+                        'get_quiz', 'generate_quiz', 'submit_quiz', 'get_quiz_attempt',
                         'list_quiz_attempts', 'get_quiz_scores',
                         'review_quiz_attempt',
                     ]

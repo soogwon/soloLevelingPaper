@@ -1,8 +1,11 @@
 """저장된 퀴즈 조회와 요청 키 기반 제출을 MCP로 연결한다."""
 
+from hashlib import sha256
 from importlib.resources import files
+from pathlib import Path
 
 import anyio
+from filelock import FileLock
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
@@ -45,6 +48,18 @@ class StoredQuizService:
             raise ContractError('NOT_FOUND')
         if self.generator is None:
             raise ContractError('QUIZ_NOT_READY')
+        # 같은 DB를 쓰는 서버끼리도 같은 맥락·단계의 외부 호출은 한 번만 시작한다.
+        db = Path(self.db_path).resolve()
+        directory = db.with_name(db.name + '.quiz-locks')
+        directory.mkdir(exist_ok=True)
+        key = sha256(f'{context_id}:{step}'.encode()).hexdigest()
+        with FileLock(directory / f'{key}.lock'):
+            existing = repository.get_quiz(self.db_path, context_id, step)
+            if existing is not None:
+                return existing
+            return self._generate(context_id, step)
+
+    def _generate(self, context_id, step):
         try:
             return self.generator.generate(context_id, step).quiz
         except ResourceNotFoundError:
@@ -150,8 +165,13 @@ def register_quiz(server: FastMCP, adapter: QuizContractAdapter):
     @server.tool(structured_output=True, meta=card, annotations=ToolAnnotations(
         readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     async def get_quiz(context_id: Text, step: Step) -> PublicQuiz:
-        """저장된 단계별 공개 퀴즈를 조회합니다. QUIZ_NOT_READY이면 아직 퀴즈가 없습니다."""
-        return await invoke(adapter.get_quiz, dict(context_id=context_id, step=step))
+        """저장된 단계별 공개 퀴즈를 조회합니다. QUIZ_NOT_READY이면 전송 내용을 안내한 뒤 generate_quiz로 생성하세요."""
+        try:
+            return await invoke(adapter.get_quiz, dict(context_id=context_id, step=step))
+        except ToolError as error:
+            if str(error) == 'QUIZ_NOT_READY':
+                raise ToolError('QUIZ_NOT_READY: 전송 내용을 안내한 뒤 generate_quiz로 생성하세요.') from None
+            raise
 
     @server.tool(structured_output=True, meta=card, annotations=ToolAnnotations(
         readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))

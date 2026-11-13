@@ -1,5 +1,7 @@
 """임시 SQLite와 MCP 세션으로 퀴즈 조회·제출·재전송을 검증한다."""
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, local
 import asyncio
 import json
 from unittest.mock import Mock
@@ -188,6 +190,8 @@ def test_generate_quiz_creates_once_and_get_reuses_it(setup_db):
 
     async def scenario():
         async with create_connected_server_and_client_session(quiz_server) as client:
+            missing = await client.call_tool('get_quiz', {'context_id': cid, 'step': 'preview'})
+            assert missing.isError and 'generate_quiz' in missing.content[0].text
             first = await client.call_tool(
                 'generate_quiz', {'context_id': cid, 'step': 'preview'})
             replay = await client.call_tool(
@@ -215,7 +219,32 @@ def test_generate_quiz_reports_unavailable_provider(setup_db):
             result = await client.call_tool(
                 'generate_quiz', {'context_id': cid, 'step': 'preview'})
             assert result.isError
-            assert result.content[0].text == 'UPSTREAM_UNAVAILABLE'
+            assert result.content[0].text.split(': ')[-1] == 'UPSTREAM_UNAVAILABLE'
             assert 'private' not in str(result)
 
     asyncio.run(scenario())
+
+
+def test_concurrent_generation_reuses_quiz_across_servers(setup_db, monkeypatch):
+    db, chunks = setup_db
+    cid = publish(db, chunks).context_id
+    generator = Mock()
+    generator.generate_quiz.side_effect = lambda step, evidence: [DraftQuestion(
+        'multiple_choice', '첫 문장은?', (evidence[0].evidence_id,), ('첫째', '둘째'), 0)]
+    services = [StoredQuizService(db, QuizService(db, generator)) for _ in range(2)]
+    get_quiz = repository.get_quiz
+    readers = Barrier(2)
+    state = local()
+
+    def simultaneous_lookup(*args):
+        quiz = get_quiz(*args)
+        if not getattr(state, 'started', False):
+            state.started = True
+            readers.wait(timeout=5)
+        return quiz
+
+    monkeypatch.setattr(repository, 'get_quiz', simultaneous_lookup)
+    with ThreadPoolExecutor(2) as pool:
+        quizzes = list(pool.map(lambda service: service.generate_quiz(cid, 'preview'), services))
+    generator.generate_quiz.assert_called_once()
+    assert quizzes[0].quiz_id == quizzes[1].quiz_id == get_quiz(db, cid, 'preview').quiz_id
