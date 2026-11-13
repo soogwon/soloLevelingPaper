@@ -179,27 +179,23 @@ class PostgresCollectionStore:
 
     def rename_collection(self, owner_user_id: str, collection_id: str, name: str,
                           normalized_name: str) -> CollectionItem:
+        from psycopg.errors import UniqueViolation
+
         with _connection(self._pool) as conn:
-            row = conn.execute(
-                """UPDATE server_collections c SET name=%s, normalized_name=%s,
-                          updated_at=CURRENT_TIMESTAMP
-                   WHERE c.owner_user_id=%s AND c.collection_id=%s
-                     AND NOT EXISTS (SELECT 1 FROM server_collections other
-                         WHERE other.owner_user_id=c.owner_user_id
-                           AND other.normalized_name=%s AND other.collection_id<>c.collection_id)
-                   RETURNING c.collection_id, c.name, c.created_at, c.updated_at,
-                     (SELECT count(*) FROM server_collection_papers cp
-                      WHERE cp.owner_user_id=c.owner_user_id AND cp.collection_id=c.collection_id) AS paper_count""",
-                (name, normalized_name, owner_user_id, collection_id, normalized_name),
-            ).fetchone()
-            if row is None:
-                exists = conn.execute(
-                    "SELECT 1 FROM server_collections WHERE owner_user_id=%s AND collection_id=%s",
-                    (owner_user_id, collection_id),
+            try:
+                row = conn.execute(
+                    """UPDATE server_collections c SET name=%s, normalized_name=%s,
+                              updated_at=CURRENT_TIMESTAMP
+                       WHERE c.owner_user_id=%s AND c.collection_id=%s
+                       RETURNING c.collection_id, c.name, c.created_at, c.updated_at,
+                         (SELECT count(*) FROM server_collection_papers cp
+                          WHERE cp.owner_user_id=c.owner_user_id AND cp.collection_id=c.collection_id) AS paper_count""",
+                    (name, normalized_name, owner_user_id, collection_id),
                 ).fetchone()
-                if exists is None:
-                    raise CollectionNotFound
-                raise CollectionNameConflict
+            except UniqueViolation:
+                raise CollectionNameConflict from None
+            if row is None:
+                raise CollectionNotFound
         return _collection(row)
 
     def delete_collection(self, owner_user_id: str, collection_id: str) -> None:
@@ -248,6 +244,11 @@ class PostgresCollectionStore:
     def add_paper(self, owner_user_id: str, collection_id: str,
                   paper_id: str) -> CollectionMembership:
         with _connection(self._pool) as conn:
+            if conn.execute(
+                "SELECT 1 FROM server_collections WHERE owner_user_id=%s AND collection_id=%s FOR KEY SHARE",
+                (owner_user_id, collection_id),
+            ).fetchone() is None:
+                raise CollectionNotFound
             row = conn.execute(
                 """INSERT INTO server_collection_papers(paper_id, collection_id, owner_user_id)
                    SELECT p.paper_id, c.collection_id, c.owner_user_id
@@ -268,7 +269,7 @@ class PostgresCollectionStore:
                         raise CollectionMembershipConflict
                     row = current
                 else:
-                    self._raise_missing(conn, owner_user_id, collection_id, paper_id)
+                    raise CollectionPaperNotFound
             count = conn.execute(
                 """SELECT count(*) AS paper_count FROM server_collection_papers
                    WHERE owner_user_id=%s AND collection_id=%s""",
@@ -298,20 +299,6 @@ class PostgresCollectionStore:
                 (owner_user_id, collection_id),
             ).fetchone()["paper_count"]
         return CollectionMembership(collection_id, paper_id, int(count))
-
-    @staticmethod
-    def _raise_missing(conn, owner_user_id: str, collection_id: str, paper_id: str):
-        if conn.execute(
-            "SELECT 1 FROM server_collections WHERE owner_user_id=%s AND collection_id=%s",
-            (owner_user_id, collection_id),
-        ).fetchone() is None:
-            raise CollectionNotFound
-        if conn.execute(
-            "SELECT 1 FROM server_papers WHERE owner_user_id=%s AND paper_id=%s",
-            (owner_user_id, paper_id),
-        ).fetchone() is None:
-            raise CollectionPaperNotFound
-        raise CollectionStoreUnavailable
 
 
 def _collection(row) -> CollectionItem:

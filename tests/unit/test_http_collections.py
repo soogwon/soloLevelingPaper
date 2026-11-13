@@ -130,11 +130,11 @@ def test_collection_paper_response_matches_external_site_published_shape():
 
 def test_add_paper_creates_membership_and_counts_target_collection():
     pool = Pool([
-        Result({"collection_id": COLLECTION_ID, "paper_id": PAPER_ID}),
+        Result({"exists": 1}), Result({"collection_id": COLLECTION_ID, "paper_id": PAPER_ID}),
         Result({"paper_count": 3}),
     ])
     result = PostgresCollectionStore(pool).add_paper("user-1", COLLECTION_ID, PAPER_ID)
-    sql, params = pool.conn.calls[0]
+    sql, params = pool.conn.calls[1]
     assert "ON CONFLICT(paper_id) DO NOTHING" in sql
     assert params == ("user-1", PAPER_ID, COLLECTION_ID)
     assert result == CollectionMembership(COLLECTION_ID, PAPER_ID, 3)
@@ -143,7 +143,7 @@ def test_add_paper_creates_membership_and_counts_target_collection():
 def test_add_paper_rejects_membership_in_another_collection():
     other = "00000000-0000-0000-0000-000000000302"
     pool = Pool([
-        Result(), Result({"collection_id": other, "paper_id": PAPER_ID}),
+        Result({"exists": 1}), Result(), Result({"collection_id": other, "paper_id": PAPER_ID}),
     ])
     import pytest
     with pytest.raises(CollectionMembershipConflict):
@@ -160,3 +160,12 @@ def test_collection_listing_uses_owner_scope_and_stable_pagination():
     assert result.total_count == 1
     assert pool.conn.calls[1][1] == ("user-1",)
     assert "ORDER BY c.created_at DESC, c.collection_id DESC" in pool.conn.calls[2][0]
+
+def test_missing_target_collection_is_reported_before_membership_conflict():
+    import pytest
+    from solo_leveling.interfaces.http.collections import CollectionNotFound
+
+    pool = Pool([Result()])
+    with pytest.raises(CollectionNotFound):
+        PostgresCollectionStore(pool).add_paper("user-1", COLLECTION_ID, PAPER_ID)
+    assert pool.conn.calls[0][1] == ("user-1", COLLECTION_ID)
