@@ -14,6 +14,9 @@ from solo_leveling.infrastructure.database.schema import get_connection
 from solo_leveling.infrastructure.storage.server_client import ServerConnectionRequired
 
 
+SERVER_SYNC_NOTICE_VERSION = "paper-learning-summary-sync-v3"
+
+
 class SyncPreviewChanged(ValueError):
     """카드에서 확인한 논문 또는 연결 계정이 달라졌다."""
 
@@ -66,7 +69,8 @@ class PaperMetadataSyncService:
             source_id = _source_instance_id(conn)
             payload = _paper_payload(conn, paper_id, source_id)
             learning_payloads = _learning_payloads(conn, paper_id, source_id)
-            summary_payloads = _summary_payloads(conn, paper_id, source_id)
+            summary_payloads = (_summary_payloads(conn, paper_id, source_id)
+                                if notice_version.strip() == SERVER_SYNC_NOTICE_VERSION else [])
             if preview is not None and preview != PaperSyncPreview(
                 account_id, payload["local_paper_id"], payload["title"], payload["original_created_at"],
                 len(learning_payloads), _latest_timestamp(
@@ -448,7 +452,10 @@ class PaperMetadataSyncService:
             if row["revoked_at"] is not None:
                 _finish(conn, row, "action_required", "consent_revoked", self._now())
                 return
-            payload = _summary_payload(conn, row["local_object_id"], row["local_subobject_id"], source_id)
+            try:
+                payload = _summary_payload(conn, row["local_object_id"], row["local_subobject_id"], source_id)
+            except (TypeError, ValueError):
+                payload = None
             if payload is None or _payload_hash(payload) != row["payload_hash"]:
                 _finish(conn, row, "conflict", "payload_changed", self._now())
                 return

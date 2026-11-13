@@ -230,7 +230,8 @@ def test_approved_summary_syncs_after_learning_record_with_explicit_content(data
     assert mapping["server_object_id"] == SERVER_SUMMARY_ID
 
 
-def test_summary_change_after_approval_conflicts_without_upload(database):
+@pytest.mark.parametrize("change", ["text", "invalid_evidence", "removed_items"])
+def test_summary_change_after_approval_conflicts_without_upload(database, change):
     add_summary(database)
     client = Client([Response(), Response(200, {
         "learning_record_id": SERVER_RECORD_ID, "revision": 1, "sync_status": "stored",
@@ -240,7 +241,12 @@ def test_summary_change_after_approval_conflicts_without_upload(database):
     operation = service.grant_and_queue(
         "paper-local-1", "paper-learning-summary-sync-v3").operation_id
     with get_connection(database) as conn:
-        conn.execute("UPDATE summary_items SET text='승인 뒤 변경된 주장'")
+        if change == "text":
+            conn.execute("UPDATE summary_items SET text='승인 뒤 변경된 주장'")
+        elif change == "invalid_evidence":
+            conn.execute("UPDATE summary_items SET evidence_ids='invalid'")
+        else:
+            conn.execute("DELETE FROM summary_items")
 
     result = service.sync(operation)
 
@@ -409,3 +415,13 @@ def test_same_summary_count_does_not_hide_changed_summary_preview(database):
     with get_connection(database) as conn:
         assert conn.execute("SELECT COUNT(*) FROM sync_outbox").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM server_sync_consents").fetchone()[0] == 0
+
+
+def test_previous_learning_notice_never_queues_summary(database):
+    add_summary(database)
+    service = PaperMetadataSyncService(database, Client())
+    service.grant_and_queue("paper-local-1", "paper-learning-sync-v2")
+    with get_connection(database) as conn:
+        assert {r[0] for r in conn.execute("SELECT object_type FROM sync_outbox")} == {
+            "paper", "learning_record",
+        }
