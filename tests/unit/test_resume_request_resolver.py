@@ -33,6 +33,9 @@ class Client:
         self.calls.append((args, kwargs))
         return self.response
 
+    def connection_id(self):
+        return "device-account"
+
 
 def payload(**change):
     return {
@@ -71,3 +74,73 @@ def test_resolver_rejects_untrusted_server_shapes(data):
     with pytest.raises(ServerResponseInvalid):
         ResumeRequestResolver(Client(response)).resolve("resume_code")
     assert response.closed
+
+
+def local_database(tmp_path, *, version_id="version-1", stored_path=None):
+    import sqlite3
+
+    db = tmp_path / "local.sqlite3"
+    conn = sqlite3.connect(db)
+    conn.executescript("""
+        CREATE TABLE server_subobject_mappings (
+            account_id TEXT, object_type TEXT, local_object_id TEXT,
+            local_subobject_id TEXT, server_object_id TEXT
+        );
+        CREATE TABLE learning_contexts (context_id TEXT PRIMARY KEY, version_id TEXT);
+        CREATE TABLE paper_versions (
+            version_id TEXT PRIMARY KEY, paper_id TEXT, stored_path TEXT
+        );
+    """)
+    conn.execute("INSERT INTO server_subobject_mappings VALUES (?,?,?,?,?)",
+                 ("device-account", "learning_record", "local-paper", "local-context",
+                  "record-1"))
+    conn.execute("INSERT INTO learning_contexts VALUES (?,?)", ("local-context", version_id))
+    conn.execute("INSERT INTO paper_versions VALUES (?,?,?)",
+                 (version_id, "local-paper", str(stored_path) if stored_path else None))
+    conn.commit()
+    conn.close()
+    return db
+
+
+def test_resolver_reports_same_pc_file_without_claiming_search_ready(tmp_path):
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF fixture")
+    db = local_database(tmp_path, stored_path=pdf)
+
+    result = ResumeRequestResolver(Client(Response(200, payload())), str(db)).resolve("resume_code")
+
+    assert result["file_access_status"] == "local_file_ready"
+    assert result["status"] == "prepared"
+    assert result["reason"] == "local_search_data_check_required"
+
+
+def test_resolver_reports_missing_mapping_on_a_different_pc(tmp_path):
+    db = local_database(tmp_path, stored_path=tmp_path / "paper.pdf")
+    import sqlite3
+    conn = sqlite3.connect(db)
+    conn.execute("DELETE FROM server_subobject_mappings")
+    conn.commit()
+    conn.close()
+
+    result = ResumeRequestResolver(Client(Response(200, payload())), str(db)).resolve("resume_code")
+
+    assert result["file_access_status"] == "local_mapping_missing"
+    assert result["status"] == "action_required"
+    assert result["reason"] == "local_mapping_missing"
+
+
+@pytest.mark.parametrize("version_id,has_file,expected", [
+    ("version-2", True, "local_version_mismatch"),
+    ("version-1", False, "local_file_missing"),
+])
+def test_resolver_reports_local_file_blockers(tmp_path, version_id, has_file, expected):
+    pdf = tmp_path / "paper.pdf"
+    if has_file:
+        pdf.write_bytes(b"%PDF fixture")
+    db = local_database(tmp_path, version_id=version_id, stored_path=pdf)
+
+    result = ResumeRequestResolver(Client(Response(200, payload())), str(db)).resolve("resume_code")
+
+    assert result["file_access_status"] == expected
+    assert result["status"] == "action_required"
+    assert result["reason"] == expected
