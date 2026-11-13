@@ -56,18 +56,22 @@ class _DraftValidationError(ValueError):
 
 
 _ABSTENTION_PATTERNS = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
-    r'(?:정보|내용|근거).{0,20}(?:없|찾을 수 없|확인할 수 없|제공되지|언급되지)',
-    r'(?:알|확인)\s*수\s*없',
-    r'답(?:변)?할\s*수\s*없',
-    r'no\s+(?:relevant\s+)?(?:information|evidence|details?)',
-    r'(?:cannot|can\s+not|unable\s+to)\s+(?:determine|answer|verify|find)',
-    r'(?:is|are|was|were)\s+not\s+(?:provided|mentioned|reported|found)',
+    r'(?:정보|내용|근거)(?:가|는|도)?\s*없(?:다|습니다|음)(?=[.!?\s]|$)',
+    r'(?:제공된|검색된|주어진|인용된)\s*(?:근거|자료|내용|문단|문서|본문)[^.!?]*'
+    r'(?:찾을 수 없|확인할 수 없|알 수 없|(?:제공|언급|명시)되(?:지 않|어 있지 않))',
+    r'^\s*(?:알|확인할|답변할|답할)\s*수\s*없',
+    r'^\s*no\s+(?:relevant\s+)?(?:information|evidence|details?)\b',
+    r'\b(?:there\s+is\s+no|there\s+are\s+no|the\s+(?:text|evidence|passage)\s+provides?\s+no)'
+    r'\s+(?:relevant\s+)?(?:information|evidence|details?)\b',
+    r'^\s*(?:(?:I|we)\s+)?(?:cannot|can\s+not|unable\s+to)\s+(?:determine|answer|verify|find)\b',
+    r'\b(?:is|are|was|were)\s+not\s+(?:provided|mentioned|reported)'
+    r'(?:\s+in\s+(?:the|these)\s+(?:paper|passage|text|excerpts?|sources?))?\s*[.!?]?$',
 ))
 
 
-def _is_abstention_claim(text: str) -> bool:
+def _contains_abstention(draft: GeneratedAnswerDraft) -> bool:
     """검색 실패 안내를 논문 내용에 관한 검증된 주장으로 취급하지 않는다."""
-    return any(pattern.search(text) for pattern in _ABSTENTION_PATTERNS)
+    return any(pattern.search(claim.text) for claim in draft.claims for pattern in _ABSTENTION_PATTERNS)
 
 
 def _validate_draft(draft, evidence_by_id):
@@ -188,6 +192,10 @@ class AnswerService:
             validate_answer_against_search(result, search)
             return AnswerResponse(context_id, search, result)
 
+        def missing_answer_evidence():
+            return insufficient(ReasonCode.EVIDENCE_NOT_FOUND,
+                                '검색된 근거에서 질문에 답할 정보를 확인하지 못했습니다.')
+
         if not search.items:
             return insufficient(ReasonCode.EVIDENCE_NOT_FOUND, '선택한 범위에서 답변에 사용할 근거를 찾지 못했습니다.')
         require_text(search.scope.translation_revision_id, 'translation_revision_id')
@@ -244,11 +252,8 @@ class AnswerService:
             draft = _validate_draft(draft, evidence_by_id)
             if not draft.claims:
                 return insufficient(ReasonCode.EVIDENCE_NOT_FOUND, '검색된 근거로 답변 초안을 구성하지 못했습니다.')
-            if any(_is_abstention_claim(claim.text) for claim in draft.claims):
-                return insufficient(
-                    ReasonCode.EVIDENCE_NOT_FOUND,
-                    '검색된 근거에서 질문에 답할 정보를 확인하지 못했습니다.',
-                )
+            if _contains_abstention(draft):
+                return missing_answer_evidence()
         except (ValueError, TypeError, AttributeError) as error:
             log_verification_failure(error, 0)
             return insufficient(ReasonCode.VERIFICATION_FAILED, '생성된 답변의 근거 연결을 확인하지 못했습니다.')
@@ -302,6 +307,8 @@ class AnswerService:
                     self.checkpoint()
                     repaired = repair(search.query, tuple(inputs), target_draft, local_targets)
                     repaired = _validate_draft(repaired, evidence_by_id)
+                    if _contains_abstention(repaired):
+                        return missing_answer_evidence()
                     sources = repaired.repair_sources
                     if sources is None:
                         # 기존 제공자의 단일 대상만 호환한다. 여러 대상의 대응을 추측하지 않는다.

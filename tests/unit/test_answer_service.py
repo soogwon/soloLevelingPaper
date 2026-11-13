@@ -179,8 +179,10 @@ def test_empty_draft_saves_nothing(parts):
 @pytest.mark.parametrize('claim', [
     '제공된 근거에는 optimizer와 learning rate 정보가 없다.',
     '검색된 내용에서 해당 설정을 확인할 수 없습니다.',
+    '제공된 문단에는 학습률이 명시되어 있지 않습니다.',
     'There is no relevant information about the optimizer.',
     'The learning rate schedule was not reported.',
+    'No relevant information about the optimizer was found.',
 ])
 def test_abstention_claim_is_insufficient_even_with_citation(parts, claim):
     service, _, saved, _ = parts
@@ -196,12 +198,18 @@ def test_abstention_claim_is_insufficient_even_with_citation(parts, claim):
     assert not saved
 
 
-def test_supported_negative_fact_is_not_mistaken_for_abstention(parts):
+@pytest.mark.parametrize('claim', [
+    '이 모델은 recurrence를 사용하지 않는다.',
+    '위치 정보가 없으면 순서를 구별할 수 없다.',
+    'The labels are not provided to the encoder during training.',
+    'The encoder cannot determine token order without positional information.',
+])
+def test_supported_negative_fact_is_not_mistaken_for_abstention(parts, claim):
     service, _, saved, _ = parts
 
     def generate(question, evidence):
         return GeneratedAnswerDraft((GeneratedClaim(
-            '이 모델은 recurrence를 사용하지 않는다.', (evidence[0].evidence_id,)),))
+            claim, (evidence[0].evidence_id,)),))
 
     service.generator = SimpleNamespace(generate_claims=generate)
     result = service.answer('recurrence를 사용하는가?', context_id='ctx').result
@@ -487,6 +495,21 @@ def repair_parts(parts):
     service.generator = SimpleNamespace(generate_claims=Mock(side_effect=generate),
                                         repair_claims=Mock(side_effect=repair))
     return service, saved, lookup
+
+
+def test_repaired_abstention_saves_no_evidence(repair_parts):
+    service, saved, _ = repair_parts
+    def repair(question, evidence, draft, targets):
+        return GeneratedAnswerDraft((GeneratedClaim('제공된 근거에는 학습률 정보가 없다.',
+            tuple(e.evidence_id for e in evidence),
+            tuple(ClaimSupport(e.evidence_id, e.original_text) for e in evidence)),))
+
+    service.generator.repair_claims.side_effect = repair
+    result = service.answer('조건은?', context_id='ctx', top_k=1).result
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == ReasonCode.EVIDENCE_NOT_FOUND
+    assert result.claims == result.citations == ()
+    assert not saved
 
 
 @pytest.mark.usefixtures('raw_diagnostics')
