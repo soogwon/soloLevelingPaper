@@ -132,6 +132,28 @@ def test_legacy_unchanged_success_is_discovered_and_retranslated_without_reregis
     assert old['translated_text'] == 'Original result improves.'
 
 
+def test_partial_legacy_recovery_can_publish_a_smaller_index(db, setup):
+    service, provider, _, client = setup
+    with closing(repo.get_connection(db)) as conn, conn:
+        for chunk_id in ('c1', 'c2'):
+            conn.execute("UPDATE chunks SET original_text='Results improve.' WHERE chunk_id=?",
+                         (chunk_id,))
+            conn.execute("UPDATE translation_results SET translated_text='Results improve.' "
+                         "WHERE translation_revision_id='t1' AND chunk_id=?", (chunk_id,))
+    old = {c.chunk_id: c.text for c in repo.get_translated_chunks(db, 'p1', 't1')}
+    provider.failures = {'c2', 'c3', 'c7'}
+    result = execute(service)
+    assert (result.status, result.outcome, result.target_count, result.recovered_count,
+            result.remaining_failed_count) == ('COMPLETED', 'PARTIAL', 4, 1, 3)
+    current = repo.get_search_index(db, 'v1')
+    assert current['embedding_set_id'] == result.new_embedding_set_id
+    documents = client.get_collection('chunks-' + result.new_embedding_set_id).get()
+    expected = {key: text for key, text in old.items() if key != 'c2'}
+    expected['c1'] = '복구 c1'
+    assert dict(zip(documents['ids'], documents['documents'])) == expected
+    assert service.preview('v1')['target_count'] == 3
+
+
 def test_zero_success_does_not_embed_publish_or_retry(db, setup):
     service, provider, embeddings, client = setup
     provider.failures = {'c3', 'c7'}

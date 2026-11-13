@@ -35,7 +35,9 @@ from solo_leveling.domain.models import (
     TranslationRecoveryDisposition,
     TranslationRecoveryRegistration,
 )
-from solo_leveling.domain.translation import TranslationBatchResult, translation_quality_failure
+from solo_leveling.domain.translation import (
+    TranslationBatchResult, TranslationFailureCode, translation_quality_failure,
+)
 from solo_leveling.domain.context import ContextNotReadyError
 
 from solo_leveling.domain.paper_summary import (
@@ -468,7 +470,9 @@ def _translation_recovery_targets(conn, translation_revision_id: str) -> list[di
     targets = []
     for row in rows:
         code = row['failure_code']
-        if code is None and row['translated_text'] is not None:
+        if code is None and not row['translated_text']:
+            code = TranslationFailureCode.EMPTY_TRANSLATION.value
+        if code is None:
             failure = translation_quality_failure(row['original_text'], row['translated_text'])
             code = failure.value if failure else None
         if code is not None:
@@ -1126,8 +1130,7 @@ def publish_recovered_index(db_path: str, job_id: str, embedding_set: EmbeddingS
                             limitations: list[str]) -> None:
     """복구한 번역의 새 색인을 게시하고 기본 색인을 바꾸고 복구 작업을 완료한다. 모두 한 트랜잭션이다.
 
-    하나라도 맞지 않으면 아무것도 바꾸지 않아 기존 색인이 계속 기본으로 남는다. 새 색인이 기존 색인보다
-    청크가 늘지 않았다면(복구가 모두 실패했다면) 게시하지 않는다.
+    기존 정상 번역을 보존하고 복구 대상이 실제로 줄어든 경우에만 새 기본 색인을 게시한다.
     """
     if type(embedding_set.dimension) is not int or embedding_set.dimension < 1:
         raise ValueError('positive embedding dimension required')
@@ -1148,12 +1151,23 @@ def publish_recovered_index(db_path: str, job_id: str, embedding_set: EmbeddingS
         published_chunk_ids = _validated_published_chunk_ids(
             conn, old['parse_revision_id'], embedding_set.translation_revision_id, chunk_ids)
         chunk_count = len(published_chunk_ids)
-        old_targets = _translation_recovery_targets(conn, old['translation_revision_id'])
-        new_targets = _translation_recovery_targets(conn, embedding_set.translation_revision_id)
-        if len(new_targets) >= len(old_targets):
+        old_targets = {r['chunk_id'] for r in _translation_recovery_targets(
+            conn, old['translation_revision_id'])}
+        new_targets = {r['chunk_id'] for r in _translation_recovery_targets(
+            conn, embedding_set.translation_revision_id)}
+        if not new_targets < old_targets:
             raise ValueError('recovered index must reduce translation recovery targets')
-        if chunk_count < old['chunk_count']:
-            raise ValueError('recovered index must not cover fewer translated chunks than the current one')
+        # 복구 대상 밖의 번역은 새 리비전에서도 같은 내용으로 검색할 수 있어야 한다.
+        changed = conn.execute(
+            'SELECT chunk_id, translated_text FROM translation_results '
+            'WHERE translation_revision_id=? AND failure_code IS NULL '
+            'EXCEPT SELECT chunk_id, translated_text FROM translation_results '
+            'WHERE translation_revision_id=? AND failure_code IS NULL',
+            (old['translation_revision_id'], embedding_set.translation_revision_id))
+        if any(row['chunk_id'] not in old_targets for row in changed):
+            raise ValueError('recovery must preserve previously valid translations')
+        if not (old_targets - new_targets).issubset(published_chunk_ids):
+            raise ValueError('recovered chunks must be present in the published index')
         conn.execute('INSERT INTO embedding_sets VALUES (?, ?, ?, ?, ?)',
                      (embedding_set.embedding_set_id, embedding_set.translation_revision_id,
                       embedding_set.model_name, embedding_set.dimension, embedding_set.created_at))
