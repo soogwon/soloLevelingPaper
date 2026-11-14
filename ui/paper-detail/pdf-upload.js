@@ -68,11 +68,20 @@ export function mountPdfUpload(app, doc) {
       if (current !== generation) return;
       const output = result?.structuredContent;
       if (result?.isError) throw Object.assign(new Error(errorText(result)), {toolResult: result});
-      if (!output || (accept ? output.status !== 'ready'
-          : output.status !== 'cancelled')) throw new Error();
-      el('status').textContent = accept
-        ? `PDF 업로드를 완료했습니다. 업로드 ID: ${output.upload_id}`
-        : '취소했습니다. PDF를 전송하지 않았습니다.';
+      if (accept && output?.status === 'already_uploaded') {
+        el('status').textContent = '이미 업로드된 원문입니다. 새로 전송하지 않았습니다.';
+        el('retry').hidden = true;
+      } else if (accept && output?.status === 'failed') {
+        const failure = uploadFailure(output.error_code);
+        el('status').textContent = `${failure.message} 자동으로 다시 전송하지 않습니다. 업로드 안내를 다시 불러온 뒤 재시도하세요.`;
+        el('retry').hidden = false;
+      } else {
+        if (!output || (accept ? output.status !== 'ready'
+            : output.status !== 'cancelled')) throw new Error();
+        el('status').textContent = accept
+          ? `PDF 업로드를 완료했습니다. 업로드 ID: ${output.upload_id}`
+          : '취소했습니다. PDF를 전송하지 않았습니다.';
+      }
     } catch (error) {
       if (current !== generation) return;
       if (accept) {

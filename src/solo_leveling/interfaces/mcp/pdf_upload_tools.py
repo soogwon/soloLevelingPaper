@@ -68,11 +68,23 @@ def _pdf_upload_stage_tool_error(exc: PdfUploadStageError) -> ToolError:
     return ToolError(f"{code}: {message}{suffix} 자동으로 다시 전송하지 않습니다.")
 
 
-def _pdf_upload_error_result(error: ToolError) -> CallToolResult:
-    """카드가 호스트 종류와 무관하게 업무 오류 코드를 읽을 수 있게 반환한다."""
+def _pdf_upload_business_result(error: ToolError) -> CallToolResult:
+    """호스트의 오류 변환을 거치지 않고 카드에 안전한 업무 상태만 전달한다."""
+    code = str(error).partition(":")[0]
+    allowed_codes = {
+        "PDF_ALREADY_UPLOADED", "PDF_UPLOAD_PREPARE_FAILED",
+        "PDF_UPLOAD_TRANSFER_FAILED", "PDF_UPLOAD_COMPLETE_FAILED",
+        "PDF_UPLOAD_FAILED", "SERVER_CONNECTION_REQUIRED",
+        "PDF_UPLOAD_PREVIEW_CHANGED", "PDF_UPLOAD_CONFIRMATION_REQUIRED",
+    }
+    if code not in allowed_codes:
+        code = "PDF_UPLOAD_FAILED"
     return CallToolResult(
-        isError=True,
-        content=[TextContent(type="text", text=str(error))],
+        content=[TextContent(type="text", text="PDF 업로드를 완료하지 않았습니다.")],
+        structuredContent={
+            "status": "already_uploaded" if code == "PDF_ALREADY_UPLOADED" else "failed",
+            "error_code": code,
+        },
     )
 
 
@@ -157,7 +169,7 @@ def register_pdf_upload(server, service: PdfUploadService) -> None:
             error = exc
         except Exception:
             error = ToolError("PDF_UPLOAD_FAILED: PDF 업로드를 완료하지 못했습니다.")
-        return _pdf_upload_error_result(error)
+        return _pdf_upload_business_result(error)
 
     @server.tool(
         name="cancel_paper_pdf_upload", structured_output=True,
