@@ -207,6 +207,27 @@ def _valid(data: Any) -> bool:
         return False
     if data.get("last_position") is not None and not isinstance(data["last_position"], dict):
         return False
-    if data.get("annotation") is not None and not isinstance(data["annotation"], dict):
+    if not _valid_annotation(data.get("annotation_id"), data.get("annotation")):
         return False
     return True
+
+
+def _valid_annotation(annotation_id: Any, annotation: Any) -> bool:
+    if annotation_id is None:
+        return annotation is None
+    if not isinstance(annotation_id, str) or not annotation_id:
+        return False
+    if not isinstance(annotation, dict) or annotation.get("annotation_id") != annotation_id:
+        return False
+    if annotation.get("kind") not in ("note", "highlight"):
+        return False
+    if not isinstance(annotation.get("body"), str):
+        return False
+    segments = annotation.get("segments")
+    if not isinstance(segments, list):
+        return False
+    return all(
+        isinstance(segment, dict)
+        and isinstance(segment.get("quote_snapshot"), str)
+        for segment in segments
+    )

@@ -161,6 +161,33 @@ def test_store_rejects_expired_code_without_changing_learning_state():
     assert store._pool.conn.calls[0][0].lstrip().startswith("SELECT")
 
 
+def test_store_resolves_selected_annotation_with_saved_quote_snapshot():
+    expires = datetime.now(timezone.utc) + timedelta(minutes=5)
+    segments = [{
+        "chunk_id": "old-chunk",
+        "quote_snapshot": "Attention is all you need.",
+        "target": "original",
+    }]
+    row = {
+        "resume_request_id": "request", "paper_id": PAPER, "title": "Paper",
+        "version_id": "v1", "learning_record_id": RECORD,
+        "last_position": {"pdf_page": 3}, "annotation_id": "annotation-1",
+        "annotation_kind": "highlight", "annotation_body": "저장 당시 메모",
+        "annotation_segments": segments, "file_name": "paper.pdf",
+        "expires_at": expires,
+    }
+
+    result = PostgresResumeRequestStore(Pool([row])).resolve("user-1", "resume_code")
+
+    assert result.annotation_id == "annotation-1"
+    assert result.annotation == {
+        "annotation_id": "annotation-1",
+        "kind": "highlight",
+        "body": "저장 당시 메모",
+        "segments": segments,
+    }
+
+
 @pytest.mark.parametrize("same_payload", [True, False])
 def test_store_handles_concurrent_idempotency_winner(same_payload):
     from solo_leveling.interfaces.http.resume_requests import _payload_hash

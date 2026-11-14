@@ -60,6 +60,40 @@ def test_resolver_posts_code_and_returns_validated_selection():
     assert response.closed
 
 
+def test_resolver_preserves_selected_annotation_body_and_quote_snapshots():
+    annotation = {
+        "annotation_id": "annotation-1",
+        "kind": "highlight",
+        "body": "저장 당시 메모",
+        "segments": [
+            {"quote_snapshot": "Attention is all you need.", "chunk_id": "old-chunk"},
+        ],
+    }
+    result = ResumeRequestResolver(Client(Response(200, payload(
+        annotation_id="annotation-1", annotation=annotation,
+    )))).resolve("resume_code")
+
+    assert result["annotation"] == annotation
+
+
+@pytest.mark.parametrize("annotation_id,annotation", [
+    ("annotation-1", None),
+    (None, {"annotation_id": "annotation-1", "kind": "note", "body": "memo",
+            "segments": []}),
+    ("annotation-1", {"annotation_id": "other", "kind": "note", "body": "memo",
+                      "segments": []}),
+    ("annotation-1", {"annotation_id": "annotation-1", "kind": "unknown",
+                      "body": "memo", "segments": []}),
+    ("annotation-1", {"annotation_id": "annotation-1", "kind": "note",
+                      "body": "memo", "segments": [{}]}),
+])
+def test_resolver_rejects_malformed_selected_annotation(annotation_id, annotation):
+    with pytest.raises(ServerResponseInvalid):
+        ResumeRequestResolver(Client(Response(200, payload(
+            annotation_id=annotation_id, annotation=annotation,
+        )))).resolve("resume_code")
+
+
 @pytest.mark.parametrize("status,error", [
     (404, ResumeRequestUnavailable), (410, ResumeRequestExpired),
 ])
