@@ -277,7 +277,7 @@ class ProcessEmbedder:
             self._closed = True
             self._stop()
 
-    def __call__(self, texts, *, model_name):
+    def __call__(self, texts, *, model_name, local_files_only=False):
         if not isinstance(model_name, str) or not model_name.strip():
             raise ValueError('모델 이름이 필요합니다.')
         if not isinstance(texts, (list, tuple)) or any(not isinstance(text, str) or not text.strip() for text in texts):
@@ -331,7 +331,8 @@ class ProcessEmbedder:
                             raise
                 connection = self._connection
             request = {'texts': list(texts), 'model': model_name,
-                       'request_id': _request.get() or uuid4().hex}
+                       'request_id': _request.get() or uuid4().hex,
+                       'local_files_only': local_files_only is True}
             completed = Queue(maxsize=1)
 
             def exchange():

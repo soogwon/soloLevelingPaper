@@ -1,7 +1,7 @@
 """MCP 서버가 뜨자마자 임베딩 worker를 미리 준비한다(#119).
 
 첫 ask_paper가 라이브러리 import·모델 로딩까지 떠안아 호스트의 60초 대기를 넘기던 문제를 줄인다.
-등록된 색인이 있을 때만 그 색인의 모델로 준비한다. 색인이 있으면 모델은 이미 이 기기에서 쓴 적이 있다.
+등록된 색인의 모델을 로컬 캐시만으로 준비한다. 캐시가 없으면 다운로드 없이 건너뛴다.
 """
 
 from contextlib import closing
@@ -30,7 +30,7 @@ def default_index_model(db_path: str) -> str | None:
 @traced('embedding_warmup', request=True)
 def _warm(embedder, model_name):
     try:
-        embedder([WARMUP_TEXT], model_name=model_name)
+        embedder([WARMUP_TEXT], model_name=model_name, local_files_only=True)
     except Exception:
         # 준비 실패는 첫 질문에서 같은 경로로 다시 드러난다. 여기서는 서버 시작을 막지 않는다.
         pass

@@ -21,23 +21,27 @@ _model_cache: dict = {}
 
 
 @traced('embedding_model_load')
-def _get_model(model_name: str) -> "SentenceTransformer":
+def _get_model(model_name: str, *, local_files_only: bool = False) -> "SentenceTransformer":
     if model_name not in _model_cache:
         with stage('embedding_library_import'), import_watchdog():
             from sentence_transformers import SentenceTransformer
 
         with stage('embedding_model_construct'):
-            _model_cache[model_name] = SentenceTransformer(model_name)
+            # 자동 워밍업은 캐시가 없어도 다운로드하지 않는다.
+            options = {'local_files_only': True} if local_files_only else {}
+            _model_cache[model_name] = SentenceTransformer(model_name, **options)
     else:
         with stage('embedding_memory_cache_hit'):
             pass
     return _model_cache[model_name]
 
 
-def embed_texts(texts: List[str], model_name: str = DEFAULT_MODEL_NAME) -> List[List[float]]:
+def embed_texts(texts: List[str], model_name: str = DEFAULT_MODEL_NAME,
+                *, local_files_only: bool = False) -> List[List[float]]:
     if not texts:
         return []
-    model = _get_model(model_name)
+    model = (_get_model(model_name, local_files_only=True) if local_files_only
+             else _get_model(model_name))
     with stage('embedding_encode'):
         vectors = model.encode(texts, convert_to_numpy=True)
     return [v.tolist() for v in vectors]

@@ -1,10 +1,20 @@
 # MCP 임베딩 프로세스 분리
 
-MCP 시작 시 sentence_transformers를 import하지 않는다. 검색 및 MCP 로컬 PDF 등록은
-같은 ProcessEmbedder를 사용하고 첫 임베딩 요청에 Windows spawn 전용 프로세스를 시작한다.
+MCP 부모 프로세스에서는 sentence_transformers를 import하지 않는다. 검색 및 MCP 로컬 PDF 등록은
+같은 ProcessEmbedder를 사용하고 첫 임베딩 요청에 spawn 전용 프로세스를 시작한다.
 라이브러리 import·모델 로딩·계산은 자식의 메인 스레드에서 수행한다.
 정상 프로세스는 재사용하며 모델이 바뀌면 이전 모델 캐시 참조를 비운다.
 모델 ID는 등록 설정 및 기존 색인에 저장된 ID를 사용하며 임의 모델로 대체하지 않는다.
+
+## 시작 시 모델 준비
+
+기본 색인이 있으면 MCP 시작 시 고정 문장 `warm-up`으로 백그라운드 준비를 요청한다.
+가장 최근 기본 색인의 모델을 사용하며, `local_files_only=True`를 worker의 모델 로더까지
+전달한다. 색인이 있어도 로컬 캐시는 없을 수 있으므로 캐시 누락 시 다운로드 없이 준비를
+건너뛰고 서버 시작을 계속한다. 일반 질문·등록 요청의 모델 로딩 정책은 바꾸지 않는다.
+준비한 모델은 이후 같은 모델의 요청에서 재사용한다.
+`SOLO_LEVELING_EMBEDDING_WARMUP=0`으로 자동 준비를 끌 수 있다.
+실제 Desktop의 첫 질문 지연 개선 폭은 별도 실측이 필요하다.
 
 ## 시간 제한과 오류
 
