@@ -412,3 +412,21 @@ for (const event of ['ontoolinput', 'ontoolcancelled']) {
     assert.equal(doc.defaultView.localStorage.length, 1);
   });
 }
+
+test('원문 위치가 모호해도 고유한 번역 위치는 저장할 수 있다', async () => {
+  const {app, el} = setup();
+  const e = evidence('e1', {annotation_start:null, translation_annotation_start:2, annotations:[]});
+  let request;
+  app.callServerTool = async call => {
+    request = call.arguments.request;
+    return {structuredContent:{outcome:'saved', annotation:{...request,annotation_id:'translation'}}};
+  };
+  app.ontoolresult(detailPayload({evidence:[e]}));
+  assert.equal(el('editor').disabled, false);
+  assert.equal(el('save-note').disabled, true);
+  assert.equal(el('save-highlight').disabled, true);
+  assert.equal(el('save-translation-highlight').disabled, false);
+  await el('save-translation-highlight').onclick();
+  assert.equal(request.segments[0].target, 'translation');
+  assert.equal(request.segments[0].start_offset, 2);
+});

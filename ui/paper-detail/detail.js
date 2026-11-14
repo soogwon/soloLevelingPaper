@@ -195,9 +195,15 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
       }
       el('more-records').hidden = !e.annotation_cursor;
       el('more-records').disabled = loading.has(e) || pending.has(e);
-      el('editor').disabled = uncertain.has(e) || e.annotation_start == null || pending.has(e) || loading.has(e);
+      const originalAvailable = Number.isSafeInteger(e.annotation_start);
+      const translationAvailable = Number.isSafeInteger(e.translation_annotation_start) && nonempty(e.quote_ko);
+      el('editor').disabled = uncertain.has(e) || pending.has(e) || loading.has(e)
+        || (!originalAvailable && !translationAvailable);
+      el('save-note').disabled = !originalAvailable;
+      el('save-highlight').disabled = !originalAvailable;
+      if (el('save-translation-highlight')) el('save-translation-highlight').disabled = !translationAvailable;
       el('record-status').textContent = uncertain.has(e) ? '저장 결과가 확인되지 않았습니다. 상세 카드를 다시 조회해 기록을 확인하세요.'
-        : e.annotation_start == null ? '원문 위치를 확정할 수 없어 작성할 수 없습니다.'
+        : !originalAvailable ? (translationAvailable ? '원문 위치는 확인할 수 없습니다. 번역문 하이라이트만 저장할 수 있습니다.' : '인용 위치를 확정할 수 없어 작성할 수 없습니다.')
         : pending.has(e) ? '저장 중입니다.' : records.children.length ? `기록 ${records.children.length}건 표시 · 전체 ${e.annotation_count ?? records.children.length}건` : e.annotation_cursor ? '더 보기를 눌러 나머지 기록을 확인하세요.' : '저장된 기록이 없습니다.';
     }
     const recordVersions = new Map();
@@ -247,13 +253,14 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
         loading.delete(e);
         if (selected === e) {
           el('more-records').disabled = pending.has(e);
-          el('editor').disabled = uncertain.has(e) || pending.has(e) || e.annotation_start == null;
+          el('editor').disabled = uncertain.has(e) || pending.has(e)
+            || (!Number.isSafeInteger(e.annotation_start) && !Number.isSafeInteger(e.translation_annotation_start));
         }
       }
       if (selected === e) showRecords(e);
     }
     async function save(e, kind, target = 'original') {
-      if (selected !== e || uncertain.has(e) || loading.has(e) || pending.has(e) || !Number.isSafeInteger(e.annotation_start)) return;
+      if (selected !== e || uncertain.has(e) || loading.has(e) || pending.has(e)) return;
       const body = kind === 'note' ? el('note-body').value : '';
       const start = target === 'translation' ? e.translation_annotation_start : e.annotation_start;
       const quote = target === 'translation' ? e.quote_ko : e.quote_original;
