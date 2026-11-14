@@ -8,7 +8,7 @@ const TARGET_LABEL = { original: '원문', translation: '한국어 번역' };
 
 function creationOriginBadge(value) {
   const label = {user:'사용자', ai:'AI', unknown:'미상'}[value] ?? '미상';
-  return html`<span class="badge b-gray">최초 작성: ${label} (신고)</span>`;
+  return html`<span class="badge b-gray">최초 생성 시 신고 주체: ${label} (신고)</span>`;
 }
 
 function firstPosition(annotation) {
