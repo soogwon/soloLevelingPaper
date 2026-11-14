@@ -106,6 +106,28 @@ def test_static_web_root_is_validated_and_mounted_after_api_routes(tmp_path, mon
     assert app.routes[-1].name == "external-site"
 
 
+def test_static_web_files_are_revalidated_on_each_load(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    web_root = tmp_path / "web"
+    (web_root / "js").mkdir(parents=True)
+    (web_root / "index.html").write_text("<!doctype html><title>test</title>", encoding="utf-8")
+    (web_root / "js" / "app.js").write_text("export {};", encoding="utf-8")
+    monkeypatch.setenv("WEB_STATIC_ROOT", str(web_root))
+    client = TestClient(create_app(HttpSettings(environment="test")))
+
+    for path in ("/", "/js/app.js"):
+        first = client.get(path)
+        assert first.status_code == 200
+        assert first.headers["cache-control"] == "no-cache"
+        # 바뀌지 않은 파일은 ETag 재확인으로 본문 없이 재사용된다.
+        again = client.get(path, headers={"If-None-Match": first.headers["etag"]})
+        assert again.status_code == 304
+        assert again.headers["cache-control"] == "no-cache"
+    # API 응답에는 웹 파일용 캐시 헤더를 붙이지 않는다.
+    assert client.get("/health").headers.get("cache-control") != "no-cache"
+
+
 def test_static_web_root_rejects_missing_index(tmp_path):
     with pytest.raises(ValueError, match="index.html"):
         load_web_static_root({"WEB_STATIC_ROOT": str(tmp_path)})

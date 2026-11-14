@@ -166,8 +166,24 @@ def create_app(
 
     web_static_root = load_web_static_root()
     if web_static_root is not None:
-        from fastapi.staticfiles import StaticFiles
         # 루트 mount는 반드시 API route 등록 뒤에 둬야 /v1과 /health를 가리지 않는다.
-        app.mount("/", StaticFiles(directory=web_static_root, html=True), name="external-site")
+        app.mount("/", _revalidating_static_files(web_static_root), name="external-site")
 
     return app
+
+
+def _revalidating_static_files(directory):
+    """웹 파일은 매번 ETag로 재확인한다. 배포 직후에도 브라우저가 이전 JS·CSS를 쓰지 않는다.
+
+    파일 이름에 빌드 해시를 붙이지 않으므로 장기 캐시 대신 no-cache를 쓴다. 바뀌지 않은 파일은
+    304 응답으로 본문 없이 재사용된다.
+    """
+    from fastapi.staticfiles import StaticFiles
+
+    class RevalidatingStaticFiles(StaticFiles):
+        def file_response(self, *args, **kwargs):
+            response = super().file_response(*args, **kwargs)
+            response.headers["Cache-Control"] = "no-cache"
+            return response
+
+    return RevalidatingStaticFiles(directory=directory, html=True)
