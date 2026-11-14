@@ -28,6 +28,21 @@ CREATE TABLE IF NOT EXISTS paper_versions (
     created_at TEXT NOT NULL
 );
 
+-- 기존 논문은 상태를 추정하지 않는다. 이후 등록되는 논문만 트리거로 초기화한다.
+CREATE TABLE IF NOT EXISTS paper_reading_states (
+    paper_id TEXT PRIMARY KEY REFERENCES papers(paper_id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('unknown', 'not_started', 'reading', 'completed')),
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+    updated_at TEXT NOT NULL
+);
+INSERT OR IGNORE INTO paper_reading_states (paper_id, status, updated_at)
+    SELECT paper_id, 'unknown', created_at FROM papers;
+CREATE TRIGGER IF NOT EXISTS initialize_paper_reading_state AFTER INSERT ON papers
+BEGIN
+    INSERT INTO paper_reading_states (paper_id, status, updated_at)
+        VALUES (NEW.paper_id, 'not_started', NEW.created_at);
+END;
+
 CREATE TABLE IF NOT EXISTS parse_revisions (
     parse_revision_id TEXT PRIMARY KEY,
     version_id TEXT NOT NULL REFERENCES paper_versions(version_id),

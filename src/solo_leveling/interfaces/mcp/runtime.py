@@ -28,6 +28,7 @@ from solo_leveling.application.paper_detail.service import PaperDetailService
 from solo_leveling.application.reflection.service import ReflectionService
 from solo_leveling.infrastructure.retrieval.paper_detail import SQLitePaperDetailReader
 from solo_leveling.application.annotations.service import AnnotationService
+from solo_leveling.application.reading_state import ReadingStateService
 from solo_leveling.application.quiz.service import QuizService
 from solo_leveling.application.server_sync import PaperMetadataSyncService
 from solo_leveling.infrastructure.storage.server_client import AuthenticatedServerClient
@@ -234,6 +235,7 @@ def build_runtime_server(values: Mapping[str, str]):
             dashboard=gate.wrap(DashboardReader(str(paths.db_path))),
             reflection=gate.wrap(ReflectionService(str(paths.db_path))),
             annotations=gate.wrap(annotations),
+            reading_state=gate.wrap(ReadingStateService(str(paths.db_path))),
             quiz=gate.wrap(QuizContractAdapter(StoredQuizService(
                 str(paths.db_path), QuizService(
                     str(paths.db_path), OpenAIQuizGenerator(settings.generation))))),

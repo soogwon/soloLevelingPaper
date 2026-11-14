@@ -150,6 +150,7 @@ class MCPServices:
     pdf_upload: object | None = None
     resume: object | None = None
     learning_path: object | None = None
+    reading_state: object | None = None
 
 
 class Focus(BaseModel):
@@ -457,6 +458,9 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
     if services.recovery is not None:
         from .recovery import register_recovery
         register_recovery(server, services.recovery)
+    if services.reading_state is not None:
+        from .reading_state_tools import register_reading_state
+        register_reading_state(server, services.reading_state)
     if services.annotations is not None:
         register_annotations(server, services.annotations)
     if services.detail is not None:
@@ -677,6 +681,8 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                     lambda: services.contexts.get_or_create_learning_context(
                         version_id, goal, concepts,
                     ))
+                if services.reading_state is not None:
+                    await anyio.to_thread.run_sync(services.reading_state.start, version_id)
                 capabilities = ['ask_paper', 'get_evidence']
                 if services.executions is not None:
                     capabilities += ['submit_paper_question', 'get_paper_question_status']

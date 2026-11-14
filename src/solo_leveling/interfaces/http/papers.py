@@ -34,7 +34,7 @@ class LearningRecordMetadata:
     file_name: str | None
     last_position: dict[str, Any] | None
     last_studied_at: datetime | None
-    reading_status: str
+    reading_status: str | None
     source_updated_at: datetime
 
 
@@ -381,19 +381,21 @@ class PostgresPaperStore:
                    (learning_record_id, owner_user_id, paper_id, source_instance_id,
                     local_learning_record_id, selected_version_id, file_name, last_position,
                     last_studied_at, reading_status, source_updated_at)
-                   SELECT %s, %s, p.paper_id, %s, %s, %s, %s, %s::jsonb, %s, %s, %s
+                   SELECT %s, %s, p.paper_id, %s, %s, %s, %s, %s::jsonb, %s, COALESCE(%s, 'unknown'), %s
                    FROM server_papers p
                    WHERE p.paper_id=%s AND p.owner_user_id=%s AND p.source_instance_id=%s
                    ON CONFLICT(owner_user_id, source_instance_id, local_learning_record_id)
                    DO UPDATE SET selected_version_id=excluded.selected_version_id,
                      file_name=excluded.file_name, last_position=excluded.last_position,
-                     last_studied_at=excluded.last_studied_at, reading_status=excluded.reading_status,
+                     last_studied_at=excluded.last_studied_at,
+                     reading_status=CASE WHEN %s THEN excluded.reading_status ELSE server_learning_records.reading_status END,
                      source_updated_at=excluded.source_updated_at, revision=server_learning_records.revision+1,
                      updated_at=CURRENT_TIMESTAMP
                    WHERE excluded.paper_id=server_learning_records.paper_id
                      AND excluded.source_updated_at>server_learning_records.source_updated_at
                    RETURNING learning_record_id, revision, updated_at""",
-                (values[0], values[1], *values[3:], paper_id, owner_user_id, metadata.source_instance_id),
+                (values[0], values[1], *values[3:], paper_id, owner_user_id, metadata.source_instance_id,
+                 metadata.reading_status is not None),
             ).fetchone()
             if row is None:
                 row = conn.execute(
@@ -407,9 +409,10 @@ class PostgresPaperStore:
                 ).fetchone()
                 if row is not None:
                     if row["source_updated_at"] != metadata.source_updated_at:
-                        raise AnnotationConflict
+                        raise LearningRecordConflict
                     fields = ("selected_version_id", "file_name", "last_position", "last_studied_at", "reading_status")
-                    if any(row[field] != getattr(metadata, field) for field in fields):
+                    if any(row[field] != getattr(metadata, field) for field in fields
+                           if field != 'reading_status' or metadata.reading_status is not None):
                         raise LearningRecordConflict
             if row is None:
                 raise PaperNotFound
