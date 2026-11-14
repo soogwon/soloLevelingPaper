@@ -264,7 +264,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
       let prepared;
       try {
         prepared = await prepareAnnotationRequest({
-          context_id: data.context_id, kind, body, segments: [{chunk_id: e.chunk_id,
+          context_id: data.context_id, kind, body, creation_origin: 'user', segments: [{chunk_id: e.chunk_id,
             start_offset: start, end_offset: start + Array.from(quote).length,
             quote_snapshot: quote,
             ...(target === 'translation' ? {target,translation_revision_id:e.translation_revision_id} : {})}],

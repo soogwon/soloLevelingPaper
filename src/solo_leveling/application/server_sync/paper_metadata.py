@@ -976,8 +976,10 @@ def _annotation_payload(conn: sqlite3.Connection, paper_id: str, annotation_id: 
                         source_id: str) -> dict[str, Any] | None:
     row = conn.execute(
         """SELECT a.annotation_id, a.context_id, a.kind, a.body, a.step,
+                  COALESCE(o.creation_origin, 'unknown') AS creation_origin,
                   a.created_at, a.updated_at, c.version_id
-           FROM annotations a JOIN learning_contexts c USING(context_id)
+           FROM annotations a LEFT JOIN annotation_creation_origins o USING(annotation_id)
+           JOIN learning_contexts c USING(context_id)
            JOIN paper_versions v USING(version_id)
            WHERE v.paper_id=? AND a.annotation_id=?""", (paper_id, annotation_id),
     ).fetchone()
@@ -991,6 +993,7 @@ def _annotation_payload(conn: sqlite3.Connection, paper_id: str, annotation_id: 
         "source_instance_id": source_id,
         "selected_version_id": row["version_id"],
         "kind": row["kind"],
+        "creation_origin": row["creation_origin"],
         "body": row["body"],
         "step": row["step"],
         "segments": segments,
