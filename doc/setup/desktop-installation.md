@@ -172,7 +172,8 @@ Remove-Item Env:SOLO_INSTALLED_PYTHON
 변경을 푸시하면 Ubuntu 24.04 / Python 3.12에서 실행한다. 새 가상환경에 wheel `[local]`을
 설치하고 `pip check`, 목록 조회·MCP 단위 테스트, 실제 설치본 stdio 테스트를 실행한다.
 테스트 XML에 skip이 있으면 실패로 처리한다. Linux 설치 검증에는 CPU용 PyTorch를 사용한다.
-기본 브랜치에 병합된 뒤에는 Actions에서 수동으로도 실행할 수 있다.
+이 workflow는 2026-11-14에 PR 공통 테스트(`.github/workflows/ci.yml`)로 정리하며 삭제했다.
+다시 실행하려면 git 기록에서 파일을 복원한다.
 
 macOS 담당자는 Python 3.12가 설치된 환경에서 아래 명령을 실행하고, OS 버전·CPU 종류·
 커밋 SHA·`pip check` 결과·테스트 결과를 PR에 기록한다. 새 임시 폴더만 사용하며

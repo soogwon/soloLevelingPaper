@@ -58,7 +58,8 @@ type: short description
 
 ## 5. Pull Request
 
-Pull Request에는 변경 내용과 이유, 실행·테스트 방법, 영향받는 영역, 남은 TODO를 포함합니다. 가능하면 하나의 Pull Request에는 하나의 주요 목적만 포함합니다.
+Pull Request에는 변경 내용과 이유, 실행·테스트 방법, 영향받는 영역, 남은 TODO를 포함합니다.
+Pull Request를 올리면 `.github/workflows/ci.yml`이 Python 단위·통합 테스트, 웹 테스트, MCP UI 테스트를 자동으로 실행합니다. 가능하면 하나의 Pull Request에는 하나의 주요 목적만 포함합니다.
 
 ## 6. Data, Security and Copyright
 
