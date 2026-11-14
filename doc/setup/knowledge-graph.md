@@ -25,6 +25,7 @@ GoalConceptPlan을 마감 전 범위로 줄인 구현이다.
 
 - 두 도구 모두 `readOnlyHint=true`, `idempotentHint=true`, `openWorldHint=false`이며 외부 API를 호출하지 않는다.
 - `graph_status=no_graph`는 오류가 아니다. 그 논문에 시드가 없다는 뜻이다.
+- `graph_status=related_version`은 같은 논문의 다른 판본이다. 아래 [같은 논문의 여러 판본](#같은-논문의-여러-판본)을 본다.
 - `start_learning`은 논문에 시드가 있을 때만 `capabilities`에 두 도구를 추가한다.
 - 오류는 기존 코드를 쓴다. 없는 맥락·개념은 `NOT_FOUND`, 형식 오류는 `INVALID_ARGUMENT`.
 - `known_concepts`를 생략하면 맥락에 저장된 값을 쓴다. 그래프와 맞지 않는 이름은 `unresolved_concepts`로 돌려준다.
@@ -62,3 +63,23 @@ GoalConceptPlan을 마감 전 범위로 줄인 구현이다.
 개념 설명과 선수 이유는 팀이 직접 쓴 문장만 넣는다. 논문 원문은 넣지 않는다.
 다른 시드를 시험할 때는 `SOLO_LEVELING_KG_SEED`에 경로를 지정한다. 시드가 잘못되면 MCP는
 `KG_SEED_UNAVAILABLE`을 남기고 두 도구 없이 시작한다.
+
+## 같은 논문의 여러 판본
+
+(#343, 2026-11-14) arXiv v6·v7처럼 같은 논문의 PDF라도 바이트가 다르면 해시가 달라 별개 논문으로 등록된다.
+판본이 달라도 개념과 선수 관계는 같지만, 페이지·찾을 말은 판본마다 달라질 수 있다.
+
+| 등록한 PDF | `graph_status` | 경로 | `paper_locations` |
+|---|---|---|---|
+| 시드의 `file_sha256`과 같은 파일(검수 판본) | `ready` | 제공 | 검수한 페이지·찾을 말 |
+| 해시는 다르지만 첫 페이지 arXiv 표기 번호가 시드 `source_url`과 같음 | `related_version` | 제공 | 빈 목록 |
+| 그 밖의 PDF, arXiv 표기를 읽지 못한 PDF | `no_graph` | 없음 | 빈 목록 |
+
+- 판본 판단은 PDF 첫 페이지 여백의 `arXiv:1706.03762v6` 같은 표기에서 번호만 비교한다(`v6` 등 판본 번호는 무시).
+  파일마다 한 번만 읽고 서버 실행 중 기억한다.
+- `related_version` 응답의 `reviewed_version`(`label`, `source_url`)으로 검수 판본을 안내한다.
+  그 판본을 받아 다시 등록하면 `ready`가 되어 페이지 근거까지 볼 수 있다.
+- v6·v7 등록 순서와 관계없이 각 등록은 자기 파일 해시로 판단한다. v7의 페이지 근거나 학습 기록이 v6 맥락에 표시되지 않는다.
+  같은 파일을 다시 등록하면 기존 등록과 같은 결과다.
+- 웹 개념 지도는 사용자의 등록 파일이 아니라 검수 목록(시드)을 보여 주므로 항상 검수 판본 기준이다.
+

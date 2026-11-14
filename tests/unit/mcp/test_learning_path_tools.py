@@ -109,3 +109,50 @@ def test_start_learning_lists_tools_only_when_paper_has_graph(service):
         conn.execute("UPDATE paper_versions SET file_hash='other'")
     result = call(server, 'start_learning', {'version_id': 'v1'})
     assert 'get_learning_path' not in result['capabilities']
+
+
+def related_service(service, arxiv_id):
+    """검수 판본과 파일 해시는 다르지만 arXiv 번호가 같은 PDF를 등록한 상태."""
+    data = seed()
+    data['papers'][0]['source_url'] = 'https://arxiv.org/pdf/1706.03762v7'
+    with get_connection(service.db_path) as conn:
+        conn.execute("UPDATE paper_versions SET file_hash='other-version'")
+    reads = []
+
+    def reader(path):
+        reads.append(path)
+        return arxiv_id
+
+    return LearningPathService(service.db_path, build_graph(data, 'kg-test'), arxiv_reader=reader), reads
+
+
+def test_other_version_of_reviewed_paper_shares_path_without_pages(service):
+    """#343: 같은 논문의 다른 판본은 개념 순서를 쓰되 페이지·찾을 말은 숨긴다."""
+    related, reads = related_service(service, '1706.03762')
+    server = create_server(MCPServices(Mock(), Mock(), learning_path=related))
+    path = call(server, 'get_learning_path', {'context_id': 'ctx'})
+    assert path['graph_status'] == 'related_version' and path['graph_revision_id'] == 'kg-test'
+    assert path['reviewed_version'] == {'label': 'Paper', 'source_url': 'https://arxiv.org/pdf/1706.03762v7'}
+    assert [s['concept_id'] for s in path['steps']] == ['vector', 'dot', 'softmax', 'attention', 'transformer']
+    assert all(step['paper_locations'] == [] for step in path['steps'])
+    prereq = call(server, 'get_prerequisites', {'context_id': 'ctx', 'concept': 'attention'})
+    assert prereq['graph_status'] == 'related_version'
+    assert [p['concept_id'] for p in prereq['prerequisites']] == ['dot', 'softmax']
+    assert prereq['paper_locations'] == []
+    assert related.has_graph('v1') is True
+    # 같은 파일의 arXiv 표기는 한 번만 읽는다.
+    assert len(reads) == 1
+
+
+def test_reviewed_version_reports_its_label_only_when_related(service):
+    server = create_server(MCPServices(Mock(), Mock(), learning_path=service))
+    assert call(server, 'get_learning_path', {'context_id': 'ctx'})['reviewed_version'] is None
+
+
+@pytest.mark.parametrize('arxiv_id', [None, '2010.11929'])
+def test_unrelated_or_unstamped_pdf_stays_without_graph(service, arxiv_id):
+    related, _ = related_service(service, arxiv_id)
+    server = create_server(MCPServices(Mock(), Mock(), learning_path=related))
+    path = call(server, 'get_learning_path', {'context_id': 'ctx'})
+    assert path['graph_status'] == 'no_graph' and path['steps'] == [] and path['reviewed_version'] is None
+    assert related.has_graph('v1') is False

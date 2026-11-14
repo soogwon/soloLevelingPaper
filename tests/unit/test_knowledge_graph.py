@@ -177,3 +177,63 @@ def test_search_phrase_is_checked_against_listed_pages():
              normalize_text('Missing ﬁ Term'), normalize_text('Missing Term')]
     problems = verify_phrases(paper, pages)
     assert problems == ['paper/transformer: "Missing Term"가 [1, 2]페이지에 없습니다(발견 페이지: 4).']
+
+
+def test_arxiv_ids_ignore_version_suffix():
+    from solo_leveling.domain.knowledge_graph import arxiv_base_id
+
+    assert arxiv_base_id('https://arxiv.org/pdf/1706.03762v7') == '1706.03762'
+    assert arxiv_base_id('https://arxiv.org/abs/2010.11929') == '2010.11929'
+    assert arxiv_base_id('arXiv:1810.04805v2 [cs.CL] 24 May 2019') == '1810.04805'
+    assert arxiv_base_id('no stamp here') is None
+    graph = load_graph()
+    assert graph.paper_by_arxiv('1706.03762').paper_key == 'attention-is-all-you-need'
+    assert graph.paper_by_arxiv(None) is None
+
+
+def test_reads_arxiv_stamp_from_reviewed_pdf():
+    from pathlib import Path
+    from solo_leveling.infrastructure.parsing.arxiv_stamp import read_arxiv_id
+
+    pdf = Path(__file__).resolve().parents[2] / 'test_data/tmp_pdfs/075b9be9-5944-4e83-af4b-2add5dbdeb94.pdf'
+    from hashlib import sha256
+    digest = sha256(pdf.read_bytes()).hexdigest()
+    assert read_arxiv_id(str(pdf), pdf_root=pdf.parent, expected_hash=digest) == '1706.03762'
+    assert read_arxiv_id(str(pdf.parent / 'missing.pdf'), pdf_root=pdf.parent, expected_hash=digest) is None
+
+
+def test_arxiv_lookup_rejects_external_links_and_changed_file(tmp_path):
+    from hashlib import sha256
+    from pathlib import Path
+    from solo_leveling.infrastructure.parsing.arxiv_stamp import read_arxiv_id
+
+    pdf = Path(__file__).resolve().parents[2] / 'test_data/tmp_pdfs/075b9be9-5944-4e83-af4b-2add5dbdeb94.pdf'
+    digest = sha256(pdf.read_bytes()).hexdigest()
+    root = tmp_path / 'pdfs'
+    root.mkdir()
+    link = root / 'linked.pdf'
+    link.symlink_to(pdf)
+    assert read_arxiv_id(str(link), pdf_root=root, expected_hash=digest) is None
+    assert read_arxiv_id(str(pdf), pdf_root=root, expected_hash=digest) is None
+    local = root / 'local.pdf'
+    local.write_bytes(pdf.read_bytes())
+    assert read_arxiv_id('local.pdf', pdf_root=root, expected_hash=digest) == '1706.03762'
+    local.write_bytes(b'%PDF-replaced')
+    assert read_arxiv_id('local.pdf', pdf_root=root, expected_hash=digest) is None
+
+
+def test_arxiv_lookup_does_not_use_body_reference(tmp_path, monkeypatch):
+    from hashlib import sha256
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    import pdfplumber
+    from solo_leveling.infrastructure.parsing.arxiv_stamp import read_arxiv_id
+
+    source = tmp_path / 'paper.pdf'
+    source.write_bytes(b'%PDF-test')
+    parsed = MagicMock()
+    parsed.__enter__.return_value.pages = [SimpleNamespace(chars=[
+        {'text': 'See https://arxiv.org/pdf/1706.03762v7', 'upright': True}])]
+    monkeypatch.setattr(pdfplumber, 'open', lambda stream: parsed)
+    assert read_arxiv_id(str(source), pdf_root=tmp_path,
+                         expected_hash=sha256(source.read_bytes()).hexdigest()) is None
