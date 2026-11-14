@@ -154,6 +154,44 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
     manager.wait_for_idle.assert_called_once_with(None)
 
 
+@pytest.mark.parametrize(('setting', 'expected'), [(None, True), ('1', True), ('0', False)])
+def test_lifespan_starts_embedding_warmup_unless_disabled(tmp_path, monkeypatch, setting, expected):
+    """첫 질문이 모델 로딩을 떠안지 않도록 서버 시작 때 임베딩을 준비한다(#119)."""
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from solo_leveling.interfaces.mcp import runtime
+
+    embedder = Mock()
+    monkeypatch.setattr(runtime, 'ProcessEmbedder', Mock(return_value=embedder))
+    services = SimpleNamespace(executions=object(), answer=SimpleNamespace(semantic_verification=None),
+        evidence=object(), search=SimpleNamespace(contexts=object()), translation=object(),
+        translation_settings=object())
+    monkeypatch.setattr('solo_leveling.workers.reparse.ReparseService', Mock())
+    monkeypatch.setattr(runtime, 'build_services', Mock(return_value=services))
+    monkeypatch.setattr(runtime, 'get_client', Mock(return_value=object()))
+    monkeypatch.setattr(runtime, 'restore_legacy_index_memberships', Mock())
+    monkeypatch.setattr(runtime, 'LocalIngestionManager', Mock(return_value=Mock()))
+    monkeypatch.setattr(runtime, 'create_server', Mock(side_effect=lambda services, *, lifespan: lifespan))
+    warmup = Mock()
+    monkeypatch.setattr('solo_leveling.infrastructure.embeddings.warmup.start_warmup', warmup)
+    values = {'DATA_ROOT': str(tmp_path), 'OPENAI_API_KEY': 'fixture'}
+    if setting is not None:
+        values['SOLO_LEVELING_EMBEDDING_WARMUP'] = setting
+    lifespan = runtime.build_runtime_server(values)
+    warmup.assert_not_called()
+
+    async def check():
+        async with lifespan(None):
+            pass
+
+    asyncio.run(check())
+    if expected:
+        warmup.assert_called_once_with(embedder, str(runtime.runtime_paths(values).db_path))
+    else:
+        warmup.assert_not_called()
+
+
 @pytest.mark.parametrize(('allow', 'local'), [
     (False, False), (False, True), (True, False), (True, True),
 ])

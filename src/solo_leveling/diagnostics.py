@@ -13,6 +13,7 @@ import sys
 from time import perf_counter
 from uuid import uuid4
 
+from solo_leveling.cancellation import RequestCancelled
 from solo_leveling.worker_diagnostics import stage_output, valid_worker_stage
 
 _request = ContextVar('diagnostic_request', default=None)
@@ -234,7 +235,8 @@ def stage(name):
     try:
         yield
     except BaseException as error:
-        code = 'CANCELLED' if isinstance(error, (KeyboardInterrupt, GeneratorExit)) or type(error).__name__ == 'CancelledError' else 'STAGE_FAILED'
+        code = ('CANCELLED' if isinstance(error, (KeyboardInterrupt, GeneratorExit, RequestCancelled))
+                or type(error).__name__ == 'CancelledError' else 'STAGE_FAILED')
         _emit(request_id, span_id, name, 'error', round((perf_counter() - started) * 1000, 3), code)
         raise
     else:
