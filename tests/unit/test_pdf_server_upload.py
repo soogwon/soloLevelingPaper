@@ -94,3 +94,40 @@ def test_upload_uses_owned_mapping_streams_pdf_and_completes(tmp_path):
     assert session.calls[0][0:3] == ("PUT", "https://objects.example/upload", PDF)
     assert client.calls[1][1] == f"/v1/uploads/{UPLOAD_ID}/complete"
     assert result.status == "ready"
+
+
+def test_changed_bytes_after_prepare_are_not_sent(tmp_path):
+    import pytest
+
+    db, root = database(tmp_path)
+
+    class ChangedFileClient(Client):
+        def request(self, method, path, **kwargs):
+            response = super().request(method, path, **kwargs)
+            (root / "managed.pdf").write_bytes(PDF[:-1] + b"!")
+            return response
+
+    client, session = ChangedFileClient(), UploadSession()
+    service = PaperPdfUploadService(str(db), root, client, session)
+    with pytest.raises(ValueError, match="PDF_UPLOAD_PREVIEW_CHANGED"):
+        service.upload(service.preview(PAPER_ID))
+    assert not session.calls
+    assert len(client.calls) == 1
+
+
+def test_storage_redirect_does_not_complete(tmp_path):
+    import pytest
+    from solo_leveling.infrastructure.storage.server_client import ServerResponseInvalid
+
+    db, root = database(tmp_path)
+
+    class RedirectSession:
+        def request(self, method, url, **kwargs):
+            assert kwargs["allow_redirects"] is False
+            return Response(307)
+
+    client = Client()
+    service = PaperPdfUploadService(str(db), root, client, RedirectSession())
+    with pytest.raises(ServerResponseInvalid):
+        service.upload(service.preview(PAPER_ID))
+    assert len(client.calls) == 1

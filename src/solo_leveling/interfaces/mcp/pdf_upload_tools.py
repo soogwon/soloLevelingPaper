@@ -11,7 +11,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from solo_leveling.application.server_sync.pdf_upload import PdfUploadPreview
-from solo_leveling.infrastructure.storage.server_client import ServerConnectionRequired
+from solo_leveling.infrastructure.storage.server_client import ServerConnectionRequired, ServerResponseInvalid
 
 
 PDF_UPLOAD_APP_URI = "ui://solo-leveling/pdf-upload.html"
@@ -112,6 +112,8 @@ def register_pdf_upload(server, service: PdfUploadService) -> None:
             return asdict(await anyio.to_thread.run_sync(service.upload, preview))
         except FileExistsError:
             raise ToolError("PDF_ALREADY_UPLOADED: 이 원문 버전의 PDF가 이미 준비되어 있습니다.") from None
+        except ServerResponseInvalid:
+            raise ToolError("PDF_UPLOAD_FAILED: 업로드 응답을 확인할 수 없습니다.") from None
         except ServerConnectionRequired:
             raise ToolError("SERVER_CONNECTION_REQUIRED: 서버 계정을 다시 연결하세요.") from None
         except ValueError as exc:

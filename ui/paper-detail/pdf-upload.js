@@ -15,7 +15,8 @@ export function mountPdfUpload(app, doc) {
   app.ontoolinput = event => { input = event.arguments; reset(); };
   app.ontoolresult = result => {
     const data = result?.structuredContent;
-    if (input === null || (input && input.paper_id !== data?.paper_id)) return;
+    if (!input || input.paper_id !== data?.paper_id
+        || (input.version_id != null && input.version_id !== data?.version_id)) return;
     reset();
     if (!result?.isError && data?.status === 'confirmation_required'
         && typeof data.notice === 'string' && typeof data.paper_id === 'string'

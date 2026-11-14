@@ -3,7 +3,8 @@
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
+from tempfile import TemporaryFile
+from typing import Any, BinaryIO
 from urllib.parse import quote, urlsplit
 from uuid import UUID
 
@@ -116,20 +117,24 @@ class PaperPdfUploadService:
                 if _detail_code(data) == "pdf_already_uploaded":
                     raise FileExistsError("PDF_ALREADY_UPLOADED")
             if response.status_code != 201:
-                response.raise_for_status()
-            prepared = _validate_prepare(_response_json(response))
+                raise ServerResponseInvalid
+            prepared = _validate_prepare(_response_json(response), current.file_size)
         finally:
             response.close()
 
         _validate_upload_url(prepared["upload_url"])
-        with open_pdf_source(current.source, self._pdf_root) as source:
+        with TemporaryFile() as snapshot:
+            digest, size = _inspect_pdf(current.source, self._pdf_root, snapshot, current.file_size)
+            if (digest, size) != (current.sha256_hex, current.file_size):
+                raise ValueError("PDF_UPLOAD_PREVIEW_CHANGED")
+            snapshot.seek(0)
             uploaded = self._upload_session.request(
-                prepared["method"], prepared["upload_url"], data=source,
+                prepared["method"], prepared["upload_url"], data=snapshot,
                 headers=prepared["headers"], timeout=120, allow_redirects=False,
             )
         try:
             if not 200 <= uploaded.status_code < 300:
-                uploaded.raise_for_status()
+                raise ServerResponseInvalid
         finally:
             uploaded.close()
 
@@ -139,7 +144,7 @@ class PaperPdfUploadService:
         )
         try:
             if completed.status_code != 200:
-                completed.raise_for_status()
+                raise ServerResponseInvalid
             data = _validate_complete(_response_json(completed), current, prepared["upload_id"])
         finally:
             completed.close()
@@ -149,13 +154,18 @@ class PaperPdfUploadService:
         )
 
 
-def _inspect_pdf(source: Path, root: Path) -> tuple[str, int]:
+def _inspect_pdf(source: Path, root: Path, snapshot: BinaryIO | None = None,
+                 max_size: int | None = None) -> tuple[str, int]:
     digest, size, header = sha256(), 0, b""
     with open_pdf_source(source, root) as stream:
         while block := stream.read(1024 * 1024):
             header = (header + block[:5])[:5]
-            digest.update(block)
             size += len(block)
+            if max_size is not None and size > max_size:
+                raise ValueError("PDF_UPLOAD_PREVIEW_CHANGED")
+            digest.update(block)
+            if snapshot is not None:
+                snapshot.write(block)
     if header != b"%PDF-" or size < 5:
         raise ValueError("INVALID_MANAGED_PDF")
     return digest.hexdigest(), size
@@ -172,7 +182,7 @@ def _detail_code(data: Any) -> str | None:
     return data.get("detail", {}).get("code") if isinstance(data, dict) else None
 
 
-def _validate_prepare(data: Any) -> dict[str, Any]:
+def _validate_prepare(data: Any, size: int) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ServerResponseInvalid
     required = ("upload_id", "upload_url", "method", "headers", "expires_at")
@@ -185,7 +195,7 @@ def _validate_prepare(data: Any) -> dict[str, Any]:
     if data["method"] != "PUT" or not isinstance(data["headers"], dict):
         raise ServerResponseInvalid
     headers = data["headers"]
-    if (set(headers) - {"Content-Length", "Content-Type"}
+    if (headers.get("Content-Length") != str(size) or set(headers) - {"Content-Length", "Content-Type"}
             or headers.get("Content-Type") != "application/pdf"):
         raise ServerResponseInvalid
     return data

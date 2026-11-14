@@ -40,3 +40,14 @@ test('체크 후 버튼만 숨겨진 업로드 도구를 호출한다', async ()
   }}]);
   assert.match(doc.getElementById('status').textContent, /완료/);
 });
+
+test('같은 논문의 다른 판본 응답은 승인 대상에 넣지 않는다', () => {
+  const {app, doc} = setup();
+  app.ontoolinput({arguments: {paper_id: 'paper-1', version_id: 'version-2'}});
+  app.ontoolresult({structuredContent: {
+    status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-1',
+    file_name: 'old.pdf', file_size: 1234, notice: 'PDF 전체 전송',
+  }, _meta: {confirmation_token: 'old'}});
+  assert.equal(doc.getElementById('agree').disabled, true);
+  assert.equal(doc.getElementById('file').textContent, '');
+});
