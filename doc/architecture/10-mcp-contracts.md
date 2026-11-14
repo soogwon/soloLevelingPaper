@@ -17,7 +17,7 @@
 
 stdio로 호출한다. 서비스 로그인·HTTP 업로드는 M1에 없다. 사용자 식별은 서버의 로컬 프로필에서 얻고 user_id 입력은 받지 않는다. context·version·evidence가 현재 로컬 데이터와 일치하는지 매 호출 검사한다. 파일 내부 지시나 모델 출력은 실행 명령이 아니다.
 
-도구 결과는 structuredContent와 간단한 text로 제공한다. 등록에는 request_key를 사용하고 동일 로컬 프로필·도구·키에 같은 입력은 기존 결과, 다른 입력은 CONFLICT를 반환한다. 조회 도구는 readOnlyHint를 표시한다.
+도구 결과는 structuredContent와 간단한 text로 제공한다. 등록에는 request_key를 사용하고 동일 로컬 프로필·도구·키에 같은 입력은 기존 결과, 다른 입력은 REQUEST_CONFLICT를 반환한다. 조회 도구는 readOnlyHint를 표시한다.
 
 ## 도구
 
@@ -226,21 +226,33 @@ get_evidence는 해당 context에 저장된 번역문·추출 원문 근거를 �
 
 ## 주요 오류
 
-서비스 오류는 다음 코드와 안전한 메시지를 사용한다. stdio에서는 `isError=true`와 text 콘텐츠로 반환하며 정상 출력 스키마를 요구하지 않는다.
+모든 도구 오류는 한 가지 형식이다(#290). stdio에서는 `isError=true`와 text 콘텐츠로 반환하며 정상 출력 스키마를 요구하지 않는다.
+
+```
+CODE[: REASON][: field=필드이름]: 안내 문장
+```
+
+- `CODE`는 아래 표나 도구별 코드(`QUIZ_NOT_READY`, `REPARSE_*` 등)다. 도구 이름 접두어(`Error executing tool …`)나 안내 문장 없는 코드만의 오류는 보내지 않는다.
+- `REASON`은 입력 오류의 세부 사유다. 예: `INVALID_INPUT`, `INVALID_JSON`.
+- `field`는 공개 입력 스키마의 필드 이름만 쓴다. 사용자가 보낸 값이나 알 수 없는 키 이름은 넣지 않는다. 메모 도구는 `request.<필드>` 형식이다.
+- 형식은 맞지만 없는 자료는 `NOT_FOUND`, 형식부터 틀린 `context_id`(UUID가 아니고 저장되지도 않은 값)는 `INVALID_ARGUMENT: INVALID_INPUT: field=context_id`다. 이미 저장된 예전 형식의 ID는 그대로 조회된다.
+- 같은 `request_key`의 다른 요청은 모든 도구에서 `REQUEST_CONFLICT`다. 메모 수정 충돌(먼저 저장된 변경이 있음)은 `CONFLICT`로 따로 구분한다.
+- `tests/integration/test_mcp_error_contract.py`가 실제 stdio 서버에서 이 형식을 검사한다.
 
 | 코드 | 사용자 메시지 |
 |---|---|
-| INVALID_ARGUMENT | 입력값을 확인해주세요. |
+| INVALID_ARGUMENT | 입력값을 확인해주세요. (사유와 필드 이름 포함 가능) |
 | NOT_FOUND | 요청한 자료를 찾을 수 없습니다. |
 | PAPER_NOT_READY | 등록 작업 상태를 확인해주세요. job_id와 status 포함 |
 | UNSUPPORTED_DOCUMENT | 지원하는 PDF 파일인지 확인해주세요. |
-| CONFLICT | request_key가 이전 요청과 일치하지 않습니다. |
+| REQUEST_CONFLICT | request_key가 이전 요청과 일치하지 않습니다. |
+| CONFLICT | 기록을 다시 조회한 뒤 수정해주세요. (메모 수정 충돌) |
 | UPSTREAM_UNAVAILABLE | 답변 생성 서비스를 사용할 수 없습니다. |
 | INTERNAL_ERROR | 저장된 데이터의 연결을 확인하지 못했습니다. 또는 요청을 처리하지 못했습니다. |
 
 임베딩 오류는 `UPSTREAM_UNAVAILABLE: <안전한 임베딩 오류 코드>: 임베딩 처리를 완료하지 못했습니다.` 형식이다.
 원래 서비스 예외의 메시지·절대 경로·키·스택은 전달하지 않는다.
-필수 인자 누락·타입 오류 등 함수 실행 전 SDK 검증 실패도 `isError=true`지만, 현재는 위 코드로 통일되지 않은 SDK 검증 문구다. 그 문구는 버전별로 달라질 수 있고 입력값을 포함할 수 있으므로 호스트는 오류 전문을 무조건 로그에 남기지 않는다. 코드 파싱에 의존하지 말고 입력 스키마를 확인한다.
+필수 인자 누락·타입 오류 등 함수 실행 전 검증 실패도 SDK 문구 대신 `INVALID_ARGUMENT: INVALID_INPUT[: field=이름]: 입력값을 확인해주세요.`로 반환하며 입력값을 포함하지 않는다.
 `partial`·`insufficient_evidence` 등 답변 상태는 도구 실행 오류와 구분한다.
 
 원격 인증·upload 만료 오류는 후속 계약에서 다시 정의한다. 인용 그래프·메모 도구는 후속 범위다.

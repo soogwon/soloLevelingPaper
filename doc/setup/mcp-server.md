@@ -335,7 +335,7 @@ Windows 재분석 지점 경쟁, import 루트 상위 폴더·관리 저장소 �
 
 요청은 관리 복사와 DB 작업 확보가 끝나면 반환하고, 파싱·번역·색인은 최대 한 개의
 백그라운드 작업으로 진행한다. 동일 `request_key`와 동일 입력은 기존 작업을 반환하며,
-다른 입력에 같은 키를 사용하면 `CONFLICT`다.
+다른 입력에 같은 키를 사용하면 `REQUEST_CONFLICT`다.
 
 ### get_paper_status
 
@@ -390,14 +390,14 @@ context의 근거는 조회할 수 없다.
 
 ## 오류와 현재 제한
 
-오류는 `INVALID_ARGUMENT`, `NOT_FOUND`, `CONFLICT`, `UNSUPPORTED_DOCUMENT`,
-`PAPER_NOT_READY`, `UPSTREAM_UNAVAILABLE`, `INTERNAL_ERROR`로 구분한다. 원래 예외 메시지,
-API 키, 절대 경로와 스택은 MCP 오류에 포함하지 않는다.
+오류는 `CODE[: REASON][: field=필드이름]: 안내 문장` 한 가지 형식이며, 코드는
+`INVALID_ARGUMENT`, `NOT_FOUND`, `REQUEST_CONFLICT`, `UNSUPPORTED_DOCUMENT`,
+`PAPER_NOT_READY`, `UPSTREAM_UNAVAILABLE`, `INTERNAL_ERROR`와 도구별 코드로 구분한다.
+원래 예외 메시지, API 키, 절대 경로와 스택은 MCP 오류에 포함하지 않는다.
+자세한 규칙은 [MCP 인터페이스 명세](../architecture/10-mcp-contracts.md#주요-오류)를 따른다.
 
-위 설명은 서비스 예외 변환에 해당한다. 필수 입력 누락·타입 오류는 함수 실행 전에
-SDK가 검사하며, 현재 코드 접두사가 통일되지 않은 검증 문구를 반환한다.
-호스트는 `isError`를 먼저 확인하고, 입력값을 포함할 수 있는 SDK 오류 전문을
-무조건 기록하지 않는다. `partial` 등 답변 상태는 도구 오류와 구분한다.
+필수 입력 누락·타입 오류도 같은 형식의 `INVALID_ARGUMENT`로 반환하며 입력값은 넣지 않는다.
+호스트는 `isError`를 먼저 확인한다. `partial` 등 답변 상태는 도구 오류와 구분한다.
 
 - 서버 시작 시 DB 스키마를 준비하고 이전 실행의 processing 작업을 interrupted로 바꾼다.
 - 서비스 호출은 작업 스레드에서 실행해 비동기 MCP 메시지 처리를 직접 막지 않는다.

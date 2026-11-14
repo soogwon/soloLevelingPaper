@@ -8,7 +8,6 @@ from typing import Annotated, Literal
 import anyio
 from jsonschema import Draft202012Validator, ValidationError
 from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 from pydantic import ValidationError as ModelValidationError
@@ -18,8 +17,8 @@ from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
 from solo_leveling.application.reflection.service import ReflectionService, ReflectionSession
 from solo_leveling.domain.reflection import MAX_ANSWER_LENGTH, ReflectionValidationError
 from .annotation_tools import ANNOTATION_INPUTS
-from .errors import to_tool_error
-from .input_privacy import SafeInputServer
+from .errors import invalid_input, to_tool_error
+from .input_privacy import SafeInputServer, model_error_field, schema_error_field
 from .quiz_contracts import AttemptInput, HistoryInput, QuizInput, ScoresInput, SubmitInput
 
 
@@ -74,31 +73,32 @@ class ReflectionInputServer(SafeInputServer):
             try:
                 arguments = self._find_tool(name).fn_metadata.pre_parse_json(arguments)
             except ValueError:
-                raise ToolError(
-                    'INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.') from None
+                raise invalid_input() from None
         if name in ANNOTATION_INPUTS:
+            model = ANNOTATION_INPUTS[name]
+            if not isinstance(arguments, dict) or set(arguments) != {'request'}:
+                field = 'request' if not isinstance(arguments, dict) or 'request' not in arguments else None
+                raise invalid_input(field)
             try:
-                model = ANNOTATION_INPUTS[name]
-                if not isinstance(arguments, dict) or set(arguments) != {'request'}:
-                    raise ValueError('invalid request')
                 model.model_validate(arguments['request'])
+            except ModelValidationError as error:
+                raise invalid_input(model_error_field(error, model.model_fields, 'request.')) from None
             except ValueError:
-                raise ToolError(
-                    'INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.') from None
+                raise invalid_input('request') from None
         if name in _QUIZ_INPUTS:
+            model = _QUIZ_INPUTS[name]
             try:
-                _QUIZ_INPUTS[name].model_validate(arguments)
-            except ModelValidationError:
-                raise ToolError(
-                    'INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.') from None
+                model.model_validate(arguments)
+            except ModelValidationError as error:
+                raise invalid_input(model_error_field(error, model.model_fields)) from None
         if name in _READING_TOOLS:
             tool = next((tool for tool in await self.list_tools() if tool.name == name), None)
             if tool is not None:
                 try:
                     Draft202012Validator(tool.inputSchema).validate(arguments)
-                except ValidationError:
-                    # 검증 예외에는 입력 본문이 포함되므로 출력하거나 원래 예외를 연결하지 않는다.
-                    raise to_tool_error(InvalidArgumentError('입력값을 확인해주세요.')) from None
+                except ValidationError as error:
+                    # 검증 예외에는 입력 본문이 포함되므로 필드 이름 외에는 출력하거나 연결하지 않는다.
+                    raise invalid_input(schema_error_field(error, tool.inputSchema)) from None
         return await super().call_tool(name, arguments)
 
 

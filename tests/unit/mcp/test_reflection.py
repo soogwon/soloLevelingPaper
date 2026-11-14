@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from dataclasses import replace
 from unittest.mock import Mock
 
@@ -203,7 +204,9 @@ def test_protocol_rejects_unsafe_input_before_service(ctx, name, changes, capsys
         async with create_connected_server_and_client_session(server) as client:
             result = await client.call_tool(name, args)
             assert result.isError
-            assert result.content[0].text == 'INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.'
+            # 필드 이름은 공개 스키마의 이름만 붙고, 알 수 없는 키나 입력값은 나오지 않는다.
+            assert re.fullmatch(r'INVALID_ARGUMENT: INVALID_INPUT(: field=[a-z_]+)?: 입력값을 확인해주세요\.',
+                                result.content[0].text)
             assert result.structuredContent is None
             spy.get_session.assert_not_called()
             spy.save_answer.assert_not_called()
@@ -229,7 +232,7 @@ def test_missing_required_field_is_safe_without_calling_service(ctx):
                 'context_id': context_id, 'template_id': 'before.background',
             })
             assert result.isError
-            assert result.content[0].text == 'INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.'
+            assert result.content[0].text == 'INVALID_ARGUMENT: INVALID_INPUT: field=text: 입력값을 확인해주세요.'
             spy.save_answer.assert_not_called()
             spy.get_comparison.assert_not_called()
 
