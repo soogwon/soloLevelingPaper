@@ -76,12 +76,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          package_json_file: ui/learning-dashboard/package.json
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # pnpm/action-setup은 pnpm 11 자체 설치 중 esbuild 빌드 승인 대기로 실패해 npm으로 설치한다.
+      - name: pnpm 설치
+        run: npm install -g pnpm@11.25.0
       - name: 의존성 설치
         working-directory: ui/learning-dashboard
         run: pnpm install --frozen-lockfile --config.strict-dep-builds=false
