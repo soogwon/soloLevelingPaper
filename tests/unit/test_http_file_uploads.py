@@ -8,6 +8,7 @@ from uuid import UUID
 
 import pytest
 from fastapi import HTTPException, Response
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from solo_leveling.interfaces.http.app import create_app
@@ -27,6 +28,68 @@ PAPER_ID = "00000000-0000-0000-0000-000000000201"
 UPLOAD_ID = "00000000-0000-0000-0000-000000000601"
 NOW = datetime(2026, 11, 14, 1, 0, tzinfo=timezone.utc)
 SHA256 = "ab" * 32
+
+
+@pytest.mark.parametrize("credential", ["device", "web_session", None])
+def test_http_pdf_routes_enforce_credentials_before_storage(credential):
+    """직접 함수 호출과 달리 실제 HTTP 인증 의존성과 응답 모델까지 확인한다."""
+    store, storage = UploadStore(), Storage()
+    principal = AuthenticatedPrincipal(
+        "user-1", credential or "device", "device-1" if credential != "web_session" else None)
+    app = create_app(
+        token_verifier=SimpleNamespace(verify=lambda _: principal),
+        device_store=SimpleNamespace(),
+        device_registry=SimpleNamespace(is_active=lambda *_: True),
+        file_upload_store=store, object_storage=storage,
+    )
+    headers = {"Authorization": "Bearer synthetic-test-token"} if credential else {}
+    with TestClient(app) as client:
+        prepared = client.post(f"/v1/papers/{PAPER_ID}/uploads", json=body(), headers=headers)
+        completed = client.post(f"/v1/uploads/{UPLOAD_ID}/complete", headers=headers)
+        access = client.get(
+            f"/v1/papers/{PAPER_ID}/versions/version-1/file-access", headers=headers)
+        status = client.get(
+            f"/v1/papers/{PAPER_ID}/versions/version-1/upload-status", headers=headers)
+    if credential is None:
+        assert [r.status_code for r in (prepared, completed, access, status)] == [401] * 4
+        assert not store.calls and not storage.calls
+    elif credential == "device":
+        assert [r.status_code for r in (prepared, completed, access, status)] == [201, 200, 403, 200]
+        assert completed.json()["storage_status"] == "ready"
+        assert status.json()["status"] == "ready"
+        assert "url" not in status.json()
+        assert status.headers["cache-control"] == "no-store"
+        assert not any(call[0] == "download" for call in storage.calls)
+    else:
+        assert [r.status_code for r in (prepared, completed, access, status)] == [403, 403, 200, 403]
+        assert access.json()["url"] == "https://objects.example/read"
+        assert "object_key" not in access.json()
+        assert access.headers["cache-control"] == "no-store"
+        assert store.calls == [("access", "user-1", PAPER_ID, "version-1")]
+
+
+@pytest.mark.parametrize("state", ["not_uploaded", "pending", "failed"])
+def test_http_non_ready_pdf_never_issues_download_url(state):
+    """미완료 파일 상태는 HTTP 직렬화 후에도 열람 주소 없이 반환한다."""
+    store, storage = UploadStore(), Storage()
+    record = None if state == "not_uploaded" else FileAccessRecord(
+        state, "paper.pdf", 1234, "application/pdf", None,
+        "upload_checksum_mismatch" if state == "failed" else None)
+    store.get_file_access = lambda *_: record
+    app = create_app(
+        token_verifier=SimpleNamespace(
+            verify=lambda _: AuthenticatedPrincipal("user-1", "web_session")),
+        file_upload_store=store, object_storage=storage,
+    )
+    with TestClient(app) as client:
+        response = client.get(
+            f"/v1/papers/{PAPER_ID}/versions/version-1/file-access",
+            headers={"Authorization": "Bearer synthetic-test-token"})
+    assert response.status_code == 200
+    assert response.json()["status"] == state
+    assert response.json()["url"] is None
+    assert response.json()["expires_at"] is None
+    assert not storage.calls
 
 
 class UploadStore:
