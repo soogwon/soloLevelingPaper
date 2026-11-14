@@ -650,3 +650,128 @@ def test_process_lock_released_after_unexpected_transport_error(database):
     next_op = other.grant_and_queue('paper-after', 'v4').operation_id
     assert other.retry_due()[0].operation_id == next_op
     assert len(other_client.calls) == 1
+
+
+def test_interrupted_work_waits_for_original_backoff_then_reuses_id(database):
+    from datetime import timedelta
+    clock = [NOW]
+    client = Client()
+    service = PaperMetadataSyncService(database, client, now=lambda: clock[0])
+    op = service.grant_and_queue('paper-local-1', 'v4').operation_id
+    with get_connection(database) as conn:
+        conn.execute("UPDATE sync_outbox SET status='syncing', attempt_count=1, updated_at=?", (NOW.isoformat(),))
+    restarted = PaperMetadataSyncService(database, client, now=lambda: clock[0])
+    assert restarted.retry_due() == []
+    assert restarted.status(op).status == 'retryable_failure'
+    assert restarted.status(op).error_code == 'sync_interrupted'
+    assert not client.calls
+    clock[0] += timedelta(minutes=3)
+    assert restarted.retry_due()[0].status == 'synced'
+    assert client.calls[0][2]['headers']['Idempotency-Key'] == op
+    with get_connection(database) as conn:
+        assert conn.execute('SELECT count(*) FROM server_sync_consents').fetchone()[0] == 1
+        assert conn.execute('SELECT attempt_count FROM sync_outbox').fetchone()[0] == 2
+
+
+def test_killed_sync_process_recovers_without_new_consent_or_operation(database):
+    import multiprocessing
+    from datetime import timedelta
+    context = multiprocessing.get_context('spawn')
+    entered, release = context.Event(), context.Event()
+    client = Client()
+    service = PaperMetadataSyncService(database, client)
+    op = service.grant_and_queue('paper-local-1', 'v4').operation_id
+    worker = context.Process(target=_hold_sync_in_process, args=(database, entered, release))
+    worker.start()
+    try:
+        assert entered.wait(10)
+        assert service.retry_due() == []
+        assert service.status(op).status == 'syncing'
+    finally:
+        worker.terminate()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert worker.exitcode != 0
+    restarted = PaperMetadataSyncService(database, client,
+        now=lambda: datetime.now(timezone.utc) + timedelta(minutes=3))
+    assert restarted.retry_due()[0].status == 'synced'
+    assert [call[2]['headers']['Idempotency-Key'] for call in client.calls] == [op]
+    with get_connection(database) as conn:
+        assert conn.execute('SELECT count(*) FROM sync_outbox').fetchone()[0] == 1
+        assert conn.execute('SELECT count(*) FROM server_sync_consents').fetchone()[0] == 1
+        assert conn.execute('SELECT attempt_count FROM sync_outbox').fetchone()[0] == 2
+
+
+@pytest.mark.parametrize('condition', ['revoked', 'other_account', 'limit', 'changed', 'invalid_time', 'invalid_attempt'])
+def test_interrupted_recovery_preserves_approval_and_retry_limits(database, condition):
+    from datetime import timedelta
+    client = Client()
+    service = PaperMetadataSyncService(database, client, now=lambda: NOW)
+    op = service.grant_and_queue('paper-local-1', 'v4').operation_id
+    with get_connection(database) as conn:
+        conn.execute("UPDATE sync_outbox SET status='syncing', attempt_count=1, updated_at=?", (NOW.isoformat(),))
+        if condition == 'revoked':
+            conn.execute('UPDATE server_sync_consents SET revoked_at=?', (NOW.isoformat(),))
+        elif condition == 'limit':
+            conn.execute('UPDATE sync_outbox SET attempt_count=5')
+        elif condition == 'changed':
+            conn.execute("UPDATE papers SET title='변경된 논문'")
+        elif condition == 'invalid_time':
+            conn.execute("UPDATE sync_outbox SET updated_at='invalid'")
+        elif condition == 'invalid_attempt':
+            conn.execute('UPDATE sync_outbox SET attempt_count=0')
+    if condition == 'other_account':
+        client._connection_id = 'different-account'
+    restarted = PaperMetadataSyncService(database, client, now=lambda: NOW + timedelta(hours=1))
+    results = restarted.retry_due()
+    assert not client.calls
+    with get_connection(database) as conn:
+        row = conn.execute('SELECT status, attempt_count, last_error_code FROM sync_outbox WHERE operation_id=?', (op,)).fetchone()
+        assert conn.execute('SELECT count(*) FROM sync_outbox').fetchone()[0] == 1
+    if condition in ('revoked', 'other_account'):
+        assert row['status'] == 'syncing'
+        assert results == []
+    elif condition == 'limit':
+        assert row['status'] == 'retryable_failure' and row['attempt_count'] == 5
+        assert results == []
+    elif condition == 'changed':
+        assert row['status'] == 'conflict' and row['last_error_code'] == 'payload_changed'
+    else:
+        assert row['status'] == 'action_required' and row['last_error_code'] == 'invalid_recovery_state'
+
+
+@pytest.mark.parametrize('kind', ['learning_record', 'summary', 'annotation'])
+def test_interrupted_child_reuses_existing_parent_and_mapping(database, kind):
+    from datetime import timedelta
+    builders = {'learning_record': add_learning_record, 'summary': add_summary, 'annotation': add_annotation}
+    builders[kind](database)
+    ids = {'learning_record': SERVER_RECORD_ID, 'summary': SERVER_SUMMARY_ID, 'annotation': SERVER_ANNOTATION_ID}
+
+    def child_response(object_type):
+        return Response(200, {object_type + '_id': ids[object_type], 'revision': 1,
+            'sync_status': 'stored', 'server_updated_at': NOW.isoformat()})
+
+    initial = [Response(), child_response('learning_record')]
+    if kind != 'learning_record':
+        initial.append(child_response(kind))
+    client = Client(initial)
+    service = PaperMetadataSyncService(database, client, now=lambda: NOW)
+    op = service.grant_and_queue('paper-local-1', 'paper-learning-summary-annotation-sync-v4').operation_id
+    assert service.sync(op).status == 'synced'
+    sent = list(client.calls)
+    with get_connection(database) as conn:
+        before = [tuple(row) for row in conn.execute('SELECT operation_id, object_type FROM sync_outbox ORDER BY operation_id')]
+        # 서버 반영 뒤 로컬 완료 기록 전 중단된 상태를 재현한다.
+        conn.execute("UPDATE sync_outbox SET status='syncing', updated_at=? WHERE object_type=?", (NOW.isoformat(), kind))
+    client.calls.clear()
+    client.responses = [child_response(kind)]
+    restarted = PaperMetadataSyncService(database, client, now=lambda: NOW + timedelta(minutes=3))
+    assert restarted.retry_due()[0].status == 'synced'
+    assert len(client.calls) == 1
+    assert client.calls[0] == sent[-1]
+    assert client.calls[0][0] == 'PUT'
+    with get_connection(database) as conn:
+        after = [tuple(row) for row in conn.execute('SELECT operation_id, object_type FROM sync_outbox ORDER BY operation_id')]
+        assert before == after
+        mapping = conn.execute('SELECT server_object_id FROM server_subobject_mappings WHERE object_type=?', (kind,)).fetchone()
+        assert mapping['server_object_id'] == ids[kind]

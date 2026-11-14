@@ -214,6 +214,7 @@ class PaperMetadataSyncService:
             account_id = self._client.connection_id()
         except ServerConnectionRequired:
             return []
+        self._recover_interrupted(account_id)
         now = _iso(self._now())
         conn = get_connection(self._db_path)
         try:
@@ -245,6 +246,38 @@ class PaperMetadataSyncService:
             except (ServerConnectionRequired, KeyError):
                 break
         return results
+
+    def _recover_interrupted(self, account_id: str) -> None:
+        """프로세스 잠금 보유 중에만 중단 작업을 재시도 대기로 바꾼다."""
+        conn = get_connection(self._db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """SELECT o.operation_id, o.attempt_count, o.updated_at
+                   FROM sync_outbox o JOIN server_sync_consents c USING(consent_scope_id)
+                   WHERE o.account_id=? AND o.status='syncing' AND c.revoked_at IS NULL
+                     AND o.object_type IN ('paper', 'learning_record', 'summary', 'annotation')""",
+                (account_id,),
+            ).fetchall()
+            now = _iso(self._now())
+            for row in rows:
+                try:
+                    started = datetime.fromisoformat(row["updated_at"].replace("Z", "+00:00"))
+                    if started.tzinfo is None or row["attempt_count"] < 1:
+                        raise ValueError
+                    # 중단된 시도도 횟수에 포함하고 원래 시도 시각의 backoff를 유지한다.
+                    due = _iso(started + timedelta(minutes=min(60, 2 ** min(row["attempt_count"], 5))))
+                    status, code = "retryable_failure", "sync_interrupted"
+                except (ValueError, TypeError, AttributeError, OverflowError):
+                    due, status, code = None, "action_required", "invalid_recovery_state"
+                conn.execute(
+                    """UPDATE sync_outbox SET status=?, next_attempt_at=?, last_error_code=?, updated_at=?
+                       WHERE operation_id=? AND status='syncing'""",
+                    (status, due, code, now, row["operation_id"]),
+                )
+            conn.commit()
+        finally:
+            conn.close()
 
     def sync(self, operation_id: str) -> SyncResult:
         # 같은 DB를 쓰는 다른 MCP 프로세스와도 전송을 직렬화한다.
