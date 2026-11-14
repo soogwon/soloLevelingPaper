@@ -562,3 +562,91 @@ def test_auto_retry_waits_for_child_and_does_not_resend_synced_parent(database):
     clock[0] += timedelta(minutes=3)
     assert service.retry_due()[0].status == 'synced'
     assert [call[0] for call in client.calls] == ['POST', 'PUT', 'PUT']
+
+
+def test_two_services_do_not_send_the_same_inflight_operation(database):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    entered, release = Event(), Event()
+    first_client, second_client = Client(), Client()
+    original = first_client.request
+
+    def blocked(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    first_client.request = blocked
+    first = PaperMetadataSyncService(database, first_client)
+    second = PaperMetadataSyncService(database, second_client)
+    op = first.grant_and_queue('paper-local-1', 'v4').operation_id
+    with ThreadPoolExecutor() as pool:
+        future = pool.submit(first.sync, op)
+        try:
+            assert entered.wait(5)
+            assert second.sync(op).status == 'syncing'
+            assert second.retry_due() == []
+            assert not second_client.calls
+        finally:
+            release.set()
+        assert future.result(timeout=5).status == 'synced'
+    assert len(first_client.calls) == 1
+
+
+def _hold_sync_in_process(database, entered, release):
+    client = Client()
+    original = client.request
+
+    def blocked(*args, **kwargs):
+        entered.set()
+        if not release.wait(15):
+            raise RuntimeError('검증 대기 시간 초과')
+        return original(*args, **kwargs)
+
+    client.request = blocked
+    service = PaperMetadataSyncService(database, client)
+    service.retry_due()
+
+
+def test_process_lock_blocks_manual_send_and_is_released_after_exit(database):
+    import multiprocessing
+    context = multiprocessing.get_context('spawn')
+    entered, release = context.Event(), context.Event()
+    client = Client()
+    service = PaperMetadataSyncService(database, client)
+    op = service.grant_and_queue('paper-local-1', 'v4').operation_id
+    worker = context.Process(target=_hold_sync_in_process, args=(database, entered, release))
+    worker.start()
+    try:
+        assert entered.wait(10)
+        assert service.sync(op).status == 'syncing'
+        assert service.retry_due() == []
+        assert not client.calls
+    finally:
+        release.set()
+        worker.join(10)
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(5)
+    assert worker.exitcode == 0
+    assert service.status(op).status == 'synced'
+    insert_paper(database, Paper('paper-after', 'After process exit', created_at=NOW.isoformat()))
+    next_op = service.grant_and_queue('paper-after', 'v4').operation_id
+    client.responses = [Response(data={'paper_id': SERVER_RECORD_ID, 'revision': 1,
+        'sync_status': 'stored', 'server_updated_at': NOW.isoformat()})]
+    assert service.retry_due()[0].operation_id == next_op
+    assert service.status(next_op).status == 'synced'
+    assert len(client.calls) == 1
+
+
+def test_process_lock_released_after_unexpected_transport_error(database):
+    failed = PaperMetadataSyncService(database, Client([RuntimeError('synthetic')]))
+    op = failed.grant_and_queue('paper-local-1', 'v4').operation_id
+    with pytest.raises(RuntimeError):
+        failed.sync(op)
+    other_client = Client()
+    other = PaperMetadataSyncService(database, other_client)
+    insert_paper(database, Paper('paper-after', 'After error', created_at=NOW.isoformat()))
+    next_op = other.grant_and_queue('paper-after', 'v4').operation_id
+    assert other.retry_due()[0].operation_id == next_op
+    assert len(other_client.calls) == 1
