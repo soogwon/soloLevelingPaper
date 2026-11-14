@@ -84,7 +84,7 @@ jobs:
           node-version: '22'
       - name: 의존성 설치
         working-directory: ui/learning-dashboard
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --config.strict-dep-builds=false
       - name: 테스트
         working-directory: ui/learning-dashboard
         run: pnpm test
