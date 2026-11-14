@@ -387,6 +387,7 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
     server = ReflectionInputServer('solo-leveling-paper',
         instructions=HOST_INSTRUCTIONS,
         log_level='ERROR', lifespan=lifespan)
+    server.context_reader = services.contexts
 
     register_detail_app(server)
     if services.reparse is not None:

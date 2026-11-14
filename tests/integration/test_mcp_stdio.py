@@ -76,11 +76,16 @@ def test_stdio_server_lists_tools(tmp_path):
                     assert status.structuredContent['status'] == 'failed'
                     assert status.structuredContent['version_id'] == found['version_id']
                     failure = await session.call_tool('get_evidence',
-                        {'context_id': 'missing', 'evidence_ids': ['missing']})
+                        {'context_id': '00000000-0000-4000-8000-000000000000', 'evidence_ids': ['missing']})
                     assert failure.isError is True
                     message = failure.content[0].text
-                    assert 'NOT_FOUND' in message
+                    assert message == 'NOT_FOUND: 요청한 자료를 찾을 수 없습니다.'
                     assert str(tmp_path) not in message
+                    # 형식부터 틀린 학습 맥락 ID는 없음이 아니라 입력 오류로 구분한다(#290).
+                    malformed = await session.call_tool('get_evidence',
+                        {'context_id': 'missing', 'evidence_ids': ['missing']})
+                    assert malformed.content[0].text == (
+                        'INVALID_ARGUMENT: INVALID_INPUT: field=context_id: 입력값을 확인해주세요.')
 
     asyncio.run(scenario())
     assert (tmp_path / 'runtime/solo_leveling.sqlite3').is_file()

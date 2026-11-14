@@ -95,7 +95,8 @@ def test_quiz_replay_after_real_stdio_server_restart(ctx, tmp_path):
             review = await success(session, 'review_quiz_attempt', detail_args)
             assert review['items'][0]['evidence'][0]['quote_original'] == 'First.'
             for tool in ('get_quiz_attempt', 'review_quiz_attempt'):
-                await rejected(session, tool, dict(detail_args, context_id='other'), 'NOT_FOUND')
+                await rejected(session, tool, dict(detail_args, context_id='00000000-0000-4000-8000-000000000000'), 'NOT_FOUND')
+                await rejected(session, tool, dict(detail_args, context_id='other'), 'INVALID_ARGUMENT')
         assert counts(db) == (1, 1, 1)
 
     asyncio.run(asyncio.wait_for(scenario(), timeout=60))

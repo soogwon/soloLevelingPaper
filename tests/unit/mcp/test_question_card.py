@@ -30,11 +30,12 @@ def test_open_card_requires_existing_context(tmp_path):
     async def scenario():
         result = await server.call_tool('open_paper_question_card', {'context_id': 'ctx'})
         assert result[1] == {'context_id': 'ctx'}
-        try:
-            await server.call_tool('open_paper_question_card', {'context_id': 'missing'})
-        except ToolError as error:
-            assert 'NOT_FOUND' in str(error)
-        else:
-            raise AssertionError('존재하지 않는 context_id가 허용되었습니다.')
+        for context_id, code in (('00000000-0000-4000-8000-000000000000', 'NOT_FOUND'), ('missing', 'INVALID_ARGUMENT')):
+            try:
+                await server.call_tool('open_paper_question_card', {'context_id': context_id})
+            except ToolError as error:
+                assert str(error).startswith(f'{code}:')
+            else:
+                raise AssertionError('존재하지 않는 context_id가 허용되었습니다.')
 
     asyncio.run(scenario())
