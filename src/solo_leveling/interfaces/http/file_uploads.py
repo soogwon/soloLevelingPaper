@@ -33,6 +33,14 @@ class UploadAlreadyReady(Exception):
     pass
 
 
+class UploadNotFound(Exception):
+    pass
+
+
+class UploadExpired(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class UploadReservation:
     upload_id: str
@@ -40,14 +48,57 @@ class UploadReservation:
     expires_at: datetime
 
 
+@dataclass(frozen=True)
+class PendingUpload:
+    upload_id: str
+    paper_id: str
+    server_version_id: str
+    file_name: str
+    file_size: int
+    content_type: str
+    sha256_hex: str
+    object_key: str
+    expires_at: datetime
+    status: str
+
+
+@dataclass(frozen=True)
+class CompletedUpload:
+    upload_id: str
+    paper_id: str
+    server_version_id: str
+    file_name: str
+    file_size: int
+    content_type: str
+    sha256_hex: str
+    object_key: str
+    completed_at: datetime
+
+
 class FileUploadStore(Protocol):
     def reserve(self, owner_user_id: str, paper_id: str, server_version_id: str,
                 local_version_id: str, file_name: str, file_size: int,
                 content_type: str, sha256_hex: str) -> UploadReservation: ...
 
+    def get_for_completion(self, owner_user_id: str, upload_id: str) -> PendingUpload | CompletedUpload: ...
+
+    def mark_failed(self, owner_user_id: str, upload_id: str, reason: str) -> None: ...
+
+    def mark_ready(self, owner_user_id: str, upload_id: str,
+                   final_object_key: str) -> CompletedUpload: ...
+
 
 class UnavailableFileUploadStore:
     def reserve(self, *args, **kwargs) -> UploadReservation:
+        raise UploadUnavailable
+
+    def get_for_completion(self, *args, **kwargs):
+        raise UploadUnavailable
+
+    def mark_failed(self, *args, **kwargs):
+        raise UploadUnavailable
+
+    def mark_ready(self, *args, **kwargs):
         raise UploadUnavailable
 
 
@@ -82,19 +133,22 @@ class PostgresFileUploadStore:
             if target is None:
                 raise UploadTargetNotFound
             existing = conn.execute(
-                """SELECT upload_id, object_key, expires_at, status, file_size, local_version_id, file_name
+                """SELECT upload_id, object_key, expires_at, status, file_size, local_version_id,
+                          file_name, sha256_hex
                    FROM server_pdf_uploads
                    WHERE owner_user_id=%s AND paper_id=%s
-                     AND server_version_id=%s AND sha256_hex=%s
-                   FOR UPDATE""",
-                (owner_user_id, paper_id, server_version_id, sha256_hex),
+                     AND server_version_id=%s
+                   ORDER BY CASE status WHEN 'ready' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END,
+                            updated_at DESC
+                   LIMIT 1 FOR UPDATE""",
+                (owner_user_id, paper_id, server_version_id),
             ).fetchone()
             if existing is not None and existing["status"] == "ready":
                 raise UploadAlreadyReady
             if (existing is not None and existing["status"] == "pending"
                     and existing["expires_at"] > now):
                 if (existing["file_size"], existing["local_version_id"], existing["file_name"]) != (
-                        file_size, local_version_id, file_name):
+                        file_size, local_version_id, file_name) or existing["sha256_hex"] != sha256_hex:
                     raise UploadReservationConflict
                 return UploadReservation(
                     str(existing["upload_id"]), existing["object_key"], existing["expires_at"])
@@ -108,31 +162,106 @@ class PostgresFileUploadStore:
             ).fetchone()
             if used is None or int(used["used"]) + file_size > self._quota:
                 raise UploadQuotaExceeded
-            if existing is None:
-                row = conn.execute(
-                    """INSERT INTO server_pdf_uploads
+            if existing is not None and existing["status"] == "pending":
+                conn.execute(
+                    """UPDATE server_pdf_uploads SET status='failed', failure_reason='upload_expired'
+                       WHERE upload_id=%s""", (existing["upload_id"],),
+                )
+            row = conn.execute(
+                """INSERT INTO server_pdf_uploads
                    (upload_id, owner_user_id, paper_id, server_version_id, local_version_id,
                     file_name, file_size, content_type, sha256_hex, object_key, status, expires_at)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s)
+                   ON CONFLICT (owner_user_id, paper_id, server_version_id, sha256_hex)
+                   DO UPDATE SET upload_id=excluded.upload_id, local_version_id=excluded.local_version_id,
+                       file_name=excluded.file_name, file_size=excluded.file_size,
+                       object_key=excluded.object_key, status='pending', failure_reason=NULL,
+                       completed_at=NULL, expires_at=excluded.expires_at, updated_at=CURRENT_TIMESTAMP
                    RETURNING upload_id, object_key, expires_at""",
-                    (upload_id, owner_user_id, paper_id, server_version_id, local_version_id,
-                     file_name, file_size, content_type, sha256_hex, object_key, expires_at),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    """UPDATE server_pdf_uploads SET
-                         upload_id=%s, local_version_id=%s, file_name=%s, file_size=%s,
-                         content_type=%s, object_key=%s, status='pending', failure_reason=NULL,
-                         expires_at=%s, updated_at=CURRENT_TIMESTAMP
-                       WHERE owner_user_id=%s AND paper_id=%s
-                         AND server_version_id=%s AND sha256_hex=%s
-                       RETURNING upload_id, object_key, expires_at""",
-                    (upload_id, local_version_id, file_name, file_size, content_type, object_key,
-                     expires_at, owner_user_id, paper_id, server_version_id, sha256_hex),
-                ).fetchone()
+                (upload_id, owner_user_id, paper_id, server_version_id, local_version_id,
+                 file_name, file_size, content_type, sha256_hex, object_key, expires_at),
+            ).fetchone()
             if row is None:
                 raise UploadUnavailable
             return UploadReservation(str(row["upload_id"]), row["object_key"], row["expires_at"])
+
+    def get_for_completion(self, owner_user_id: str,
+                           upload_id: str) -> PendingUpload | CompletedUpload:
+        with _connection(self._pool) as conn:
+            row = conn.execute(
+                """SELECT upload_id, paper_id, server_version_id, file_name, file_size,
+                          content_type, sha256_hex, object_key, expires_at, status, completed_at, failure_reason
+                   FROM server_pdf_uploads
+                   WHERE owner_user_id=%s AND upload_id=%s FOR UPDATE""",
+                (owner_user_id, upload_id),
+            ).fetchone()
+            if row and row["status"] == "failed" and row["failure_reason"] == "upload_expired":
+                raise UploadExpired
+            if row is None or row["status"] in ("failed", "deleted"):
+                raise UploadNotFound
+            if row["status"] == "ready":
+                return _completed(row)
+            if row["expires_at"] <= self._now():
+                conn.execute(
+                    """UPDATE server_pdf_uploads SET status='failed',
+                         failure_reason='upload_expired', updated_at=CURRENT_TIMESTAMP
+                       WHERE owner_user_id=%s AND upload_id=%s AND status='pending'""",
+                    (owner_user_id, upload_id),
+                )
+            else:
+                return PendingUpload(
+                    str(row["upload_id"]), str(row["paper_id"]), row["server_version_id"],
+                    row["file_name"], int(row["file_size"]), row["content_type"],
+                    row["sha256_hex"], row["object_key"], row["expires_at"], row["status"],
+                )
+        raise UploadExpired
+
+    def mark_failed(self, owner_user_id: str, upload_id: str, reason: str) -> None:
+        with _connection(self._pool) as conn:
+            row = conn.execute(
+                """UPDATE server_pdf_uploads SET status='failed', failure_reason=%s,
+                         updated_at=CURRENT_TIMESTAMP
+                       WHERE owner_user_id=%s AND upload_id=%s AND status='pending'
+                       RETURNING upload_id""",
+                (reason, owner_user_id, upload_id),
+            ).fetchone()
+            if row is None:
+                raise UploadNotFound
+
+    def mark_ready(self, owner_user_id: str, upload_id: str,
+                   final_object_key: str) -> CompletedUpload:
+        with _connection(self._pool) as conn:
+            row = conn.execute(
+                """UPDATE server_pdf_uploads SET status='ready', object_key=%s,
+                         failure_reason=NULL, completed_at=CURRENT_TIMESTAMP,
+                         updated_at=CURRENT_TIMESTAMP
+                       WHERE owner_user_id=%s AND upload_id=%s AND status='pending'
+                         AND expires_at>CURRENT_TIMESTAMP
+                       RETURNING upload_id, paper_id, server_version_id, file_name, file_size,
+                                 content_type, sha256_hex, object_key, completed_at""",
+                (final_object_key, owner_user_id, upload_id),
+            ).fetchone()
+            if row is None:
+                current = conn.execute(
+                    """SELECT upload_id, paper_id, server_version_id, file_name, file_size,
+                              content_type, sha256_hex, object_key, completed_at, status
+                       FROM server_pdf_uploads WHERE owner_user_id=%s AND upload_id=%s""",
+                    (owner_user_id, upload_id),
+                ).fetchone()
+                if current is not None and current["status"] == "ready":
+                    return _completed(current)
+                if current is not None:
+                    raise UploadExpired
+                raise UploadNotFound
+            return _completed(row)
+
+
+def _completed(row) -> CompletedUpload:
+    return CompletedUpload(
+        str(row["upload_id"]), str(row["paper_id"]), row["server_version_id"],
+        row["file_name"], int(row["file_size"]), row["content_type"], row["sha256_hex"],
+        row["object_key"], row["completed_at"],
+    )
 
 
 @contextmanager
@@ -141,7 +270,8 @@ def _connection(pool):
         with pool.connection() as conn:
             with conn.transaction():
                 yield conn
-    except (UploadTargetNotFound, UploadQuotaExceeded, UploadReservationConflict, UploadAlreadyReady):
+    except (UploadTargetNotFound, UploadQuotaExceeded, UploadReservationConflict, UploadAlreadyReady,
+            UploadNotFound, UploadExpired):
         raise
     except Exception as exc:
         from psycopg import Error
