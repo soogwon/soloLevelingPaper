@@ -5,6 +5,9 @@ from pathlib import Path
 import sqlite3
 from typing import Any
 
+from solo_leveling.domain.annotation import (
+    AnnotationValidationError, SegmentInput, validate_annotation_fields, validate_segments,
+)
 from solo_leveling.infrastructure.database.schema import get_connection
 from solo_leveling.infrastructure.storage.pdf_source import open_pdf_source
 from solo_leveling.infrastructure.storage.server_client import ServerResponseInvalid
@@ -207,6 +210,39 @@ def _valid(data: Any) -> bool:
         return False
     if data.get("last_position") is not None and not isinstance(data["last_position"], dict):
         return False
-    if data.get("annotation") is not None and not isinstance(data["annotation"], dict):
+    if not _valid_annotation(data.get("annotation_id"), data.get("annotation")):
+        return False
+    return True
+
+
+def _valid_annotation(annotation_id: Any, annotation: Any) -> bool:
+    if annotation_id is None:
+        return annotation is None
+    if not isinstance(annotation_id, str) or not annotation_id:
+        return False
+    if not isinstance(annotation, dict) or annotation.get("annotation_id") != annotation_id:
+        return False
+    segments = annotation.get("segments")
+    if not isinstance(segments, list):
+        return False
+    try:
+        validate_annotation_fields(annotation.get("kind"), annotation.get("body"), None, len(segments))
+        checked = []
+        for segment in segments:
+            if not isinstance(segment, dict):
+                return False
+            revision = segment.get("parse_revision_id")
+            translation = segment.get("translation_revision_id")
+            if not isinstance(revision, str) or not revision.strip():
+                return False
+            if translation is not None and not isinstance(translation, str):
+                return False
+            checked.append(SegmentInput(
+                chunk_id=segment.get("chunk_id"), target=segment.get("target"),
+                start_offset=segment.get("start_offset"), end_offset=segment.get("end_offset"),
+                quote_snapshot=segment.get("quote_snapshot"), translation_revision_id=translation,
+            ))
+        validate_segments(checked)
+    except AnnotationValidationError:
         return False
     return True

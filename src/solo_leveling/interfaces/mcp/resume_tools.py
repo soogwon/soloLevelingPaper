@@ -10,7 +10,7 @@ from mcp.types import ToolAnnotations
 from solo_leveling.application.server_sync.resume import (
     ResumeRequestExpired, ResumeRequestUnavailable,
 )
-from solo_leveling.infrastructure.storage.server_client import ServerConnectionRequired
+from solo_leveling.infrastructure.storage.server_client import ServerConnectionRequired, ServerResponseInvalid
 
 _CODE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
@@ -54,6 +54,8 @@ def register_resume(server, resolver) -> None:
             raise ToolError("RESUME_REQUEST_EXPIRED: 웹에서 이어하기 코드를 다시 만들어 주세요.") from None
         except ResumeRequestUnavailable:
             raise ToolError("NOT_FOUND: 이어하기 코드를 찾을 수 없습니다.") from None
+        except ServerResponseInvalid:
+            raise ToolError("INVALID_SERVER_RESPONSE: 서버의 이어하기 응답 형식을 확인해 주세요.") from None
         except ServerConnectionRequired:
             raise ToolError("SERVER_CONNECTION_REQUIRED: 먼저 서버 계정을 연결하세요.") from None
         except Exception:

@@ -27,3 +27,16 @@ def test_resume_tool_registers_with_read_only_structured_contract():
         "file_access_status", "status",
     }
     resolver.resolve.assert_not_called()
+
+
+def test_invalid_server_response_does_not_request_reconnection():
+    import asyncio
+    import pytest
+    from mcp.server.fastmcp.exceptions import ToolError
+    from solo_leveling.infrastructure.storage.server_client import ServerResponseInvalid
+
+    resolver = Mock()
+    resolver.resolve.side_effect = ServerResponseInvalid
+    tool = make_server(resolver)._tool_manager._tools["resolve_resume_request"]
+    with pytest.raises(ToolError, match="INVALID_SERVER_RESPONSE"):
+        asyncio.run(tool.fn("resume_code"))

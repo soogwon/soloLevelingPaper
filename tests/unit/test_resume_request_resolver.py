@@ -60,6 +60,41 @@ def test_resolver_posts_code_and_returns_validated_selection():
     assert response.closed
 
 
+def test_resolver_preserves_selected_annotation_body_and_quote_snapshots():
+    annotation = {
+        "annotation_id": "annotation-1",
+        "kind": "highlight",
+        "body": "저장 당시 메모",
+        "segments": [
+            {"quote_snapshot": " 앞\n뒤 ", "chunk_id": "old-chunk", "parse_revision_id": "r1",
+             "target": "original", "start_offset": 2, "end_offset": 7},
+        ],
+    }
+    result = ResumeRequestResolver(Client(Response(200, payload(
+        annotation_id="annotation-1", annotation=annotation,
+    )))).resolve("resume_code")
+
+    assert result["annotation"] == annotation
+
+
+@pytest.mark.parametrize("annotation_id,annotation", [
+    ("annotation-1", None),
+    (None, {"annotation_id": "annotation-1", "kind": "note", "body": "memo",
+            "segments": []}),
+    ("annotation-1", {"annotation_id": "other", "kind": "note", "body": "memo",
+                      "segments": []}),
+    ("annotation-1", {"annotation_id": "annotation-1", "kind": "unknown",
+                      "body": "memo", "segments": []}),
+    ("annotation-1", {"annotation_id": "annotation-1", "kind": "note",
+                      "body": "memo", "segments": [{}]}),
+])
+def test_resolver_rejects_malformed_selected_annotation(annotation_id, annotation):
+    with pytest.raises(ServerResponseInvalid):
+        ResumeRequestResolver(Client(Response(200, payload(
+            annotation_id=annotation_id, annotation=annotation,
+        )))).resolve("resume_code")
+
+
 @pytest.mark.parametrize("status,error", [
     (404, ResumeRequestUnavailable), (410, ResumeRequestExpired),
 ])
@@ -336,3 +371,19 @@ def test_resume_position_must_match_published_context_chunk(tmp_path, position, 
     conn.close()
 
     assert _resume_position_status(str(db), "context", position) == expected
+
+@pytest.mark.parametrize("kind,body,segments,valid", [
+    ("note", "메모", [], True),
+    ("note", "  ", [], False),
+    ("highlight", "", [], False),
+    ("highlight", "", [{"chunk_id": "c", "parse_revision_id": "r", "target": "original",
+                        "quote_snapshot": "인용", "start_offset": 1, "end_offset": 2}], False),
+])
+def test_resume_uses_saved_annotation_rules(kind, body, segments, valid):
+    annotation = dict(annotation_id="a", kind=kind, body=body, segments=segments)
+    resolver = ResumeRequestResolver(Client(Response(200, payload(annotation_id="a", annotation=annotation))))
+    if valid:
+        assert resolver.resolve("resume_code")["annotation"] == annotation
+    else:
+        with pytest.raises(ServerResponseInvalid):
+            resolver.resolve("resume_code")
