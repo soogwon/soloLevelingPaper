@@ -129,6 +129,7 @@ def create_paper_router(require_principal: Any, store: PaperStore):
             default_factory=list, max_length=len(LEARNING_STEPS)
         )
         source_updated_at: datetime
+        reading_status: Literal['not_started', 'reading', 'completed', 'unknown'] | None = None
 
         @field_validator("last_studied_at", "source_updated_at")
         @classmethod
@@ -323,8 +324,7 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         if len(completed) != len(payload.completed_steps):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                                 detail={"code": "invalid_completed_steps"})
-        reading_status = ("not_started" if payload.last_studied_at is None else
-                          "completed" if completed == set(LEARNING_STEPS) else "reading")
+        reading_status = payload.reading_status
         metadata = LearningRecordMetadata(
             str(payload.source_instance_id), local_record_id, payload.selected_version_id,
             payload.file_name, payload.last_position.model_dump(exclude_none=True) if payload.last_position else None,

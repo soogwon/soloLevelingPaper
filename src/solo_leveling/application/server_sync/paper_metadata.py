@@ -895,6 +895,8 @@ def _learning_payload(conn: sqlite3.Connection, paper_id: str, context_id: str,
         raise ValueError("저장된 완료 단계가 올바르지 않습니다.")
     raw_name = str(row["original_filename"])
     file_name = PurePosixPath(PureWindowsPath(raw_name).name).name
+    reading = conn.execute('SELECT status, updated_at FROM paper_reading_states WHERE paper_id=?',
+                           (paper_id,)).fetchone()
     return {
         "source_instance_id": source_id,
         "selected_version_id": row["version_id"],
@@ -902,7 +904,9 @@ def _learning_payload(conn: sqlite3.Connection, paper_id: str, context_id: str,
         "last_position": position or None,
         "last_studied_at": row["last_studied_at"],
         "completed_steps": completed,
-        "source_updated_at": row["updated_at"] or row["created_at"],
+        "reading_status": reading['status'] if reading else 'unknown',
+        "source_updated_at": _latest_timestamp([
+            row["updated_at"] or row["created_at"], reading['updated_at'] if reading else None]),
         "local_learning_record_id": row["context_id"],
     }
 
