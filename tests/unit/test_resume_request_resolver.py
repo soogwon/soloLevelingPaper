@@ -3,7 +3,7 @@ import pytest
 import solo_leveling.application.server_sync.resume as resume_module
 from solo_leveling.application.server_sync.resume import (
     ResumeRequestExpired, ResumeRequestResolver, ResumeRequestUnavailable,
-    _available_search_data,
+    _available_search_data, _resume_position_status,
 )
 from solo_leveling.infrastructure.storage.server_client import ServerResponseInvalid
 
@@ -133,6 +133,8 @@ def test_resolver_reports_search_readiness_when_chroma_is_configured(
         return ready
 
     monkeypatch.setattr(resume_module, "_available_search_data", search_status)
+    monkeypatch.setattr(resume_module, "_resume_position_status",
+                        lambda *args: "local_position_ready")
     result = ResumeRequestResolver(
         Client(Response(200, payload())), str(db), tmp_path, chroma,
     ).resolve("resume_code")
@@ -140,8 +142,29 @@ def test_resolver_reports_search_readiness_when_chroma_is_configured(
     assert result["file_access_status"] == "local_file_ready"
     assert result["status"] == "prepared"
     assert result["reason"] == reason
+    assert result["resume_position_status"] == (
+        "local_position_ready" if ready else "not_checked")
     assert checked == [(str(db), chroma, "local-paper", "local-context",
                         "version-1")]
+
+
+def test_resolver_does_not_claim_resume_ready_when_saved_position_is_unavailable(
+        tmp_path, monkeypatch):
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF fixture")
+    db = local_database(tmp_path, stored_path=pdf)
+    monkeypatch.setattr(resume_module, "_available_search_data", lambda *args: True)
+    monkeypatch.setattr(resume_module, "_resume_position_status",
+                        lambda *args: "local_position_unavailable")
+
+    result = ResumeRequestResolver(
+        Client(Response(200, payload())), str(db), tmp_path, object(),
+    ).resolve("resume_code")
+
+    assert result["file_access_status"] == "local_file_ready"
+    assert result["resume_position_status"] == "local_position_unavailable"
+    assert result["status"] == "action_required"
+    assert result["reason"] == "local_resume_position_unavailable"
 
 
 def test_resolver_reports_missing_mapping_on_a_different_pc(tmp_path):
@@ -269,3 +292,47 @@ def test_search_readiness_requires_matching_db_members_and_vector_metadata(tmp_p
     conn.commit()
     conn.close()
     assert not ready()
+
+
+@pytest.mark.parametrize("position,expected", [
+    (None, "no_saved_position"),
+    ({}, "local_position_unavailable"),
+    ({"chunk_id": "missing", "pdf_page": 2}, "local_position_unavailable"),
+    ({"pdf_page": 2}, "local_position_ready"),
+    ({"pdf_page": 9}, "local_position_unavailable"),
+    ({"section_id": "section"}, "local_position_ready"),
+    ({"section_id": "section", "pdf_page": 3}, "local_position_ready"),
+    ({"section_id": "section", "pdf_page": 9}, "local_position_unavailable"),
+    ({"section_id": "other-revision"}, "local_position_unavailable"),
+    ({"chunk_id": "missing"}, "local_position_unavailable"),
+    ({"chunk_id": "chunk", "pdf_page": 3}, "local_position_unavailable"),
+    ({"chunk_id": "chunk", "section_id": "other"}, "local_position_unavailable"),
+    ({"chunk_id": "chunk", "pdf_page": 2, "section_id": "section"},
+     "local_position_ready"),
+])
+def test_resume_position_must_match_published_context_chunk(tmp_path, position, expected):
+    import sqlite3
+
+    db = tmp_path / "position.sqlite3"
+    conn = sqlite3.connect(db)
+    conn.executescript("""
+        CREATE TABLE learning_contexts (
+            context_id TEXT PRIMARY KEY, parse_revision_id TEXT, embedding_set_id TEXT
+        );
+        CREATE TABLE search_index_chunks (embedding_set_id TEXT, chunk_id TEXT);
+        CREATE TABLE chunks (
+            chunk_id TEXT, parse_revision_id TEXT, pdf_page INTEGER, section_id TEXT
+        );
+        CREATE TABLE sections (
+            parse_revision_id TEXT, section_id TEXT, start_pdf_page INTEGER, end_pdf_page INTEGER
+        );
+        INSERT INTO sections VALUES ('parse', 'section', 2, 4);
+        INSERT INTO sections VALUES ('older', 'other-revision', 1, 9);
+        INSERT INTO learning_contexts VALUES ('context', 'parse', 'embedding');
+        INSERT INTO search_index_chunks VALUES ('embedding', 'chunk');
+        INSERT INTO chunks VALUES ('chunk', 'parse', 2, 'section');
+    """)
+    conn.commit()
+    conn.close()
+
+    assert _resume_position_status(str(db), "context", position) == expected
