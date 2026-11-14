@@ -175,8 +175,21 @@ def test_transport_failure_keeps_local_annotation(setup_db):
     app = create_app(token_verifier=SimpleNamespace(verify=lambda _:principal),
         device_registry=SimpleNamespace(is_active=lambda *_:True), paper_store=store)
     with TestClient(app) as http:
-        sync = PaperMetadataSyncService(db, HttpTransport(http, fail_annotations=True))
+        transport = HttpTransport(http, fail_annotations=True)
+        sync = PaperMetadataSyncService(db, transport)
         operation = sync.grant_and_queue('paper', SERVER_SYNC_NOTICE_VERSION, preview=sync.preview('paper'))
-        sync.sync(operation.operation_id)
+        failed = sync.sync(operation.operation_id)
+        assert failed.status == 'retryable_failure'
+        assert failed.error_code == 'server_unavailable'
+        assert annotations.get(context.context_id, saved.annotation_id).annotation == saved
+        assert store.annotations == {}
+        failed_path = transport.calls[-1]
+        transport.calls.clear()
+        transport.fail_annotations = False
+        # 같은 승인 작업을 재개하며 완료된 논문·학습 기록을 다시 보내지 않는다.
+        recovered = sync.sync(operation.operation_id)
+        assert recovered.operation_id == operation.operation_id
+        assert recovered.status == 'synced'
+        assert transport.calls == [failed_path]
+        assert len(store.annotations) == 1
     assert annotations.get(context.context_id, saved.annotation_id).annotation == saved
-    assert store.annotations == {}
