@@ -197,10 +197,17 @@ def build_runtime_server(values: Mapping[str, str]):
 
         annotations = AnnotationService(str(paths.db_path))
         server_sync = None
+        pdf_upload = None
         resume = None
         if settings.server_api_url is not None:
             server_client = AuthenticatedServerClient.from_keyring(settings.server_api_url)
             server_sync = PaperMetadataSyncService(str(paths.db_path), server_client)
+            import requests
+            upload_session = requests.Session()
+            upload_session.auth = lambda request: request
+            from solo_leveling.application.server_sync import PaperPdfUploadService
+            pdf_upload = PaperPdfUploadService(
+                str(paths.db_path), paths.pdf_dir, server_client, upload_session)
             from solo_leveling.application.server_sync.resume import ResumeRequestResolver
             resume = ResumeRequestResolver(server_client, str(paths.db_path), paths.pdf_dir, client)
         learning_path = _learning_path_service(str(paths.db_path), values.get('SOLO_LEVELING_KG_SEED'))
@@ -218,6 +225,7 @@ def build_runtime_server(values: Mapping[str, str]):
                 str(paths.db_path), QuizService(
                     str(paths.db_path), OpenAIQuizGenerator(settings.generation))))),
             server_sync=gate.wrap(server_sync) if server_sync is not None else None,
+            pdf_upload=gate.wrap(pdf_upload) if pdf_upload is not None else None,
             resume=gate.wrap(resume) if resume is not None else None,
             learning_path=gate.wrap(learning_path) if learning_path is not None else None,
         ), lifespan=lifespan)

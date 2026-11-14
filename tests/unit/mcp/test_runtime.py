@@ -134,6 +134,7 @@ def test_runtime_shares_embedder_and_closes_it(tmp_path, monkeypatch, capsys, en
     assert connected.reflection.db_path == str(runtime.runtime_paths(values).db_path)
     assert connected.dashboard.db_path == str(runtime.runtime_paths(values).db_path)
     assert connected.server_sync is None
+    assert connected.pdf_upload is None
     assert factory.call_args.kwargs['collect_raw_logs'] is (raw_setting == '1')
     captured = capsys.readouterr()
     assert captured.out == ''
