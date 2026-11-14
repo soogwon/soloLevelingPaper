@@ -9,7 +9,7 @@ const html = await readFile(new URL('./template.html', import.meta.url),'utf8');
 const evidence = (id='e1', changes={}) => ({evidence_id:id,chunk_id:`c-${id}`,version_id:'v',parse_revision_id:'p',translation_revision_id:'t',pdf_page:6,printed_page_label:null,quote_original:'A is faster when',quote_ko:'A가 빠른 조건',...changes});
 function setup(connect=async()=>{},timeout=1000){
  const doc=new JSDOM(html, {url:'https://card.test'}).window.document;
- Object.defineProperty(doc.defaultView, 'crypto', {value:webcrypto});
+ Object.defineProperty(doc.defaultView, 'crypto', {value:webcrypto, configurable:true});
  const app={connect,callServerTool:()=>{throw Error('자동 호출 금지');}};
  mountDetailApp(app,doc,timeout); return {app,doc,el:id=>doc.getElementById(id)};
 }
@@ -403,4 +403,44 @@ test('다음 근거 페이지의 기록을 삭제하면 건수가 줄고 늦은 
   assert.match(el('record-status').textContent,/전체 1건/);
   assert.doesNotMatch(el('records').textContent,/삭제 대상/);
   assert.equal(el('more-records').disabled,false);
+});
+
+for (const event of ['ontoolinput', 'ontoolcancelled']) {
+  test(`요청 키 준비 중 ${event}가 오면 이전 맥락으로 저장하지 않는다`, async () => {
+    const {app, doc, el} = setup();
+    let finish;
+    Object.defineProperty(doc.defaultView, 'crypto', {value: {
+      subtle: {digest: () => finish ? Promise.resolve(new Uint8Array(32).buffer)
+        : new Promise(resolve => { finish = resolve; })},
+      randomUUID: () => 'cancelled-request',
+    }, configurable: true});
+    let calls = 0;
+    app.callServerTool = async () => { calls++; };
+    app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,annotations:[]})]}));
+    el('note-body').value = '취소된 맥락 메모';
+    const saving = el('save-note').onclick();
+    app[event]();
+    finish(new Uint8Array(32).buffer);
+    await saving;
+    assert.equal(calls, 0);
+    assert.equal(doc.defaultView.localStorage.length, 1);
+  });
+}
+
+test('원문 위치가 모호해도 고유한 번역 위치는 저장할 수 있다', async () => {
+  const {app, el} = setup();
+  const e = evidence('e1', {annotation_start:null, translation_annotation_start:2, annotations:[]});
+  let request;
+  app.callServerTool = async call => {
+    request = call.arguments.request;
+    return {structuredContent:{outcome:'saved', annotation:{...request,annotation_id:'translation'}}};
+  };
+  app.ontoolresult(detailPayload({evidence:[e]}));
+  assert.equal(el('editor').disabled, false);
+  assert.equal(el('save-note').disabled, true);
+  assert.equal(el('save-highlight').disabled, true);
+  assert.equal(el('save-translation-highlight').disabled, false);
+  await el('save-translation-highlight').onclick();
+  assert.equal(request.segments[0].target, 'translation');
+  assert.equal(request.segments[0].start_offset, 2);
 });

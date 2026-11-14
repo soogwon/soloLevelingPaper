@@ -8,8 +8,10 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
   const optional = (v) => v === null || typeof v === 'string';
   let timer;
   let selected;
+  let generation = 0;
   const annotationPanel = el('annotations');
   function clear(message, busy = false) {
+    generation++;
     clearTimeout(timer);
     selected = null;
     if (annotationPanel) {
@@ -105,6 +107,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
   }
   function display(result) {
     clear('표시할 근거가 없습니다. 채팅의 응답을 확인하세요.');
+    const viewGeneration = generation;
     if (result?.isError) { el('message').textContent = '근거 조회에 실패했습니다. 채팅의 오류 안내를 확인하세요.'; return; }
     const data = result?.structuredContent;
     const answering = data && Object.hasOwn(data, 'citations');
@@ -192,9 +195,15 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
       }
       el('more-records').hidden = !e.annotation_cursor;
       el('more-records').disabled = loading.has(e) || pending.has(e);
-      el('editor').disabled = uncertain.has(e) || e.annotation_start == null || pending.has(e) || loading.has(e);
+      const originalAvailable = Number.isSafeInteger(e.annotation_start);
+      const translationAvailable = Number.isSafeInteger(e.translation_annotation_start) && nonempty(e.quote_ko);
+      el('editor').disabled = uncertain.has(e) || pending.has(e) || loading.has(e)
+        || (!originalAvailable && !translationAvailable);
+      el('save-note').disabled = !originalAvailable;
+      el('save-highlight').disabled = !originalAvailable;
+      if (el('save-translation-highlight')) el('save-translation-highlight').disabled = !translationAvailable;
       el('record-status').textContent = uncertain.has(e) ? '저장 결과가 확인되지 않았습니다. 상세 카드를 다시 조회해 기록을 확인하세요.'
-        : e.annotation_start == null ? '원문 위치를 확정할 수 없어 작성할 수 없습니다.'
+        : !originalAvailable ? (translationAvailable ? '원문 위치는 확인할 수 없습니다. 번역문 하이라이트만 저장할 수 있습니다.' : '인용 위치를 확정할 수 없어 작성할 수 없습니다.')
         : pending.has(e) ? '저장 중입니다.' : records.children.length ? `기록 ${records.children.length}건 표시 · 전체 ${e.annotation_count ?? records.children.length}건` : e.annotation_cursor ? '더 보기를 눌러 나머지 기록을 확인하세요.' : '저장된 기록이 없습니다.';
     }
     const recordVersions = new Map();
@@ -244,13 +253,14 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
         loading.delete(e);
         if (selected === e) {
           el('more-records').disabled = pending.has(e);
-          el('editor').disabled = uncertain.has(e) || pending.has(e) || e.annotation_start == null;
+          el('editor').disabled = uncertain.has(e) || pending.has(e)
+            || (!Number.isSafeInteger(e.annotation_start) && !Number.isSafeInteger(e.translation_annotation_start));
         }
       }
       if (selected === e) showRecords(e);
     }
     async function save(e, kind, target = 'original') {
-      if (selected !== e || uncertain.has(e) || loading.has(e) || pending.has(e) || !Number.isSafeInteger(e.annotation_start)) return;
+      if (selected !== e || uncertain.has(e) || loading.has(e) || pending.has(e)) return;
       const body = kind === 'note' ? el('note-body').value : '';
       const start = target === 'translation' ? e.translation_annotation_start : e.annotation_start;
       const quote = target === 'translation' ? e.quote_ko : e.quote_original;
@@ -277,6 +287,12 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
         }
         return;
       }
+      // 키 준비 도중 새 입력·취소가 오면 이전 맥락을 전송하지 않는다.
+      if (viewGeneration !== generation) {
+        // 이전 응답 유실 요청일 수 있으므로 키는 성공 확인 전까지 유지한다.
+        pending.delete(e);
+        return;
+      }
       try {
         const result = await app.callServerTool({name: 'create_annotation', arguments: {request: prepared.request}});
         const saved = result?.structuredContent;
@@ -292,7 +308,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
           e.annotations.unshift(record);
           if (e.annotation_count != null) e.annotation_count = Math.max(e.annotation_count, e.annotations.length);
         } else e.annotations[index] = record;
-        updateContextRecords?.(record);
+        if (viewGeneration === generation) updateContextRecords?.(record);
         prepared.confirm();
         if (selected === e && kind === 'note') el('note-body').value = '';
       } catch {
