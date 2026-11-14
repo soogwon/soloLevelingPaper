@@ -13,6 +13,7 @@ from solo_leveling.domain.models import Chunk, RequestConflictError
 from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.database.schema import get_connection
 from solo_leveling.infrastructure.embeddings.embedder import embed_texts
+from solo_leveling.infrastructure.retrieval.lexical import bm25_scores, reciprocal_rank_fusion
 from solo_leveling.application.evidence_qa.errors import (
     DataIntegrityError, InvalidArgumentError, ResourceNotFoundError,
 )
@@ -67,10 +68,12 @@ class SQLiteContextReader:
 
 
 class SQLiteChromaRetriever:
-    def __init__(self, db_path: str, client, *, embedder=embed_texts):
+    def __init__(self, db_path: str, client, *, embedder=embed_texts, hybrid: bool = True):
         self.db_path = db_path
         self.client = client
         self.embedder = embedder
+        # 번역문 벡터 순위에 원문·번역문 어휘 순위를 합친다(#284). False면 벡터 순위만 쓴다.
+        self.hybrid = hybrid
 
     @traced('continuation_lookup')
     def following_chunks(self, search: SearchResult, indices: tuple[int, ...]) -> tuple[Chunk, ...]:
@@ -139,6 +142,21 @@ class SQLiteChromaRetriever:
             if len(vector) != index['dimension'] or any(not math.isfinite(x) for x in vector):
                 raise ValueError('저장된 벡터의 차원 또는 값이 올바르지 않습니다.')
 
+    @staticmethod
+    def _fuse_lexical(question, ranked, eligible):
+        """벡터 순위와 원문+번역문 BM25 순위를 RRF로 합친다. 어휘가 겹치지 않으면 벡터 순위를 그대로 쓴다.
+
+        score는 합친 RRF 점수다. 같은 결과 안에서 높을수록 관련성이 높다는 설계 규칙을 지킨다.
+        """
+        with stage('lexical_search'):
+            lexical = bm25_scores(question, {
+                key: f'{chunk.original_text}\n{chunk.text}' for key, chunk in eligible.items()})
+        if not lexical:
+            return ranked
+        lexical_order = sorted(lexical, key=lambda key: (-lexical[key], key))
+        fused = reciprocal_rank_fusion([[key for key, _ in ranked], lexical_order])
+        return sorted(((key, fused[key]) for key, _ in ranked), key=lambda hit: (-hit[1], hit[0]))
+
     def search(self, question: str, scope: SearchScope, top_k: int) -> SearchResult:
         require_text(question, 'question')
         positive_int(top_k, 'top_k')
@@ -176,8 +194,11 @@ class SQLiteChromaRetriever:
                 if chunk_id in eligible:
                     ranked.append((chunk_id, 1.0 / (1.0 + distance)))
             ranked.sort(key=lambda hit: (-hit[1], hit[0]))
+            if self.hybrid:
+                ranked = self._fuse_lexical(question, ranked, eligible)
             items = tuple(RetrievedChunk(eligible[key], score, rank)
                           for rank, (key, score) in enumerate(ranked[:top_k], 1))
-        result = SearchResult(question, scope, RetrievalMethod.VECTOR, index['embedding_set_id'], items)
+        method = RetrievalMethod.HYBRID if self.hybrid else RetrievalMethod.VECTOR
+        result = SearchResult(question, scope, method, index['embedding_set_id'], items)
         validate_search_result(result)
         return result
