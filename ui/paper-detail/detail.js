@@ -1,4 +1,5 @@
 import { mountRecordEditor } from './record-editor.js';
+import { prepareAnnotationRequest } from './annotation-request.js';
 
 // 호스트가 제공한 근거 스냅샷만 표시한다. 본문은 HTML로 해석하지 않는다.
 export function mountDetailApp(app, doc, timeoutMs = 15000) {
@@ -232,7 +233,8 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
         const page = result?.structuredContent;
         if (result?.isError || page?.context_id !== data.context_id || page.evidence_id !== e.evidence_id
             || page.annotation_start !== e.annotation_start || !Array.isArray(page.annotations)) throw new Error();
-        e.annotations.push(...page.annotations);
+        const known = new Set(e.annotations.map(record => record.annotation_id));
+        e.annotations.push(...page.annotations.filter(record => !known.has(record.annotation_id)));
         e.annotation_count = page.annotation_count;
         e.annotation_cursor = page.annotation_cursor;
       } catch {
@@ -256,19 +258,36 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
       }
       pending.add(e);
       showRecords(e);
+      let prepared;
       try {
-        const result = await app.callServerTool({name: 'create_annotation', arguments: {request: {
+        prepared = await prepareAnnotationRequest({
           context_id: data.context_id, kind, body, segments: [{chunk_id: e.chunk_id,
             start_offset: e.annotation_start, end_offset: e.annotation_start + Array.from(e.quote_original).length,
             quote_snapshot: e.quote_original}],
-        }}});
+        }, doc.defaultView.localStorage, doc.defaultView.crypto);
+      } catch {
+        pending.delete(e);
+        if (selected === e) {
+          showRecords(e);
+          el('record-status').textContent = '재시도용 요청 키를 보관할 수 없어 전송하지 않았습니다. 채팅에서 요청 키를 지정해 저장하세요.';
+        }
+        return;
+      }
+      try {
+        const result = await app.callServerTool({name: 'create_annotation', arguments: {request: prepared.request}});
         const saved = result?.structuredContent;
         const record = saved?.annotation;
         if (result?.isError || saved?.outcome !== 'saved' || record?.context_id !== data.context_id
-            || record.kind !== kind || record.body !== body || !nonempty(record.annotation_id)) throw new Error();
-        e.annotation_count = (e.annotation_count ?? e.annotations.length) + 1;
-        e.annotations.unshift(record);
+            || record.kind !== kind || typeof record.body !== 'string' || !nonempty(record.annotation_id)
+            || (saved.reused !== true && record.body !== body)) throw new Error();
+        const index = e.annotations.findIndex(item => item.annotation_id === record.annotation_id);
+        if (index < 0) {
+          if (!saved.reused) e.annotation_count = (e.annotation_count ?? e.annotations.length) + 1;
+          e.annotations.unshift(record);
+          if (e.annotation_count != null) e.annotation_count = Math.max(e.annotation_count, e.annotations.length);
+        } else e.annotations[index] = record;
         updateContextRecords?.(record);
+        prepared.confirm();
         if (selected === e && kind === 'note') el('note-body').value = '';
       } catch {
         uncertain.add(e);

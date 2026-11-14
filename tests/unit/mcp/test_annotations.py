@@ -31,6 +31,27 @@ async def call(client, name, request):
     return result.structuredContent
 
 
+def test_keyed_create_survives_mcp_restart_and_rejects_conflict(environment):
+    db, context = environment
+    request = {'context_id': context, 'kind': 'note', 'body': 'PRIVATE_MARKER', 'request_key': 'retry'}
+
+    async def scenario():
+        async with create_connected_server_and_client_session(server(db)) as client:
+            first = await call(client, 'create_annotation', request)
+        async with create_connected_server_and_client_session(server(db)) as client:
+            replay = await call(client, 'create_annotation', request)
+            assert replay['annotation'] == first['annotation']
+            assert replay['reused'] and not first['reused']
+            conflict = await client.call_tool('create_annotation', {'request': {**request, 'body': '다른 값'}})
+            assert conflict.isError and 'REQUEST_KEY_CONFLICT' in conflict.content[0].text
+            assert 'PRIVATE_MARKER' not in conflict.content[0].text
+            await call(client, 'delete_annotation', {'context_id': context,
+                'annotation_id': first['annotation']['annotation_id'], 'expected_revision': 1})
+            deleted = await client.call_tool('create_annotation', {'request': request})
+            assert deleted.isError and 'ANNOTATION_DELETED' in deleted.content[0].text
+    asyncio.run(scenario())
+
+
 def test_persistence_pagination_conflict_and_location(environment):
     db, context = environment
     scope = {'context_id': context}

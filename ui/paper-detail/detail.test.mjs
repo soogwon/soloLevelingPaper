@@ -2,11 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
+import { webcrypto } from 'node:crypto';
 import { mountDetailApp } from './detail.js';
+import { prepareAnnotationRequest } from './annotation-request.js';
 const html = await readFile(new URL('./template.html', import.meta.url),'utf8');
 const evidence = (id='e1', changes={}) => ({evidence_id:id,chunk_id:`c-${id}`,version_id:'v',parse_revision_id:'p',translation_revision_id:'t',pdf_page:6,printed_page_label:null,quote_original:'A is faster when',quote_ko:'A가 빠른 조건',...changes});
 function setup(connect=async()=>{},timeout=1000){
- const doc=new JSDOM(html).window.document;
+ const doc=new JSDOM(html, {url:'https://card.test'}).window.document;
+ Object.defineProperty(doc.defaultView, 'crypto', {value:webcrypto});
  const app={connect,callServerTool:()=>{throw Error('자동 호출 금지');}};
  mountDetailApp(app,doc,timeout); return {app,doc,el:id=>doc.getElementById(id)};
 }
@@ -147,6 +150,7 @@ test('저장 중 근거를 전환해도 요청 위치와 표시 목록은 섞이
   app.ontoolresult(detailPayload({evidence: [first, second]}));
   el('note-body').value = '첫 근거의 메모';
   el('save-note').click();
+  while (!request) await new Promise(resolve => setImmediate(resolve));
   assert.equal(request.context_id, 'ctx');
   assert.deepEqual(request.segments, [{chunk_id:'c-e1', start_offset:3, end_offset:5, quote_snapshot:'😀가'}]);
   el('evidence-list').lastChild.click();
@@ -197,6 +201,75 @@ test('저장 결과 미확정 뒤에는 근거 재선택으로 재시도할 수 
   app.ontoolresult(detailPayload({evidence:[{...first,annotations:[{kind:'highlight',body:''}]}]}));
   assert.equal(el('editor').disabled,false);
   assert.match(el('records').textContent,/하이라이트/);
+});
+
+test('응답 유실 후 카드 재시작에서도 같은 요청 키를 사용하고 목록을 중복 표시하지 않는다', async () => {
+  const first = evidence('e1', {annotation_start:0, annotations:[]});
+  const a = setup();
+  let original;
+  a.app.callServerTool = async call => { original = call.arguments.request; throw Error(); };
+  a.app.ontoolresult(detailPayload({evidence:[first]}));
+  a.el('note-body').value = '미확정 메모';
+  await a.el('save-note').onclick();
+  assert.ok(original.request_key);
+  const storage = a.doc.defaultView.localStorage;
+  assert.equal(storage.length, 1);
+  assert.doesNotMatch(storage.key(0) + storage.getItem(storage.key(0)), /미확정 메모|c-e1/);
+  const b = setup();
+  b.doc.defaultView.localStorage.setItem(storage.key(0), storage.getItem(storage.key(0)));
+  const record = {...original, annotation_id:'a1'};
+  b.app.ontoolresult(detailPayload({evidence:[{...first, annotations:[record], annotation_count:1}]}));
+  b.app.callServerTool = async call => {
+    assert.deepEqual(call.arguments.request, original);
+    return {structuredContent:{outcome:'saved',annotation:record}};
+  };
+  b.el('note-body').value = '미확정 메모';
+  await b.el('save-note').onclick();
+  assert.equal(b.el('records').children.length, 1);
+  assert.equal(b.doc.defaultView.localStorage.length, 0);
+});
+
+test('요청 키 보관 실패 시 생성 도구를 호출하지 않는다', async () => {
+  const {app, doc, el} = setup();
+  Object.defineProperty(doc.defaultView, 'localStorage', {get(){throw Error('blocked');}});
+  let calls = 0;
+  app.callServerTool = async () => { calls++; };
+  app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,annotations:[]})]}));
+  await el('save-highlight').onclick();
+  assert.equal(calls, 0);
+  assert.equal(el('editor').disabled, false);
+  assert.match(el('record-status').textContent, /전송하지 않았습니다/);
+});
+
+test('동일 입력 키는 보존하고 성공 확인 뒤 의도적인 새 저장에는 새 키를 만든다', async () => {
+  const {doc} = setup();
+  const storage = doc.defaultView.localStorage;
+  const request = {context_id:'ctx',kind:'note',body:'메모',segments:[]};
+  const first = await prepareAnnotationRequest(request, storage, webcrypto);
+  const second = await prepareAnnotationRequest(request, storage, webcrypto);
+  assert.equal(first.request.request_key, second.request.request_key);
+  const other = await prepareAnnotationRequest({...request,context_id:'other'}, storage, webcrypto);
+  assert.notEqual(first.request.request_key, other.request.request_key);
+  first.confirm();
+  const fresh = await prepareAnnotationRequest(request, storage, webcrypto);
+  assert.notEqual(first.request.request_key, fresh.request.request_key);
+});
+
+test('다음 페이지의 기존 기록 재사용은 건수를 늘리지 않고 더 보기에서도 중복하지 않는다', async () => {
+  const {app, el} = setup();
+  const old = {annotation_id:'old',context_id:'ctx',kind:'note',body:'수정된 메모'};
+  app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,
+    annotations:[{annotation_id:'new',kind:'note',body:'최근 메모'}],annotation_count:2,annotation_cursor:'next'})]}));
+  app.callServerTool = async call => call.name === 'create_annotation'
+    ? {structuredContent:{outcome:'saved',reused:true,annotation:old}}
+    : {structuredContent:{context_id:'ctx',evidence_id:'e1',annotation_start:0,
+        annotations:[old],annotation_count:2,annotation_cursor:null}};
+  el('note-body').value = '최초 메모';
+  await el('save-note').onclick();
+  assert.match(el('record-status').textContent, /전체 2건/);
+  await el('more-records').onclick();
+  assert.equal(el('records').children.length, 2);
+  assert.match(el('records').textContent, /수정된 메모/);
 });
 
 test('저장된 추출·생성 항목을 구분하고 잘못된 번역 출처의 본문은 숨긴다',()=>{
