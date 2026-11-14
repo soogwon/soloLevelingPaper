@@ -168,6 +168,19 @@ export const api = {
    * → { resume_request_id, code, expires_at, prompt_text, status, reason }
    */
   createResumeRequest: (body, idempotencyKey) => send('POST', '/resume-requests', { body, idempotencyKey }),
+
+  // ---------- 개념 지도 (검수 KG) ----------
+  /** GET /v1/knowledge-graph/papers → { graph_revision_id, items: [{ paper_key, label, source_url, concept_count }] } */
+  listConceptPapers: () => send('GET', '/knowledge-graph/papers'),
+  /** GET /v1/knowledge-graph/papers/{논문 키} → { concepts, prerequisites, goals, ... } */
+  getConceptGraph: (paperKey) => send('GET', `/knowledge-graph/papers/${id(paperKey)}`),
+  /**
+   * GET /v1/knowledge-graph/papers/{논문 키}/path?goal=&mode=&known=
+   * known: 쉼표로 구분한 아는 개념 → { steps, skipped, unresolved_concepts, goal, mode }
+   */
+  getConceptPath: (paperKey, { goal, mode, known } = {}) => send('GET', `/knowledge-graph/papers/${id(paperKey)}/path`, {
+    query: { goal, mode, known: known?.trim() || undefined },
+  }),
 };
 
 export { ApiError };

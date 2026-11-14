@@ -25,6 +25,7 @@ def create_app(
     resume_store: "ResumeRequestStore | None" = None,
     web_auth_flow=None,
     web_session_store=None,
+    knowledge_graph=None,
 ) -> "FastAPI":
     """명시적 설정 또는 환경 설정으로 독립적인 API 앱을 만든다."""
 
@@ -43,6 +44,7 @@ def create_app(
     from .papers import PostgresPaperStore, UnavailablePaperStore
     from .resume_requests import PostgresResumeRequestStore, UnavailableResumeRequestStore
     from .resume_routes import create_resume_router
+    from .knowledge_graph_routes import create_knowledge_graph_router, load_server_graph
     from .settings import (
         load_database_settings,
         load_oidc_settings,
@@ -141,6 +143,8 @@ def create_app(
     app.include_router(create_annotation_router(require_principal, selected_paper_store))
     app.include_router(create_collection_router(require_principal, selected_collection_store))
     app.include_router(create_resume_router(require_principal, selected_resume_store))
+    selected_graph = knowledge_graph if knowledge_graph is not None else load_server_graph()
+    app.include_router(create_knowledge_graph_router(require_principal, selected_graph))
     if web_auth_flow is not None and web_session_store is not None:
         app.include_router(create_web_auth_router(web_auth_flow, web_session_store))
 
