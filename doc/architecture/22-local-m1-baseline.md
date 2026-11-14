@@ -68,7 +68,7 @@ flowchart TB
 - SQLite FK는 연결마다 활성화하고 테스트한다. Chroma에는 SQLite 복합 FK를 적용할 수 없으므로 안정적인 청크 ID로 대조한다.
 - SQLite와 Chroma 쓰기는 하나의 트랜잭션이 아니다. 파생 색인을 먼저 준비·검증한 후 SQLite의 ready 상태·활성 참조를 게시한다. 실패 시 재구축/정리한다.
 - 삭제는 SQLite에서 접근 차단 후 파일·벡터·컨텍스트 정리 순서다. 외부에서 사용자가 제공한 원본 파일은 삭제하지 않는다.
-- 키워드 검색과 벡터 검색을 결합하는 기존 방향은 유지하되 구체적인 키워드 검색 구현은 미정이다. PostgreSQL SQL이나 pgvector 인덱스 전제는 적용하지 않는다.
+- 키워드 검색과 벡터 검색을 결합한다(#284). 번역문 벡터 순위와, 원문+번역문에 대한 BM25 어휘 순위를 RRF(k=60)로 합친다. 어휘는 영어 단어(하이픈 단어는 나눈 형태와 붙인 형태)와 한글 음절 2-gram이며, 논문 하나의 청크만 다루므로 별도 색인 없이 조회 시점에 계산한다(`infrastructure/retrieval/lexical.py`). 질문과 어휘가 겹치지 않으면 벡터 순위를 그대로 쓴다. 결과의 `retrieval_method`는 `hybrid`다. 실제 색인에서의 순위 비교는 `scripts/measure_retrieval.py`로 한다. PostgreSQL SQL이나 pgvector 인덱스 전제는 적용하지 않는다.
 
 ## 텍스트·페이지 합의 (2026-09-07)
 

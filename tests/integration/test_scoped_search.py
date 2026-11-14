@@ -85,14 +85,14 @@ def test_search_returns_db_text_scores_ranks_and_saved_model(setup_search):
     result = service.search('어텐션은 무엇인가?', 'ctx', top_k=10)
     assert [r.chunk.chunk_id for r in result.items] == ['a', 'b', 'c']
     assert [r.rank for r in result.items] == [1, 2, 3]
-    assert result.items[0].score == pytest.approx(1.)
-    assert result.items[1].score == pytest.approx(1 / 3)
+    # 기본 검색은 벡터·어휘 순위를 합친 점수이며, 같은 결과 안에서 내림차순이다.
+    assert [r.score for r in result.items] == sorted((r.score for r in result.items), reverse=True)
     assert calls == [(['어텐션은 무엇인가?'], 'saved-model')]
     assert result.items[0].chunk.original_text == 'Attention.'
     assert result.items[0].chunk.text == '어텐션 설명'
     assert result.items[1].chunk.pdf_page == 2
     payload = serialize_search_result(result)
-    assert payload['retrieval_method'] == 'vector'
+    assert payload['retrieval_method'] == 'hybrid'
     assert payload['embedding_set_id'] == 'idx'
     assert '/private' not in str(payload)
     with closing(get_connection(db)) as conn:
@@ -160,3 +160,21 @@ def test_inconsistent_index_is_not_returned_as_empty_success(setup_search, damag
     assert calls == []
     if damage == 'collection':
         assert not client.list_collections()
+
+
+def test_hybrid_search_lifts_chunk_with_question_terms(setup_search):
+    """#284: 벡터 순위가 낮아도 질문 용어가 원문에 있는 청크를 앞으로 올린다."""
+    db, client, retriever, service, _ = setup_search
+    # 질문 벡터는 a에 가장 가깝지만, 질문 용어 Computation은 c의 원문에만 있다.
+    hybrid = service.search('Computation 방법은?', 'ctx', top_k=3)
+    assert [r.chunk.chunk_id for r in hybrid.items] == ['c', 'a', 'b']
+    assert hybrid.retrieval_method.value == 'hybrid'
+    assert hybrid.items[0].score > hybrid.items[1].score
+    vector_only = ContextSearchService(SQLiteContextReader(db),
+        SQLiteChromaRetriever(db, client, embedder=retriever.embedder, hybrid=False))
+    vector = vector_only.search('Computation 방법은?', 'ctx', top_k=3)
+    assert [r.chunk.chunk_id for r in vector.items] == ['a', 'b', 'c']
+    assert vector.retrieval_method.value == 'vector'
+    # 벡터만 쓰면 기존처럼 1/(1+거리) 유사도를 점수로 쓴다.
+    assert vector.items[0].score == pytest.approx(1.)
+    assert vector.items[1].score == pytest.approx(1 / 3)
