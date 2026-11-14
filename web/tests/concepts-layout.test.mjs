@@ -37,3 +37,26 @@ test('원문 링크는 웹 주소만 연다', () => {
     assert.equal(sourceLink(value), null);
   }
 });
+
+
+test('원문 페이지 링크는 기준 PDF 주소에 #page를 붙인다', async () => {
+  const { pageLink } = await import('../js/pages/concepts.js');
+  assert.equal(pageLink('https://arxiv.org/pdf/1706.03762v7', 6), 'https://arxiv.org/pdf/1706.03762v7#page=6');
+  assert.equal(pageLink(null, 6), null);
+  assert.equal(pageLink('https://arxiv.org/pdf/1706.03762v7', 0), null);
+});
+
+
+test('경로 보기는 단계와 건너뛴 개념, 그 사이 관계만 남긴다', async () => {
+  const { focusGraph } = await import('../js/pages/concepts.js');
+  const graph = {
+    concepts: ['a', 'b', 'c', 'd'].map(concept),
+    prerequisites: [edge('a', 'b'), edge('b', 'd'), edge('c', 'd')],
+  };
+  const path = { steps: [{ concept_id: 'b' }, { concept_id: 'd' }], skipped: [{ concept_id: 'a' }] };
+  const shown = focusGraph(graph, path);
+  assert.deepEqual(shown.concepts.map((c) => c.concept_id), ['a', 'b', 'd']);
+  assert.deepEqual(shown.prerequisites, [edge('a', 'b'), edge('b', 'd')]);
+  assert.equal(focusGraph(graph, null), graph);
+  assert.equal(focusGraph(graph, { steps: [], skipped: [] }), graph);
+});
