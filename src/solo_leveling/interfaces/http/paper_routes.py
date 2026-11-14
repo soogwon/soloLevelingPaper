@@ -18,6 +18,7 @@ from .papers import (
     LearningRecordMetadata, PaperMetadata, PaperNotFound, PaperSelectionConflict, PaperStore,
     PaperStoreUnavailable, SummaryConflict, SummaryMetadata,
 )
+from .file_uploads import UploadTargetNotFound, UploadUnavailable
 
 
 _KEY = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
@@ -411,7 +412,7 @@ def create_paper_router(require_principal: Any, store: PaperStore):
     return router
 
 
-def create_web_paper_router(require_principal: Any, store: PaperStore):
+def create_web_paper_router(require_principal: Any, store: PaperStore, file_store: Any = None):
     """외부 웹이 로그인 사용자의 서버 확정 논문만 페이지 단위로 조회한다."""
     from fastapi import APIRouter, Depends, HTTPException, Query, status
     from pydantic import BaseModel
@@ -554,6 +555,32 @@ def create_web_paper_router(require_principal: Any, store: PaperStore):
         else:
             resume = AvailabilityView(available=True, reason="resume_code_available",
                                       message="이어하기 코드를 만든 뒤 연결된 로컬 MCP에서 준비 상태를 확인하세요.")
+        file_access = AvailabilityView(
+            available=False, reason="not_uploaded",
+            message="이 원문 버전의 PDF가 서버에 업로드되지 않았어요.",
+        )
+        if item.selected_version_id and file_store is not None:
+            try:
+                uploaded = file_store.get_file_access(
+                    principal.user_id, item.paper_id, item.selected_version_id)
+                if uploaded is not None and uploaded.status == "ready":
+                    file_access = AvailabilityView(
+                        available=True, reason="file_ready",
+                        message="서버에 보관된 PDF를 열 수 있어요.",
+                    )
+                elif uploaded is not None and uploaded.status == "pending":
+                    file_access = AvailabilityView(
+                        available=False, reason="upload_pending",
+                        message="PDF 업로드 확인이 진행 중이에요.",
+                    )
+                elif uploaded is not None and uploaded.status == "failed":
+                    file_access = AvailabilityView(
+                        available=False, reason=uploaded.failure_reason or "upload_failed",
+                        message="PDF 업로드 확인에 실패했어요. 다시 업로드해 주세요.",
+                    )
+            except (UploadTargetNotFound, UploadUnavailable):
+                # 논문 상세 자체는 파일 저장소의 일시 장애와 독립적으로 조회한다.
+                pass
         return PaperDetailView(
             paper_id=item.paper_id, title=item.title,
             authors=list(item.authors) if item.authors else None, file_name=item.file_name,
@@ -569,10 +596,7 @@ def create_web_paper_router(require_principal: Any, store: PaperStore):
                 "author_type": detail.summary.author_type,
                 "items": list(detail.summary.items),
             } if detail.summary is not None else None),
-            file_access=AvailabilityView(
-                available=False, reason="not_uploaded",
-                message="이 원문 버전의 PDF가 서버에 업로드되지 않았어요.",
-            ),
+            file_access=file_access,
             resume=resume,
         )
 

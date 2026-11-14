@@ -2,7 +2,7 @@
 
 from pathlib import PureWindowsPath
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from .auth import AuthenticatedPrincipal
@@ -70,6 +70,15 @@ def create_file_router(require_principal: Any, store: FileUploadStore, object_st
         content_type: str
         storage_status: str
         failure_reason: None = None
+
+    class FileAccessView(BaseModel):
+        status: Literal["not_uploaded", "pending", "failed", "ready"]
+        url: str | None = None
+        expires_at: str | None = None
+        file_name: str | None = None
+        file_size: int | None = None
+        content_type: str | None = None
+        reason: str | None = None
 
     router = APIRouter(prefix="/v1", tags=["paper-files"])
     Principal = Annotated[AuthenticatedPrincipal, Depends(require_principal)]
@@ -147,6 +156,33 @@ def create_file_router(require_principal: Any, store: FileUploadStore, object_st
             raise
         except RuntimeError:
             raise HTTPException(status_code=503, detail={"code": "pdf_upload_unavailable"}) from None
+
+    @router.get("/papers/{paper_id}/versions/{version_id}/file-access",
+                response_model=FileAccessView)
+    def get_file_access(paper_id: UUID, version_id: str, principal: Principal):
+        if principal.credential_type != "web_session":
+            raise HTTPException(status_code=403, detail={"code": "web_session_required"})
+        version_id = version_id.strip()
+        if (not version_id or len(version_id) > 128 or "\x00" in version_id
+                or "/" in version_id or "\\" in version_id or PureWindowsPath(version_id).drive):
+            raise HTTPException(status_code=422, detail={"code": "invalid_version_id"})
+        try:
+            file = store.get_file_access(principal.user_id, str(paper_id), version_id)
+            if file is None:
+                return FileAccessView(status="not_uploaded", reason="not_uploaded")
+            values = {
+                "status": file.status, "file_name": file.file_name,
+                "file_size": file.file_size, "content_type": file.content_type,
+            }
+            if file.status != "ready":
+                return FileAccessView(**values, reason=file.failure_reason or f"upload_{file.status}")
+            prepared = object_storage.prepare_download(file)
+            return FileAccessView(
+                **values, url=prepared.url, expires_at=prepared.expires_at.isoformat())
+        except UploadTargetNotFound:
+            raise HTTPException(status_code=404, detail={"code": "paper_version_not_found"}) from None
+        except (UploadUnavailable, RuntimeError):
+            raise HTTPException(status_code=503, detail={"code": "pdf_access_unavailable"}) from None
 
     return router
 

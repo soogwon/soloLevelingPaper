@@ -1,8 +1,9 @@
 """S3 호환 비공개 저장소의 제한된 presigned URL 어댑터."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from urllib.parse import quote
 from uuid import uuid4
 
 
@@ -23,6 +24,12 @@ class StoredObject:
     pdf_header_valid: bool = True
 
 
+@dataclass(frozen=True)
+class PresignedDownload:
+    url: str
+    expires_at: datetime
+
+
 class UnavailableObjectStorage:
     def prepare_upload(self, *args, **kwargs):
         raise RuntimeError("object_storage_unavailable")
@@ -34,6 +41,9 @@ class UnavailableObjectStorage:
         raise RuntimeError("object_storage_unavailable")
 
     def delete_upload(self, *args, **kwargs):
+        raise RuntimeError("object_storage_unavailable")
+
+    def prepare_download(self, *args, **kwargs):
         raise RuntimeError("object_storage_unavailable")
 
 
@@ -124,4 +134,21 @@ class S3ObjectStorage:
 
     def delete_upload(self, object_key: str) -> None:
         self._client.delete_object(Bucket=self._bucket, Key=object_key)
+
+    def prepare_download(self, file, *, ttl_seconds: int = 300) -> PresignedDownload:
+        if not file.object_key:
+            raise RuntimeError("object_key_missing")
+        safe_name = quote(file.file_name, safe="")
+        disposition = f"inline; filename=\"paper.pdf\"; filename*=UTF-8''{safe_name}"
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+        url = self._client.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": self._bucket, "Key": file.object_key,
+                "ResponseContentDisposition": disposition,
+                "ResponseContentType": file.content_type,
+            },
+            ExpiresIn=ttl_seconds, HttpMethod="GET",
+        )
+        return PresignedDownload(url, expires_at)
 

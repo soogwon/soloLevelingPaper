@@ -75,6 +75,16 @@ class CompletedUpload:
     completed_at: datetime
 
 
+@dataclass(frozen=True)
+class FileAccessRecord:
+    status: str
+    file_name: str
+    file_size: int
+    content_type: str
+    object_key: str | None
+    failure_reason: str | None = None
+
+
 class FileUploadStore(Protocol):
     def reserve(self, owner_user_id: str, paper_id: str, server_version_id: str,
                 local_version_id: str, file_name: str, file_size: int,
@@ -86,6 +96,9 @@ class FileUploadStore(Protocol):
 
     def mark_ready(self, owner_user_id: str, upload_id: str,
                    final_object_key: str) -> CompletedUpload: ...
+
+    def get_file_access(self, owner_user_id: str, paper_id: str,
+                        server_version_id: str) -> FileAccessRecord | None: ...
 
 
 class UnavailableFileUploadStore:
@@ -99,6 +112,9 @@ class UnavailableFileUploadStore:
         raise UploadUnavailable
 
     def mark_ready(self, *args, **kwargs):
+        raise UploadUnavailable
+
+    def get_file_access(self, *args, **kwargs):
         raise UploadUnavailable
 
 
@@ -254,6 +270,52 @@ class PostgresFileUploadStore:
                     raise UploadExpired
                 raise UploadNotFound
             return _completed(row)
+
+    def get_file_access(self, owner_user_id: str, paper_id: str,
+                        server_version_id: str) -> FileAccessRecord | None:
+        with _connection(self._pool) as conn:
+            target = conn.execute(
+                """SELECT 1 FROM server_papers p
+                   WHERE p.paper_id=%s AND p.owner_user_id=%s
+                     AND EXISTS (
+                       SELECT 1 FROM server_learning_records r
+                       WHERE r.paper_id=p.paper_id AND r.owner_user_id=p.owner_user_id
+                         AND r.selected_version_id=%s
+                     )""",
+                (paper_id, owner_user_id, server_version_id),
+            ).fetchone()
+            if target is None:
+                raise UploadTargetNotFound
+            row = conn.execute(
+                """SELECT file_name, file_size, content_type, object_key, status,
+                          failure_reason, expires_at
+                   FROM server_pdf_uploads
+                   WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s
+                   ORDER BY CASE status WHEN 'ready' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END,
+                            updated_at DESC
+                   LIMIT 1 FOR UPDATE""",
+                (owner_user_id, paper_id, server_version_id),
+            ).fetchone()
+            if row is None or row["status"] == "deleted":
+                return None
+            status = row["status"]
+            failure_reason = row["failure_reason"]
+            now = self._now()
+            if status == "pending" and row["expires_at"] <= now:
+                status, failure_reason = "failed", "upload_expired"
+                conn.execute(
+                    """UPDATE server_pdf_uploads SET status='failed', failure_reason=%s,
+                             updated_at=CURRENT_TIMESTAMP
+                       WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s
+                         AND status='pending' AND expires_at<=%s""",
+                    (failure_reason, owner_user_id, paper_id, server_version_id, now),
+                )
+            return FileAccessRecord(
+                status=status, file_name=row["file_name"], file_size=int(row["file_size"]),
+                content_type=row["content_type"],
+                object_key=row["object_key"] if status == "ready" else None,
+                failure_reason=failure_reason,
+            )
 
 
 def _completed(row) -> CompletedUpload:

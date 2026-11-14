@@ -526,6 +526,24 @@ def test_web_detail_uses_session_owner_and_reports_unavailable_dependencies():
     assert (result.resume.available, result.resume.reason) == (True, "resume_code_available")
 
 
+def test_web_detail_enables_file_access_after_pdf_is_ready():
+    class FileStore:
+        def get_file_access(self, owner_user_id, paper_id, version_id):
+            from solo_leveling.interfaces.http.file_uploads import FileAccessRecord
+            assert (owner_user_id, paper_id, version_id) == (
+                "web-user", PAPER_ID, "version-1")
+            return FileAccessRecord(
+                "ready", "paper.pdf", 1234, "application/pdf", "private/final.pdf")
+
+    store = MemoryStore()
+    route = next(route.endpoint for route in create_app(
+        paper_store=store, file_upload_store=FileStore()).routes
+        if route.path == "/v1/papers/{paper_id}")
+    result = route(
+        UUID(PAPER_ID), AuthenticatedPrincipal("web-user", "web_session"), None, "version-1")
+    assert (result.file_access.available, result.file_access.reason) == (True, "file_ready")
+
+
 def test_web_detail_serializes_synced_summary():
     class SummaryStore(MemoryStore):
         def get_paper(self, owner_user_id, paper_id, **selection):
