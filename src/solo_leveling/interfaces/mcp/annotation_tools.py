@@ -21,6 +21,7 @@ class MutationOutput(TypedDict):
     outcome: Literal['saved', 'deleted']
     annotation: Annotation | None
     code: str | None
+    reused: bool
 
 
 class DetailOutput(TypedDict):
@@ -55,6 +56,7 @@ class CreateInput(Input):
     body: str
     segments: list[Segment] = Field(default_factory=list)
     step: str | None = None
+    request_key: str | None = None
 
 
 class GetInput(Input):
@@ -90,7 +92,7 @@ ANNOTATION_INPUTS = {
 _SAFE_REASONS = frozenset({
     'TRANSLATION_NOT_SUPPORTED', 'INVALID_LIMIT', 'INVALID_CURSOR', 'DUPLICATE_SEGMENT',
     'QUOTE_TOTAL_TOO_LONG', 'CHUNK_NOT_IN_CONTEXT', 'TRANSLATION_REVISION_MISMATCH',
-    'OFFSET_OUT_OF_RANGE', 'QUOTE_MISMATCH',
+    'OFFSET_OUT_OF_RANGE', 'QUOTE_MISMATCH', 'INVALID_REQUEST_KEY',
 })
 
 
@@ -116,6 +118,10 @@ async def invoke(method, *args, **kwargs):
     except Exception as error:
         raise to_tool_error(error) from None
     if isinstance(value, AnnotationResult):
+        if value.code == 'REQUEST_KEY_CONFLICT':
+            raise ToolError('CONFLICT: REQUEST_KEY_CONFLICT: 같은 요청 키에 다른 입력을 사용할 수 없습니다.')
+        if value.code == 'ANNOTATION_DELETED':
+            raise ToolError('NOT_FOUND: ANNOTATION_DELETED: 이전 요청으로 생성한 기록이 삭제되었습니다.')
         if value.outcome == AnnotationOutcome.CONFLICT:
             raise ToolError('CONFLICT: 기록을 다시 조회한 뒤 수정해주세요. 자동 재시도하지 마세요.')
         if value.outcome == AnnotationOutcome.NOT_FOUND or value.code == 'CONTEXT_NOT_FOUND':
@@ -139,11 +145,14 @@ def register_annotations(server, service):
                                             idempotentHint=False, openWorldHint=False))
     async def create_annotation(request: CreateInput) -> MutationOutput:
         """메모·하이라이트를 저장합니다. 원문 위치는 문자 단위 [시작, 끝)이며 인용문과 일치해야 합니다.
-        생성 응답을 잃으면 목록을 먼저 조회하세요. 자동 재생성은 중복 기록을 만들 수 있습니다.
+        새 생성 요청에는 request_key(영문·숫자·밑줄·하이픈, 1~128자)를 발급하세요.
+        응답 유실 시 같은 키와 입력으로 재시도하면 기존 기록의 현재 상태를 반환합니다.
+        다른 입력은 REQUEST_KEY_CONFLICT, 삭제된 기록은 ANNOTATION_DELETED입니다.
+        키를 생략한 기존 호출은 중복 방지가 없으므로 응답 유실 시 목록을 먼저 조회하세요.
         """
         segments = original_segments(request.segments)
         return await invoke(service.create, request.context_id, request.kind, request.body,
-                            segments=segments, step=request.step)
+                            segments=segments, step=request.step, request_key=request.request_key)
 
     @server.tool(meta={'ui': {'resourceUri': ANNOTATION_URI}},
                  annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))

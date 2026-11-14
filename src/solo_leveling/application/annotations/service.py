@@ -64,10 +64,12 @@ class AnnotationService:
         self.db_path = db_path
 
     def create(self, context_id: str, kind: str, body: str, *,
-               segments: Sequence[SegmentInput] = (), step: str | None = None) -> AnnotationResult:
+               segments: Sequence[SegmentInput] = (), step: str | None = None,
+               request_key: str | None = None) -> AnnotationResult:
         _require_context(context_id)
         segments = _original_segments(segments)
-        return store.create_annotation(self.db_path, context_id, kind, body, segments, step)
+        return store.create_annotation(self.db_path, context_id, kind, body, segments, step,
+                                       request_key=request_key)
 
     def get(self, context_id: str, annotation_id: str, *, source_position: int | None = None) -> AnnotationDetail:
         _require_context(context_id)

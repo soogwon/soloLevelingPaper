@@ -15,6 +15,10 @@
 - 본문·인용문은 로그에 남기지 않는다. 이유는 고정 코드로만 알린다.
 """
 from contextlib import closing
+from dataclasses import asdict
+import hashlib
+import json
+import re
 from typing import Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
@@ -72,15 +76,35 @@ def _check_segment(conn, context, segment: SegmentInput):
 
 
 def create_annotation(db_path: str, context_id: str, kind: str, body: str,
-                      segments: Sequence[SegmentInput] = (), step: Optional[str] = None) -> AnnotationResult:
+                      segments: Sequence[SegmentInput] = (), step: Optional[str] = None,
+                      *, request_key: Optional[str] = None) -> AnnotationResult:
     """기록과 구간을 한 트랜잭션으로 저장한다. 맥락·청크·위치·인용문이 맞지 않으면 아무것도 저장하지 않는다."""
     segments = tuple(segments)
     validate_annotation_fields(kind, body, step, len(segments))
     if not all(isinstance(s, SegmentInput) for s in segments):
         raise AnnotationValidationError('구간은 SegmentInput이어야 함')
     validate_segments(segments)
+    if request_key is not None and (not isinstance(request_key, str)
+            or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', request_key)):
+        raise AnnotationValidationError('요청 키 형식이 올바르지 않음', 'INVALID_REQUEST_KEY')
+    # 본문·인용문을 요청 이력에 중복 저장하지 않는다. 공백과 구간 순서는 입력 그대로 비교한다.
+    input_hash = hashlib.sha256(json.dumps(
+        [kind, body, step, [asdict(s) for s in segments]],
+        ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('ascii')).hexdigest()
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
+        if request_key is not None:
+            previous = conn.execute(
+                'SELECT input_hash, annotation_id FROM annotation_create_requests '
+                'WHERE context_id=? AND request_key=?', (context_id, request_key)).fetchone()
+            if previous is not None:
+                if previous['input_hash'] != input_hash:
+                    return AnnotationResult(AnnotationOutcome.CONFLICT, code='REQUEST_KEY_CONFLICT')
+                record = _load(conn, previous['annotation_id'], context_id)
+                # 수정된 기록은 현재 상태로 돌려주며, 삭제된 기록은 재생성하지 않는다.
+                if record is None:
+                    return AnnotationResult(AnnotationOutcome.NOT_FOUND, code='ANNOTATION_DELETED')
+                return AnnotationResult(AnnotationOutcome.SAVED, record, reused=True)
         context = conn.execute('SELECT parse_revision_id, translation_revision_id FROM learning_contexts '
                                'WHERE context_id=?', (context_id,)).fetchone()
         if context is None:
@@ -102,6 +126,10 @@ def create_annotation(db_path: str, context_id: str, kind: str, body: str,
                          (annotation_id, position, segment.chunk_id, chunk['parse_revision_id'], segment.target,
                           segment.translation_revision_id, segment.start_offset, segment.end_offset,
                           segment.quote_snapshot))
+        if request_key is not None:
+            conn.execute('INSERT INTO annotation_create_requests '
+                         '(context_id, request_key, input_hash, annotation_id, created_at) VALUES (?, ?, ?, ?, ?)',
+                         (context_id, request_key, input_hash, annotation_id, timestamp))
         return AnnotationResult(AnnotationOutcome.SAVED, _load(conn, annotation_id))
 
 

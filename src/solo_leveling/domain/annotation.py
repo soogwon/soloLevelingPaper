@@ -129,7 +129,8 @@ class Annotation:
 class AnnotationResult:
     outcome: AnnotationOutcome
     annotation: Optional[Annotation] = None
-    code: Optional[str] = None  # INVALID_REFERENCE의 이유 코드
+    code: Optional[str] = None  # 잘못된 참조·요청 키 충돌 등의 이유 코드
+    reused: bool = False  # 같은 생성 요청 키로 기존 기록을 반환했는지 여부
 
 
 def validate_annotation_fields(kind: str, body: str, step: Optional[str], segment_count: int) -> None:
