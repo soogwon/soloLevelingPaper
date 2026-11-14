@@ -1,7 +1,7 @@
 from hashlib import sha256
 from pathlib import Path
 
-from solo_leveling.application.server_sync.pdf_upload import PaperPdfUploadService
+from solo_leveling.application.server_sync.pdf_upload import PaperPdfUploadService, PdfUploadStageError
 from solo_leveling.infrastructure.database.schema import init_db, get_connection
 
 
@@ -131,3 +131,72 @@ def test_storage_redirect_does_not_complete(tmp_path):
     with pytest.raises(ServerResponseInvalid):
         service.upload(service.preview(PAPER_ID))
     assert len(client.calls) == 1
+
+
+def test_prepare_failure_reports_stage_status_and_safe_code(tmp_path):
+    import pytest
+
+    db, root = database(tmp_path)
+
+    class FailedClient(Client):
+        def request(self, method, path, **kwargs):
+            self.calls.append((method, path, kwargs))
+            return Response(503, {"detail": {"code": "storage_unavailable"}})
+
+    service = PaperPdfUploadService(str(db), root, FailedClient(), UploadSession())
+    with pytest.raises(PdfUploadStageError) as caught:
+        service.upload(service.preview(PAPER_ID))
+    assert (caught.value.stage, caught.value.status_code, caught.value.detail_code) == (
+        "prepare", 503, "storage_unavailable")
+
+
+def test_prepare_failure_does_not_expose_untrusted_detail(tmp_path):
+    import pytest
+
+    db, root = database(tmp_path)
+
+    class FailedClient(Client):
+        def request(self, method, path, **kwargs):
+            self.calls.append((method, path, kwargs))
+            return Response(503, {"detail": {"code": "secret=do-not-display"}})
+
+    service = PaperPdfUploadService(str(db), root, FailedClient(), UploadSession())
+    with pytest.raises(PdfUploadStageError) as caught:
+        service.upload(service.preview(PAPER_ID))
+    assert caught.value.detail_code is None
+
+
+def test_transfer_failure_reports_stage_and_does_not_complete(tmp_path):
+    import pytest
+
+    db, root = database(tmp_path)
+
+    class ForbiddenSession(UploadSession):
+        def request(self, method, url, **kwargs):
+            return Response(403)
+
+    client = Client()
+    service = PaperPdfUploadService(str(db), root, client, ForbiddenSession())
+    with pytest.raises(PdfUploadStageError) as caught:
+        service.upload(service.preview(PAPER_ID))
+    assert (caught.value.stage, caught.value.status_code) == ("transfer", 403)
+    assert len(client.calls) == 1
+
+
+def test_complete_failure_reports_stage_status_and_safe_code(tmp_path):
+    import pytest
+
+    db, root = database(tmp_path)
+
+    class FailedCompleteClient(Client):
+        def request(self, method, path, **kwargs):
+            if path.endswith("/complete"):
+                self.calls.append((method, path, kwargs))
+                return Response(422, {"detail": {"code": "object_checksum_mismatch"}})
+            return super().request(method, path, **kwargs)
+
+    service = PaperPdfUploadService(str(db), root, FailedCompleteClient(), UploadSession())
+    with pytest.raises(PdfUploadStageError) as caught:
+        service.upload(service.preview(PAPER_ID))
+    assert (caught.value.stage, caught.value.status_code, caught.value.detail_code) == (
+        "complete", 422, "object_checksum_mismatch")

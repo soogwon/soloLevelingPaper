@@ -10,7 +10,7 @@ import anyio
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
-from solo_leveling.application.server_sync.pdf_upload import PdfUploadPreview
+from solo_leveling.application.server_sync.pdf_upload import PdfUploadPreview, PdfUploadStageError
 from solo_leveling.infrastructure.storage.server_client import ServerConnectionRequired, ServerResponseInvalid
 
 
@@ -51,6 +51,21 @@ class PdfUploadGate:
 
     def cancel(self, token: str) -> None:
         self.pending.pop(token, None)
+
+
+def _pdf_upload_stage_tool_error(exc: PdfUploadStageError) -> ToolError:
+    code, message = {
+        "prepare": ("PDF_UPLOAD_PREPARE_FAILED", "업로드 준비 요청에 실패했습니다."),
+        "transfer": ("PDF_UPLOAD_TRANSFER_FAILED", "PDF 파일 전송에 실패했습니다."),
+        "complete": ("PDF_UPLOAD_COMPLETE_FAILED", "업로드 완료 확인에 실패했습니다."),
+    }.get(exc.stage, ("PDF_UPLOAD_FAILED", "PDF 업로드를 완료하지 못했습니다."))
+    details = []
+    if exc.status_code is not None:
+        details.append(f"HTTP {exc.status_code}")
+    if exc.detail_code:
+        details.append(exc.detail_code)
+    suffix = f" ({', '.join(details)})" if details else ""
+    return ToolError(f"{code}: {message}{suffix} 자동으로 다시 전송하지 않습니다.")
 
 
 def register_pdf_upload(server, service: PdfUploadService) -> None:
@@ -114,6 +129,8 @@ def register_pdf_upload(server, service: PdfUploadService) -> None:
             return asdict(await anyio.to_thread.run_sync(service.upload, preview))
         except FileExistsError:
             raise ToolError("PDF_ALREADY_UPLOADED: 이 원문 버전의 PDF가 이미 준비되어 있습니다.") from None
+        except PdfUploadStageError as exc:
+            raise _pdf_upload_stage_tool_error(exc) from None
         except ServerResponseInvalid:
             raise ToolError("PDF_UPLOAD_FAILED: 업로드 응답을 확인할 수 없습니다.") from None
         except ServerConnectionRequired:
