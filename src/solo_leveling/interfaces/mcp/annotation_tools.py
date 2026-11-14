@@ -57,6 +57,7 @@ class CreateInput(Input):
     segments: list[Segment] = Field(default_factory=list)
     step: str | None = None
     request_key: str | None = None
+    creation_origin: Literal['user', 'ai', 'unknown'] = 'unknown'
 
 
 class GetInput(Input):
@@ -92,7 +93,7 @@ ANNOTATION_INPUTS = {
 _SAFE_REASONS = frozenset({
     'TRANSLATION_NOT_AVAILABLE', 'INVALID_LIMIT', 'INVALID_CURSOR', 'DUPLICATE_SEGMENT',
     'QUOTE_TOTAL_TOO_LONG', 'CHUNK_NOT_IN_CONTEXT', 'TRANSLATION_REVISION_MISMATCH',
-    'OFFSET_OUT_OF_RANGE', 'QUOTE_MISMATCH', 'INVALID_REQUEST_KEY',
+    'OFFSET_OUT_OF_RANGE', 'QUOTE_MISMATCH', 'INVALID_REQUEST_KEY', 'INVALID_CREATION_ORIGIN',
 })
 
 
@@ -144,6 +145,8 @@ def register_annotations(server, service):
     async def create_annotation(request: CreateInput) -> MutationOutput:
         """메모·하이라이트를 저장합니다. 위치는 문자 단위 [시작, 끝)이며 인용문과 일치해야 합니다.
         target=translation은 해당 맥락의 translation_revision_id와 저장된 번역문 위치를 지정하세요.
+        creation_origin은 최초 작성 주체 신고입니다. 사용자의 글을 그대로 전달하면 user,
+        모델이 작성한 내용은 ai, 알 수 없으면 unknown입니다. MCP 호출이라는 이유로 ai로 지정하지 마세요.
         새 생성 요청에는 request_key(영문·숫자·밑줄·하이픈, 1~128자)를 발급하세요.
         응답 유실 시 같은 키와 입력으로 재시도하면 기존 기록의 현재 상태를 반환합니다.
         다른 입력은 REQUEST_KEY_CONFLICT, 삭제된 기록은 ANNOTATION_DELETED입니다.
@@ -151,7 +154,8 @@ def register_annotations(server, service):
         """
         segments = validated_segments(request.segments)
         return await invoke(service.create, request.context_id, request.kind, request.body,
-                            segments=segments, step=request.step, request_key=request.request_key)
+                            segments=segments, step=request.step, request_key=request.request_key,
+                            creation_origin=request.creation_origin)
 
     @server.tool(meta={'ui': {'resourceUri': ANNOTATION_URI}},
                  annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))

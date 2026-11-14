@@ -79,6 +79,7 @@ class AnnotationMetadata:
     segments: tuple[dict[str, Any], ...]
     original_created_at: datetime
     source_updated_at: datetime
+    creation_origin: str | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,7 @@ class StoredAnnotation:
     segments: tuple[dict[str, Any], ...]
     created_at: datetime
     updated_at: datetime
+    creation_origin: str = 'unknown'
 
 
 @dataclass(frozen=True)
@@ -498,8 +500,8 @@ class PostgresPaperStore:
                 """INSERT INTO server_annotations
                    (annotation_id, owner_user_id, paper_id, learning_record_id, source_instance_id,
                     local_annotation_id, selected_version_id, kind, body, step, segments,
-                    original_created_at, source_updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
+                    original_created_at, source_updated_at, creation_origin)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, COALESCE(%s, 'unknown'))
                    ON CONFLICT(owner_user_id, source_instance_id, local_annotation_id)
                    DO UPDATE SET kind=excluded.kind, body=excluded.body, step=excluded.step,
                      segments=excluded.segments, source_updated_at=excluded.source_updated_at,
@@ -508,19 +510,20 @@ class PostgresPaperStore:
                      AND excluded.learning_record_id=server_annotations.learning_record_id
                      AND excluded.selected_version_id IS NOT DISTINCT FROM server_annotations.selected_version_id
                      AND excluded.original_created_at=server_annotations.original_created_at
+                     AND (%s OR excluded.creation_origin=server_annotations.creation_origin)
                      AND excluded.source_updated_at>server_annotations.source_updated_at
                    RETURNING annotation_id, revision, updated_at""",
                 (str(uuid4()), owner_user_id, paper_id, record["learning_record_id"],
                  metadata.source_instance_id, metadata.local_annotation_id,
                  metadata.selected_version_id, metadata.kind, metadata.body, metadata.step,
                  json.dumps(metadata.segments, ensure_ascii=False), metadata.original_created_at,
-                 metadata.source_updated_at),
+                 metadata.source_updated_at, metadata.creation_origin, metadata.creation_origin is None),
             ).fetchone()
             if row is None:
                 row = conn.execute(
                     """SELECT a.annotation_id, a.revision, a.updated_at, a.paper_id,
                               a.learning_record_id, a.selected_version_id, a.kind, a.body,
-                              a.step, a.segments, a.original_created_at, a.source_updated_at,
+                              a.step, a.segments, a.original_created_at, a.source_updated_at, a.creation_origin,
                               r.local_learning_record_id
                        FROM server_annotations a JOIN server_learning_records r
                          ON r.learning_record_id=a.learning_record_id
@@ -531,6 +534,8 @@ class PostgresPaperStore:
                 if row is not None and (str(row["paper_id"]) != paper_id
                                         or row["selected_version_id"] != metadata.selected_version_id
                                         or row["local_learning_record_id"] != metadata.local_learning_record_id):
+                    raise AnnotationConflict
+                if row is not None and metadata.creation_origin is not None and row['creation_origin'] != metadata.creation_origin:
                     raise AnnotationConflict
                 if row is not None:
                     if row["source_updated_at"] != metadata.source_updated_at:
@@ -594,7 +599,7 @@ class PostgresPaperStore:
             rows = [] if page > total_pages else conn.execute(
                 f"""SELECT a.annotation_id, a.paper_id, p.title AS paper_title,
                            a.learning_record_id, a.selected_version_id, a.kind, a.body, a.step,
-                           a.segments, a.original_created_at, a.source_updated_at AS updated_at
+                           a.segments, a.original_created_at, a.source_updated_at AS updated_at, a.creation_origin
                     {base} WHERE {where}
                     ORDER BY a.original_created_at {direction}, a.annotation_id {direction}
                     LIMIT %s OFFSET %s""", (*params, limit, (page - 1) * limit),
@@ -611,7 +616,7 @@ class PostgresPaperStore:
             row = conn.execute(
                 """SELECT a.annotation_id, a.paper_id, p.title AS paper_title,
                           a.learning_record_id, a.selected_version_id, a.kind, a.body, a.step,
-                          a.segments, a.original_created_at, a.source_updated_at AS updated_at
+                          a.segments, a.original_created_at, a.source_updated_at AS updated_at, a.creation_origin
                    FROM server_annotations a JOIN server_papers p ON p.paper_id=a.paper_id
                    WHERE a.owner_user_id=%s AND a.annotation_id=%s""",
                 (owner_user_id, annotation_id),
@@ -694,7 +699,7 @@ def _stored_annotation(row) -> StoredAnnotation:
         str(row["annotation_id"]), str(row["paper_id"]), row["paper_title"],
         str(row["learning_record_id"]), row["selected_version_id"], row["kind"],
         row["body"], row["step"], tuple(row["segments"]), row["original_created_at"],
-        row["updated_at"],
+        row["updated_at"], row.get('creation_origin', 'unknown'),
     )
 
 

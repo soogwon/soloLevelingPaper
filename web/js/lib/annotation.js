@@ -1,10 +1,15 @@
 // 메모·하이라이트 카드 (논문 상세, 메모 페이지, 검색 결과에서 같이 쓴다)
 import { html } from './html.js';
 import { buildHash } from '../router.js';
-import { icons, kindBadge, authorBadge } from './ui.js';
+import { icons, kindBadge } from './ui.js';
 import { formatPosition, formatDateTime, formatTime } from './format.js';
 
 const TARGET_LABEL = { original: '원문', translation: '한국어 번역' };
+
+function creationOriginBadge(value) {
+  const label = {user:'사용자', ai:'AI', unknown:'미상'}[value] ?? '미상';
+  return html`<span class="badge b-gray">최초 작성: ${label} (신고)</span>`;
+}
 
 function firstPosition(annotation) {
   for (const s of annotation.segments ?? []) {
@@ -44,7 +49,7 @@ export function compactAnnotationCard(a, { focused = false } = {}) {
   return html`<article class="note-card ${focused ? 'is-focus' : ''}" data-annotation-id="${a.annotation_id}" ${focused ? html`tabindex="-1"` : ''}>
     ${focused ? html`<span class="focus-label">메모 페이지에서 선택한 기록</span>` : ''}
     <div class="note-top">
-      <span class="note-tags">${kindBadge(a.kind)}${authorBadge(a.author_type)}</span>
+      <span class="note-tags">${kindBadge(a.kind)}${creationOriginBadge(a.creation_origin)}</span>
       <span class="note-pos">${firstPosition(a) ?? '위치 연결 없음'}</span>
     </div>
     ${quotes(a)}
@@ -57,7 +62,7 @@ export function compactAnnotationCard(a, { focused = false } = {}) {
 export function fullAnnotationCard(a, { showDate = false } = {}) {
   return html`<article class="note-card lg">
     <div class="note-top">
-      <span class="note-tags">${kindBadge(a.kind)}${authorBadge(a.author_type)}</span>
+      <span class="note-tags">${kindBadge(a.kind)}${creationOriginBadge(a.creation_origin)}</span>
       <span class="note-date">${dateText(a, showDate)}</span>
     </div>
     ${quotes(a)}

@@ -239,6 +239,7 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         segments: list[AnnotationSegmentUpsert] = Field(default_factory=list, max_length=MAX_SEGMENTS)
         original_created_at: datetime
         source_updated_at: datetime
+        creation_origin: Literal['user', 'ai', 'unknown'] | None = None
 
         _version_id = field_validator("selected_version_id")(_normalize_file_or_version)
 
@@ -397,7 +398,7 @@ def create_paper_router(require_principal: Any, store: PaperStore):
             str(payload.source_instance_id), identifiers[0], identifiers[1],
             payload.selected_version_id, payload.kind, payload.body, payload.step,
             tuple(item.model_dump() for item in payload.segments), payload.original_created_at,
-            payload.source_updated_at,
+            payload.source_updated_at, payload.creation_origin,
         )
         try:
             result = store.upsert_annotation(principal.user_id, str(paper_id), metadata)

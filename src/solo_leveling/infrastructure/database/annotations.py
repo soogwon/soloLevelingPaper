@@ -54,8 +54,11 @@ def _load(conn, annotation_id: str, context_id: Optional[str] = None) -> Optiona
                           r['end_offset'], r['quote_snapshot'], r['translation_revision_id'])
         for r in conn.execute('SELECT * FROM annotation_segments WHERE annotation_id=? ORDER BY position',
                               (annotation_id,)))
+    origin = conn.execute('SELECT creation_origin FROM annotation_creation_origins WHERE annotation_id=?',
+                          (annotation_id,)).fetchone()
     return Annotation(row['annotation_id'], row['context_id'], row['kind'], row['body'], row['step'],
-                      row['revision'], row['created_at'], row['updated_at'], segments)
+                      row['revision'], row['created_at'], row['updated_at'], segments,
+                      origin['creation_origin'] if origin else 'unknown')
 
 
 def _check_segment(conn, context, segment: SegmentInput):
@@ -90,19 +93,25 @@ def _check_segment(conn, context, segment: SegmentInput):
 
 def create_annotation(db_path: str, context_id: str, kind: str, body: str,
                       segments: Sequence[SegmentInput] = (), step: Optional[str] = None,
-                      *, request_key: Optional[str] = None) -> AnnotationResult:
+                      *, request_key: Optional[str] = None, creation_origin: str = 'unknown') -> AnnotationResult:
     """기록과 구간을 한 트랜잭션으로 저장한다. 맥락·청크·위치·인용문이 맞지 않으면 아무것도 저장하지 않는다."""
     segments = tuple(segments)
     validate_annotation_fields(kind, body, step, len(segments))
     if not all(isinstance(s, SegmentInput) for s in segments):
         raise AnnotationValidationError('구간은 SegmentInput이어야 함')
     validate_segments(segments)
+    if creation_origin not in ('user', 'ai', 'unknown'):
+        raise AnnotationValidationError('최초 작성 주체가 올바르지 않음', 'INVALID_CREATION_ORIGIN')
     if request_key is not None and (not isinstance(request_key, str)
             or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', request_key)):
         raise AnnotationValidationError('요청 키 형식이 올바르지 않음', 'INVALID_REQUEST_KEY')
     # 본문·인용문을 요청 이력에 중복 저장하지 않는다. 공백과 구간 순서는 입력 그대로 비교한다.
+    fingerprint = [kind, body, step, [asdict(s) for s in segments]]
+    # 이전 버전에서 주체 없이 저장한 요청 해시와 호환한다.
+    if creation_origin != 'unknown':
+        fingerprint.append({'creation_origin': creation_origin})
     input_hash = hashlib.sha256(json.dumps(
-        [kind, body, step, [asdict(s) for s in segments]],
+        fingerprint,
         ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('ascii')).hexdigest()
     with closing(get_connection(db_path)) as conn, conn:
         conn.execute('BEGIN IMMEDIATE')
@@ -132,6 +141,7 @@ def create_annotation(db_path: str, context_id: str, kind: str, body: str,
         conn.execute('INSERT INTO annotations (annotation_id, context_id, kind, body, step, revision, '
                      'created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)',
                      (annotation_id, context_id, kind, body, step, timestamp, timestamp))
+        conn.execute('INSERT INTO annotation_creation_origins VALUES (?, ?)', (annotation_id, creation_origin))
         for position, (segment, chunk) in enumerate(zip(segments, checked)):
             conn.execute('INSERT INTO annotation_segments (annotation_id, position, chunk_id, parse_revision_id, '
                          'target, translation_revision_id, start_offset, end_offset, quote_snapshot) '

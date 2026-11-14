@@ -59,8 +59,10 @@ def annotation_library_query(kind: Optional[str], query: Optional[str], created_
                              before: Optional[Tuple[str, str]] = None):
     """최신순 키셋 조회 SQL. 본문·인용문·논문 제목 검색은 EXISTS로 중복을 막는다."""
     sql = """
-        SELECT a.*, l.version_id, v.paper_id, v.original_filename, p.title AS paper_title
+        SELECT a.*, COALESCE(o.creation_origin, 'unknown') AS creation_origin,
+               l.version_id, v.paper_id, v.original_filename, p.title AS paper_title
         FROM annotations a
+        LEFT JOIN annotation_creation_origins o USING(annotation_id)
         JOIN learning_contexts l ON l.context_id=a.context_id
         JOIN paper_versions v ON v.version_id=l.version_id
         JOIN papers p ON p.paper_id=v.paper_id
@@ -147,7 +149,7 @@ def list_annotation_library(db_path: str, *, kind: Optional[str] = None, query: 
                     if segment['pdf_page'] is not None and segment['pdf_page'] not in pages:
                         pages.append(segment['pdf_page'])
                 annotation = Annotation(row['annotation_id'], row['context_id'], row['kind'], row['body'], row['step'],
-                                        row['revision'], row['created_at'], row['updated_at'], tuple(stored))
+                                        row['revision'], row['created_at'], row['updated_at'], tuple(stored), row['creation_origin'])
                 items.append(AnnotationLibraryItem(
                     annotation, row['paper_id'], row['paper_title'], row['version_id'],
                     PureWindowsPath(PurePosixPath(row['original_filename']).name).name,

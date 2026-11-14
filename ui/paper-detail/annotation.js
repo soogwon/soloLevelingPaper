@@ -19,7 +19,8 @@ export function mountAnnotation(app, doc) {
     reset('기록을 조회할 수 없습니다.');
     if (result?.isError || !Array.isArray(record?.segments)
         || !Array.isArray(data.segment_available) || data.segment_available.length !== record.segments.length) return;
-    el('title').textContent = record.kind === 'highlight' ? '하이라이트' : '메모';
+    const origin = {user:'사용자',ai:'AI',unknown:'미상'}[record.creation_origin] ?? '미상';
+    el('title').textContent = (record.kind === 'highlight' ? '하이라이트' : '메모') + ` · 최초 작성 주체: ${origin} (신고)`;
     el('body').textContent = record.body;
     el('status').textContent = record.segments.length ? '' : '연결된 원문 구간이 없습니다.';
     for (const [i, segment] of record.segments.entries()) {

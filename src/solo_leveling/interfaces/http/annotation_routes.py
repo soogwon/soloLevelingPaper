@@ -37,6 +37,7 @@ def create_annotation_router(require_principal: Any, store: PaperStore):
         segments: list[SegmentView]
         created_at: datetime
         updated_at: datetime
+        creation_origin: Literal['user', 'ai', 'unknown']
 
     class AnnotationPageView(BaseModel):
         items: list[AnnotationView]
@@ -69,7 +70,7 @@ def create_annotation_router(require_principal: Any, store: PaperStore):
             learning_record_id=item.learning_record_id,
             version_id=item.selected_version_id, kind=item.kind, body=item.body,
             step=item.step, segments=segments, created_at=item.created_at,
-            updated_at=item.updated_at,
+            updated_at=item.updated_at, creation_origin=item.creation_origin,
         )
 
     @router.get("", response_model=AnnotationPageView)
