@@ -444,3 +444,17 @@ test('원문 위치가 모호해도 고유한 번역 위치는 저장할 수 있
   assert.equal(request.segments[0].target, 'translation');
   assert.equal(request.segments[0].start_offset, 2);
 });
+
+
+test('저장 클릭만으로 본문 생성 주체를 user로 추정하지 않는다', async () => {
+  const {app, el} = setup();
+  let request;
+  app.callServerTool = async call => {
+    if (call.name === 'create_annotation') request = call.arguments.request;
+    return {isError:true};
+  };
+  app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,annotations:[]})]}));
+  el('note-body').value = 'AI에서 복사했을 수도 있는 문장';
+  await el('save-note').onclick();
+  assert.equal(request.creation_origin, 'unknown');
+});
