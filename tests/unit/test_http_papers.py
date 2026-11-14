@@ -382,13 +382,14 @@ def test_summary_route_uses_device_owner_and_preserves_evidence_links():
     assert sent.items[0]["evidence_ids"] == ["e1"]
 
 
-def test_annotation_route_uses_device_owner_and_preserves_segments():
+@pytest.mark.parametrize('origin', [None, 'user', 'ai', 'unknown'])
+def test_annotation_route_uses_device_owner_and_preserves_segments(origin):
     store = MemoryStore()
     route = next(route.endpoint for route in create_app(paper_store=store).routes
                  if route.path.endswith("/annotations/{local_annotation_id}"))
     payload = SimpleNamespace(
         source_instance_id=UUID(SOURCE_ID), selected_version_id="v1", kind="highlight",
-        body="중요", step="deep_read",
+        body="중요", step="deep_read", creation_origin=origin,
         segments=[SimpleNamespace(model_dump=lambda: {
             "chunk_id": "chunk-1", "target": "original", "start_offset": 0,
             "end_offset": 4, "quote_snapshot": "text",
@@ -402,6 +403,7 @@ def test_annotation_route_uses_device_owner_and_preserves_segments():
     sent = store.calls[0][2]
     assert sent.local_learning_record_id == "context-1"
     assert sent.segments[0]["quote_snapshot"] == "text"
+    assert sent.creation_origin == origin
 
 
 def test_postgres_detail_selects_requested_record_in_owner_scope():

@@ -255,6 +255,19 @@ test('동일 입력 키는 보존하고 성공 확인 뒤 의도적인 새 저�
   assert.notEqual(first.request.request_key, fresh.request.request_key);
 });
 
+test('작성 주체 도입 전 미확정 요청은 이전 키와 입력을 그대로 재사용한다', async () => {
+  const {doc} = setup();
+  const storage = doc.defaultView.localStorage;
+  const request = {context_id:'ctx',kind:'note',body:'기존 요청',segments:[]};
+  const old = await prepareAnnotationRequest(request, storage, webcrypto);
+  const next = await prepareAnnotationRequest({...request,creation_origin:'user'}, storage, webcrypto);
+  assert.deepEqual(next.request, old.request);
+  next.confirm();
+  const fresh = await prepareAnnotationRequest({...request,creation_origin:'user'}, storage, webcrypto);
+  assert.equal(fresh.request.creation_origin, 'user');
+  assert.notEqual(fresh.request.request_key, old.request.request_key);
+});
+
 test('다음 페이지의 기존 기록 재사용은 건수를 늘리지 않고 더 보기에서도 중복하지 않는다', async () => {
   const {app, el} = setup();
   const old = {annotation_id:'old',context_id:'ctx',kind:'note',body:'수정된 메모'};
