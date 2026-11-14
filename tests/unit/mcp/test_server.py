@@ -426,6 +426,16 @@ def test_nested_schema_defaults_and_nullable_fields():
     assert source['additionalProperties'] is False
     assert set(source['required']) == {'kind', 'relative_path'}
     assert source['properties']['kind']['const'] == 'local_file'
+    assert source['examples'] == [{'kind': 'local_file', 'relative_path': 'glove.pdf'}]
+    assert source['properties']['kind']['examples'] == ['local_file']
+    assert source['properties']['relative_path']['examples'] == ['glove.pdf']
+    assert 'imports/ 접두사를 붙이지 마세요' in source['properties']['relative_path']['description']
+    registration = tools['prepare_paper_registration']
+    request_key = registration.inputSchema['properties']['request_key']
+    assert request_key['examples'] == ['glove-registration-20261114-01']
+    assert '동일 요청을 재시도할 때는 같은 값을 재사용' in request_key['description']
+    assert '"relative_path":"glove.pdf"' in registration.description
+    assert 'imports/glove.pdf가 아니라 glove.pdf' in registration.description
     definitions = ask.outputSchema['$defs']
     assert set(definitions['ClaimOutput']['required']) == {'claim_id', 'text', 'evidence_ids'}
     citation = definitions['CitationOutput']
@@ -565,3 +575,45 @@ async def confirmed_registration(server, arguments):
     return await server.call_tool('add_paper', {
         **arguments, 'confirmation_token': prepared.meta['confirmation_token'],
     })
+
+
+@pytest.mark.parametrize(('arguments', 'field'), [
+    ({'request_key': 'key'}, 'source'),
+    ({'source': 'private-file-name.pdf', 'request_key': 'key'}, 'source'),
+    ({'source': {'relative_path': 'private-file-name.pdf'}, 'request_key': 'key'}, 'source.kind'),
+    ({'source': {'kind': 'private-kind', 'relative_path': 'glove.pdf'}, 'request_key': 'key'}, 'source.kind'),
+    ({'source': {'kind': 'local_file'}, 'request_key': 'key'}, 'source.relative_path'),
+    ({'source': {'kind': 'local_file', 'relative_path': 'glove.pdf'}}, 'request_key'),
+    ({'source': {'kind': 'local_file', 'relative_path': 'glove.pdf'}, 'request_key': ''}, 'request_key'),
+    ({'source': {'kind': 'local_file', 'relative_path': 'glove.pdf'}, 'request_key': '   '}, 'request_key'),
+    ({'source': {'kind': 'local_file', 'relative_path': 'glove.pdf'}, 'request_key': 'x' * 201}, 'request_key'),
+])
+def test_registration_input_errors_explain_safe_correction(arguments, field):
+    ingestion = Mock()
+    server, _, _ = make_server(ingestion=ingestion)
+    with pytest.raises(ToolError) as error:
+        run(server.call_tool('prepare_paper_registration', arguments))
+    message = str(error.value)
+    assert 'INVALID_ARGUMENT:' in message
+    assert f'field={field}:' in message
+    assert '"source":{"kind":"local_file","relative_path":"glove.pdf"}' in message
+    assert '"request_key"' in message
+    assert 'private-file-name' not in message
+    assert 'private-kind' not in message
+    ingestion.validate_local_pdf.assert_not_called()
+    ingestion.add_local_pdf.assert_not_called()
+
+
+def test_registration_invalid_path_has_safe_example():
+    ingestion = Mock()
+    ingestion.validate_local_pdf.side_effect = InvalidArgumentError('private-path')
+    server, _, _ = make_server(ingestion=ingestion)
+    with pytest.raises(ToolError) as error:
+        run(server.call_tool('prepare_paper_registration', {
+            'source': {'kind': 'local_file', 'relative_path': '../private-path.pdf'},
+            'request_key': 'key',
+        }))
+    assert 'field=source.relative_path:' in str(error.value)
+    assert '"source":{"kind":"local_file"' in str(error.value)
+    assert 'private-path' not in str(error.value)
+    ingestion.add_local_pdf.assert_not_called()
