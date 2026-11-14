@@ -53,7 +53,9 @@ def test_path_orders_prerequisites_before_targets_and_is_deterministic():
     assert ids(path) == ['vector', 'dot', 'softmax', 'attention', 'transformer']
     assert [s.role for s in path.steps] == ['required'] * 4 + ['target']
     assert path.steps[1].reason_ko == 'dot→attention'  # required의 이유는 다음 개념과의 관계
+    assert path.steps[1].needed_for.concept_id == 'attention'
     assert path.steps[-1].reason_ko == '목표'
+    assert path.steps[-1].needed_for is None
     assert path.steps[3].prerequisite_ids == ('dot', 'softmax')
     assert path.steps[3].locations.pdf_pages == (1, 2)
     assert ids(learning_path(graph, paper, 'understand')) == ids(path)
