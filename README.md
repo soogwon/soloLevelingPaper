@@ -104,5 +104,6 @@ docs/{topic}
 ## Status
 
 로컬 MCP 설치·연결 방법은 [Claude Desktop 설치·배포 안내](doc/setup/desktop-installation.md)를 참고합니다.
+전체 문서 목록은 [문서 안내](doc/README.md)에 있습니다.
 
 현재 프로젝트 초기 구성 단계입니다. 기획서의 필수 기능(MVP), 추가 고려 기능, 데이터 수집 계획, 세부 일정과 역할 분담은 팀 협의 후 문서에 반영합니다.

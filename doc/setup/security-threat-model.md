@@ -100,5 +100,5 @@ Windows에서는 해석된 경로의 상위 디렉터리를 순서대로 열어 
 
 관련 안내: [외부 전송 데이터와 시점](external-data-transfer.md),
 [MCP 실행·파일 제한](mcp-server.md),
-[임베딩 로그 협의](embedding-log-privacy-coordination.md).
+[임베딩 로그 협의](../history/embedding-log-privacy-coordination.md).
 협의 문서의 과거 진행 상태와 별개로 실제 #85 구현·검증 완료를 확인해야 한다.
