@@ -96,6 +96,8 @@ async function renderRoute() {
     if (seq !== renderSeq) return;
     if (error instanceof ApiError && error.status === 401) return; // auth:expired 처리로 이동
     console.error(error);
+    // 화면을 그리기 전에 실패하면 탭 제목이 이전 화면 것으로 남으므로 여기서 바꾼다.
+    document.title = '불러오지 못했어요 · Solo Leveling';
     setHTML(view, errorBlock(error));
   }
 }
