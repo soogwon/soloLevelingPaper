@@ -6,7 +6,7 @@ from typing import Literal
 
 from solo_leveling.domain.annotation import (
     Annotation, AnnotationOutcome, AnnotationPage, AnnotationResult, AnnotationValidationError,
-    KINDS, SegmentInput, TARGET_ORIGINAL,
+    KINDS, SegmentInput,
 )
 from solo_leveling.domain.learning_progress import LEARNING_STEPS
 from solo_leveling.infrastructure.database import annotations as store
@@ -44,18 +44,13 @@ def _require_context(context_id: str) -> None:
         raise AnnotationValidationError('학습 맥락 ID가 필요합니다.')
 
 
-TRANSLATION_NOT_SUPPORTED = 'TRANSLATION_NOT_SUPPORTED'
-
-
-def _original_segments(segments: Sequence[SegmentInput]) -> tuple[SegmentInput, ...]:
+def _validated_segments(segments: Sequence[SegmentInput]) -> tuple[SegmentInput, ...]:
     if isinstance(segments, (str, bytes, bytearray, memoryview)) or not isinstance(segments, Sequence):
         raise AnnotationValidationError('구간 목록이 필요합니다.')
     segments = tuple(segments)
     for segment in segments:
         if not isinstance(segment, SegmentInput):
             raise AnnotationValidationError('구간은 SegmentInput이어야 합니다.')
-        if segment.target != TARGET_ORIGINAL:
-            raise AnnotationValidationError('현재 원문 구간만 지정할 수 있습니다.', code=TRANSLATION_NOT_SUPPORTED)
     return segments
 
 
@@ -67,7 +62,7 @@ class AnnotationService:
                segments: Sequence[SegmentInput] = (), step: str | None = None,
                request_key: str | None = None) -> AnnotationResult:
         _require_context(context_id)
-        segments = _original_segments(segments)
+        segments = _validated_segments(segments)
         return store.create_annotation(self.db_path, context_id, kind, body, segments, step,
                                        request_key=request_key)
 
@@ -103,7 +98,7 @@ class AnnotationService:
                segments: Sequence[SegmentInput] | _Omitted = _Omitted.FIELD) -> AnnotationResult:
         _require_context(context_id)
         if segments is not _Omitted.FIELD:
-            _original_segments(segments)
+            _validated_segments(segments)
             raise AnnotationValidationError('저장된 구간은 변경할 수 없습니다.')
         if type(expected_revision) is not int or expected_revision < 1:
             raise AnnotationValidationError('expected_revision은 1 이상의 정수여야 합니다.')
