@@ -76,6 +76,20 @@ class PaperGraph:
     concepts: dict[str, PaperConcept]
     goals: dict[str, GoalPlan]
 
+    @property
+    def arxiv_id(self) -> str | None:
+        """source_url의 arXiv 번호(판본 제외). 같은 논문의 다른 판본을 알아보는 데 쓴다."""
+        return arxiv_base_id(self.source_url or '')
+
+
+_ARXIV = re.compile(r'(?:arxiv\.org/(?:abs|pdf)/|arxiv:\s*)(\d{4}\.\d{4,5})(?:v\d+)?', re.IGNORECASE)
+
+
+def arxiv_base_id(text: str) -> str | None:
+    """'arXiv:1706.03762v7'이나 arXiv URL에서 판본을 뺀 번호(1706.03762)를 꺼낸다."""
+    match = _ARXIV.search(text or '')
+    return match.group(1) if match else None
+
 
 @dataclass(frozen=True)
 class KnowledgeGraph:
@@ -101,6 +115,12 @@ class KnowledgeGraph:
     def paper_by_hash(self, file_hash: str) -> PaperGraph | None:
         key = (file_hash or '').lower()
         return next((p for p in self.papers if p.file_sha256 == key), None)
+
+    def paper_by_arxiv(self, arxiv_id: str | None) -> PaperGraph | None:
+        """검수 판본과 파일은 다르지만 arXiv 번호가 같은 논문을 찾는다."""
+        if not arxiv_id:
+            return None
+        return next((p for p in self.papers if p.arxiv_id == arxiv_id), None)
 
 
 def parse_seed(raw: bytes | str) -> KnowledgeGraph:

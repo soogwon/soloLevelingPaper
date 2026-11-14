@@ -50,10 +50,16 @@ class SkippedOutput(TypedDict):
     reason: Literal['known', 'only_needed_by_known']
 
 
+class ReviewedVersionOutput(TypedDict):
+    label: str
+    source_url: str | None
+
+
 class LearningPathOutput(TypedDict):
     context_id: str
-    graph_status: Literal['ready', 'no_graph']
+    graph_status: Literal['ready', 'related_version', 'no_graph']
     graph_revision_id: str | None
+    reviewed_version: ReviewedVersionOutput | None
     goal: Literal['understand', 'implement', 'skim']
     mode: Literal['compact', 'expanded']
     steps: list[PathStepOutput]
@@ -82,8 +88,9 @@ class RequiredByOutput(TypedDict):
 
 class PrerequisitesOutput(TypedDict):
     context_id: str
-    graph_status: Literal['ready', 'no_graph']
+    graph_status: Literal['ready', 'related_version', 'no_graph']
     graph_revision_id: str | None
+    reviewed_version: ReviewedVersionOutput | None
     concept: ConceptOutput | None
     prerequisites: list[PrerequisiteOutput]
     required_by: list[RequiredByOutput]
@@ -105,6 +112,9 @@ def register_learning_path(server, reader: LearningPathReader):
         아는 개념과 그 개념에만 필요했던 선수는 skipped로 돌려주며 이해를 검증한 결과가 아닙니다.
         그래프와 맞지 않는 이름은 unresolved_concepts로 돌려주고 경로에 반영하지 않습니다.
         graph_status=no_graph이면 이 논문에 검수 그래프가 없습니다. 경로를 추측하지 말고 ask_paper로 안내하세요.
+        graph_status=related_version이면 사용자의 PDF는 검수한 판본과 다른 판본(arXiv 번호는 같음)입니다.
+        개념 순서는 그대로 쓸 수 있지만 페이지가 다를 수 있어 paper_locations는 비어 있습니다.
+        reviewed_version의 판본으로 받으면 페이지 근거까지 볼 수 있다고 안내하세요.
         선수 관계는 팀이 검수한 교육적 판단이며 논문 본문의 주장이 아닙니다.
         paper_locations의 pdf_page는 'PDF 기준 N페이지'로 표시하세요. search_phrase는 사용자가 자기 PDF에서
         검색해 찾을 수 있는 논문 속 용어·소제목이니 그대로 안내하세요.
@@ -125,6 +135,7 @@ def register_learning_path(server, reader: LearningPathReader):
         concept은 개념 ID, 한글·영문 이름 또는 별칭이며 정확히 일치해야 합니다(부분 검색 없음).
         더 깊은 선수는 반환된 concept_id로 다시 호출하세요. 그래프에 없는 개념은 NOT_FOUND입니다.
         graph_status=no_graph이면 이 논문에 검수 그래프가 없습니다.
+        graph_status=related_version이면 검수 판본과 다른 판본이라 paper_locations를 비워 둡니다.
         """
         try:
             return await anyio.to_thread.run_sync(
