@@ -234,3 +234,50 @@ def test_external_policy_reaches_real_providers(tmp_path, monkeypatch, allow, lo
         assert config.local_only is local
     post.assert_not_called()
     embedder.assert_not_called()
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+def test_auto_sync_retry_lifetime_and_disable_switch(tmp_path, monkeypatch, enabled):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    import anyio
+    from solo_leveling.interfaces.mcp import runtime
+
+    monkeypatch.setattr(runtime, 'ProcessEmbedder', Mock(return_value=Mock()))
+    services = SimpleNamespace(executions=object(), answer=SimpleNamespace(semantic_verification=None),
+        evidence=object(), search=SimpleNamespace(contexts=object()), translation=object(),
+        translation_settings=object())
+    monkeypatch.setattr('solo_leveling.workers.reparse.ReparseService', Mock())
+    monkeypatch.setattr(runtime, 'build_services', Mock(return_value=services))
+    monkeypatch.setattr(runtime, 'get_client', Mock(return_value=object()))
+    monkeypatch.setattr(runtime, 'restore_legacy_index_memberships', Mock())
+    monkeypatch.setattr(runtime, 'LocalIngestionManager', Mock(return_value=Mock()))
+    monkeypatch.setattr(runtime, 'create_server', Mock(side_effect=lambda services, *, lifespan: lifespan))
+    monkeypatch.setattr(runtime.AuthenticatedServerClient, 'from_keyring', Mock(return_value=Mock()))
+    sync_service = Mock()
+    monkeypatch.setattr(runtime, 'PaperMetadataSyncService', Mock(return_value=sync_service))
+    events = []
+
+    async def scheduler(service):
+        events.append('started')
+        try:
+            await anyio.sleep_forever()
+        finally:
+            events.append('stopped')
+
+    monkeypatch.setattr('solo_leveling.application.server_sync.retry.run_auto_retry', scheduler)
+    lifespan = runtime.build_runtime_server({
+        'DATA_ROOT': str(tmp_path), 'OPENAI_API_KEY': 'fixture',
+        'SERVER_API_URL': 'https://example.test', 'SOLO_LEVELING_EMBEDDING_WARMUP': '0',
+        'SOLO_LEVELING_SYNC_AUTO_RETRY': '1' if enabled else '0',
+    })
+
+    async def scenario():
+        with anyio.fail_after(5):
+            async with lifespan(None):
+                await anyio.sleep(0.01)
+                assert events == (['started'] if enabled else [])
+        assert events == (['started', 'stopped'] if enabled else [])
+
+    asyncio.run(scenario())

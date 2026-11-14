@@ -6,6 +6,7 @@ from hashlib import sha256
 import json
 from pathlib import PurePosixPath, PureWindowsPath
 import sqlite3
+from threading import RLock
 from typing import Any
 from urllib.parse import quote
 from uuid import UUID, uuid4
@@ -48,6 +49,7 @@ class PaperMetadataSyncService:
     """동의, 재시도 키, payload 고정을 보장하는 독립 동기화 경계."""
 
     def __init__(self, db_path: str, client: Any, now=None):
+        self._sync_lock = RLock()
         self._db_path = db_path
         self._client = client
         self._now = now or (lambda: datetime.now(timezone.utc))
@@ -192,7 +194,51 @@ class PaperMetadataSyncService:
         finally:
             conn.close()
 
+    def retry_due(self, limit: int = 10) -> list[SyncResult]:
+        """기존 승인 작업만 재시도 시각·상한에 맞춰 재개한다. 새 작업은 만들지 않는다."""
+        with self._sync_lock:
+            try:
+                account_id = self._client.connection_id()
+            except ServerConnectionRequired:
+                return []
+            now = _iso(self._now())
+            conn = get_connection(self._db_path)
+            try:
+                rows = conn.execute(
+                    """SELECT p.operation_id FROM sync_outbox p
+                       JOIN server_sync_consents c USING(consent_scope_id)
+                       WHERE p.account_id=? AND p.object_type='paper' AND c.revoked_at IS NULL
+                         AND p.status IN ('pending', 'retryable_failure', 'synced')
+                         AND EXISTS (SELECT 1 FROM sync_outbox o
+                             WHERE o.consent_scope_id=p.consent_scope_id
+                               AND o.status IN ('pending', 'retryable_failure'))
+                         AND NOT EXISTS (SELECT 1 FROM sync_outbox o
+                             WHERE o.consent_scope_id=p.consent_scope_id AND o.status!='synced'
+                               AND (o.status NOT IN ('pending', 'retryable_failure')
+                                    OR o.attempt_count>=5
+                                    OR (o.next_attempt_at IS NOT NULL AND o.next_attempt_at>?)))
+                       ORDER BY p.created_at, p.operation_id LIMIT ?""",
+                    (account_id, now, limit),
+                ).fetchall()
+            finally:
+                conn.close()
+            results = []
+            for row in rows:
+                # 배치 도중 계정이 바뀌면 이전 계정의 다음 작업을 보내지 않는다.
+                try:
+                    if self._client.connection_id() != account_id:
+                        break
+                    results.append(self.sync(row['operation_id']))
+                except (ServerConnectionRequired, KeyError):
+                    break
+            return results
+
     def sync(self, operation_id: str) -> SyncResult:
+        # 수동·자동 재개가 같은 프로세스에서 중복 전송되지 않도록 직렬화한다.
+        with self._sync_lock:
+            return self._sync(operation_id)
+
+    def _sync(self, operation_id: str) -> SyncResult:
         """한 작업을 전송한다. 실패해도 기존 로컬 논문 기능에는 예외를 전파하지 않는다."""
         try:
             account_id = self._client.connection_id()

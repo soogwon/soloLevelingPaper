@@ -104,3 +104,109 @@ def test_resource_is_bundled_without_external_dependencies():
         assert '<script src=' not in html
 
     asyncio.run(check())
+
+
+@pytest.mark.parametrize('state', ['pending', 'retryable_failure'])
+def test_retry_reuses_operation_without_new_consent(state):
+    service = Mock()
+    service.status.return_value = SyncResult('existing', state)
+    service.sync.return_value = SyncResult('existing', 'synced', 'server-paper')
+    server = make_server(service)
+    result = asyncio.run(server.call_tool('retry_paper_server_sync', {'operation_id': 'existing'}))
+    assert result[1]['status'] == 'synced'
+    service.sync.assert_called_once_with('existing')
+    service.grant_and_queue.assert_not_called()
+    service.preview.assert_not_called()
+
+
+@pytest.mark.parametrize('state', ['synced', 'conflict', 'action_required', 'syncing'])
+def test_retry_does_not_send_blocked_or_completed_operation(state):
+    service = Mock()
+    service.status.return_value = SyncResult('existing', state)
+    result = asyncio.run(make_server(service).call_tool(
+        'retry_paper_server_sync', {'operation_id': 'existing'}))
+    assert result[1]['status'] == state
+    service.sync.assert_not_called()
+
+
+def test_retry_unknown_or_other_accounts_operation_does_not_send():
+    service = Mock()
+    service.status.side_effect = KeyError('private')
+    with pytest.raises(ToolError, match='NOT_FOUND'):
+        asyncio.run(make_server(service).call_tool(
+            'retry_paper_server_sync', {'operation_id': 'unknown'}))
+    service.sync.assert_not_called()
+
+
+@pytest.mark.parametrize('change, expected', [('none', 'synced'), ('payload', 'conflict'), ('revoked', 'action_required')])
+def test_retry_with_real_outbox_preserves_consent_and_idempotency(tmp_path, change, expected):
+    from solo_leveling.application.server_sync import PaperMetadataSyncService
+    from solo_leveling.domain.models import Paper
+    from solo_leveling.infrastructure.database.repository import insert_paper
+    from solo_leveling.infrastructure.database.schema import get_connection, init_db
+    from tests.unit.test_paper_metadata_sync import Client, Response
+
+    db = str(tmp_path / 'sync.sqlite')
+    init_db(db)
+    insert_paper(db, Paper('paper-1', 'Paper', created_at='2026-11-01T10:00:00+09:00'))
+    client = Client([ConnectionError('offline'), Response()])
+    service = PaperMetadataSyncService(db, client)
+    operation = service.grant_and_queue('paper-1', SERVER_SYNC_NOTICE_VERSION).operation_id
+    assert service.sync(operation).status == 'retryable_failure'
+    with get_connection(db) as conn:
+        if change == 'payload':
+            conn.execute("UPDATE papers SET title='Changed' WHERE paper_id='paper-1'")
+        elif change == 'revoked':
+            conn.execute("UPDATE server_sync_consents SET revoked_at='2026-11-14T00:00:00Z'")
+    restarted = make_server(PaperMetadataSyncService(db, client))
+    result = asyncio.run(restarted.call_tool('retry_paper_server_sync', {'operation_id': operation}))
+    assert result[1]['status'] == expected
+    assert len(client.calls) == (2 if change == 'none' else 1)
+    assert all(call[2]['headers']['Idempotency-Key'] == operation for call in client.calls)
+    with get_connection(db) as conn:
+        assert conn.execute('SELECT count(*) FROM server_sync_consents').fetchone()[0] == 1
+        assert conn.execute('SELECT count(*) FROM sync_outbox').fetchone()[0] == 1
+
+
+def test_concurrent_retry_runs_once_and_can_retry_after_error():
+    from threading import Event
+    import anyio
+
+    started, release = Event(), Event()
+    service = Mock()
+    service.status.return_value = SyncResult('existing', 'retryable_failure')
+
+    def run(operation_id):
+        started.set()
+        if not release.wait(5):
+            raise RuntimeError('test timeout')
+        raise RuntimeError('private failure')
+
+    service.sync.side_effect = run
+    server = make_server(service)
+
+    async def scenario():
+        with anyio.fail_after(10):
+            async def first():
+                with pytest.raises(ToolError, match='INTERNAL_ERROR'):
+                    await server.call_tool('retry_paper_server_sync', {'operation_id': 'existing'})
+            async with anyio.create_task_group() as group:
+                group.start_soon(first)
+                while not started.is_set():
+                    await anyio.sleep(0.001)
+                try:
+                    with pytest.raises(ToolError, match='SERVER_SYNC_BUSY'):
+                        await server.call_tool('retry_paper_server_sync', {'operation_id': 'existing'})
+                finally:
+                    release.set()
+            assert service.sync.call_count == 1
+            service.sync.side_effect = None
+            service.sync.return_value = SyncResult('existing', 'synced')
+            result = await server.call_tool('retry_paper_server_sync', {'operation_id': 'existing'})
+            assert result[1]['status'] == 'synced'
+            assert service.sync.call_count == 2
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()

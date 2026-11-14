@@ -501,3 +501,64 @@ def test_previous_learning_notice_never_queues_summary(database):
         assert {r[0] for r in conn.execute("SELECT object_type FROM sync_outbox")} == {
             "paper", "learning_record",
         }
+
+
+def test_auto_retry_waits_then_resumes_same_operation_after_restart(database):
+    from datetime import timedelta
+    clock = [NOW]
+    client = Client([ConnectionError('offline'), Response()])
+    service = PaperMetadataSyncService(database, client, now=lambda: clock[0])
+    op = service.grant_and_queue('paper-local-1', 'v4').operation_id
+    assert service.sync(op).status == 'retryable_failure'
+    assert service.retry_due() == []
+    clock[0] += timedelta(minutes=3)
+    restarted = PaperMetadataSyncService(database, client, now=lambda: clock[0])
+    assert restarted.retry_due()[0].status == 'synced'
+    assert [call[2]['headers']['Idempotency-Key'] for call in client.calls] == [op, op]
+    assert restarted.retry_due() == []
+
+
+@pytest.mark.parametrize('condition', ['revoked', 'limit', 'conflict', 'action_required', 'syncing', 'other_account'])
+def test_auto_retry_skips_ineligible_jobs(database, condition):
+    client = Client()
+    service = PaperMetadataSyncService(database, client, now=lambda: NOW)
+    service.grant_and_queue('paper-local-1', 'v4')
+    with get_connection(database) as conn:
+        if condition == 'revoked':
+            conn.execute('UPDATE server_sync_consents SET revoked_at=?', (NOW.isoformat(),))
+        elif condition == 'limit':
+            conn.execute('UPDATE sync_outbox SET attempt_count=5')
+        elif condition != 'other_account':
+            conn.execute('UPDATE sync_outbox SET status=?', (condition,))
+    if condition == 'other_account':
+        client._connection_id = 'other'
+    assert service.retry_due() == []
+    assert not client.calls
+
+
+def test_auto_retry_checks_payload_and_does_not_queue_new_records(database):
+    client = Client()
+    service = PaperMetadataSyncService(database, client)
+    service.grant_and_queue('paper-local-1', 'v4')
+    with get_connection(database) as conn:
+        conn.execute("UPDATE papers SET title='changed' WHERE paper_id='paper-local-1'")
+    assert service.retry_due()[0].status == 'conflict'
+    assert not client.calls
+    with get_connection(database) as conn:
+        assert conn.execute('SELECT count(*) FROM sync_outbox').fetchone()[0] == 1
+
+
+def test_auto_retry_waits_for_child_and_does_not_resend_synced_parent(database):
+    from datetime import timedelta
+    add_learning_record(database)
+    clock = [NOW]
+    client = Client([Response(), Response(503), Response(200, {
+        'learning_record_id': SERVER_RECORD_ID, 'revision': 1,
+        'server_updated_at': NOW.isoformat(), 'sync_status': 'stored'})])
+    service = PaperMetadataSyncService(database, client, now=lambda: clock[0])
+    op = service.grant_and_queue('paper-local-1', 'v4').operation_id
+    assert service.sync(op).status == 'retryable_failure'
+    assert service.retry_due() == []
+    clock[0] += timedelta(minutes=3)
+    assert service.retry_due()[0].status == 'synced'
+    assert [call[0] for call in client.calls] == ['POST', 'PUT', 'PUT']
