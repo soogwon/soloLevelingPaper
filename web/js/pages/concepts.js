@@ -49,9 +49,19 @@ function readState(query) {
   };
 }
 
+function sourceLink(value) {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 async function graphPage(view, paperKey, query) {
   const state = readState(query);
   const graph = await api.getConceptGraph(paperKey);
+  const source = sourceLink(graph.source_url);
   document.title = `${graph.label} 개념 지도 · Solo Leveling`;
   const byId = new Map(graph.concepts.map((c) => [c.concept_id, c]));
   const layout = layoutGraph(graph);
@@ -65,7 +75,7 @@ async function graphPage(view, paperKey, query) {
         <h1 class="page-title">${graph.label}</h1>
         <p class="page-desc">읽는 목적에 맞춰 먼저 알아야 할 개념과 순서를 보여줘요. 선수 관계는 팀이 검수한 교육적 판단이에요.</p>
       </div>
-      ${graph.source_url ? html`<a class="btn sm" href="${graph.source_url}" target="_blank" rel="noopener noreferrer">원문 PDF</a>` : ''}
+      ${source ? html`<a class="btn sm" href="${source}" target="_blank" rel="noopener noreferrer">원문 PDF</a>` : ''}
     </div>
     <form class="card kg-controls" data-role="controls">
       <div class="kg-control" role="group" aria-label="읽는 목적">
@@ -169,6 +179,8 @@ async function graphPage(view, paperKey, query) {
 
   async function loadPath() {
     const mine = ++seq;
+    path = null;
+    renderMap();
     setHTML(stepsEl, loadingBlock('경로를 계산하는 중이에요'));
     try {
       const result = await api.getConceptPath(paperKey, state);
@@ -221,7 +233,6 @@ async function graphPage(view, paperKey, query) {
     loadPath();
   });
 
-  renderMap();
   renderDetail();
   await loadPath();
 }
@@ -315,4 +326,4 @@ function drawSvg(graph, layout, roleOf, selected) {
     + edges + nodes + '</svg>';
 }
 
-export { layoutGraph };
+export { layoutGraph, sourceLink };
