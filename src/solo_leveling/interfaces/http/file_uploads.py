@@ -11,6 +11,7 @@ from uuid import uuid4
 MAX_FILE_BYTES = 50 * 1024 * 1024
 DEFAULT_USER_QUOTA_BYTES = 1024 * 1024 * 1024
 UPLOAD_TTL = timedelta(minutes=15)
+TEMP_OBJECT_PREFIX = "private/tmp"
 
 
 class UploadUnavailable(Exception):
@@ -130,7 +131,10 @@ class PostgresFileUploadStore:
                 content_type: str, sha256_hex: str) -> UploadReservation:
         upload_id = str(uuid4())
         owner_prefix = sha256(owner_user_id.encode("utf-8")).hexdigest()[:24]
-        object_key = f"private/{owner_prefix}/{paper_id}/{server_version_id}/{upload_id}.pdf"
+        # 미완료 객체만 저장소 수명주기 규칙으로 제거할 수 있도록 확정 PDF와 prefix를 분리한다.
+        object_key = (
+            f"{TEMP_OBJECT_PREFIX}/{owner_prefix}/{paper_id}/{server_version_id}/{upload_id}.pdf"
+        )
         with _connection(self._pool) as conn:
             # 같은 사용자의 준비 요청끼리 한도 확인과 예약이 엇갈리지 않게 직렬화한다.
             conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (owner_user_id,))

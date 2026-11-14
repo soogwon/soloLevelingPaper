@@ -427,6 +427,13 @@ def test_s3_completion_reads_checksum_and_copies_to_immutable_key():
         "Bucket": "private-bucket", "Key": "private/key.pdf"}
     assert ("delete", {"Bucket": "private-bucket", "Key": "private/key.pdf"}) in raw.calls
 
+    temporary = pending_upload(
+        object_key="private/tmp/owner/paper-1/version-1/upload.pdf")
+    lifecycle_safe = storage.finalize_upload(temporary)
+    assert lifecycle_safe.object_key.startswith(
+        "private/files/owner/paper-1/version-1/")
+    assert not lifecycle_safe.object_key.startswith("private/tmp/")
+
 
     def failed_read(**kwargs):
         raise RuntimeError("unavailable")
@@ -500,6 +507,7 @@ def test_postgres_reservation_locks_quota_and_requires_owned_synced_version():
     assert pool.conn.calls[1][1] == (PAPER_ID, "user-1", "version-1")
     assert "FOR UPDATE" in pool.conn.calls[2][0]
     assert "status='ready'" in pool.conn.calls[3][0]
+    assert pool.conn.calls[4][1][9].startswith("private/tmp/")
 
 
 def test_postgres_reservation_rejects_quota_before_insert():
