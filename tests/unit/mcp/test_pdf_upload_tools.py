@@ -14,6 +14,7 @@ from solo_leveling.interfaces.mcp.pdf_upload_tools import (
     PDF_UPLOAD_APP_URI, _pdf_upload_error_result, _pdf_upload_stage_tool_error,
 )
 from solo_leveling.interfaces.mcp.server import MCPServices, create_server
+from solo_leveling.infrastructure.storage.server_client import ServerConnectionRequired, ServerResponseInvalid
 
 
 def make_server(service):
@@ -91,3 +92,37 @@ def test_expected_upload_error_is_returned_as_mcp_error_result():
     assert result.isError is True
     assert result.structuredContent is None
     assert result.content[0].text.startswith("PDF_ALREADY_UPLOADED:")
+
+
+@pytest.mark.parametrize(("failure", "code"), [
+    (FileExistsError("private-detail"), "PDF_ALREADY_UPLOADED"),
+    (PdfUploadStageError("prepare", 503, "storage_unavailable"), "PDF_UPLOAD_PREPARE_FAILED"),
+    (PdfUploadStageError("transfer", 403), "PDF_UPLOAD_TRANSFER_FAILED"),
+    (PdfUploadStageError("complete", 422), "PDF_UPLOAD_COMPLETE_FAILED"),
+    (ServerResponseInvalid("private-detail"), "PDF_UPLOAD_FAILED"),
+    (ServerConnectionRequired("private-detail"), "SERVER_CONNECTION_REQUIRED"),
+    (ValueError("PDF_UPLOAD_PREVIEW_CHANGED"), "PDF_UPLOAD_PREVIEW_CHANGED"),
+    (ValueError("private-detail"), "PDF_UPLOAD_FAILED"),
+    (RuntimeError("private-detail"), "PDF_UPLOAD_FAILED"),
+])
+def test_upload_failure_preserves_code_and_consumes_token(failure, code):
+    service = Mock()
+    service.preview.return_value = preview()
+    service.upload.side_effect = failure
+    server = make_server(service)
+
+    async def check():
+        prepared = await server.call_tool("prepare_paper_pdf_upload", {"paper_id": "paper-1"})
+        arguments = {"paper_id": "paper-1", "version_id": "version-1",
+                     "confirmation_token": prepared.structuredContent["confirmation_token"]}
+        result = await server.call_tool("upload_paper_pdf_to_server", arguments)
+        assert result.isError is True
+        assert result.structuredContent is None
+        assert result.content[0].text.startswith(code + ":")
+        assert "private-detail" not in result.model_dump_json()
+        repeated = await server.call_tool("upload_paper_pdf_to_server", arguments)
+        assert repeated.isError is True
+        assert repeated.content[0].text.startswith("PDF_UPLOAD_CONFIRMATION_REQUIRED:")
+
+    asyncio.run(check())
+    service.upload.assert_called_once_with(preview())
