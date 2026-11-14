@@ -121,6 +121,17 @@ def file_access_route(store=None, storage=None):
     return endpoint
 
 
+def upload_status_route(store=None):
+    store = store or UploadStore()
+    app = create_app(
+        token_verifier=SimpleNamespace(verify=lambda _: AuthenticatedPrincipal("user-1", "device", "device-1")),
+        device_store=SimpleNamespace(), device_registry=SimpleNamespace(is_active=lambda *_: True),
+        file_upload_store=store, object_storage=Storage(),
+    )
+    return next(item.endpoint for item in app.routes
+                if item.path == "/v1/papers/{paper_id}/versions/{version_id}/upload-status")
+
+
 def pending_upload(**changes):
     values = dict(
         upload_id=UPLOAD_ID, paper_id=PAPER_ID, server_version_id="version-1",
@@ -356,6 +367,31 @@ def test_device_token_cannot_use_external_site_file_access():
     with pytest.raises(HTTPException) as failure:
         file_access_route(store)(
             UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "device", "device-1"), Response())
+    assert failure.value.status_code == 403
+    assert not store.calls
+
+
+def test_device_can_check_ready_upload_without_download_url():
+    store = UploadStore()
+    headers = Response()
+    response = upload_status_route(store)(
+        UUID(PAPER_ID), "version-1",
+        AuthenticatedPrincipal("user-1", "device", "device-1"), headers)
+
+    assert headers.headers["Cache-Control"] == "no-store"
+    assert response.model_dump(mode="json") == {
+        "status": "ready", "file_name": "paper.pdf", "file_size": 1234,
+        "content_type": "application/pdf", "reason": None,
+    }
+    assert store.calls == [("access", "user-1", PAPER_ID, "version-1")]
+
+
+def test_web_session_cannot_use_device_upload_status():
+    store = UploadStore()
+    with pytest.raises(HTTPException) as failure:
+        upload_status_route(store)(
+            UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "web_session"),
+            Response())
     assert failure.value.status_code == 403
     assert not store.calls
 
