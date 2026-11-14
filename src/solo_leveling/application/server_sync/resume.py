@@ -59,6 +59,7 @@ class ResumeRequestResolver:
 
 def _apply_local_status(data: dict[str, Any], db_path: str, account_id: str, pdf_root: Path,
                         chroma_client: Any | None) -> None:
+    data["resume_position_status"] = "not_checked"
     conn = get_connection(db_path)
     try:
         row = conn.execute(
@@ -85,8 +86,17 @@ def _apply_local_status(data: dict[str, Any], db_path: str, account_id: str, pdf
     elif chroma_client is not None and _available_search_data(
             db_path, chroma_client, row["local_object_id"], row["local_subobject_id"],
             row["version_id"]):
-        data.update(file_access_status="local_file_ready", status="prepared",
-                    reason="local_search_data_ready")
+        position_status = _resume_position_status(
+            db_path, row["local_subobject_id"], data.get("last_position"),
+        )
+        if position_status == "local_position_unavailable":
+            data.update(file_access_status="local_file_ready", status="action_required",
+                        reason="local_resume_position_unavailable",
+                        resume_position_status=position_status)
+        else:
+            data.update(file_access_status="local_file_ready", status="prepared",
+                        reason="local_search_data_ready",
+                        resume_position_status=position_status)
     else:
         data.update(file_access_status="local_file_ready", status="prepared",
                     reason="local_search_data_check_required")
@@ -142,6 +152,37 @@ def _available_search_data(db_path: str, chroma_client: Any, paper_id: str,
                    for metadata in stored["metadatas"])
     except Exception:
         return False
+
+
+def _resume_position_status(db_path: str, context_id: str,
+                            last_position: dict[str, Any] | None) -> str:
+    if last_position is None:
+        return "no_saved_position"
+    chunk_id = last_position.get("chunk_id")
+    if not isinstance(chunk_id, str) or not chunk_id:
+        return "local_position_unavailable"
+    try:
+        with closing(get_connection(db_path)) as conn:
+            row = conn.execute(
+                """SELECT ch.pdf_page, ch.section_id
+                   FROM learning_contexts c
+                   JOIN search_index_chunks sic ON sic.embedding_set_id=c.embedding_set_id
+                   JOIN chunks ch ON ch.chunk_id=sic.chunk_id
+                                 AND ch.parse_revision_id=c.parse_revision_id
+                   WHERE c.context_id=? AND ch.chunk_id=?""",
+                (context_id, chunk_id),
+            ).fetchone()
+    except sqlite3.Error:
+        return "local_position_unavailable"
+    if row is None:
+        return "local_position_unavailable"
+    if (last_position.get("pdf_page") is not None
+            and last_position["pdf_page"] != row["pdf_page"]):
+        return "local_position_unavailable"
+    if (last_position.get("section_id") is not None
+            and last_position["section_id"] != row["section_id"]):
+        return "local_position_unavailable"
+    return "local_position_ready"
 
 
 def _valid(data: Any) -> bool:
