@@ -168,11 +168,12 @@ Remove-Item Env:SOLO_INSTALLED_PYTHON
 
 ### #101 Linux CI와 macOS 수동 확인
 
-`.github/workflows/issue-101-installed-linux.yml`은 #101 브랜치의 코드·테스트·워크플로
-변경을 푸시하면 Ubuntu 24.04 / Python 3.12에서 실행한다. 새 가상환경에 wheel `[local]`을
+`.github/workflows/issue-101-installed-linux.yml`은 Actions에서 수동으로 실행하며
+Ubuntu 24.04 / Python 3.12를 사용한다. 새 가상환경에 wheel `[local]`을
 설치하고 `pip check`, 목록 조회·MCP 단위 테스트, 실제 설치본 stdio 테스트를 실행한다.
 테스트 XML에 skip이 있으면 실패로 처리한다. Linux 설치 검증에는 CPU용 PyTorch를 사용한다.
-기본 브랜치에 병합된 뒤에는 Actions에서 수동으로도 실행할 수 있다.
+이 workflow는 PR 공통 테스트와 별도로 수동 실행용으로 유지한다.
+Actions에서 workflow_dispatch로 실행하며, wheel 설치본 검증은 공통 CI의 소스 테스트로 대체하지 않는다.
 
 macOS 담당자는 Python 3.12가 설치된 환경에서 아래 명령을 실행하고, OS 버전·CPU 종류·
 커밋 SHA·`pip check` 결과·테스트 결과를 PR에 기록한다. 새 임시 폴더만 사용하며

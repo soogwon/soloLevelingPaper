@@ -1,13 +1,6 @@
 name: "#101 Linux 설치 도구 계약 검증"
 
 on:
-  push:
-    branches: [soogwon/issue-101-installed-tool-contract]
-    paths:
-      - '.github/workflows/issue-101-installed-linux.yml'
-      - 'src/**'
-      - 'tests/**'
-      - 'pyproject.toml'
   workflow_dispatch:
 
 permissions:

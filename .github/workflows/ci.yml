@@ -1,0 +1,94 @@
+name: 테스트
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      LOCAL_ONLY: 'true'
+      ALLOW_EXTERNAL_API: 'false'
+      HF_HUB_OFFLINE: '1'
+      TRANSFORMERS_OFFLINE: '1'
+      ANONYMIZED_TELEMETRY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: 테스트 의존성 설치
+        run: python -m pip install -e ".[dev]"
+      - name: 단위 테스트
+        run: python -m pytest tests/unit -q -p no:cacheprovider
+      - name: 통합 테스트
+        if: ${{ !cancelled() }}
+        run: python -m pytest tests/integration -q -p no:cacheprovider
+
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 웹 테스트
+        working-directory: web
+        run: npm test
+
+  mcp-ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [paper-detail, paper-status, quiz, reading-before, reading-comparison]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/${{ matrix.app }}/package-lock.json
+      - name: 의존성 설치
+        working-directory: ui/${{ matrix.app }}
+        run: npm ci --no-audit --no-fund
+      - name: 테스트
+        working-directory: ui/${{ matrix.app }}
+        run: npm test
+
+  mcp-ui-dashboard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # pnpm 11은 esbuild 빌드 스크립트 승인 대기를 오류로 본다. 테스트에는 빌드가 필요 없다.
+      # install과 test(실행 전 의존성 재확인) 모두에 적용되도록 환경 변수로 둔다.
+      pnpm_config_strict_dep_builds: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # pnpm/action-setup은 pnpm 11 자체 설치 중 esbuild 빌드 승인 대기로 실패해 npm으로 설치한다.
+      - name: pnpm 설치
+        run: npm install -g pnpm@11.25.0
+      - name: 의존성 설치
+        working-directory: ui/learning-dashboard
+        run: pnpm install --frozen-lockfile
+      - name: 테스트
+        working-directory: ui/learning-dashboard
+        run: pnpm test

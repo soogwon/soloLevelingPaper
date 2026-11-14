@@ -116,7 +116,8 @@ python -m pytest tests/unit/test_safe_diagnostic_stream.py tests/unit/test_diagn
   실제 논문·키·사용자 DB는 사용하지 않았다. Linux의 실제 Claude UI·모델 실행이나
   전체 테스트 모음의 통과를 의미하지 않는다.
 - 실행 환경, 설치 패키지 목록과 JUnit 결과는 `issue-85-linux-results` 아티팩트로
-  14일간 보관한다. `.github/workflows/issue-85-linux.yml`로 재현할 수 있다.
+  14일간 보관했다. 당시 `.github/workflows/issue-85-linux.yml`은 2026-11-14에 PR 공통
+  테스트로 정리하며 삭제했으며, git 기록에서 복원해 재현할 수 있다.
 - 위 추가 검증으로 앞 절의 Linux 미검증 항목은 해소했다. 남은 사항은 기본 자식
   단계 진단의 추가 범위·담당 확정과 기존 제한을 반영한 #85 종료 판단이다.
   #64 전체 완료 및 #99의 보관·정리 구현 완료를 뜻하지 않는다.
