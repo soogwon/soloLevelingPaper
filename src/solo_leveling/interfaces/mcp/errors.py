@@ -30,6 +30,16 @@ def invalid_input(field: str | None = None, reason: str = 'INVALID_INPUT') -> To
     return tool_error('INVALID_ARGUMENT', INVALID_INPUT_MESSAGE, reason=reason, field=field)
 
 
+def registration_input_error(field: str | None = None) -> ToolError:
+    """등록 입력의 수정 방법만 안내하며 호출자가 보낸 값은 포함하지 않는다."""
+    return tool_error('INVALID_ARGUMENT',
+        'source.kind는 local_file, source.relative_path는 설정된 import 루트 기준 PDF 상대 경로입니다. '
+        '루트 폴더명을 접두사로 중복하지 마세요. request_key는 공백만으로 이루어지지 않은 '
+        '1~200자 문자열이며 동일 요청 재시도에 재사용합니다. 호출 예시: '
+        '{"source":{"kind":"local_file","relative_path":"glove.pdf"},"request_key":"registration-01"}',
+        reason='INVALID_INPUT', field=field)
+
+
 def to_tool_error(error: Exception) -> ToolError:
     """원래 예외 메시지·경로·스택을 MCP 응답에 포함하지 않는다."""
     if isinstance(error, IngestionShuttingDownError):
