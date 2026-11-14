@@ -66,7 +66,8 @@ def test_resolver_preserves_selected_annotation_body_and_quote_snapshots():
         "kind": "highlight",
         "body": "저장 당시 메모",
         "segments": [
-            {"quote_snapshot": "Attention is all you need.", "chunk_id": "old-chunk"},
+            {"quote_snapshot": " 앞\n뒤 ", "chunk_id": "old-chunk", "parse_revision_id": "r1",
+             "target": "original", "start_offset": 2, "end_offset": 7},
         ],
     }
     result = ResumeRequestResolver(Client(Response(200, payload(
@@ -370,3 +371,19 @@ def test_resume_position_must_match_published_context_chunk(tmp_path, position, 
     conn.close()
 
     assert _resume_position_status(str(db), "context", position) == expected
+
+@pytest.mark.parametrize("kind,body,segments,valid", [
+    ("note", "메모", [], True),
+    ("note", "  ", [], False),
+    ("highlight", "", [], False),
+    ("highlight", "", [{"chunk_id": "c", "parse_revision_id": "r", "target": "original",
+                        "quote_snapshot": "인용", "start_offset": 1, "end_offset": 2}], False),
+])
+def test_resume_uses_saved_annotation_rules(kind, body, segments, valid):
+    annotation = dict(annotation_id="a", kind=kind, body=body, segments=segments)
+    resolver = ResumeRequestResolver(Client(Response(200, payload(annotation_id="a", annotation=annotation))))
+    if valid:
+        assert resolver.resolve("resume_code")["annotation"] == annotation
+    else:
+        with pytest.raises(ServerResponseInvalid):
+            resolver.resolve("resume_code")
