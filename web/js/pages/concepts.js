@@ -4,7 +4,7 @@
 import { api } from '../api/index.js';
 import { html, esc, setHTML } from '../lib/html.js';
 import { replaceQuery } from '../router.js';
-import { loadingBlock, emptyBlock, errorBlock } from '../lib/ui.js';
+import { loadingBlock, emptyBlock, errorBlock, copyText, toast } from '../lib/ui.js';
 
 const GOALS = [['understand', '이해'], ['implement', '구현'], ['skim', '훑어보기']];
 const MODES = [['compact', '필수만'], ['expanded', '선택 포함']];
@@ -58,16 +58,36 @@ function sourceLink(value) {
   }
 }
 
+// 경로에 나온 개념(단계와 건너뜀)만 남긴 그래프. 비어 있으면 전체를 그린다.
+function focusGraph(graph, path) {
+  if (!path) return graph;
+  const keep = new Set([...path.steps, ...path.skipped].map((s) => s.concept_id));
+  if (!keep.size) return graph;
+  return {
+    ...graph,
+    concepts: graph.concepts.filter((c) => keep.has(c.concept_id)),
+    prerequisites: graph.prerequisites.filter((e) => keep.has(e.concept_id) && keep.has(e.prerequisite_id)),
+  };
+}
+
 async function graphPage(view, paperKey, query) {
   const state = readState(query);
   const graph = await api.getConceptGraph(paperKey);
   const source = sourceLink(graph.source_url);
   document.title = `${graph.label} 개념 지도 · Solo Leveling`;
   const byId = new Map(graph.concepts.map((c) => [c.concept_id, c]));
-  const layout = layoutGraph(graph);
   let path = null;
   let selected = null;
   let seq = 0;
+  let showAll = false;
+  let shown = graph;
+  let layout = layoutGraph(graph);
+
+  // 논문 위치는 페이지와 '찾을 말'로 안내한다. 사용자는 자기 PDF에서 Ctrl+F(⌘F)로 찾는다.
+  const pages = (locations) => {
+    const phrase = locations[0]?.search_phrase;
+    return html`PDF 기준 ${locations.map((l) => l.pdf_page).join(', ')}페이지${phrase ? html` · 찾을 말 <q class="kg-phrase">${phrase}</q> <button type="button" class="link-btn kg-copy" data-copy="${phrase}" aria-label="찾을 말 ${phrase} 복사">복사</button>` : ''}`;
+  };
 
   setHTML(view, html`
     <div class="page-head">
@@ -100,6 +120,7 @@ async function graphPage(view, paperKey, query) {
       <section class="card kg-map" aria-labelledby="kg-map-title">
         <div class="kg-map-head">
           <h2 id="kg-map-title" class="kg-section-title">개념 관계</h2>
+          <button type="button" class="chip sm" data-action="toggle-all" aria-pressed="false">전체 개념 보기</button>
           <p class="kg-legend"><span class="kg-dot target"></span>목표 <span class="kg-dot required"></span>필수 선수 <span class="kg-dot optional"></span>선택 <span class="kg-dot skipped"></span>건너뜀 <span class="kg-dot idle"></span>이번 경로 밖</p>
         </div>
         <div class="kg-canvas" data-role="canvas"></div>
@@ -133,7 +154,7 @@ async function graphPage(view, paperKey, query) {
             </span>
             <span class="badge ${s.role === 'target' ? 'b-reading' : s.role === 'optional' ? 'b-gray' : 'b-ok'}">${ROLE_LABEL[s.role]}</span>
           </button>
-          ${s.paper_locations.length ? html`<span class="kg-pages">PDF 기준 ${s.paper_locations.map((l) => l.pdf_page).join(', ')}페이지</span>` : ''}
+          ${s.paper_locations.length ? html`<span class="kg-pages">${pages(s.paper_locations)}</span>` : ''}
         </li>`)}</ol>`);
     }
     const notes = [];
@@ -147,7 +168,17 @@ async function graphPage(view, paperKey, query) {
   }
 
   function renderMap() {
-    canvasEl.innerHTML = drawSvg(graph, layout, roleOf, selected);
+    canvasEl.innerHTML = drawSvg(shown, layout, roleOf, selected);
+  }
+
+  // 기본은 이번 경로의 개념만, '전체 개념 보기'를 누르면 논문의 모든 개념을 그린다.
+  function relayout() {
+    const next = showAll ? graph : focusGraph(graph, path);
+    if (next !== shown) {
+      shown = next;
+      layout = layoutGraph(shown);
+    }
+    renderMap();
   }
 
   // 그래프가 화면보다 넓으면 첫 목표 개념이 보이도록 가로 스크롤을 맞춘다.
@@ -171,7 +202,7 @@ async function graphPage(view, paperKey, query) {
     setHTML(detailEl, html`
       <h3 class="kg-detail-title">${c.name_ko} <span class="hint">${c.name_en}</span></h3>
       <p>${c.description_ko}</p>
-      ${c.paper_locations.length ? html`<p class="hint">이 논문의 PDF 기준 ${c.paper_locations.map((l) => l.pdf_page).join(', ')}페이지${c.paper_locations[0].section_hint ? ` · ${c.paper_locations[0].section_hint}` : ''}</p>` : html`<p class="hint">논문에 직접 나오지 않는 기초 개념이에요.</p>`}
+      ${c.paper_locations.length ? html`<p class="hint">이 논문의 ${pages(c.paper_locations)}${c.paper_locations[0].section_hint ? ` · ${c.paper_locations[0].section_hint}` : ''}</p>` : html`<p class="hint">논문에 직접 나오지 않는 기초 개념이에요.</p>`}
       ${needs.length ? html`<p class="kg-detail-label">먼저 알면 좋은 개념</p><ul class="kg-detail-list">${needs.map((e) => html`<li><button type="button" class="link-btn" data-concept="${e.prerequisite_id}">${byId.get(e.prerequisite_id).name_ko}</button> — ${e.rationale_ko}</li>`)}</ul>` : ''}
       ${usedBy.length ? html`<p class="kg-detail-label">이 개념이 필요한 개념</p><p>${usedBy.map((e, i) => html`${i ? ', ' : ''}<button type="button" class="link-btn" data-concept="${e.concept_id}">${byId.get(e.concept_id).name_ko}</button>`)}</p>` : ''}
     `);
@@ -187,7 +218,7 @@ async function graphPage(view, paperKey, query) {
       if (mine !== seq) return;
       path = result;
       renderSteps();
-      renderMap();
+      relayout();
       revealTarget();
     } catch (error) {
       if (mine !== seq) return;
@@ -202,7 +233,13 @@ async function graphPage(view, paperKey, query) {
     renderDetail();
   }
 
-  view.addEventListener('click', (e) => {
+  view.addEventListener('click', async (e) => {
+    const copy = e.target.closest('[data-copy]');
+    if (copy) {
+      const ok = await copyText(copy.dataset.copy);
+      toast(ok ? '복사했어요. 내 PDF에서 Ctrl+F(Mac은 ⌘F)로 찾아보세요.' : '복사하지 못했어요. 직접 선택해서 복사해 주세요.');
+      return;
+    }
     const goal = e.target.closest('[data-goal]');
     const mode = e.target.closest('[data-mode]');
     const concept = e.target.closest('[data-concept]');
@@ -217,6 +254,11 @@ async function graphPage(view, paperKey, query) {
       select(concept.dataset.concept);
     } else if (e.target.closest('[data-action="reload-path"]')) {
       loadPath();
+    } else if (e.target.closest('[data-action="toggle-all"]')) {
+      showAll = !showAll;
+      e.target.closest('[data-action="toggle-all"]').setAttribute('aria-pressed', String(showAll));
+      relayout();
+      revealTarget();
     }
   });
   view.addEventListener('keydown', (e) => {
@@ -326,4 +368,4 @@ function drawSvg(graph, layout, roleOf, selected) {
     + edges + nodes + '</svg>';
 }
 
-export { layoutGraph, sourceLink };
+export { layoutGraph, sourceLink, focusGraph };

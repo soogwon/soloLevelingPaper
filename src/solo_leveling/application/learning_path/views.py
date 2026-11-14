@@ -13,7 +13,8 @@ def concept_view(concept: Concept) -> dict:
 def locations_view(location: PaperConcept | None) -> list[dict]:
     if location is None:
         return []
-    return [{'pdf_page': page, 'section_hint': location.section_hint} for page in location.pdf_pages]
+    return [{'pdf_page': page, 'section_hint': location.section_hint,
+             'search_phrase': location.search_phrase} for page in location.pdf_pages]
 
 
 def path_view(path: LearningPath) -> dict:

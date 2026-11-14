@@ -311,11 +311,12 @@ dialog.dialog::backdrop { background: rgba(22, 22, 29, 0.45); }
 .kg-known .input { height: 40px; font-size: 14px; }
 .kg-label { font-size: 13px; font-weight: 600; color: var(--text-2); }
 .kg-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.kg-body { margin-top: 16px; display: grid; gap: 16px; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); align-items: start; }
-@media (max-width: 1100px) { .kg-body { grid-template-columns: minmax(0, 1fr); } }
+.kg-body { margin-top: 16px; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+/* 경로 그래프는 가로로 길어서 전체 폭을 쓰도록 위에 두고, 학습 순서 카드는 아래에 격자로 놓는다. */
+.kg-map { order: -1; }
 .kg-steps, .kg-map { padding: 20px; min-width: 0; }
 .kg-section-title { margin: 0 0 12px; font-size: 17px; font-weight: 700; }
-.kg-step-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.kg-step-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 8px; }
 .kg-step { border: 1px solid var(--line-soft); border-radius: 12px; padding: 4px 4px 6px; }
 .kg-step.target { border-color: var(--accent); background: var(--accent-soft); }
 .kg-step-btn { width: 100%; display: flex; align-items: flex-start; gap: 10px; padding: 8px; background: none; border: 0; text-align: left; cursor: pointer; border-radius: 10px; }
@@ -327,8 +328,11 @@ dialog.dialog::backdrop { background: rgba(22, 22, 29, 0.45); }
 .kg-step-reason { font-size: 13px; color: var(--muted); }
 .kg-step-for { display: block; font-weight: 600; color: var(--accent); }
 .kg-pages { display: block; padding: 0 8px 0 44px; font-size: 12px; color: var(--muted); }
-.kg-map-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
-.kg-legend { margin: 0 0 12px; font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.kg-map-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.kg-map-head .chip.sm { order: 3; min-height: 30px; padding: 0 10px; font-size: 13px; }
+.kg-phrase { color: var(--text-2); font-weight: 600; }
+.kg-copy { min-height: 0; font-size: 12px; }
+.kg-legend { margin: 0 0 12px auto; font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .kg-dot { display: inline-block; width: 12px; height: 12px; border-radius: 4px; border: 1.5px solid #B9B9C8; background: #fff; vertical-align: -1px; margin-right: 2px; }
 .kg-dot.target { background: var(--accent); border-color: var(--accent); }
 .kg-dot.required { background: var(--accent-soft); border-color: var(--accent); }

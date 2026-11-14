@@ -46,7 +46,7 @@ def test_tools_are_read_only_and_return_the_path(service):
     assert result['steps'][-1]['needed_for'] is None
     assert result['unresolved_concepts'] == ['어텐션']
     assert result['steps'][3]['paper_locations'] == [
-        {'pdf_page': 1, 'section_hint': None}, {'pdf_page': 2, 'section_hint': None}]
+        {'pdf_page': 1, 'section_hint': None, 'search_phrase': None}, {'pdf_page': 2, 'section_hint': None, 'search_phrase': None}]
 
 
 def test_known_concepts_override_and_expanded_mode(service):

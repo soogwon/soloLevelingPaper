@@ -100,6 +100,9 @@ def test_known_target_leaves_nothing_to_learn():
     (lambda d: d['papers'][0].update(file_sha256='TODO'), '64자'),
     (lambda d: d['papers'][0]['goals'].pop('skim'), '모두 있어야'),
     (lambda d: d['papers'][0]['concepts'][0].update(pdf_pages=[0]), '양의 정수'),
+    (lambda d: d['papers'][0]['concepts'][0].update(search_phrase='x' * 61), 'search_phrase'),
+    (lambda d: d['papers'][0]['concepts'][0].update(search_phrase='두 줄\n문장'), 'search_phrase'),
+    (lambda d: d['papers'][0]['concepts'][0].update(search_phrase='두 줄\r문장'), 'search_phrase'),
 ])
 def test_invalid_seed_reports_every_problem(mutate, message):
     data = copy.deepcopy(seed())
@@ -161,3 +164,16 @@ def test_malformed_seed_reports_multiple_problems_without_crashing_cli(tmp_path,
     path.write_bytes(bytes([255]))
     assert kg_check([str(path)]) == 1
     assert 'UTF-8' in capsys.readouterr().err
+
+
+def test_search_phrase_is_checked_against_listed_pages():
+    from solo_leveling.interfaces.cli.kg_check import normalize_text, verify_phrases
+    data = seed()
+    data['papers'][0]['concepts'][0]['search_phrase'] = 'Scaled Dot-Product Attention'
+    data['papers'][0]['concepts'][1]['search_phrase'] = 'Missing Term'
+    paper = build_graph(data, 'rev').papers[0]
+    assert paper.concepts['attention'].search_phrase == 'Scaled Dot-Product Attention'
+    pages = [normalize_text('3.2.1 Scaled Dot-\nProduct  Attention'), normalize_text('nothing'),
+             normalize_text('Missing ﬁ Term'), normalize_text('Missing Term')]
+    problems = verify_phrases(paper, pages)
+    assert problems == ['paper/transformer: "Missing Term"가 [1, 2]페이지에 없습니다(발견 페이지: 4).']

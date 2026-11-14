@@ -10,6 +10,7 @@ import json
 import re
 from typing import Iterable, Literal
 
+SEARCH_PHRASE_MAX = 60  # 짧은 용어·소제목만. 문장 인용을 막는다.
 GOALS = ('understand', 'implement', 'skim')
 Mode = Literal['compact', 'expanded']
 
@@ -55,6 +56,8 @@ class PaperConcept:
     concept_id: str
     pdf_pages: tuple[int, ...]
     section_hint: str | None
+    # 사용자가 자기 PDF에서 Ctrl+F로 찾을 짧은 용어·소제목. 논문 문장은 넣지 않는다.
+    search_phrase: str | None = None
 
 
 @dataclass(frozen=True)
@@ -286,7 +289,14 @@ def _build_paper(index, item, concepts, problems, warnings) -> PaperGraph | None
         if hint is not None and (not isinstance(hint, str) or not hint.strip()):
             problems.append(f'{where}.concepts[{c_index}]({cid}): section_hint는 null 또는 문자열이어야 합니다.')
             continue
-        paper_concepts[cid] = PaperConcept(cid, tuple(sorted(set(pages))), hint)
+        phrase = entry.get('search_phrase')
+        if phrase is not None and (not isinstance(phrase, str) or not 2 <= len(phrase.strip()) <= SEARCH_PHRASE_MAX
+                                   or len(phrase.splitlines()) != 1):
+            problems.append(f'{where}.concepts[{c_index}]({cid}): search_phrase는 null 또는 '
+                            f'한 줄 {SEARCH_PHRASE_MAX}자 이하 문자열이어야 합니다.')
+            continue
+        paper_concepts[cid] = PaperConcept(cid, tuple(sorted(set(pages))), hint,
+                                           phrase.strip() if phrase else None)
 
     goals: dict[str, GoalPlan] = {}
     raw_goals = item.get('goals')
