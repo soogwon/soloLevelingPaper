@@ -349,6 +349,16 @@ CREATE INDEX IF NOT EXISTS idx_annotations_context ON annotations(context_id, st
 CREATE INDEX IF NOT EXISTS idx_annotations_page ON annotations(context_id, created_at, annotation_id);
 -- 전체 기록함(#206)은 모든 학습 맥락을 최신순 키셋으로 훑는다.
 CREATE INDEX IF NOT EXISTS idx_annotations_library_page ON annotations(created_at DESC, annotation_id DESC);
+-- 생성 요청 이력은 메모 삭제 뒤에도 남겨 재시도로 삭제된 메모가 복원되지 않게 한다.
+-- 로컬 DB·맥락 범위이며, 맥락 삭제 시 함께 제거한다. 메모 본문은 저장하지 않는다.
+CREATE TABLE IF NOT EXISTS annotation_create_requests (
+    context_id TEXT NOT NULL REFERENCES learning_contexts(context_id) ON DELETE CASCADE,
+    request_key TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    annotation_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (context_id, request_key)
+);
 CREATE TABLE IF NOT EXISTS annotation_segments (
     annotation_id TEXT NOT NULL REFERENCES annotations(annotation_id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
