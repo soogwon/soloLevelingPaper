@@ -154,7 +154,10 @@ def run_worker(connection):
                     embedder._model_cache.clear()
                     previous_model = request['model']
                 with stage('embedding_worker'):
-                    vectors = embedder.embed_texts(request['texts'], model_name=request['model'])
+                    options = ({'local_files_only': True}
+                               if request.get('local_files_only') is True else {})
+                    vectors = embedder.embed_texts(request['texts'], model_name=request['model'],
+                                                  **options)
                     dimension = embedder.embedding_dimension(request['model'])
                 with stage('worker_result_send'):
                     connection.send({'ok': True, 'vectors': vectors, 'dimension': dimension})

@@ -10,6 +10,7 @@ from mcp import types
 from mcp.shared.exceptions import McpError
 from mcp.shared.memory import create_connected_server_and_client_session
 
+from solo_leveling.cancellation import RequestCancelled, cancellation_signal, raise_if_cancelled
 from tests.unit.mcp.test_server import answer_response, make_server
 
 
@@ -180,17 +181,27 @@ def test_mcp_cancel_notification_replies_before_worker_stops(worker_fails, capsy
     assert any(record.get('error_code') == 'CANCELLED' for record in records)
 
 
-def test_cancel_scope_waits_for_worker_but_does_not_return_normal_answer():
+def test_cancel_scope_returns_without_waiting_and_stops_before_next_stage():
+    """취소되면 작업 종료를 기다리지 않고, 작업은 다음 단계를 시작하기 전에 멈춘다."""
     started, release, finished = Event(), Event(), Event()
-    returned = []
+    returned, effects, outcomes = [], [], []
     scopes = []
 
     def answer(*args, **kwargs):
         started.set()
-        if not release.wait(5):
-            raise RuntimeError('TEST_RELEASE_TIMEOUT')
-        finished.set()
-        return answer_response()
+        try:
+            if not release.wait(5):
+                raise RuntimeError('TEST_RELEASE_TIMEOUT')
+            # 진행 중이던 단계가 끝난 뒤 다음 단계(예: 생성 API) 직전 확인.
+            raise_if_cancelled()
+            effects.append('next_stage')
+            outcomes.append('completed')
+            return answer_response()
+        except RequestCancelled:
+            outcomes.append('cancelled')
+            raise
+        finally:
+            finished.set()
 
     server, service, _ = make_server()
     service.answer.side_effect = answer
@@ -202,18 +213,89 @@ def test_cancel_scope_waits_for_worker_but_does_not_return_normal_answer():
                 {'context_id': 'context', 'question': '합성 질문'}))
 
     async def scenario():
-        async with anyio.create_task_group() as group:
-            group.start_soon(invoke)
-            try:
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as group:
+                group.start_soon(invoke)
                 await wait_event(started)
                 scopes[0].cancel()
-                await anyio.sleep(0)
-                assert not finished.is_set()
-                assert not returned
-            finally:
-                release.set()
-        assert finished.is_set()
-        assert not returned
+            # 작업 스레드가 아직 막혀 있어도 호출은 이미 끝났다.
+            assert not finished.is_set()
+            assert not returned
+            release.set()
+            await wait_event(finished)
+        assert outcomes == ['cancelled']
+        assert effects == []
         assert service.answer.call_count == 1
 
     asyncio.run(scenario())
+
+
+def test_mcp_cancel_notification_stops_worker_before_next_stage():
+    """실제 MCP 취소 알림이 작업 스레드까지 전달되고 세션은 계속 쓸 수 있다."""
+    started, release, finished = Event(), Event(), Event()
+    replies, effects, outcomes = [], [], []
+
+    def answer(*args, **kwargs):
+        started.set()
+        try:
+            if not release.wait(5):
+                raise RuntimeError('TEST_RELEASE_TIMEOUT')
+            raise_if_cancelled()
+            effects.append('next_stage')
+            outcomes.append('completed')
+            return answer_response()
+        except RequestCancelled:
+            outcomes.append('cancelled')
+            raise
+        finally:
+            finished.set()
+
+    server, service, _ = make_server()
+    service.answer.side_effect = answer
+
+    async def scenario():
+        with anyio.fail_after(10):
+            async with create_connected_server_and_client_session(server) as client:
+                request_id = client._request_id
+
+                async def invoke():
+                    with pytest.raises(McpError) as error:
+                        await client.call_tool('ask_paper',
+                            {'context_id': 'context', 'question': '합성 질문'})
+                    replies.append(error.value.error.message)
+
+                async with anyio.create_task_group() as group:
+                    group.start_soon(invoke)
+                    await wait_event(started)
+                    await client.send_notification(types.ClientNotification(
+                        types.CancelledNotification(method='notifications/cancelled',
+                            params=types.CancelledNotificationParams(requestId=request_id))))
+                    with anyio.fail_after(3):
+                        while not replies:
+                            await anyio.sleep(0.001)
+                assert replies == ['Request cancelled']
+                release.set()
+                await wait_event(finished)
+                assert outcomes == ['cancelled'] and effects == []
+                await client.send_ping()
+                service.answer.side_effect = None
+                service.answer.return_value = answer_response()
+                result = await client.call_tool('ask_paper',
+                    {'context_id': 'context', 'question': '다음 합성 질문'})
+                assert not result.isError
+                assert result.structuredContent['status'] == 'ok'
+
+    asyncio.run(scenario())
+
+
+def test_cancellation_signal_is_scoped_to_its_request():
+    """취소 신호는 해당 요청 문맥 안에서만 보이고, 기본 답변 단계 확인이 그 신호를 쓴다."""
+    from solo_leveling.application.evidence_qa.answer import AnswerService
+
+    AnswerService.checkpoint()
+    with cancellation_signal() as cancelled:
+        AnswerService.checkpoint()
+        cancelled.set()
+        with pytest.raises(RequestCancelled):
+            AnswerService.checkpoint()
+    AnswerService.checkpoint()

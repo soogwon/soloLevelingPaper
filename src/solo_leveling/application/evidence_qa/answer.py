@@ -5,6 +5,7 @@ import json
 import re
 from typing import Callable
 from uuid import uuid4
+from solo_leveling.cancellation import raise_if_cancelled
 from solo_leveling.diagnostics import traced, stage, evidence_diagnostic
 
 from solo_leveling.domain.evidence_qa import (
@@ -112,7 +113,8 @@ class AnswerService:
 
     @staticmethod
     def checkpoint():
-        """키가 있는 실행은 단계 사이에서 실행권 상실을 확인한다."""
+        """단계 사이에서 호출자 취소를 확인한다. 키가 있는 실행은 실행권 상실 확인으로 바꾼다."""
+        raise_if_cancelled()
 
     @traced('answer', request=True)
     def answer(self, question: str, *, context_id: str | None = None,

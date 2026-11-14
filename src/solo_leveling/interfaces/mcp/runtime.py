@@ -184,9 +184,15 @@ def build_runtime_server(values: Mapping[str, str]):
         gate = RequestGate()
         lifetime = RuntimeLifetime(gate, ingestion, embedder, client, additional_workers=(recovery, reparse))
 
+        warmup_enabled = values.get('SOLO_LEVELING_EMBEDDING_WARMUP', '1') != '0'
+
         @asynccontextmanager
         async def lifespan(server):
             try:
+                if warmup_enabled:
+                    # 첫 질문이 모델 로딩을 기다리지 않도록 서버 시작과 함께 준비한다(#119).
+                    from solo_leveling.infrastructure.embeddings.warmup import start_warmup
+                    start_warmup(embedder, str(paths.db_path))
                 yield
             finally:
                 lifetime.begin()

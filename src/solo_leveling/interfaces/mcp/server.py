@@ -7,6 +7,7 @@ from typing_extensions import NotRequired, TypedDict
 
 import anyio
 from solo_leveling.diagnostics import traced
+from solo_leveling.cancellation import cancellation_signal
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
@@ -762,11 +763,17 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             pages = tuple(focus.pdf_pages) if focus is not None else ()
             sections = tuple(focus.section_ids) if focus is not None else ()
             strict = {"strict_pages": True} if focus and focus.strict_pages else {}
-            response = await anyio.to_thread.run_sync(lambda: services.answer.answer(
-                effective_question, context_id=context_id, top_k=top_k,
-                pdf_pages=pages, section_ids=sections, **strict))
+            with cancellation_signal() as cancelled:
+                try:
+                    # 취소되면 기다리지 않고 돌아간다. 작업 스레드는 다음 단계(생성·보완·의미 검증·저장)
+                    # 전에 신호를 보고 멈춘다. 이미 시작한 API 호출·저장은 끊지 않는다.
+                    response = await anyio.to_thread.run_sync(lambda: services.answer.answer(
+                        effective_question, context_id=context_id, top_k=top_k,
+                        pdf_pages=pages, section_ids=sections, **strict), abandon_on_cancel=True)
+                except anyio.get_cancelled_exc_class():
+                    cancelled.set()
+                    raise
             # 동기 작업 대기 중 도착한 MCP 취소를 반영해 이미 취소 응답한 요청에 재응답하지 않는다.
-            # 실행 중인 스레드의 API 호출·저장을 취소하는 것은 아니다.
             await anyio.lowlevel.checkpoint()
             return _answer_payload(response)
         except Exception as error:
