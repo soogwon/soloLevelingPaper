@@ -25,6 +25,8 @@ SERVER_SYNC_NOTICE = """로컬 설치 식별자와 선택한 논문의 ID, 제�
 저자와 출판 연도는 현재 로컬에 없어 빈 값으로 전송합니다.
 PDF 파일, 전체 추출 원문·번역문, 근거 본문, 질문·답변과 로컬 파일 경로는 전송하지 않습니다.
 메타데이터는 연결된 계정에 저장됩니다.
+일시적인 전송 실패는 같은 승인 내용과 작업 ID로 자동 재시도하며 최초 전송 포함 5회 뒤에는 수동 확인을 기다립니다.
+새로 추가하거나 변경한 기록과 로컬 삭제는 자동 동기화하지 않습니다.
 취소하거나 동의하지 않으면 서버 전송 작업을 만들지 않습니다."""
 
 
@@ -66,6 +68,7 @@ def _output(result) -> dict[str, Any]:
 
 def register_server_sync(server, service: ServerSyncService) -> None:
     gate = ServerSyncGate()
+    retrying: set[str] = set()
 
     @server.resource(
         SERVER_SYNC_APP_URI, name="server-sync", title="논문 및 학습 기록 서버 동기화 확인",
@@ -143,6 +146,7 @@ def register_server_sync(server, service: ServerSyncService) -> None:
 
     @server.tool(
         name="get_paper_server_sync", structured_output=True,
+        meta={"ui": {"resourceUri": SERVER_SYNC_APP_URI}},
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                     idempotentHint=True, openWorldHint=False),
     )
@@ -152,3 +156,33 @@ def register_server_sync(server, service: ServerSyncService) -> None:
             return _output(await anyio.to_thread.run_sync(service.status, operation_id))
         except KeyError:
             raise ToolError("NOT_FOUND: 요청한 동기화 작업을 찾을 수 없습니다.") from None
+
+
+    @server.tool(
+        name="retry_paper_server_sync", structured_output=True,
+        meta={"ui": {"visibility": ["app"]}},
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                    idempotentHint=True, openWorldHint=True),
+    )
+    async def retry_paper_server_sync(operation_id: str) -> dict[str, Any]:
+        """카드에서 사용자가 재개를 누른 기존 작업만 다시 보냅니다. 새 동의나 작업을 만들지 않습니다.
+
+        현재 계정에 속한 pending·retryable_failure 작업만 재개합니다.
+        동의 철회와 승인 후 데이터 변경은 기존 전송 서비스가 다시 검사합니다.
+        """
+        if operation_id in retrying:
+            raise ToolError("SERVER_SYNC_BUSY: 같은 작업을 재개 중입니다. 잠시 후 상태를 조회하세요.")
+        retrying.add(operation_id)
+        try:
+            current = await anyio.to_thread.run_sync(service.status, operation_id)
+            if current.status not in {"pending", "retryable_failure"}:
+                return _output(current)
+            return _output(await anyio.to_thread.run_sync(service.sync, operation_id))
+        except KeyError:
+            raise ToolError("NOT_FOUND: 요청한 동기화 작업을 찾을 수 없습니다.") from None
+        except ServerConnectionRequired:
+            raise ToolError("SERVER_CONNECTION_REQUIRED: 서버 계정을 다시 연결하세요.") from None
+        except Exception:
+            raise ToolError("INTERNAL_ERROR: 재개 결과를 확인하지 못했습니다. 같은 작업 ID로 상태를 조회하세요.") from None
+        finally:
+            retrying.discard(operation_id)

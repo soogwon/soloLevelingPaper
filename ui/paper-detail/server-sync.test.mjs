@@ -61,3 +61,93 @@ test('새 논문 입력이나 호스트 취소 후 이전 카드로 승인할 �
     assert.equal(calls.length, 0);
   }
 });
+
+test('실패 작업 재개는 같은 ID만 사용하고 새 동의를 만들지 않는다', async () => {
+  const {app, el, calls} = setup();
+  app.callServerTool = async call => {
+    calls.push(call);
+    return {structuredContent: {operation_id: 'op-1',
+      status: call.name === 'retry_paper_server_sync' ? 'synced' : 'retryable_failure'}};
+  };
+  el('agree').checked = true;
+  await el('confirm').onclick();
+  assert.equal(el('retry').hidden, false);
+  await el('retry').onclick();
+  assert.deepEqual(calls.at(-1), {name: 'retry_paper_server_sync', arguments: {operation_id: 'op-1'}});
+  assert.equal(calls.length, 2);
+  assert.equal(el('retry').hidden, true);
+});
+
+test('응답 유실 뒤 상태 조회만으로 재전송하지 않는다', async () => {
+  const {app, el, calls} = setup();
+  app.callServerTool = async call => {
+    calls.push(call);
+    if (call.name === 'sync_paper_to_server') throw new Error('private');
+    return {structuredContent: {operation_id: 'op-1', status: 'retryable_failure'}};
+  };
+  el('agree').checked = true;
+  await el('confirm').onclick();
+  assert.equal(el('retry').hidden, true);
+  await el('refresh').onclick();
+  assert.equal(calls.at(-1).name, 'get_paper_server_sync');
+  assert.equal(el('retry').hidden, false);
+  assert.equal(calls.length, 2);
+});
+
+test('재시작 후 작업 조회 카드에서도 명시적으로 재개한다', async () => {
+  const {app, el, calls} = setup();
+  app.ontoolinput({arguments: {operation_id: 'existing'}});
+  app.ontoolresult({structuredContent: {operation_id: 'existing', status: 'retryable_failure'}});
+  assert.equal(el('retry').hidden, false);
+  assert.equal(el('confirm').disabled, true);
+  assert.equal(calls.length, 0);
+  app.callServerTool = async call => {
+    calls.push(call);
+    return {structuredContent: {operation_id: 'existing', status: 'synced'}};
+  };
+  await el('retry').onclick();
+  assert.deepEqual(calls, [{name: 'retry_paper_server_sync', arguments: {operation_id: 'existing'}}]);
+});
+
+test('최초 상태 조회 오류 뒤에는 같은 작업을 다시 조회할 수 있다', async () => {
+  const {app, el, calls} = setup();
+  app.ontoolinput({arguments: {operation_id: 'existing'}});
+  app.ontoolresult({isError: true, content: [{type: 'text', text: 'private-error'}]});
+  assert.match(el('status').textContent, /상태를 확인하지 못했습니다/);
+  assert.doesNotMatch(el('status').textContent, /private-error/);
+  assert.equal(el('refresh').hidden, false);
+  assert.equal(el('retry').hidden, true);
+  assert.equal(calls.length, 0);
+  app.callServerTool = async call => {
+    calls.push(call);
+    return {structuredContent: {operation_id: 'existing', status: 'synced'}};
+  };
+  await el('refresh').onclick();
+  assert.deepEqual(calls, [{name: 'get_paper_server_sync', arguments: {operation_id: 'existing'}}]);
+  assert.match(el('status').textContent, /synced/);
+  assert.equal(el('retry').hidden, true);
+});
+
+for (const state of ['conflict', 'action_required', 'syncing', 'synced']) {
+  test(`${state} 작업은 재개 버튼으로 전송하지 않는다`, async () => {
+    const {app, el, calls} = setup();
+    app.ontoolinput({arguments: {operation_id: 'existing'}});
+    app.ontoolresult({structuredContent: {operation_id: 'existing', status: state}});
+    await el('retry').onclick();
+    assert.equal(calls.length, 0);
+  });
+}
+
+test('재개 중 새 입력 뒤 늦은 응답은 이전 작업을 복원하지 않는다', async () => {
+  const {app, el} = setup();
+  app.ontoolinput({arguments: {operation_id: 'existing'}});
+  app.ontoolresult({structuredContent: {operation_id: 'existing', status: 'retryable_failure'}});
+  let finish;
+  app.callServerTool = () => new Promise(resolve => { finish = resolve; });
+  const retry = el('retry').onclick();
+  app.ontoolinput({arguments: {paper_id: 'other'}});
+  finish({structuredContent: {operation_id: 'existing', status: 'retryable_failure'}});
+  await retry;
+  assert.equal(el('retry').hidden, true);
+  assert.equal(el('status').textContent, '');
+});

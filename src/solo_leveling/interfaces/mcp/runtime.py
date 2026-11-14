@@ -193,7 +193,14 @@ def build_runtime_server(values: Mapping[str, str]):
                     # 첫 질문이 모델 로딩을 기다리지 않도록 서버 시작과 함께 준비한다(#119).
                     from solo_leveling.infrastructure.embeddings.warmup import start_warmup
                     start_warmup(embedder, str(paths.db_path))
-                yield
+                async with anyio.create_task_group() as tasks:
+                    if server_sync is not None and values.get('SOLO_LEVELING_SYNC_AUTO_RETRY', '1') != '0':
+                        from solo_leveling.application.server_sync.retry import run_auto_retry
+                        tasks.start_soon(run_auto_retry, gate.wrap(server_sync))
+                    try:
+                        yield
+                    finally:
+                        tasks.cancel_scope.cancel()
             finally:
                 lifetime.begin()
                 # 취소돼도 종료 스레드는 마지막 사용이 끝날 때까지 소유권을 유지한다.

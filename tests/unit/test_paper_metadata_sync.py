@@ -501,3 +501,152 @@ def test_previous_learning_notice_never_queues_summary(database):
         assert {r[0] for r in conn.execute("SELECT object_type FROM sync_outbox")} == {
             "paper", "learning_record",
         }
+
+
+def test_auto_retry_waits_then_resumes_same_operation_after_restart(database):
+    from datetime import timedelta
+    clock = [NOW]
+    client = Client([ConnectionError('offline'), Response()])
+    service = PaperMetadataSyncService(database, client, now=lambda: clock[0])
+    op = service.grant_and_queue('paper-local-1', 'v4').operation_id
+    assert service.sync(op).status == 'retryable_failure'
+    assert service.retry_due() == []
+    clock[0] += timedelta(minutes=3)
+    restarted = PaperMetadataSyncService(database, client, now=lambda: clock[0])
+    assert restarted.retry_due()[0].status == 'synced'
+    assert [call[2]['headers']['Idempotency-Key'] for call in client.calls] == [op, op]
+    assert restarted.retry_due() == []
+
+
+@pytest.mark.parametrize('condition', ['revoked', 'limit', 'conflict', 'action_required', 'syncing', 'other_account'])
+def test_auto_retry_skips_ineligible_jobs(database, condition):
+    client = Client()
+    service = PaperMetadataSyncService(database, client, now=lambda: NOW)
+    service.grant_and_queue('paper-local-1', 'v4')
+    with get_connection(database) as conn:
+        if condition == 'revoked':
+            conn.execute('UPDATE server_sync_consents SET revoked_at=?', (NOW.isoformat(),))
+        elif condition == 'limit':
+            conn.execute('UPDATE sync_outbox SET attempt_count=5')
+        elif condition != 'other_account':
+            conn.execute('UPDATE sync_outbox SET status=?', (condition,))
+    if condition == 'other_account':
+        client._connection_id = 'other'
+    assert service.retry_due() == []
+    assert not client.calls
+
+
+def test_auto_retry_checks_payload_and_does_not_queue_new_records(database):
+    client = Client()
+    service = PaperMetadataSyncService(database, client)
+    service.grant_and_queue('paper-local-1', 'v4')
+    with get_connection(database) as conn:
+        conn.execute("UPDATE papers SET title='changed' WHERE paper_id='paper-local-1'")
+    assert service.retry_due()[0].status == 'conflict'
+    assert not client.calls
+    with get_connection(database) as conn:
+        assert conn.execute('SELECT count(*) FROM sync_outbox').fetchone()[0] == 1
+
+
+def test_auto_retry_waits_for_child_and_does_not_resend_synced_parent(database):
+    from datetime import timedelta
+    add_learning_record(database)
+    clock = [NOW]
+    client = Client([Response(), Response(503), Response(200, {
+        'learning_record_id': SERVER_RECORD_ID, 'revision': 1,
+        'server_updated_at': NOW.isoformat(), 'sync_status': 'stored'})])
+    service = PaperMetadataSyncService(database, client, now=lambda: clock[0])
+    op = service.grant_and_queue('paper-local-1', 'v4').operation_id
+    assert service.sync(op).status == 'retryable_failure'
+    assert service.retry_due() == []
+    clock[0] += timedelta(minutes=3)
+    assert service.retry_due()[0].status == 'synced'
+    assert [call[0] for call in client.calls] == ['POST', 'PUT', 'PUT']
+
+
+def test_two_services_do_not_send_the_same_inflight_operation(database):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    entered, release = Event(), Event()
+    first_client, second_client = Client(), Client()
+    original = first_client.request
+
+    def blocked(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    first_client.request = blocked
+    first = PaperMetadataSyncService(database, first_client)
+    second = PaperMetadataSyncService(database, second_client)
+    op = first.grant_and_queue('paper-local-1', 'v4').operation_id
+    with ThreadPoolExecutor() as pool:
+        future = pool.submit(first.sync, op)
+        try:
+            assert entered.wait(5)
+            assert second.sync(op).status == 'syncing'
+            assert second.retry_due() == []
+            assert not second_client.calls
+        finally:
+            release.set()
+        assert future.result(timeout=5).status == 'synced'
+    assert len(first_client.calls) == 1
+
+
+def _hold_sync_in_process(database, entered, release):
+    client = Client()
+    original = client.request
+
+    def blocked(*args, **kwargs):
+        entered.set()
+        if not release.wait(15):
+            raise RuntimeError('검증 대기 시간 초과')
+        return original(*args, **kwargs)
+
+    client.request = blocked
+    service = PaperMetadataSyncService(database, client)
+    service.retry_due()
+
+
+def test_process_lock_blocks_manual_send_and_is_released_after_exit(database):
+    import multiprocessing
+    context = multiprocessing.get_context('spawn')
+    entered, release = context.Event(), context.Event()
+    client = Client()
+    service = PaperMetadataSyncService(database, client)
+    op = service.grant_and_queue('paper-local-1', 'v4').operation_id
+    worker = context.Process(target=_hold_sync_in_process, args=(database, entered, release))
+    worker.start()
+    try:
+        assert entered.wait(10)
+        assert service.sync(op).status == 'syncing'
+        assert service.retry_due() == []
+        assert not client.calls
+    finally:
+        release.set()
+        worker.join(10)
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(5)
+    assert worker.exitcode == 0
+    assert service.status(op).status == 'synced'
+    insert_paper(database, Paper('paper-after', 'After process exit', created_at=NOW.isoformat()))
+    next_op = service.grant_and_queue('paper-after', 'v4').operation_id
+    client.responses = [Response(data={'paper_id': SERVER_RECORD_ID, 'revision': 1,
+        'sync_status': 'stored', 'server_updated_at': NOW.isoformat()})]
+    assert service.retry_due()[0].operation_id == next_op
+    assert service.status(next_op).status == 'synced'
+    assert len(client.calls) == 1
+
+
+def test_process_lock_released_after_unexpected_transport_error(database):
+    failed = PaperMetadataSyncService(database, Client([RuntimeError('synthetic')]))
+    op = failed.grant_and_queue('paper-local-1', 'v4').operation_id
+    with pytest.raises(RuntimeError):
+        failed.sync(op)
+    other_client = Client()
+    other = PaperMetadataSyncService(database, other_client)
+    insert_paper(database, Paper('paper-after', 'After error', created_at=NOW.isoformat()))
+    next_op = other.grant_and_queue('paper-after', 'v4').operation_id
+    assert other.retry_due()[0].operation_id == next_op
+    assert len(other_client.calls) == 1
