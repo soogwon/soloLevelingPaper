@@ -102,9 +102,11 @@ class KnowledgeGraph:
 
 def parse_seed(raw: bytes | str) -> KnowledgeGraph:
     """JSON 시드를 읽어 검증한다. 문제가 하나라도 있으면 아무것도 반환하지 않는다."""
-    text = raw.decode('utf-8') if isinstance(raw, bytes) else raw
     try:
+        text = raw.decode('utf-8') if isinstance(raw, bytes) else raw
         data = json.loads(text)
+    except UnicodeDecodeError:
+        raise SeedValidationError(['시드는 UTF-8이어야 합니다.']) from None
     except json.JSONDecodeError as error:
         raise SeedValidationError([f'JSON 형식 오류: {error.msg} (line {error.lineno})']) from None
     revision = 'kg-' + hashlib.sha256(text.encode('utf-8')).hexdigest()[:12]
@@ -154,7 +156,7 @@ def build_graph(data: dict, revision_id: str) -> KnowledgeGraph:
             problems.append(f'{where}: 객체여야 합니다.')
             continue
         source, target = item.get('prerequisite'), item.get('concept')
-        missing = [v for v in (source, target) if v not in concepts]
+        missing = [v for v in (source, target) if not isinstance(v, str) or v not in concepts]
         if missing:
             problems.append(f'{where}: 없는 개념 참조 {", ".join(map(str, missing))}')
             continue
@@ -252,6 +254,7 @@ def _build_paper(index, item, concepts, problems, warnings) -> PaperGraph | None
     where = f'papers[{index}]({key})'
     if not isinstance(label, str) or not label.strip():
         problems.append(f'{where}: label이 필요합니다.')
+        label = ''
     file_hash = item.get('file_sha256')
     if file_hash is None:
         warnings.append(f'{where}: file_sha256이 없어 등록 논문과 연결되지 않습니다.')
@@ -266,9 +269,9 @@ def _build_paper(index, item, concepts, problems, warnings) -> PaperGraph | None
         source_url = None
 
     paper_concepts: dict[str, PaperConcept] = {}
-    for c_index, entry in enumerate(item.get('concepts') or []):
+    for c_index, entry in enumerate(_list(item, 'concepts', problems)):
         cid = entry.get('id') if isinstance(entry, dict) else None
-        if cid not in concepts:
+        if not isinstance(cid, str) or cid not in concepts:
             problems.append(f'{where}.concepts[{c_index}]: 없는 개념 {cid}')
             continue
         if cid in paper_concepts:
@@ -302,6 +305,9 @@ def _build_paper(index, item, concepts, problems, warnings) -> PaperGraph | None
             continue
         if not isinstance(optional, list) or not isinstance(reasons, dict):
             problems.append(f'{gw}: optional은 목록, reasons는 객체여야 합니다.')
+            continue
+        if any(not isinstance(cid, str) for cid in [*targets, *optional]):
+            problems.append(f'{gw}: 개념 id는 문자열이어야 합니다.')
             continue
         both = set(targets) & set(optional)
         if both:
