@@ -191,8 +191,7 @@ def build_runtime_server(values: Mapping[str, str]):
             server_client = AuthenticatedServerClient.from_keyring(settings.server_api_url)
             server_sync = PaperMetadataSyncService(str(paths.db_path), server_client)
             from solo_leveling.application.server_sync.resume import ResumeRequestResolver
-            resume = ResumeRequestResolver(server_client, str(paths.db_path), paths.pdf_dir,
-                                           paths.chroma_dir)
+            resume = ResumeRequestResolver(server_client, str(paths.db_path), paths.pdf_dir, client)
         server = create_server(MCPServices(
             recovery=gate.wrap(recovery), reparse=gate.wrap(reparse),
             question_keys=gate.wrap(QuestionKeys(paths.data_root.resolve() / 'card-question-keys.sqlite3')),

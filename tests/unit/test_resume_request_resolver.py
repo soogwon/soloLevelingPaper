@@ -126,6 +126,7 @@ def test_resolver_reports_search_readiness_when_chroma_is_configured(
     pdf.write_bytes(b"%PDF fixture")
     db = local_database(tmp_path, stored_path=pdf)
     checked = []
+    chroma = object()
 
     def search_status(*args):
         checked.append(args)
@@ -133,13 +134,13 @@ def test_resolver_reports_search_readiness_when_chroma_is_configured(
 
     monkeypatch.setattr(resume_module, "_available_search_data", search_status)
     result = ResumeRequestResolver(
-        Client(Response(200, payload())), str(db), tmp_path, tmp_path / "chroma",
+        Client(Response(200, payload())), str(db), tmp_path, chroma,
     ).resolve("resume_code")
 
     assert result["file_access_status"] == "local_file_ready"
     assert result["status"] == "prepared"
     assert result["reason"] == reason
-    assert checked == [(str(db), tmp_path / "chroma", "local-paper", "local-context",
+    assert checked == [(str(db), chroma, "local-paper", "local-context",
                         "version-1")]
 
 
@@ -206,7 +207,7 @@ def test_file_outside_managed_root_is_unavailable(tmp_path):
     assert resolver.resolve("resume_code")["file_access_status"] == "local_file_missing"
 
 
-def test_search_readiness_requires_matching_db_members_and_vector_metadata(tmp_path, monkeypatch):
+def test_search_readiness_requires_matching_db_members_and_vector_metadata(tmp_path):
     import sqlite3
 
     db = tmp_path / "search.sqlite3"
@@ -228,12 +229,18 @@ def test_search_readiness_requires_matching_db_members_and_vector_metadata(tmp_p
     conn.close()
 
     class Collection:
+        size = 2
+        metadata_count = 2
+
+        def count(self):
+            return self.size
+
         def get(self, *, ids, include):
             assert set(ids) == {"chunk-1", "chunk-2"}
             assert include == ["metadatas"]
             metadata = {"embedding_set_id": "embedding", "paper_id": "paper",
                         "version_id": "version"}
-            return {"ids": ids, "metadatas": [metadata.copy() for _ in ids]}
+            return {"ids": ids, "metadatas": [metadata.copy() for _ in range(self.metadata_count)]}
 
     class ChromaClient:
         def get_collection(self, name):
@@ -241,17 +248,24 @@ def test_search_readiness_requires_matching_db_members_and_vector_metadata(tmp_p
             return Collection()
 
     client = ChromaClient()
-    closed = []
-    monkeypatch.setattr(resume_module, "get_client", lambda path: client)
-    monkeypatch.setattr(resume_module, "close_client", lambda current: closed.append(current))
+    def ready():
+        return _available_search_data(str(db), client, "paper", "context", "version")
 
-    assert _available_search_data(str(db), tmp_path / "chroma", "paper", "context",
-                                  "version") is True
-    assert closed == [client]
-
+    assert ready()
+    Collection.metadata_count = 1
+    assert not ready()
+    Collection.metadata_count = 2
+    Collection.size = 3
+    assert not ready()
+    Collection.size = 2
     conn = sqlite3.connect(db)
     conn.execute("DELETE FROM search_index_chunks WHERE chunk_id='chunk-2'")
     conn.commit()
     conn.close()
-    assert _available_search_data(str(db), tmp_path / "chroma", "paper", "context",
-                                  "version") is False
+    assert not ready()
+
+    conn = sqlite3.connect(db)
+    conn.execute("DROP TABLE search_indexes")
+    conn.commit()
+    conn.close()
+    assert not ready()

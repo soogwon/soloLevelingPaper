@@ -1,12 +1,13 @@
 """인증된 기기로 웹의 이어하기 코드를 조회하고 응답 계약을 검증한다."""
 
+from contextlib import closing
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 from solo_leveling.infrastructure.database.schema import get_connection
 from solo_leveling.infrastructure.storage.pdf_source import open_pdf_source
 from solo_leveling.infrastructure.storage.server_client import ServerResponseInvalid
-from solo_leveling.infrastructure.storage.vector_store import close_client, get_client
 
 
 class ResumeRequestUnavailable(Exception):
@@ -19,13 +20,13 @@ class ResumeRequestExpired(Exception):
 
 class ResumeRequestResolver:
     def __init__(self, client: Any, db_path: str | None = None, pdf_root: Path | None = None,
-                 chroma_root: Path | None = None):
+                 chroma_client: Any | None = None):
         if (db_path is None) != (pdf_root is None):
             raise ValueError("로컬 상태 확인에는 DB와 PDF 저장 경로가 모두 필요합니다.")
-        if chroma_root is not None and db_path is None:
+        if chroma_client is not None and db_path is None:
             raise ValueError("검색 데이터 확인에는 로컬 DB가 필요합니다.")
         self._pdf_root = pdf_root
-        self._chroma_root = chroma_root
+        self._chroma_client = chroma_client
         self._client = client
         self._db_path = db_path
 
@@ -52,12 +53,12 @@ class ResumeRequestResolver:
             raise ServerResponseInvalid
         if self._db_path is not None and self._pdf_root is not None:
             _apply_local_status(data, self._db_path, account_id, self._pdf_root,
-                                self._chroma_root)
+                                self._chroma_client)
         return data
 
 
 def _apply_local_status(data: dict[str, Any], db_path: str, account_id: str, pdf_root: Path,
-                        chroma_root: Path | None) -> None:
+                        chroma_client: Any | None) -> None:
     conn = get_connection(db_path)
     try:
         row = conn.execute(
@@ -81,8 +82,8 @@ def _apply_local_status(data: dict[str, Any], db_path: str, account_id: str, pdf
     elif not _available_pdf(pdf_root, row["stored_path"]):
         data.update(file_access_status="local_file_missing", status="action_required",
                     reason="local_file_missing")
-    elif chroma_root is not None and _available_search_data(
-            db_path, chroma_root, row["local_object_id"], row["local_subobject_id"],
+    elif chroma_client is not None and _available_search_data(
+            db_path, chroma_client, row["local_object_id"], row["local_subobject_id"],
             row["version_id"]):
         data.update(file_access_status="local_file_ready", status="prepared",
                     reason="local_search_data_ready")
@@ -104,34 +105,36 @@ def _available_pdf(root: Path, stored_path: str | None) -> bool:
         return False
 
 
-def _available_search_data(db_path: str, chroma_root: Path, paper_id: str,
+def _available_search_data(db_path: str, chroma_client: Any, paper_id: str,
                            context_id: str, version_id: str) -> bool:
-    conn = get_connection(db_path)
     try:
-        row = conn.execute(
-            """SELECT c.embedding_set_id, s.chunk_count
-               FROM learning_contexts c
-               JOIN search_indexes s ON s.embedding_set_id=c.embedding_set_id
-               WHERE c.context_id=? AND c.version_id=? AND s.version_id=?""",
-            (context_id, version_id, version_id),
-        ).fetchone()
-        if row is None or row["chunk_count"] < 1:
-            return False
-        chunk_ids = [entry["chunk_id"] for entry in conn.execute(
-            "SELECT chunk_id FROM search_index_chunks WHERE embedding_set_id=?",
-            (row["embedding_set_id"],),
-        )]
-        if len(chunk_ids) != row["chunk_count"]:
-            return False
-    finally:
-        conn.close()
+        with closing(get_connection(db_path)) as conn:
+            row = conn.execute(
+                """SELECT c.embedding_set_id, s.chunk_count
+                   FROM learning_contexts c
+                   JOIN search_indexes s ON s.embedding_set_id=c.embedding_set_id
+                   WHERE c.context_id=? AND c.version_id=? AND s.version_id=?""",
+                (context_id, version_id, version_id),
+            ).fetchone()
+            if row is None or row["chunk_count"] < 1:
+                return False
+            chunk_ids = [entry["chunk_id"] for entry in conn.execute(
+                "SELECT chunk_id FROM search_index_chunks WHERE embedding_set_id=?",
+                (row["embedding_set_id"],),
+            )]
+            if len(chunk_ids) != row["chunk_count"]:
+                return False
+    except sqlite3.Error:
+        return False
 
-    client = None
     try:
-        client = get_client(str(chroma_root))
-        collection = client.get_collection(f"chunks-{row['embedding_set_id']}")
+        collection = chroma_client.get_collection(f"chunks-{row['embedding_set_id']}")
+        if collection.count() != len(chunk_ids):
+            return False
         stored = collection.get(ids=chunk_ids, include=["metadatas"])
-        if set(stored["ids"]) != set(chunk_ids):
+        if (set(stored["ids"]) != set(chunk_ids)
+                or len(stored["ids"]) != len(chunk_ids)
+                or len(stored["metadatas"]) != len(chunk_ids)):
             return False
         expected = {"embedding_set_id": row["embedding_set_id"],
                     "paper_id": paper_id, "version_id": version_id}
@@ -139,9 +142,6 @@ def _available_search_data(db_path: str, chroma_root: Path, paper_id: str,
                    for metadata in stored["metadatas"])
     except Exception:
         return False
-    finally:
-        if client is not None:
-            close_client(client)
 
 
 def _valid(data: Any) -> bool:
