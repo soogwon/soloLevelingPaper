@@ -110,8 +110,14 @@ class S3ObjectStorage:
                             header == b"%PDF-")
 
     def finalize_upload(self, upload) -> StoredObject:
-        prefix = upload.object_key.rsplit("/", 1)[0]
-        final_key = f"{prefix}/files/{uuid4()}.pdf"
+        parts = upload.object_key.split("/")
+        if len(parts) >= 6 and parts[:2] == ["private", "tmp"]:
+            # private/tmp/<owner>/<paper>/<version>/<upload>.pdf
+            final_prefix = "/".join(["private", "files", *parts[2:-1]])
+        else:
+            # 이전 배포에서 만든 예약도 완료할 수 있게 기존 key 형식을 지원한다.
+            final_prefix = f"{upload.object_key.rsplit('/', 1)[0]}/files"
+        final_key = f"{final_prefix}/{uuid4()}.pdf"
         try:
             self._client.copy_object(
                 Bucket=self._bucket, Key=final_key,
