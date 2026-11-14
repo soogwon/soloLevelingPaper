@@ -41,8 +41,8 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 12)]
-    assert items[-1].name == "0011_server_pdf_uploads.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 13)]
+    assert items[-1].name == "0012_server_pdf_upload_completion.sql"
 
 
 def test_rejects_gaps_and_invalid_sql_files(tmp_path):

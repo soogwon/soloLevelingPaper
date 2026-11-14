@@ -7,7 +7,8 @@ from uuid import UUID
 
 from .auth import AuthenticatedPrincipal
 from .file_uploads import (
-    MAX_FILE_BYTES, FileUploadStore, UploadAlreadyReady, UploadQuotaExceeded, UploadTargetNotFound,
+    MAX_FILE_BYTES, CompletedUpload, FileUploadStore, PendingUpload, UploadAlreadyReady,
+    UploadExpired, UploadNotFound, UploadQuotaExceeded, UploadTargetNotFound,
     UploadReservationConflict, UploadUnavailable,
 )
 
@@ -60,10 +61,20 @@ def create_file_router(require_principal: Any, store: FileUploadStore, object_st
         expires_at: str
         max_file_size: int
 
-    router = APIRouter(prefix="/v1/papers", tags=["paper-files"])
+    class UploadCompleteView(BaseModel):
+        upload_id: UUID
+        paper_id: UUID
+        version_id: str
+        file_name: str
+        file_size: int
+        content_type: str
+        storage_status: str
+        failure_reason: None = None
+
+    router = APIRouter(prefix="/v1", tags=["paper-files"])
     Principal = Annotated[AuthenticatedPrincipal, Depends(require_principal)]
 
-    @router.post("/{paper_id}/uploads", response_model=UploadPrepareView,
+    @router.post("/papers/{paper_id}/uploads", response_model=UploadPrepareView,
                  status_code=status.HTTP_201_CREATED)
     def prepare_upload(paper_id: UUID, payload: UploadPrepare, principal: Principal):
         if principal.credential_type != "device":
@@ -94,4 +105,67 @@ def create_file_router(require_principal: Any, store: FileUploadStore, object_st
             expires_at=prepared.expires_at.isoformat(), max_file_size=MAX_FILE_BYTES,
         )
 
+    @router.post("/uploads/{upload_id}/complete", response_model=UploadCompleteView)
+    def complete_upload(upload_id: UUID, principal: Principal):
+        if principal.credential_type != "device":
+            raise HTTPException(status_code=403, detail={"code": "device_credential_required"})
+        try:
+            upload = store.get_for_completion(principal.user_id, str(upload_id))
+            if isinstance(upload, CompletedUpload):
+                return _completed_view(UploadCompleteView, upload)
+            actual = object_storage.inspect_upload(upload)
+            if actual is None:
+                raise HTTPException(status_code=409, detail={"code": "upload_object_missing"})
+            failure = _verification_failure(upload, actual)
+            if failure is not None:
+                store.mark_failed(principal.user_id, str(upload_id), failure)
+                _delete_quietly(object_storage, upload.object_key)
+                raise HTTPException(status_code=422, detail={"code": failure})
+            finalized = object_storage.finalize_upload(upload)
+            failure = _verification_failure(upload, finalized)
+            if failure is not None:
+                store.mark_failed(principal.user_id, str(upload_id), failure)
+                _delete_quietly(object_storage, upload.object_key)
+                _delete_quietly(object_storage, finalized.object_key)
+                raise HTTPException(status_code=422, detail={"code": failure})
+            completed = store.mark_ready(principal.user_id, str(upload_id), finalized.object_key)
+            _delete_quietly(object_storage, upload.object_key)
+            return _completed_view(UploadCompleteView, completed)
+        except UploadNotFound:
+            raise HTTPException(status_code=404, detail={"code": "upload_not_found"}) from None
+        except UploadExpired:
+            raise HTTPException(status_code=410, detail={"code": "upload_expired"}) from None
+        except UploadUnavailable:
+            raise HTTPException(status_code=503, detail={"code": "pdf_upload_unavailable"}) from None
+        except HTTPException:
+            raise
+        except RuntimeError:
+            raise HTTPException(status_code=503, detail={"code": "pdf_upload_unavailable"}) from None
+
     return router
+
+
+def _verification_failure(upload: PendingUpload, actual) -> str | None:
+    if actual.file_size != upload.file_size:
+        return "upload_size_mismatch"
+    if actual.content_type.split(";", 1)[0].strip().lower() != upload.content_type:
+        return "upload_content_type_mismatch"
+    if actual.sha256_hex != upload.sha256_hex:
+        return "upload_checksum_mismatch"
+    return None
+
+
+def _delete_quietly(object_storage, object_key: str) -> None:
+    try:
+        object_storage.delete_upload(object_key)
+    except Exception:
+        pass
+
+
+def _completed_view(view_type, completed: CompletedUpload):
+    return view_type(
+        upload_id=UUID(completed.upload_id), paper_id=UUID(completed.paper_id),
+        version_id=completed.server_version_id, file_name=completed.file_name,
+        file_size=completed.file_size, content_type=completed.content_type,
+        storage_status="ready", failure_reason=None,
+    )
