@@ -5,6 +5,9 @@ from pathlib import Path
 import sqlite3
 from typing import Any
 
+from solo_leveling.domain.annotation import (
+    AnnotationValidationError, SegmentInput, validate_annotation_fields, validate_segments,
+)
 from solo_leveling.infrastructure.database.schema import get_connection
 from solo_leveling.infrastructure.storage.pdf_source import open_pdf_source
 from solo_leveling.infrastructure.storage.server_client import ServerResponseInvalid
@@ -59,6 +62,7 @@ class ResumeRequestResolver:
 
 def _apply_local_status(data: dict[str, Any], db_path: str, account_id: str, pdf_root: Path,
                         chroma_client: Any | None) -> None:
+    data["resume_position_status"] = "not_checked"
     conn = get_connection(db_path)
     try:
         row = conn.execute(
@@ -85,8 +89,17 @@ def _apply_local_status(data: dict[str, Any], db_path: str, account_id: str, pdf
     elif chroma_client is not None and _available_search_data(
             db_path, chroma_client, row["local_object_id"], row["local_subobject_id"],
             row["version_id"]):
-        data.update(file_access_status="local_file_ready", status="prepared",
-                    reason="local_search_data_ready")
+        position_status = _resume_position_status(
+            db_path, row["local_subobject_id"], data.get("last_position"),
+        )
+        if position_status == "local_position_unavailable":
+            data.update(file_access_status="local_file_ready", status="action_required",
+                        reason="local_resume_position_unavailable",
+                        resume_position_status=position_status)
+        else:
+            data.update(file_access_status="local_file_ready", status="prepared",
+                        reason="local_search_data_ready",
+                        resume_position_status=position_status)
     else:
         data.update(file_access_status="local_file_ready", status="prepared",
                     reason="local_search_data_check_required")
@@ -144,6 +157,46 @@ def _available_search_data(db_path: str, chroma_client: Any, paper_id: str,
         return False
 
 
+def _resume_position_status(db_path: str, context_id: str,
+                            last_position: dict[str, Any] | None) -> str:
+    if last_position is None:
+        return "no_saved_position"
+    chunk_id = last_position.get("chunk_id")
+    section_id = last_position.get("section_id")
+    page = last_position.get("pdf_page")
+    if page is not None and (type(page) is not int or page < 1):
+        return "local_position_unavailable"
+    if any(value is not None and (not isinstance(value, str) or not value.strip())
+           for value in (chunk_id, section_id)):
+        return "local_position_unavailable"
+    if chunk_id is None and section_id is None and page is None:
+        return "local_position_unavailable"
+    try:
+        with closing(get_connection(db_path)) as conn:
+            if chunk_id is None and section_id is not None:
+                row = conn.execute(
+                    """SELECT 1 FROM learning_contexts c
+                       JOIN sections s ON s.parse_revision_id=c.parse_revision_id
+                       WHERE c.context_id=? AND s.section_id=?
+                         AND (? IS NULL OR ? BETWEEN s.start_pdf_page AND s.end_pdf_page)""",
+                    (context_id, section_id, page, page),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """SELECT 1 FROM learning_contexts c
+                       JOIN search_index_chunks sic ON sic.embedding_set_id=c.embedding_set_id
+                       JOIN chunks ch ON ch.chunk_id=sic.chunk_id
+                                     AND ch.parse_revision_id=c.parse_revision_id
+                       WHERE c.context_id=? AND (? IS NULL OR ch.chunk_id=?)
+                         AND (? IS NULL OR ch.pdf_page=?)
+                         AND (? IS NULL OR ch.section_id=?) LIMIT 1""",
+                    (context_id, chunk_id, chunk_id, page, page, section_id, section_id),
+                ).fetchone()
+    except sqlite3.Error:
+        return "local_position_unavailable"
+    return "local_position_ready" if row is not None else "local_position_unavailable"
+
+
 def _valid(data: Any) -> bool:
     if not isinstance(data, dict):
         return False
@@ -157,6 +210,39 @@ def _valid(data: Any) -> bool:
         return False
     if data.get("last_position") is not None and not isinstance(data["last_position"], dict):
         return False
-    if data.get("annotation") is not None and not isinstance(data["annotation"], dict):
+    if not _valid_annotation(data.get("annotation_id"), data.get("annotation")):
+        return False
+    return True
+
+
+def _valid_annotation(annotation_id: Any, annotation: Any) -> bool:
+    if annotation_id is None:
+        return annotation is None
+    if not isinstance(annotation_id, str) or not annotation_id:
+        return False
+    if not isinstance(annotation, dict) or annotation.get("annotation_id") != annotation_id:
+        return False
+    segments = annotation.get("segments")
+    if not isinstance(segments, list):
+        return False
+    try:
+        validate_annotation_fields(annotation.get("kind"), annotation.get("body"), None, len(segments))
+        checked = []
+        for segment in segments:
+            if not isinstance(segment, dict):
+                return False
+            revision = segment.get("parse_revision_id")
+            translation = segment.get("translation_revision_id")
+            if not isinstance(revision, str) or not revision.strip():
+                return False
+            if translation is not None and not isinstance(translation, str):
+                return False
+            checked.append(SegmentInput(
+                chunk_id=segment.get("chunk_id"), target=segment.get("target"),
+                start_offset=segment.get("start_offset"), end_offset=segment.get("end_offset"),
+                quote_snapshot=segment.get("quote_snapshot"), translation_revision_id=translation,
+            ))
+        validate_segments(checked)
+    except AnnotationValidationError:
         return False
     return True

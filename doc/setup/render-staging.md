@@ -31,10 +31,25 @@
 | `OIDC_ISSUER`, `OIDC_AUDIENCE`, `OIDC_JWKS_URL` | API access token 검증 |
 | `WEB_OIDC_AUTHORIZATION_URL`, `WEB_OIDC_TOKEN_URL`, `WEB_OIDC_USERINFO_URL` | 웹 로그인 흐름 |
 | `WEB_OIDC_CLIENT_ID`, `WEB_OIDC_CLIENT_SECRET` | confidential web client |
+| `OBJECT_STORAGE_ENDPOINT`, `OBJECT_STORAGE_BUCKET` | 비공개 S3 호환 PDF 저장소 |
+| `OBJECT_STORAGE_ACCESS_KEY_ID`, `OBJECT_STORAGE_SECRET_ACCESS_KEY` | 객체 저장소 전용 자격정보 |
+| `OBJECT_STORAGE_REGION` | 저장소 리전. Cloudflare R2는 `auto` |
 
 OIDC 공급자에는 `https://solo-leveling-staging.soogyung.com/v1/auth/callback`을 허용 callback으로 등록합니다.
 Auth0를 사용할 때 `OIDC_AUDIENCE`에는 Custom API의 Identifier를 입력하고, 해당 API는 RS256과
 RFC 9068 access-token profile을 사용해야 합니다. 자세한 설정은 [Auth0 설정](auth0.md)을 따릅니다.
+
+## PDF 객체 저장소
+
+PDF는 Render Web Service의 임시 파일시스템에 저장하지 않습니다. 별도의 비공개 S3 호환 버킷을 만들고
+위 환경 변수를 Render에 입력합니다. 자격정보는 해당 버킷의 객체 읽기·쓰기·삭제에만 제한합니다.
+
+브라우저 또는 로컬 MCP가 presigned PUT 주소로 업로드할 수 있도록 버킷 CORS에는 스테이징 origin의
+`PUT`과 `Content-Type` 헤더만 허용합니다. 버킷 자체를 공개하지 않으며,
+객체 목록 권한이나 공개 URL을 사용자에게 제공하지 않습니다. 업로드 준비 API는 파일당 50 MiB,
+사용자당 1 GiB를 기본 한도로 사용합니다. 완료 확인·다운로드 주소 발급 전에는 업로드된 것으로
+표시하지 않습니다. 완료 확인 시 서버가 객체를 스트리밍으로 읽어 크기·형식·SHA-256을 검증하고,
+검증된 객체만 확정 키로 복사합니다. 따라서 Render와 객체 저장소 사이의 읽기 트래픽이 발생합니다.
 
 ## 도메인 연결
 

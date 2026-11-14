@@ -143,3 +143,19 @@ def test_kg_check_cli_validates_and_matches_hashes(tmp_path, capsys):
     seed_file.write_text(json.dumps(data), encoding='utf-8')
     assert kg_check([str(seed_file)]) == 1
     assert '순환' in capsys.readouterr().err
+
+
+def test_malformed_seed_reports_multiple_problems_without_crashing_cli(tmp_path, capsys):
+    data = seed()
+    data['prerequisites'][0]['concept'] = []
+    paper = data['papers'][0]
+    paper.update(label=123, concepts=5)
+    paper['goals']['skim']['targets'] = [{}]
+    path = tmp_path / 'invalid.json'
+    path.write_text(json.dumps(data), encoding='utf-8')
+    assert kg_check([str(path)]) == 1
+    problems = capsys.readouterr().err
+    assert all(field in problems for field in ('prerequisites', 'label', 'concepts', 'skim'))
+    path.write_bytes(bytes([255]))
+    assert kg_check([str(path)]) == 1
+    assert 'UTF-8' in capsys.readouterr().err

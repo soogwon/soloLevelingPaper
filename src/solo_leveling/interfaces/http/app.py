@@ -23,6 +23,8 @@ def create_app(
     paper_store: "PaperStore | None" = None,
     collection_store: "CollectionStore | None" = None,
     resume_store: "ResumeRequestStore | None" = None,
+    file_upload_store=None,
+    object_storage=None,
     web_auth_flow=None,
     web_session_store=None,
     knowledge_graph=None,
@@ -41,6 +43,9 @@ def create_app(
     from .devices import PostgresDeviceStore, UnavailableDeviceStore
     from .oidc import OidcAccessTokenVerifier
     from .paper_routes import create_paper_router, create_web_paper_router
+    from .file_routes import create_file_router
+    from .file_uploads import PostgresFileUploadStore, UnavailableFileUploadStore
+    from .object_storage import S3ObjectStorage, UnavailableObjectStorage
     from .papers import PostgresPaperStore, UnavailablePaperStore
     from .resume_requests import PostgresResumeRequestStore, UnavailableResumeRequestStore
     from .resume_routes import create_resume_router
@@ -48,6 +53,7 @@ def create_app(
     from .settings import (
         load_database_settings,
         load_oidc_settings,
+        load_object_storage_settings,
         load_web_auth_settings,
         load_web_static_root,
     )
@@ -72,6 +78,14 @@ def create_app(
     if resume_store is None and managed_store is not None:
         resume_store = PostgresResumeRequestStore(managed_store.connection_pool)
     selected_resume_store = resume_store if resume_store is not None else UnavailableResumeRequestStore()
+    if file_upload_store is None and managed_store is not None:
+        file_upload_store = PostgresFileUploadStore(managed_store.connection_pool)
+    selected_file_upload_store = (file_upload_store if file_upload_store is not None
+                                  else UnavailableFileUploadStore())
+    if object_storage is None:
+        storage_settings = load_object_storage_settings()
+        object_storage = (S3ObjectStorage.create(storage_settings) if storage_settings is not None
+                          else UnavailableObjectStorage())
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -140,6 +154,7 @@ def create_app(
     app.include_router(create_device_token_router(selected_store))
     app.include_router(create_paper_router(require_principal, selected_paper_store))
     app.include_router(create_web_paper_router(require_principal, selected_paper_store))
+    app.include_router(create_file_router(require_principal, selected_file_upload_store, object_storage))
     app.include_router(create_annotation_router(require_principal, selected_paper_store))
     app.include_router(create_collection_router(require_principal, selected_collection_store))
     app.include_router(create_resume_router(require_principal, selected_resume_store))
