@@ -127,3 +127,34 @@ test('이미 업로드된 원문은 성공 상태로 안내하고 재시도를 �
   assert.match(doc.getElementById('status').textContent, /이미 업로드된 원문/);
   assert.equal(doc.getElementById('retry').hidden, true);
 });
+
+for (const [name, response] of [
+  ['도구 오류', {isError: true, content: [{type: 'text', text: 'private error'}]}],
+  ['빈 응답', {}],
+  ['다른 논문', {structuredContent: {paper_id: 'other'}}],
+  ['잘못된 안내', {structuredContent: {paper_id: 'paper-1'}}],
+]) {
+  test(`재시도 안내의 ${name} 뒤에도 다시 요청할 수 있다`, async () => {
+    const {app, doc, calls} = setup();
+    const preview = {status: 'confirmation_required', paper_id: 'paper-1',
+      version_id: 'version-1', file_name: 'paper.pdf', file_size: 1234,
+      notice: '안내', confirmation_token: 'secret'};
+    app.ontoolresult({structuredContent: preview});
+    app.callServerTool = async call => {
+      calls.push(call);
+      return calls.length <= 2 ? response : {structuredContent: preview};
+    };
+    doc.getElementById('agree').checked = true;
+    await doc.getElementById('confirm').onclick();
+    await doc.getElementById('retry').onclick();
+    assert.equal(doc.getElementById('retry').hidden, false);
+    assert.equal(doc.getElementById('agree').disabled, true);
+    assert.doesNotMatch(doc.getElementById('status').textContent, /private/);
+    await doc.getElementById('retry').onclick();
+    assert.equal(calls.length, 3);
+    assert.equal(calls[2].name, 'prepare_paper_pdf_upload');
+    assert.equal(doc.getElementById('agree').disabled, false);
+    assert.equal(doc.getElementById('agree').checked, false);
+    assert.equal(doc.getElementById('confirm').disabled, true);
+  });
+}

@@ -95,6 +95,10 @@ export function mountPdfUpload(app, doc) {
       }});
       if (current !== generation) return;
       app.ontoolresult(result);
+      if (!pending) {
+        busy = false; el('retry').hidden = false; controls();
+        el('status').textContent = '업로드 안내를 다시 불러오지 못했습니다. 잠시 후 다시 시도하세요.';
+      }
     } catch {
       if (current !== generation) return;
       busy = false; el('retry').hidden = false; controls();
