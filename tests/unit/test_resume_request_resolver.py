@@ -297,6 +297,13 @@ def test_search_readiness_requires_matching_db_members_and_vector_metadata(tmp_p
 @pytest.mark.parametrize("position,expected", [
     (None, "no_saved_position"),
     ({}, "local_position_unavailable"),
+    ({"chunk_id": "missing", "pdf_page": 2}, "local_position_unavailable"),
+    ({"pdf_page": 2}, "local_position_ready"),
+    ({"pdf_page": 9}, "local_position_unavailable"),
+    ({"section_id": "section"}, "local_position_ready"),
+    ({"section_id": "section", "pdf_page": 3}, "local_position_ready"),
+    ({"section_id": "section", "pdf_page": 9}, "local_position_unavailable"),
+    ({"section_id": "other-revision"}, "local_position_unavailable"),
     ({"chunk_id": "missing"}, "local_position_unavailable"),
     ({"chunk_id": "chunk", "pdf_page": 3}, "local_position_unavailable"),
     ({"chunk_id": "chunk", "section_id": "other"}, "local_position_unavailable"),
@@ -316,6 +323,11 @@ def test_resume_position_must_match_published_context_chunk(tmp_path, position, 
         CREATE TABLE chunks (
             chunk_id TEXT, parse_revision_id TEXT, pdf_page INTEGER, section_id TEXT
         );
+        CREATE TABLE sections (
+            parse_revision_id TEXT, section_id TEXT, start_pdf_page INTEGER, end_pdf_page INTEGER
+        );
+        INSERT INTO sections VALUES ('parse', 'section', 2, 4);
+        INSERT INTO sections VALUES ('older', 'other-revision', 1, 9);
         INSERT INTO learning_contexts VALUES ('context', 'parse', 'embedding');
         INSERT INTO search_index_chunks VALUES ('embedding', 'chunk');
         INSERT INTO chunks VALUES ('chunk', 'parse', 2, 'section');

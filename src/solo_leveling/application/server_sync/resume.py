@@ -159,30 +159,39 @@ def _resume_position_status(db_path: str, context_id: str,
     if last_position is None:
         return "no_saved_position"
     chunk_id = last_position.get("chunk_id")
-    if not isinstance(chunk_id, str) or not chunk_id:
+    section_id = last_position.get("section_id")
+    page = last_position.get("pdf_page")
+    if page is not None and (type(page) is not int or page < 1):
+        return "local_position_unavailable"
+    if any(value is not None and (not isinstance(value, str) or not value.strip())
+           for value in (chunk_id, section_id)):
+        return "local_position_unavailable"
+    if chunk_id is None and section_id is None and page is None:
         return "local_position_unavailable"
     try:
         with closing(get_connection(db_path)) as conn:
-            row = conn.execute(
-                """SELECT ch.pdf_page, ch.section_id
-                   FROM learning_contexts c
-                   JOIN search_index_chunks sic ON sic.embedding_set_id=c.embedding_set_id
-                   JOIN chunks ch ON ch.chunk_id=sic.chunk_id
-                                 AND ch.parse_revision_id=c.parse_revision_id
-                   WHERE c.context_id=? AND ch.chunk_id=?""",
-                (context_id, chunk_id),
-            ).fetchone()
+            if chunk_id is None and section_id is not None:
+                row = conn.execute(
+                    """SELECT 1 FROM learning_contexts c
+                       JOIN sections s ON s.parse_revision_id=c.parse_revision_id
+                       WHERE c.context_id=? AND s.section_id=?
+                         AND (? IS NULL OR ? BETWEEN s.start_pdf_page AND s.end_pdf_page)""",
+                    (context_id, section_id, page, page),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """SELECT 1 FROM learning_contexts c
+                       JOIN search_index_chunks sic ON sic.embedding_set_id=c.embedding_set_id
+                       JOIN chunks ch ON ch.chunk_id=sic.chunk_id
+                                     AND ch.parse_revision_id=c.parse_revision_id
+                       WHERE c.context_id=? AND (? IS NULL OR ch.chunk_id=?)
+                         AND (? IS NULL OR ch.pdf_page=?)
+                         AND (? IS NULL OR ch.section_id=?) LIMIT 1""",
+                    (context_id, chunk_id, chunk_id, page, page, section_id, section_id),
+                ).fetchone()
     except sqlite3.Error:
         return "local_position_unavailable"
-    if row is None:
-        return "local_position_unavailable"
-    if (last_position.get("pdf_page") is not None
-            and last_position["pdf_page"] != row["pdf_page"]):
-        return "local_position_unavailable"
-    if (last_position.get("section_id") is not None
-            and last_position["section_id"] != row["section_id"]):
-        return "local_position_unavailable"
-    return "local_position_ready"
+    return "local_position_ready" if row is not None else "local_position_unavailable"
 
 
 def _valid(data: Any) -> bool:
