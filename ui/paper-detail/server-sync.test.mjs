@@ -109,6 +109,25 @@ test('재시작 후 작업 조회 카드에서도 명시적으로 재개한다',
   assert.deepEqual(calls, [{name: 'retry_paper_server_sync', arguments: {operation_id: 'existing'}}]);
 });
 
+test('최초 상태 조회 오류 뒤에는 같은 작업을 다시 조회할 수 있다', async () => {
+  const {app, el, calls} = setup();
+  app.ontoolinput({arguments: {operation_id: 'existing'}});
+  app.ontoolresult({isError: true, content: [{type: 'text', text: 'private-error'}]});
+  assert.match(el('status').textContent, /상태를 확인하지 못했습니다/);
+  assert.doesNotMatch(el('status').textContent, /private-error/);
+  assert.equal(el('refresh').hidden, false);
+  assert.equal(el('retry').hidden, true);
+  assert.equal(calls.length, 0);
+  app.callServerTool = async call => {
+    calls.push(call);
+    return {structuredContent: {operation_id: 'existing', status: 'synced'}};
+  };
+  await el('refresh').onclick();
+  assert.deepEqual(calls, [{name: 'get_paper_server_sync', arguments: {operation_id: 'existing'}}]);
+  assert.match(el('status').textContent, /synced/);
+  assert.equal(el('retry').hidden, true);
+});
+
 for (const state of ['conflict', 'action_required', 'syncing', 'synced']) {
   test(`${state} 작업은 재개 버튼으로 전송하지 않는다`, async () => {
     const {app, el, calls} = setup();

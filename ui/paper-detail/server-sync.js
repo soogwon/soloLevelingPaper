@@ -29,7 +29,7 @@ export function mountServerSync(app, doc) {
     const data = result?.structuredContent;
     const confirmationToken = data?.confirmation_token ?? result?._meta?.confirmation_token;
     if (input?.operation_id) {
-      if (data?.operation_id !== input.operation_id) return;
+      if (!result?.isError && data?.operation_id !== input.operation_id) return;
       reset(); operation = input.operation_id;
       try { if (result?.isError) throw new Error(); showStatus(data); }
       catch { el('status').textContent = '기존 작업 상태를 확인하지 못했습니다.'; el('refresh').hidden = false; }
