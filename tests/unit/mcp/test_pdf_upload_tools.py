@@ -38,7 +38,7 @@ def test_card_approval_uploads_exact_preview_once():
         prepared = await server.call_tool("prepare_paper_pdf_upload", {"paper_id": "paper-1"})
         service.upload.assert_not_called()
         assert "PDF 원문 전체" in prepared.structuredContent["notice"]
-        assert "confirmation_token" not in prepared.structuredContent
+        assert prepared.structuredContent["confirmation_token"] == prepared.meta["confirmation_token"]
         result = await server.call_tool("upload_paper_pdf_to_server", {
             "paper_id": "paper-1", "version_id": "version-1",
             "confirmation_token": prepared.meta["confirmation_token"],
