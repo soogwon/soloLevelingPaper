@@ -102,6 +102,7 @@ def test_known_target_leaves_nothing_to_learn():
     (lambda d: d['papers'][0]['concepts'][0].update(pdf_pages=[0]), '양의 정수'),
     (lambda d: d['papers'][0]['concepts'][0].update(search_phrase='x' * 61), 'search_phrase'),
     (lambda d: d['papers'][0]['concepts'][0].update(search_phrase='두 줄\n문장'), 'search_phrase'),
+    (lambda d: d['papers'][0]['concepts'][0].update(search_phrase='두 줄\r문장'), 'search_phrase'),
 ])
 def test_invalid_seed_reports_every_problem(mutate, message):
     data = copy.deepcopy(seed())

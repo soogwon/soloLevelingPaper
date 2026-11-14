@@ -291,7 +291,7 @@ def _build_paper(index, item, concepts, problems, warnings) -> PaperGraph | None
             continue
         phrase = entry.get('search_phrase')
         if phrase is not None and (not isinstance(phrase, str) or not 2 <= len(phrase.strip()) <= SEARCH_PHRASE_MAX
-                                   or '\n' in phrase):
+                                   or len(phrase.splitlines()) != 1):
             problems.append(f'{where}.concepts[{c_index}]({cid}): search_phrase는 null 또는 '
                             f'한 줄 {SEARCH_PHRASE_MAX}자 이하 문자열이어야 합니다.')
             continue
