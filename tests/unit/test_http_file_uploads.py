@@ -224,6 +224,7 @@ def test_complete_verifies_and_promotes_object_before_marking_ready():
 
 @pytest.mark.parametrize(("actual", "code"), [
     (stored_object(file_size=1235), "upload_size_mismatch"),
+    (stored_object(pdf_header_valid=False), "upload_content_type_mismatch"),
     (stored_object(content_type="text/plain"), "upload_content_type_mismatch"),
     (stored_object(sha256_hex="wrong"), "upload_checksum_mismatch"),
 ])
@@ -323,7 +324,7 @@ def test_s3_presign_binds_content_type_and_checksum():
 
 
 def test_s3_completion_reads_checksum_and_copies_to_immutable_key():
-    payload = b"verified pdf bytes"
+    payload = b"%PDF-1.7 verified bytes"
     checksum = sha256(payload).hexdigest()
 
     class Client:
@@ -348,10 +349,21 @@ def test_s3_completion_reads_checksum_and_copies_to_immutable_key():
     storage.delete_upload("private/key.pdf")
 
     assert inspected.sha256_hex == checksum
-    assert finalized.object_key.endswith(f"/files/{SHA256}.pdf")
+    assert finalized.object_key.startswith("private/files/")
+    assert storage.finalize_upload(pending_upload()).object_key != finalized.object_key
     assert raw.calls[1][1]["CopySource"] == {
         "Bucket": "private-bucket", "Key": "private/key.pdf"}
-    assert raw.calls[-1] == ("delete", {"Bucket": "private-bucket", "Key": "private/key.pdf"})
+    assert ("delete", {"Bucket": "private-bucket", "Key": "private/key.pdf"}) in raw.calls
+
+
+    def failed_read(**kwargs):
+        raise RuntimeError("unavailable")
+    raw.get_object = failed_read
+    with pytest.raises(RuntimeError, match="final_object_read_failed"):
+        storage.finalize_upload(pending_upload())
+    assert raw.calls[-1][0] == "delete"
+    assert raw.calls[-1][1]["Key"] == raw.calls[-2][1]["Key"]
+    assert raw.calls[-1][1]["Key"] != finalized.object_key
 
 
 class Result:

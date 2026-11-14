@@ -124,11 +124,17 @@ def create_file_router(require_principal: Any, store: FileUploadStore, object_st
             finalized = object_storage.finalize_upload(upload)
             failure = _verification_failure(upload, finalized)
             if failure is not None:
+                _delete_quietly(object_storage, finalized.object_key)
                 store.mark_failed(principal.user_id, str(upload_id), failure)
                 _delete_quietly(object_storage, upload.object_key)
-                _delete_quietly(object_storage, finalized.object_key)
                 raise HTTPException(status_code=422, detail={"code": failure})
-            completed = store.mark_ready(principal.user_id, str(upload_id), finalized.object_key)
+            try:
+                completed = store.mark_ready(principal.user_id, str(upload_id), finalized.object_key)
+            except (UploadExpired, UploadNotFound):
+                _delete_quietly(object_storage, finalized.object_key)
+                raise
+            if completed.object_key != finalized.object_key:
+                _delete_quietly(object_storage, finalized.object_key)
             _delete_quietly(object_storage, upload.object_key)
             return _completed_view(UploadCompleteView, completed)
         except UploadNotFound:
@@ -149,6 +155,8 @@ def _verification_failure(upload: PendingUpload, actual) -> str | None:
     if actual.file_size != upload.file_size:
         return "upload_size_mismatch"
     if actual.content_type.split(";", 1)[0].strip().lower() != upload.content_type:
+        return "upload_content_type_mismatch"
+    if not actual.pdf_header_valid:
         return "upload_content_type_mismatch"
     if actual.sha256_hex != upload.sha256_hex:
         return "upload_checksum_mismatch"
