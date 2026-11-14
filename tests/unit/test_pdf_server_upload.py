@@ -96,6 +96,27 @@ def test_upload_uses_owned_mapping_streams_pdf_and_completes(tmp_path):
     assert result.status == "ready"
 
 
+def test_status_checks_server_without_uploading_pdf(tmp_path):
+    db, root = database(tmp_path)
+
+    class StatusClient(Client):
+        def request(self, method, path, **kwargs):
+            self.calls.append((method, path, kwargs))
+            return Response(200, {
+                "status": "ready", "file_name": "paper.pdf", "file_size": len(PDF),
+                "content_type": "application/pdf", "reason": None,
+            })
+
+    client, session = StatusClient(), UploadSession()
+    service = PaperPdfUploadService(str(db), root, client, session)
+    result = service.status(service.preview(PAPER_ID))
+
+    assert result["status"] == "ready"
+    assert client.calls[0][0] == "GET"
+    assert client.calls[0][1].endswith("/versions/version-1/upload-status")
+    assert not session.calls
+
+
 def test_changed_bytes_after_prepare_are_not_sent(tmp_path):
     import pytest
 

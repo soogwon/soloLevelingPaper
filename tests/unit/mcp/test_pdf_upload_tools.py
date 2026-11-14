@@ -62,6 +62,32 @@ def test_card_approval_uploads_exact_preview_once():
     service.upload.assert_called_once_with(preview())
 
 
+def test_card_can_recover_confirmed_upload_status_without_reuploading():
+    service = Mock()
+    service.preview.return_value = preview()
+    service.upload.side_effect = ServerResponseInvalid()
+    service.status.return_value = {
+        "status": "ready", "file_name": "paper.pdf", "file_size": 1234,
+        "content_type": "application/pdf", "reason": None,
+    }
+    server = make_server(service)
+
+    async def check():
+        prepared = await server.call_tool("prepare_paper_pdf_upload", {"paper_id": "paper-1"})
+        arguments = {
+            "paper_id": "paper-1", "version_id": "version-1",
+            "confirmation_token": prepared.meta["confirmation_token"],
+        }
+        failed = await server.call_tool("upload_paper_pdf_to_server", arguments)
+        assert failed.structuredContent["status"] == "failed"
+        recovered = await server.call_tool("check_paper_pdf_upload_status", arguments)
+        assert recovered.structuredContent["status"] == "ready"
+
+    asyncio.run(check())
+    service.upload.assert_called_once_with(preview())
+    service.status.assert_called_once_with(preview())
+
+
 def test_pdf_upload_resource_is_bundled():
     server = make_server(Mock())
 

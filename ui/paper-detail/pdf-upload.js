@@ -33,6 +33,19 @@ export function mountPdfUpload(app, doc) {
     return {alreadyUploaded: false, message: code ? messages[code]
       : 'PDF 업로드 결과를 확인하지 못했습니다.'};
   }
+  async function recoverUploadStatus(data) {
+    try {
+      const result = await app.callServerTool({
+        name: 'check_paper_pdf_upload_status',
+        arguments: {paper_id: data.paper_id, version_id: data.version_id,
+          confirmation_token: data.confirmation_token},
+      });
+      const output = result?.structuredContent;
+      if (!result?.isError && ['ready', 'failed', 'not_uploaded'].includes(output?.status))
+        return output;
+    } catch { /* 상태 확인 실패 시에도 원문을 다시 전송하지 않는다. */ }
+    return null;
+  }
   app.ontoolinputpartial = app.ontoolcancelled = () => { input = null; reset(); };
   app.ontoolinput = event => { input = event.arguments; reset(); };
   app.ontoolresult = result => {
@@ -72,9 +85,17 @@ export function mountPdfUpload(app, doc) {
         el('status').textContent = '이미 업로드된 원문입니다. 새로 전송하지 않았습니다.';
         el('retry').hidden = true;
       } else if (accept && output?.status === 'failed') {
-        const failure = uploadFailure(output.error_code);
-        el('status').textContent = `${failure.message} 자동으로 다시 전송하지 않습니다. 업로드 안내를 다시 불러온 뒤 재시도하세요.`;
-        el('retry').hidden = false;
+        const recovered = output.error_code === 'PDF_UPLOAD_COMPLETE_FAILED'
+          ? await recoverUploadStatus(data) : null;
+        if (current !== generation) return;
+        if (recovered?.status === 'ready') {
+          el('status').textContent = 'PDF 업로드를 완료했습니다. 서버에서 저장 상태를 확인했습니다.';
+          el('retry').hidden = true;
+        } else {
+          const failure = uploadFailure(output.error_code);
+          el('status').textContent = `${failure.message} 자동으로 다시 전송하지 않습니다. 업로드 안내를 다시 불러온 뒤 재시도하세요.`;
+          el('retry').hidden = false;
+        }
       } else {
         if (!output || (accept ? output.status !== 'ready'
             : output.status !== 'cancelled')) throw new Error();
@@ -85,10 +106,24 @@ export function mountPdfUpload(app, doc) {
     } catch (error) {
       if (current !== generation) return;
       if (accept) {
-        const failure = uploadFailure(error?.toolResult ?? error?.message);
-        el('status').textContent = failure.alreadyUploaded ? failure.message
-          : `${failure.message} 자동으로 다시 전송하지 않습니다. 업로드 안내를 다시 불러온 뒤 재시도하세요.`;
-        el('retry').hidden = failure.alreadyUploaded;
+        const originalFailure = uploadFailure(error?.toolResult ?? error?.message);
+        const errorCode = errorText(error?.toolResult ?? error?.message);
+        const shouldRecover = !originalFailure.alreadyUploaded
+          && (!error?.toolResult || errorCode.includes('PDF_UPLOAD_COMPLETE_FAILED'));
+        if (shouldRecover)
+          el('status').textContent = '응답이 불확실하여 서버의 업로드 상태를 확인하는 중입니다.';
+        const recovered = shouldRecover ? await recoverUploadStatus(data) : null;
+        if (current !== generation) return;
+        if (recovered?.status === 'ready') {
+          el('status').textContent = 'PDF 업로드를 완료했습니다. 서버에서 저장 상태를 확인했습니다.';
+          el('retry').hidden = true;
+        } else {
+          const failure = recovered?.status === 'failed'
+            ? uploadFailure(recovered.reason) : originalFailure;
+          el('status').textContent = failure.alreadyUploaded ? failure.message
+            : `${failure.message} 자동으로 다시 전송하지 않습니다. 업로드 안내를 다시 불러온 뒤 재시도하세요.`;
+          el('retry').hidden = failure.alreadyUploaded;
+        }
       } else el('status').textContent = '취소 결과를 확인하지 못했습니다.';
     }
     if (current === generation) { pending = null; busy = false; controls(); }

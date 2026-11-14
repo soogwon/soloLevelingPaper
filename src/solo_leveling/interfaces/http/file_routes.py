@@ -80,6 +80,13 @@ def create_file_router(require_principal: Any, store: FileUploadStore, object_st
         content_type: str | None = None
         reason: str | None = None
 
+    class UploadStatusView(BaseModel):
+        status: Literal["not_uploaded", "pending", "failed", "ready"]
+        file_name: str | None = None
+        file_size: int | None = None
+        content_type: str | None = None
+        reason: str | None = None
+
     router = APIRouter(prefix="/v1", tags=["paper-files"])
     Principal = Annotated[AuthenticatedPrincipal, Depends(require_principal)]
 
@@ -184,6 +191,33 @@ def create_file_router(require_principal: Any, store: FileUploadStore, object_st
             raise HTTPException(status_code=404, detail={"code": "paper_version_not_found"}) from None
         except (UploadUnavailable, RuntimeError):
             raise HTTPException(status_code=503, detail={"code": "pdf_access_unavailable"}) from None
+
+    @router.get("/papers/{paper_id}/versions/{version_id}/upload-status",
+                response_model=UploadStatusView)
+    def get_upload_status(paper_id: UUID, version_id: str, principal: Principal,
+                          response: Response):
+        """기기에서 불확실한 업로드 응답을 원문 재전송 없이 확인한다."""
+        response.headers["Cache-Control"] = "no-store"
+        if principal.credential_type != "device":
+            raise HTTPException(status_code=403, detail={"code": "device_credential_required"})
+        version_id = version_id.strip()
+        if (not version_id or len(version_id) > 128 or "\x00" in version_id
+                or "/" in version_id or "\\" in version_id or PureWindowsPath(version_id).drive):
+            raise HTTPException(status_code=422, detail={"code": "invalid_version_id"})
+        try:
+            file = store.get_file_access(principal.user_id, str(paper_id), version_id)
+            if file is None:
+                return UploadStatusView(status="not_uploaded", reason="not_uploaded")
+            return UploadStatusView(
+                status=file.status, file_name=file.file_name, file_size=file.file_size,
+                content_type=file.content_type,
+                reason=None if file.status == "ready" else (
+                    file.failure_reason or f"upload_{file.status}"),
+            )
+        except UploadTargetNotFound:
+            raise HTTPException(status_code=404, detail={"code": "paper_version_not_found"}) from None
+        except (UploadUnavailable, RuntimeError):
+            raise HTTPException(status_code=503, detail={"code": "pdf_upload_unavailable"}) from None
 
     return router
 

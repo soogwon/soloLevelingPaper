@@ -25,16 +25,19 @@ PDF 원문 전체가 전송되며 저장 공간을 사용합니다. 메타데이
 class PdfUploadService(Protocol):
     def preview(self, paper_id: str, version_id: str | None = None) -> PdfUploadPreview: ...
     def upload(self, expected: PdfUploadPreview): ...
+    def status(self, expected: PdfUploadPreview) -> dict: ...
 
 
 class PdfUploadGate:
     def __init__(self, *, clock=monotonic):
         self.pending: dict[str, tuple[PdfUploadPreview, float]] = {}
+        self.confirmed: dict[str, tuple[PdfUploadPreview, float]] = {}
         self.clock = clock
 
     def prepare(self, preview: PdfUploadPreview) -> str:
         now = self.clock()
         self.pending = {key: value for key, value in self.pending.items() if value[1] > now}
+        self.confirmed = {key: value for key, value in self.confirmed.items() if value[1] > now}
         if len(self.pending) >= 128:
             raise ToolError("PDF_UPLOAD_LIMIT: 잠시 후 업로드 안내를 다시 요청하세요.")
         token = token_urlsafe(32)
@@ -47,10 +50,19 @@ class PdfUploadGate:
                 or (pending[0].paper_id, pending[0].version_id) != (paper_id, version_id)):
             raise ToolError("PDF_UPLOAD_CONFIRMATION_REQUIRED: PDF 업로드 안내 카드를 다시 확인하세요.")
         del self.pending[token]
+        self.confirmed[token] = pending
         return pending[0]
+
+    def lookup_confirmed(self, token: str, paper_id: str, version_id: str) -> PdfUploadPreview:
+        confirmed = self.confirmed.get(token)
+        if (confirmed is None or confirmed[1] <= self.clock()
+                or (confirmed[0].paper_id, confirmed[0].version_id) != (paper_id, version_id)):
+            raise ToolError("PDF_UPLOAD_CONFIRMATION_REQUIRED: PDF 업로드 안내 카드를 다시 확인하세요.")
+        return confirmed[0]
 
     def cancel(self, token: str) -> None:
         self.pending.pop(token, None)
+        self.confirmed.pop(token, None)
 
 
 def _pdf_upload_stage_tool_error(exc: PdfUploadStageError) -> ToolError:
@@ -58,6 +70,7 @@ def _pdf_upload_stage_tool_error(exc: PdfUploadStageError) -> ToolError:
         "prepare": ("PDF_UPLOAD_PREPARE_FAILED", "업로드 준비 요청에 실패했습니다."),
         "transfer": ("PDF_UPLOAD_TRANSFER_FAILED", "PDF 파일 전송에 실패했습니다."),
         "complete": ("PDF_UPLOAD_COMPLETE_FAILED", "업로드 완료 확인에 실패했습니다."),
+        "status": ("PDF_UPLOAD_STATUS_FAILED", "업로드 상태 확인에 실패했습니다."),
     }.get(exc.stage, ("PDF_UPLOAD_FAILED", "PDF 업로드를 완료하지 못했습니다."))
     details = []
     if exc.status_code is not None:
@@ -74,6 +87,7 @@ def _pdf_upload_business_result(error: ToolError) -> CallToolResult:
     allowed_codes = {
         "PDF_ALREADY_UPLOADED", "PDF_UPLOAD_PREPARE_FAILED",
         "PDF_UPLOAD_TRANSFER_FAILED", "PDF_UPLOAD_COMPLETE_FAILED",
+        "PDF_UPLOAD_STATUS_FAILED",
         "PDF_UPLOAD_FAILED", "SERVER_CONNECTION_REQUIRED",
         "PDF_UPLOAD_PREVIEW_CHANGED", "PDF_UPLOAD_CONFIRMATION_REQUIRED",
     }
@@ -169,6 +183,35 @@ def register_pdf_upload(server, service: PdfUploadService) -> None:
             error = exc
         except Exception:
             error = ToolError("PDF_UPLOAD_FAILED: PDF 업로드를 완료하지 못했습니다.")
+        return _pdf_upload_business_result(error)
+
+    @server.tool(
+        name="check_paper_pdf_upload_status", structured_output=True,
+        meta={"ui": {"visibility": ["app"]}},
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                    idempotentHint=True, openWorldHint=True),
+    )
+    async def check_paper_pdf_upload_status(
+        paper_id: str, version_id: str, confirmation_token: str,
+    ) -> CallToolResult:
+        """응답이 불확실한 업로드의 서버 상태를 원문 재전송 없이 확인합니다."""
+        try:
+            preview = gate.lookup_confirmed(confirmation_token, paper_id, version_id)
+            data = await anyio.to_thread.run_sync(service.status, preview)
+            return CallToolResult(
+                content=[TextContent(type="text", text="PDF 업로드 상태를 확인했습니다.")],
+                structuredContent=data,
+            )
+        except PdfUploadStageError as exc:
+            error = _pdf_upload_stage_tool_error(exc)
+        except ServerConnectionRequired:
+            error = ToolError("SERVER_CONNECTION_REQUIRED: 서버 계정을 다시 연결하세요.")
+        except ValueError:
+            error = ToolError("PDF_UPLOAD_PREVIEW_CHANGED: 파일이 변경되었습니다.")
+        except ToolError as exc:
+            error = exc
+        except Exception:
+            error = ToolError("PDF_UPLOAD_FAILED: 업로드 상태를 확인하지 못했습니다.")
         return _pdf_upload_business_result(error)
 
     @server.tool(

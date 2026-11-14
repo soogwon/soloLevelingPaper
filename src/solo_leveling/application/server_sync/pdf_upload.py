@@ -173,6 +173,29 @@ class PaperPdfUploadService:
             data["file_size"], data["content_type"], data["storage_status"],
         )
 
+    def status(self, expected: PdfUploadPreview) -> dict[str, Any]:
+        """승인한 버전의 서버 저장 상태만 조회하며 파일을 다시 전송하지 않는다."""
+        current = self.preview(expected.paper_id, expected.version_id)
+        if current != expected:
+            raise ValueError("PDF_UPLOAD_PREVIEW_CHANGED")
+        response = self._client.request(
+            "GET",
+            f"/v1/papers/{quote(current.server_paper_id, safe='')}/versions/"
+            f"{quote(current.version_id, safe='')}/upload-status",
+            expected_connection_id=current.account_id,
+        )
+        try:
+            if response.status_code != 200:
+                raise PdfUploadStageError(
+                    "status", response.status_code, _safe_detail_code(response))
+            data = _response_json(response)
+            if not isinstance(data, dict) or data.get("status") not in {
+                    "not_uploaded", "pending", "failed", "ready"}:
+                raise PdfUploadStageError("status", response.status_code)
+            return data
+        finally:
+            response.close()
+
 
 def _inspect_pdf(source: Path, root: Path, snapshot: BinaryIO | None = None,
                  max_size: int | None = None) -> tuple[str, int]:

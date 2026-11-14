@@ -85,6 +85,46 @@ test('파일 전송 실패 이유를 표시하고 자동 재전송하지 않는�
   assert.equal(calls.length, 1);
 });
 
+test('업로드 응답을 잃으면 원문 재전송 없이 서버 상태를 복구한다', async () => {
+  const {app, doc, calls} = setup();
+  app.callServerTool = async input => {
+    calls.push(input);
+    if (input.name === 'upload_paper_pdf_to_server') throw new Error('transport lost');
+    return {structuredContent: {status: 'ready', file_name: 'paper.pdf'}};
+  };
+  app.ontoolresult({structuredContent: {
+    status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-1',
+    file_name: 'paper.pdf', file_size: 1234, notice: 'PDF 전체 전송',
+    confirmation_token: 'secret',
+  }});
+  doc.getElementById('agree').checked = true;
+  await doc.getElementById('confirm').onclick();
+  assert.deepEqual(calls.map(call => call.name), [
+    'upload_paper_pdf_to_server', 'check_paper_pdf_upload_status']);
+  assert.match(doc.getElementById('status').textContent, /서버에서 저장 상태를 확인/);
+  assert.equal(doc.getElementById('retry').hidden, true);
+});
+
+test('완료 응답 오류도 서버 상태가 ready이면 성공으로 복구한다', async () => {
+  const {app, doc, calls} = setup();
+  app.callServerTool = async input => {
+    calls.push(input);
+    if (input.name === 'upload_paper_pdf_to_server') return {structuredContent: {
+      status: 'failed', error_code: 'PDF_UPLOAD_COMPLETE_FAILED'}};
+    return {structuredContent: {status: 'ready', file_name: 'paper.pdf'}};
+  };
+  app.ontoolresult({structuredContent: {
+    status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-1',
+    file_name: 'paper.pdf', file_size: 1234, notice: 'PDF 전체 전송',
+    confirmation_token: 'secret',
+  }});
+  doc.getElementById('agree').checked = true;
+  await doc.getElementById('confirm').onclick();
+  assert.deepEqual(calls.map(call => call.name), [
+    'upload_paper_pdf_to_server', 'check_paper_pdf_upload_status']);
+  assert.match(doc.getElementById('status').textContent, /서버에서 저장 상태를 확인/);
+});
+
 test('재시도는 새 안내만 요청하고 다시 동의를 요구한다', async () => {
   const {app, doc, calls} = setup();
   app.callServerTool = async input => {
@@ -105,8 +145,8 @@ test('재시도는 새 안내만 요청하고 다시 동의를 요구한다', as
   doc.getElementById('agree').onchange();
   await doc.getElementById('confirm').onclick();
   await doc.getElementById('retry').onclick();
-  assert.equal(calls[1].name, 'prepare_paper_pdf_upload');
-  assert.deepEqual(calls[1].arguments, {paper_id: 'paper-1'});
+  assert.equal(calls[2].name, 'prepare_paper_pdf_upload');
+  assert.deepEqual(calls[2].arguments, {paper_id: 'paper-1'});
   assert.equal(doc.getElementById('notice').textContent, '새 안내');
   assert.equal(doc.getElementById('agree').checked, false);
   assert.equal(doc.getElementById('confirm').disabled, true);
@@ -168,7 +208,7 @@ for (const [code, message] of [
     assert.equal(doc.getElementById('retry').hidden, false);
     assert.equal(doc.getElementById('confirm').disabled, true);
     await doc.getElementById('confirm').onclick();
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, code === 'PDF_UPLOAD_COMPLETE_FAILED' ? 2 : 1);
   });
 }
 
@@ -184,9 +224,14 @@ for (const [name, response] of [
       version_id: 'version-1', file_name: 'paper.pdf', file_size: 1234,
       notice: '안내', confirmation_token: 'secret'};
     app.ontoolresult({structuredContent: preview});
+    let prepareCalls = 0;
     app.callServerTool = async call => {
       calls.push(call);
-      return calls.length <= 2 ? response : {structuredContent: preview};
+      if (call.name === 'prepare_paper_pdf_upload') {
+        prepareCalls += 1;
+        return prepareCalls === 1 ? response : {structuredContent: preview};
+      }
+      return response;
     };
     doc.getElementById('agree').checked = true;
     await doc.getElementById('confirm').onclick();
@@ -195,8 +240,8 @@ for (const [name, response] of [
     assert.equal(doc.getElementById('agree').disabled, true);
     assert.doesNotMatch(doc.getElementById('status').textContent, /private/);
     await doc.getElementById('retry').onclick();
-    assert.equal(calls.length, 3);
-    assert.equal(calls[2].name, 'prepare_paper_pdf_upload');
+    assert.equal(prepareCalls, 2);
+    assert.equal(calls.at(-1).name, 'prepare_paper_pdf_upload');
     assert.equal(doc.getElementById('agree').disabled, false);
     assert.equal(doc.getElementById('agree').checked, false);
     assert.equal(doc.getElementById('confirm').disabled, true);
