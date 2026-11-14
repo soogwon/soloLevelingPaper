@@ -1,7 +1,5 @@
 name: 로그 정리 플랫폼 검증
 on:
-  push:
-    branches: [feat/issue-99-safe-log-cleanup]
   workflow_dispatch:
 
 permissions:
