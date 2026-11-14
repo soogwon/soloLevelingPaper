@@ -50,6 +50,21 @@ class DatabaseSettings:
 
 
 @dataclass(frozen=True)
+class ObjectStorageSettings:
+    endpoint_url: str
+    bucket: str
+    access_key_id: str
+    secret_access_key: str
+    region: str = "auto"
+
+    def __post_init__(self) -> None:
+        _validate_https_url("OBJECT_STORAGE_ENDPOINT", self.endpoint_url)
+        if any(not value.strip() for value in (
+                self.bucket, self.access_key_id, self.secret_access_key, self.region)):
+            raise ValueError("객체 저장소 설정은 비어 있을 수 없습니다.")
+
+
+@dataclass(frozen=True)
 class WebAuthSettings:
     authorization_url: str
     token_url: str
@@ -133,6 +148,20 @@ def load_database_settings(source: Mapping[str, str] | None = None) -> DatabaseS
     values = environ if source is None else source
     dsn = values.get("DATABASE_URL", "").strip()
     return DatabaseSettings(dsn) if dsn else None
+
+
+def load_object_storage_settings(
+    source: Mapping[str, str] | None = None,
+) -> ObjectStorageSettings | None:
+    values = environ if source is None else source
+    names = ("OBJECT_STORAGE_ENDPOINT", "OBJECT_STORAGE_BUCKET",
+             "OBJECT_STORAGE_ACCESS_KEY_ID", "OBJECT_STORAGE_SECRET_ACCESS_KEY")
+    raw = tuple(values.get(name, "").strip() for name in names)
+    if not any(raw):
+        return None
+    if not all(raw):
+        raise ValueError("객체 저장소 설정을 모두 지정해야 합니다.")
+    return ObjectStorageSettings(*raw, values.get("OBJECT_STORAGE_REGION", "auto").strip())
 
 
 def load_web_auth_settings(source: Mapping[str, str] | None = None) -> WebAuthSettings | None:
