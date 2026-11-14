@@ -8,7 +8,7 @@ from uuid import UUID
 from .auth import AuthenticatedPrincipal
 from .file_uploads import (
     MAX_FILE_BYTES, FileUploadStore, UploadAlreadyReady, UploadQuotaExceeded, UploadTargetNotFound,
-    UploadUnavailable,
+    UploadReservationConflict, UploadUnavailable,
 )
 
 
@@ -27,7 +27,7 @@ def create_file_router(require_principal: Any, store: FileUploadStore, object_st
         file_size: int = Field(strict=True, gt=0, le=MAX_FILE_BYTES)
         content_type: str
         sha256: str
-        consent: bool
+        consent: bool = Field(strict=True)
 
         @field_validator("server_version_id", "local_version_id", "file_name")
         @classmethod
@@ -77,11 +77,13 @@ def create_file_router(require_principal: Any, store: FileUploadStore, object_st
                 payload.content_type, payload.sha256,
             )
             prepared = object_storage.prepare_upload(
-                reservation, content_type=payload.content_type, sha256_hex=payload.sha256)
+                reservation, file_size=payload.file_size, content_type=payload.content_type, sha256_hex=payload.sha256)
         except UploadTargetNotFound:
             raise HTTPException(status_code=404, detail={"code": "paper_version_not_found"}) from None
         except UploadQuotaExceeded:
             raise HTTPException(status_code=413, detail={"code": "pdf_storage_quota_exceeded"}) from None
+        except UploadReservationConflict:
+            raise HTTPException(status_code=409, detail={"code": "pdf_upload_reservation_conflict"}) from None
         except UploadAlreadyReady:
             raise HTTPException(status_code=409, detail={"code": "pdf_already_uploaded"}) from None
         except (UploadUnavailable, RuntimeError):

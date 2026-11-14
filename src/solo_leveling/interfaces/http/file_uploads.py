@@ -25,6 +25,10 @@ class UploadQuotaExceeded(Exception):
     pass
 
 
+class UploadReservationConflict(Exception):
+    pass
+
+
 class UploadAlreadyReady(Exception):
     pass
 
@@ -57,14 +61,14 @@ class PostgresFileUploadStore:
     def reserve(self, owner_user_id: str, paper_id: str, server_version_id: str,
                 local_version_id: str, file_name: str, file_size: int,
                 content_type: str, sha256_hex: str) -> UploadReservation:
-        now = self._now()
-        expires_at = now + UPLOAD_TTL
         upload_id = str(uuid4())
         owner_prefix = sha256(owner_user_id.encode("utf-8")).hexdigest()[:24]
         object_key = f"private/{owner_prefix}/{paper_id}/{server_version_id}/{upload_id}.pdf"
         with _connection(self._pool) as conn:
             # 같은 사용자의 준비 요청끼리 한도 확인과 예약이 엇갈리지 않게 직렬화한다.
             conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (owner_user_id,))
+            now = self._now()
+            expires_at = now + UPLOAD_TTL
             target = conn.execute(
                 """SELECT 1 FROM server_papers p
                    WHERE p.paper_id=%s AND p.owner_user_id=%s
@@ -78,7 +82,7 @@ class PostgresFileUploadStore:
             if target is None:
                 raise UploadTargetNotFound
             existing = conn.execute(
-                """SELECT upload_id, object_key, expires_at, status
+                """SELECT upload_id, object_key, expires_at, status, file_size, local_version_id, file_name
                    FROM server_pdf_uploads
                    WHERE owner_user_id=%s AND paper_id=%s
                      AND server_version_id=%s AND sha256_hex=%s
@@ -89,6 +93,9 @@ class PostgresFileUploadStore:
                 raise UploadAlreadyReady
             if (existing is not None and existing["status"] == "pending"
                     and existing["expires_at"] > now):
+                if (existing["file_size"], existing["local_version_id"], existing["file_name"]) != (
+                        file_size, local_version_id, file_name):
+                    raise UploadReservationConflict
                 return UploadReservation(
                     str(existing["upload_id"]), existing["object_key"], existing["expires_at"])
             used = conn.execute(
@@ -130,7 +137,15 @@ class PostgresFileUploadStore:
 
 @contextmanager
 def _connection(pool):
-    with pool.connection() as conn:
-        with conn.transaction():
-            yield conn
-
+    try:
+        with pool.connection() as conn:
+            with conn.transaction():
+                yield conn
+    except (UploadTargetNotFound, UploadQuotaExceeded, UploadReservationConflict, UploadAlreadyReady):
+        raise
+    except Exception as exc:
+        from psycopg import Error
+        from psycopg_pool import PoolTimeout
+        if isinstance(exc, (Error, PoolTimeout)):
+            raise UploadUnavailable from None
+        raise

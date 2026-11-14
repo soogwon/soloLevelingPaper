@@ -26,25 +26,28 @@ class S3ObjectStorage:
     @classmethod
     def create(cls, settings):
         import boto3
+        from botocore.config import Config
         client = boto3.client(
             "s3", endpoint_url=settings.endpoint_url,
             aws_access_key_id=settings.access_key_id,
             aws_secret_access_key=settings.secret_access_key,
-            region_name=settings.region,
+            region_name=settings.region, config=Config(signature_version="s3v4"),
         )
         return cls(client, settings.bucket)
 
-    def prepare_upload(self, reservation, *, content_type: str, sha256_hex: str) -> PresignedUpload:
+    def prepare_upload(self, reservation, *, file_size: int, content_type: str, sha256_hex: str) -> PresignedUpload:
         checksum = base64.b64encode(bytes.fromhex(sha256_hex)).decode("ascii")
-        expires = max(1, int((reservation.expires_at - datetime.now(reservation.expires_at.tzinfo)).total_seconds()))
+        expires = int((reservation.expires_at - datetime.now(reservation.expires_at.tzinfo)).total_seconds())
+        if expires < 1:
+            raise RuntimeError("upload_reservation_expired")
         params = {
             "Bucket": self._bucket, "Key": reservation.object_key,
-            "ContentType": content_type, "ChecksumSHA256": checksum,
+            "ContentLength": file_size, "ContentType": content_type, "ChecksumSHA256": checksum,
         }
         url = self._client.generate_presigned_url(
             "put_object", Params=params, ExpiresIn=expires, HttpMethod="PUT")
         return PresignedUpload(url, "PUT", {
-            "Content-Type": content_type,
+            "Content-Length": str(file_size), "Content-Type": content_type,
             "x-amz-checksum-sha256": checksum,
         }, reservation.expires_at)
 

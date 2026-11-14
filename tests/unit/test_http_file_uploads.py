@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import inspect
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -12,7 +12,7 @@ from solo_leveling.interfaces.http.app import create_app
 from solo_leveling.interfaces.http.auth import AuthenticatedPrincipal
 from solo_leveling.interfaces.http.file_uploads import (
     MAX_FILE_BYTES, PostgresFileUploadStore, UploadAlreadyReady, UploadQuotaExceeded,
-    UploadReservation, UploadTargetNotFound,
+    UploadReservation, UploadReservationConflict, UploadTargetNotFound,
 )
 from solo_leveling.interfaces.http.object_storage import PresignedUpload, S3ObjectStorage
 from solo_leveling.interfaces.http.settings import load_object_storage_settings
@@ -83,7 +83,7 @@ def test_device_prepares_private_pdf_upload_with_explicit_integrity_headers():
     }
     assert store.calls == [("user-1", PAPER_ID, "version-1", "version-1", "paper.pdf",
                             1234, "application/pdf", SHA256)]
-    assert storage.calls[0][1] == {"content_type": "application/pdf", "sha256_hex": SHA256}
+    assert storage.calls[0][1] == {"file_size": 1234, "content_type": "application/pdf", "sha256_hex": SHA256}
 
 
 def test_upload_requires_separate_consent_before_reserving_storage():
@@ -98,7 +98,7 @@ def test_upload_requires_separate_consent_before_reserving_storage():
 
 
 @pytest.mark.parametrize("change", [
-    {"file_size": MAX_FILE_BYTES + 1}, {"content_type": "text/plain"},
+    {"consent": 1}, {"consent": "true"}, {"file_size": MAX_FILE_BYTES + 1}, {"content_type": "text/plain"},
     {"file_name": "../paper.pdf"}, {"sha256": "nope"},
 ])
 def test_invalid_pdf_metadata_never_reserves_storage(change):
@@ -162,10 +162,15 @@ def test_s3_presign_binds_content_type_and_checksum():
 
     raw = Client()
     upload = S3ObjectStorage(raw, "private-bucket").prepare_upload(
-        UploadReservation(UPLOAD_ID, "private/key.pdf", NOW),
-        content_type="application/pdf", sha256_hex=SHA256,
+        UploadReservation(UPLOAD_ID, "private/key.pdf", datetime.now(timezone.utc) + timedelta(minutes=10)),
+        file_size=1234, content_type="application/pdf", sha256_hex=SHA256,
     )
+    with pytest.raises(RuntimeError, match="expired"):
+        S3ObjectStorage(raw, "private-bucket").prepare_upload(
+            UploadReservation(UPLOAD_ID, "private/key.pdf", datetime.now(timezone.utc)),
+            file_size=1234, content_type="application/pdf", sha256_hex=SHA256)
     operation, sent = raw.call
+    assert int(upload.headers["Content-Length"]) == sent["Params"]["ContentLength"] == 1234
     assert operation == "put_object" and sent["HttpMethod"] == "PUT"
     assert sent["Params"]["Bucket"] == "private-bucket"
     assert sent["Params"]["Key"] == "private/key.pdf"
@@ -230,6 +235,7 @@ def test_postgres_reservation_rejects_quota_before_insert():
 
 def test_postgres_active_retry_reuses_reservation_without_double_counting_quota():
     existing = {"upload_id": UPLOAD_ID, "object_key": "private/key.pdf",
+                "file_size": 1234, "local_version_id": "local-v1", "file_name": "paper.pdf",
                 "expires_at": NOW.replace(minute=10), "status": "pending"}
     pool = Pool([Result(), Result({"exists": 1}), Result(existing)])
     result = PostgresFileUploadStore(pool, now=lambda: NOW).reserve(
@@ -237,3 +243,9 @@ def test_postgres_active_retry_reuses_reservation_without_double_counting_quota(
         1234, "application/pdf", SHA256)
     assert result == UploadReservation(UPLOAD_ID, "private/key.pdf", existing["expires_at"])
     assert len(pool.conn.calls) == 3
+
+    pool = Pool([Result(), Result({"exists": 1}), Result(existing)])
+    with pytest.raises(UploadReservationConflict):
+        PostgresFileUploadStore(pool, now=lambda: NOW).reserve(
+            "user-1", PAPER_ID, "version-1", "local-v1", "paper.pdf",
+            1235, "application/pdf", SHA256)
