@@ -410,7 +410,8 @@ for (const event of ['ontoolinput', 'ontoolcancelled']) {
     const {app, doc, el} = setup();
     let finish;
     Object.defineProperty(doc.defaultView, 'crypto', {value: {
-      subtle: {digest: () => new Promise(resolve => { finish = resolve; })},
+      subtle: {digest: () => finish ? Promise.resolve(new Uint8Array(32).buffer)
+        : new Promise(resolve => { finish = resolve; })},
       randomUUID: () => 'cancelled-request',
     }, configurable: true});
     let calls = 0;
