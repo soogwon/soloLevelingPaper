@@ -383,6 +383,49 @@ class RecoveryContextOutput(TypedDict):
     goal: str
 
 
+# 진행 알림 간격(#119). 호스트가 진행 알림마다 대기 시간을 다시 세면 60초 제한에 덜 걸린다.
+PROGRESS_INTERVAL_SECONDS = 10
+PROGRESS_MESSAGE = '논문 질문을 처리하고 있습니다.'
+
+
+async def _with_progress(server: FastMCP, work):
+    """호출자가 progressToken을 보냈을 때만 작업이 끝날 때까지 주기적으로 진행 알림을 보낸다.
+
+    알림 실패는 작업 결과를 바꾸지 않는다. 작업의 예외는 그대로 다시 던진다.
+    """
+    try:
+        context = server.get_context()
+        meta = context.request_context.meta
+    except (LookupError, ValueError):
+        meta = None
+    if meta is None or meta.progressToken is None:
+        return await work()
+
+    async def beat():
+        count = 0
+        while True:
+            await anyio.sleep(PROGRESS_INTERVAL_SECONDS)
+            count += 1
+            try:
+                await context.report_progress(count, None, PROGRESS_MESSAGE)
+            except Exception:
+                return
+
+    outcome = None
+    async with anyio.create_task_group() as group:
+        group.start_soon(beat)
+        try:
+            outcome = (True, await work())
+        except Exception as error:
+            outcome = (False, error)
+        finally:
+            group.cancel_scope.cancel()
+    succeeded, value = outcome
+    if not succeeded:
+        raise value
+    return value
+
+
 def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
     """저장소 수명이나 환경 설정에 관여하지 않고 MCP 도구만 구성한다."""
     server = ReflectionInputServer('solo-leveling-paper',
@@ -687,11 +730,12 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             except ValueError:
                 raise to_tool_error(InvalidArgumentError('question')) from None
             try:
-                result = await anyio.to_thread.run_sync(lambda: services.executions.run(
-                    request_key, standalone_question if standalone_question is not None else question,
-                    context_id=context_id, top_k=top_k, pdf_pages=tuple(focus.pdf_pages) if focus else (),
-                    section_ids=tuple(focus.section_ids) if focus else (),
-                    strict_pages=focus.strict_pages if focus else False))
+                result = await _with_progress(server, lambda: anyio.to_thread.run_sync(
+                    lambda: services.executions.run(
+                        request_key, standalone_question if standalone_question is not None else question,
+                        context_id=context_id, top_k=top_k, pdf_pages=tuple(focus.pdf_pages) if focus else (),
+                        section_ids=tuple(focus.section_ids) if focus else (),
+                        strict_pages=focus.strict_pages if focus else False)))
                 if result.view is not None:
                     return _execution_output(result.view)
                 state = ('not_found' if result.outcome == ExecutionOutcome.CONTEXT_NOT_FOUND
@@ -767,9 +811,10 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                 try:
                     # 취소되면 기다리지 않고 돌아간다. 작업 스레드는 다음 단계(생성·보완·의미 검증·저장)
                     # 전에 신호를 보고 멈춘다. 이미 시작한 API 호출·저장은 끊지 않는다.
-                    response = await anyio.to_thread.run_sync(lambda: services.answer.answer(
-                        effective_question, context_id=context_id, top_k=top_k,
-                        pdf_pages=pages, section_ids=sections, **strict), abandon_on_cancel=True)
+                    response = await _with_progress(server, lambda: anyio.to_thread.run_sync(
+                        lambda: services.answer.answer(
+                            effective_question, context_id=context_id, top_k=top_k,
+                            pdf_pages=pages, section_ids=sections, **strict), abandon_on_cancel=True))
                 except anyio.get_cancelled_exc_class():
                     cancelled.set()
                     raise
