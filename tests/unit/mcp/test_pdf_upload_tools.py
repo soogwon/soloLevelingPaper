@@ -118,13 +118,16 @@ def test_upload_failure_preserves_code_and_consumes_token(failure, code):
         arguments = {"paper_id": "paper-1", "version_id": "version-1",
                      "confirmation_token": prepared.structuredContent["confirmation_token"]}
         result = await server.call_tool("upload_paper_pdf_to_server", arguments)
-        assert result.isError is True
-        assert result.structuredContent is None
-        assert result.content[0].text.startswith(code + ":")
+        assert result.isError is False
+        assert result.structuredContent == {
+            "status": "already_uploaded" if code == "PDF_ALREADY_UPLOADED" else "failed",
+            "error_code": code,
+        }
         assert "private-detail" not in result.model_dump_json()
         repeated = await server.call_tool("upload_paper_pdf_to_server", arguments)
-        assert repeated.isError is True
-        assert repeated.content[0].text.startswith("PDF_UPLOAD_CONFIRMATION_REQUIRED:")
+        assert repeated.isError is False
+        assert repeated.structuredContent == {
+            "status": "failed", "error_code": "PDF_UPLOAD_CONFIRMATION_REQUIRED"}
 
     asyncio.run(check())
     service.upload.assert_called_once_with(preview())

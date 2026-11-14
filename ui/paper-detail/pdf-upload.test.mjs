@@ -145,6 +145,33 @@ test('호스트 오류 채널 없이 이미 업로드 상태를 안내한다', a
   assert.equal(doc.getElementById('retry').hidden, true);
 });
 
+for (const [code, message] of [
+  ['PDF_UPLOAD_PREPARE_FAILED', /준비를 만들지 못했습니다/],
+  ['PDF_UPLOAD_TRANSFER_FAILED', /저장소로 전송하지 못했습니다/],
+  ['PDF_UPLOAD_COMPLETE_FAILED', /완료 여부를 확인하지 못했습니다/],
+  ['PRIVATE_UNKNOWN', /결과를 확인하지 못했습니다/],
+]) {
+  test(`구조화 실패 ${code}는 자동 재전송 없이 새 동의를 요구한다`, async () => {
+    const {app, doc, calls} = setup();
+    app.callServerTool = async call => {
+      calls.push(call);
+      return {structuredContent: {status: 'failed', error_code: code}};
+    };
+    app.ontoolresult({structuredContent: {
+      status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-1',
+      file_name: 'paper.pdf', file_size: 1234, notice: '안내', confirmation_token: 'secret',
+    }});
+    doc.getElementById('agree').checked = true;
+    await doc.getElementById('confirm').onclick();
+    assert.match(doc.getElementById('status').textContent, message);
+    assert.doesNotMatch(doc.getElementById('status').textContent, /PRIVATE_UNKNOWN/);
+    assert.equal(doc.getElementById('retry').hidden, false);
+    assert.equal(doc.getElementById('confirm').disabled, true);
+    await doc.getElementById('confirm').onclick();
+    assert.equal(calls.length, 1);
+  });
+}
+
 for (const [name, response] of [
   ['도구 오류', {isError: true, content: [{type: 'text', text: 'private error'}]}],
   ['빈 응답', {}],
