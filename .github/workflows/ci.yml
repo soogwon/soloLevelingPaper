@@ -74,6 +74,10 @@ jobs:
   mcp-ui-dashboard:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      # pnpm 11은 esbuild 빌드 스크립트 승인 대기를 오류로 본다. 테스트에는 빌드가 필요 없다.
+      # install과 test(실행 전 의존성 재확인) 모두에 적용되도록 환경 변수로 둔다.
+      pnpm_config_strict_dep_builds: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -84,7 +88,7 @@ jobs:
         run: npm install -g pnpm@11.25.0
       - name: 의존성 설치
         working-directory: ui/learning-dashboard
-        run: pnpm install --frozen-lockfile --config.strict-dep-builds=false
+        run: pnpm install --frozen-lockfile
       - name: 테스트
         working-directory: ui/learning-dashboard
         run: pnpm test
