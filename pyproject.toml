@@ -18,6 +18,7 @@ solo-leveling-verification-retention = "solo_leveling.interfaces.cli.verificatio
 solo-leveling-api = "solo_leveling.interfaces.http.runtime:main"
 solo-leveling-connect = "solo_leveling.interfaces.cli.connect_server:main"
 solo-leveling-server-migrate = "solo_leveling.interfaces.cli.server_migrations:main"
+solo-leveling-kg-check = "solo_leveling.interfaces.cli.kg_check:main"
 
 [project.optional-dependencies]
 dev = ["pytest", "filelock>=3.13,<5", "mcp>=1,<2", "jsonschema>=4.20,<5", "pdfplumber", "chromadb>=1.5.9,<1.6", "requests>=2.32,<3", "python-dotenv>=1,<2", "fastapi>=0.121,<0.122", "PyJWT[crypto]>=2.10,<3", "psycopg[binary,pool]>=3.2,<4", "keyring>=25,<26"]
@@ -41,6 +42,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "solo_leveling.interfaces.mcp" = ["assets/*.html", "assets/*.txt"]
+"solo_leveling.knowledge" = ["seed.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]

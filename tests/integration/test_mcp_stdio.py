@@ -46,6 +46,8 @@ def test_stdio_server_lists_tools(tmp_path):
                         'recover_translation', 'get_translation_recovery', 'select_recovery_context',
                         'prepare_paper_reparse', 'cancel_paper_reparse', 'submit_paper_reparse',
                         'get_paper_reparse', 'select_reparsed_context',
+                        # 검수 KG 학습 경로
+                        'get_learning_path', 'get_prerequisites',
                     }
                     ask = next(tool for tool in tools.tools if tool.name == 'ask_paper')
                     assert ask.outputSchema is not None

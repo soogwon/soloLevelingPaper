@@ -68,7 +68,8 @@ async def run():
                         'get_quiz_scores', 'review_quiz_attempt',
                 'prepare_translation_recovery', 'cancel_translation_recovery', 'recover_translation',
                 'get_translation_recovery', 'select_recovery_context', 'prepare_paper_reparse',
-                'cancel_paper_reparse', 'submit_paper_reparse', 'get_paper_reparse', 'select_reparsed_context'}
+                'cancel_paper_reparse', 'submit_paper_reparse', 'get_paper_reparse', 'select_reparsed_context',
+                'get_learning_path', 'get_prerequisites'}
             # 설치본에서도 목록 조회 계약과 빈 DB·오류 응답을 실제 stdio로 확인한다.
             card = next(t for t in tools.tools if t.name == 'open_paper_question_card')
             resource = await session.read_resource(card.meta['ui']['resourceUri'])
