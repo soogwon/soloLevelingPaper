@@ -67,6 +67,7 @@ export default async function paperDetailPage({ view, params, query }) {
     <div class="detail-head">
       <div class="detail-head-main">
         ${statusBadge(paper.reading_status)}
+        ${paper.reading_basis_version_id ? html`<span>상태 기준 원문 버전: ${paper.reading_basis_version_id} · 다른 판본의 학습 완료를 뜻하지 않습니다.</span>` : html`<span>상태 기준 원문 버전 미확인</span>`}
         <h1 class="detail-title">${title}</h1>
         <p class="meta">${[formatAuthorsYear(paper), paper.file_name].filter(Boolean).join(' · ')}</p>
       </div>
