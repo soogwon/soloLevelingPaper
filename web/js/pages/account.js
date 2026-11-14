@@ -5,6 +5,11 @@ import { navigate } from '../router.js';
 import { icons, loadingBlock, emptyBlock, errorBlock, errorMessage, confirmDialog, toast } from '../lib/ui.js';
 import { formatDate, formatDateTime } from '../lib/format.js';
 
+/** 'a@b.c' 형태인지 확인한다 (display_name에 이메일이 들어온 경우를 가려내는 용도). */
+function isEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
 /** 이메일 일부를 가린다: demo@example.com → de***@example.com */
 function maskEmail(email) {
   if (!email || !email.includes('@')) return '';
@@ -15,7 +20,12 @@ function maskEmail(email) {
 export default async function accountPage({ view }) {
   document.title = '계정·연결 기기 · Solo Leveling';
   const me = await api.me();
-  const name = me.display_name?.trim() || '이름 없음';
+  // 서버가 display_name에 이메일을 그대로 보내는 경우가 있다. 그때는 이름 자리에도 가린 이메일을 쓰고
+  // 아래 줄(가린 이메일)은 같은 내용이라 숨긴다.
+  const rawName = me.display_name?.trim() ?? '';
+  const nameIsEmail = isEmail(rawName);
+  const name = nameIsEmail ? maskEmail(rawName) : (rawName || '이름 없음');
+  const subline = nameIsEmail ? '' : maskEmail(me.email);
 
   setHTML(view, html`
     <h1 class="page-title">계정 · 연결 기기</h1>
@@ -25,7 +35,7 @@ export default async function accountPage({ view }) {
         <span class="profile-avatar" aria-hidden="true">${[...name][0]}</span>
         <div>
           <h2 id="acc-h" class="panel-title">${name}</h2>
-          <p class="meta">${maskEmail(me.email)}</p>
+          ${subline ? html`<p class="meta">${subline}</p>` : ''}
         </div>
       </div>
       <button type="button" class="btn" data-action="logout">로그아웃</button>
