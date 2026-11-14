@@ -37,6 +37,7 @@ def test_stdio_server_lists_tools(tmp_path):
                         'list_paper_jobs', 'get_paper_detail', 'list_evidence_annotations',
                         'get_learning_dashboard',
                         'get_reading_questions', 'save_reading_answer', 'get_reading_comparison',
+                        'get_reading_state', 'set_reading_completed',
                         'get_quiz', 'generate_quiz', 'submit_quiz', 'get_quiz_attempt', 'list_quiz_attempts',
                         'create_annotation', 'get_annotation', 'list_annotations',
                         'update_annotation', 'delete_annotation',
@@ -75,6 +76,11 @@ def test_stdio_server_lists_tools(tmp_path):
                     assert status.isError is False
                     assert status.structuredContent['status'] == 'failed'
                     assert status.structuredContent['version_id'] == found['version_id']
+                    reading = await session.call_tool('get_reading_state', {'paper_id':'p'})
+                    assert not reading.isError and reading.structuredContent['status'] == 'not_started'
+                    completed = await session.call_tool('set_reading_completed',
+                        {'paper_id':'p','completed':True,'expected_revision':reading.structuredContent['revision']})
+                    assert not completed.isError and completed.structuredContent['status'] == 'completed'
                     failure = await session.call_tool('get_evidence',
                         {'context_id': '00000000-0000-4000-8000-000000000000', 'evidence_ids': ['missing']})
                     assert failure.isError is True

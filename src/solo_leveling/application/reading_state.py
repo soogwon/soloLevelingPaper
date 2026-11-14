@@ -42,6 +42,8 @@ class ReadingStateService:
             return current
         # 빠른 연속 변경이나 시스템 시계 역행에도 동기화 순서를 보존한다.
         previous = datetime.fromisoformat(current.updated_at.replace('Z', '+00:00'))
+        if previous.tzinfo is None:
+            previous = previous.replace(tzinfo=timezone.utc)
         stamp = max(datetime.now(timezone.utc), previous + timedelta(microseconds=1)).isoformat()
         conn.execute('UPDATE paper_reading_states SET status=?, revision=revision+1, updated_at=? WHERE paper_id=?',
                      (status, stamp, current.paper_id))
