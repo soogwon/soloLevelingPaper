@@ -123,12 +123,12 @@ def validate_runtime_settings(values: Mapping[str, str]) -> RuntimeSettings:
                            server_api_url)
 
 
-def _learning_path_service(db_path: str, seed_path: str | None):
+def _learning_path_service(db_path: str, seed_path: str | None, pdf_root: Path):
     """검수 KG 시드가 잘못돼도 다른 MCP 기능은 그대로 시작한다."""
     from solo_leveling.application.learning_path.service import LearningPathService
     from solo_leveling.knowledge import load_graph
     try:
-        return LearningPathService(db_path, load_graph(seed_path or None))
+        return LearningPathService(db_path, load_graph(seed_path or None), pdf_root=pdf_root)
     except Exception:
         report('KG_SEED_UNAVAILABLE')
         return None
@@ -210,7 +210,7 @@ def build_runtime_server(values: Mapping[str, str]):
                 str(paths.db_path), paths.pdf_dir, server_client, upload_session)
             from solo_leveling.application.server_sync.resume import ResumeRequestResolver
             resume = ResumeRequestResolver(server_client, str(paths.db_path), paths.pdf_dir, client)
-        learning_path = _learning_path_service(str(paths.db_path), values.get('SOLO_LEVELING_KG_SEED'))
+        learning_path = _learning_path_service(str(paths.db_path), values.get('SOLO_LEVELING_KG_SEED'), paths.pdf_dir)
         server = create_server(MCPServices(
             recovery=gate.wrap(recovery), reparse=gate.wrap(reparse),
             question_keys=gate.wrap(QuestionKeys(paths.data_root.resolve() / 'card-question-keys.sqlite3')),

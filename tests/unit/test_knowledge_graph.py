@@ -196,5 +196,44 @@ def test_reads_arxiv_stamp_from_reviewed_pdf():
     from solo_leveling.infrastructure.parsing.arxiv_stamp import read_arxiv_id
 
     pdf = Path(__file__).resolve().parents[2] / 'test_data/tmp_pdfs/075b9be9-5944-4e83-af4b-2add5dbdeb94.pdf'
-    assert read_arxiv_id(str(pdf)) == '1706.03762'
-    assert read_arxiv_id(str(pdf.parent / 'missing.pdf')) is None
+    from hashlib import sha256
+    digest = sha256(pdf.read_bytes()).hexdigest()
+    assert read_arxiv_id(str(pdf), pdf_root=pdf.parent, expected_hash=digest) == '1706.03762'
+    assert read_arxiv_id(str(pdf.parent / 'missing.pdf'), pdf_root=pdf.parent, expected_hash=digest) is None
+
+
+def test_arxiv_lookup_rejects_external_links_and_changed_file(tmp_path):
+    from hashlib import sha256
+    from pathlib import Path
+    from solo_leveling.infrastructure.parsing.arxiv_stamp import read_arxiv_id
+
+    pdf = Path(__file__).resolve().parents[2] / 'test_data/tmp_pdfs/075b9be9-5944-4e83-af4b-2add5dbdeb94.pdf'
+    digest = sha256(pdf.read_bytes()).hexdigest()
+    root = tmp_path / 'pdfs'
+    root.mkdir()
+    link = root / 'linked.pdf'
+    link.symlink_to(pdf)
+    assert read_arxiv_id(str(link), pdf_root=root, expected_hash=digest) is None
+    assert read_arxiv_id(str(pdf), pdf_root=root, expected_hash=digest) is None
+    local = root / 'local.pdf'
+    local.write_bytes(pdf.read_bytes())
+    assert read_arxiv_id('local.pdf', pdf_root=root, expected_hash=digest) == '1706.03762'
+    local.write_bytes(b'%PDF-replaced')
+    assert read_arxiv_id('local.pdf', pdf_root=root, expected_hash=digest) is None
+
+
+def test_arxiv_lookup_does_not_use_body_reference(tmp_path, monkeypatch):
+    from hashlib import sha256
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    import pdfplumber
+    from solo_leveling.infrastructure.parsing.arxiv_stamp import read_arxiv_id
+
+    source = tmp_path / 'paper.pdf'
+    source.write_bytes(b'%PDF-test')
+    parsed = MagicMock()
+    parsed.__enter__.return_value.pages = [SimpleNamespace(chars=[
+        {'text': 'See https://arxiv.org/pdf/1706.03762v7', 'upright': True}])]
+    monkeypatch.setattr(pdfplumber, 'open', lambda stream: parsed)
+    assert read_arxiv_id(str(source), pdf_root=tmp_path,
+                         expected_hash=sha256(source.read_bytes()).hexdigest()) is None

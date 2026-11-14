@@ -17,12 +17,16 @@ MODES = ('compact', 'expanded')
 class LearningPathService:
     """읽기 전용 서비스. 그래프는 시작 시 메모리에 올린 검수 시드다."""
 
-    def __init__(self, db_path: str, graph: KnowledgeGraph, *, arxiv_reader=None):
+    def __init__(self, db_path: str, graph: KnowledgeGraph, *, arxiv_reader=None, pdf_root: Path | None = None):
         self.db_path = db_path
         self.graph = graph
         if arxiv_reader is None:
             from solo_leveling.infrastructure.parsing.arxiv_stamp import read_arxiv_id
-            arxiv_reader = read_arxiv_id
+            arxiv_reader = lambda path, digest: read_arxiv_id(
+                path, pdf_root=pdf_root, expected_hash=digest)
+        else:
+            supplied_reader = arxiv_reader
+            arxiv_reader = lambda path, digest: supplied_reader(path)
         self.arxiv_reader = arxiv_reader
         self._arxiv_by_hash: dict[str, str | None] = {}
 
@@ -33,7 +37,7 @@ class LearningPathService:
             return paper, False
         if file_hash not in self._arxiv_by_hash:
             # 같은 파일은 다시 읽지 않는다. 파일이 없거나 표기가 없으면 None으로 기억한다.
-            self._arxiv_by_hash[file_hash] = self.arxiv_reader(stored_path)
+            self._arxiv_by_hash[file_hash] = self.arxiv_reader(stored_path, file_hash)
         related = self.graph.paper_by_arxiv(self._arxiv_by_hash[file_hash])
         return related, related is not None
 
