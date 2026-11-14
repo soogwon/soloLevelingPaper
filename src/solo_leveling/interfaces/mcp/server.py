@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_serializer
 from solo_leveling.application.evidence_qa.serialization import (
     public_answer_payload as _answer_payload, serialize_stored_evidence_result,
 )
-from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
+from solo_leveling.application.evidence_qa.errors import InvalidArgumentError, LocalPdfNotFoundError
 from solo_leveling.application.evidence_qa.ports import DefaultContextStore
 from solo_leveling.domain.ask_execution import ExecutionOutcome, ExecutionValidationError, ExecutionView
 from solo_leveling.infrastructure.generation.ask_execution_service import AskExecutionService
@@ -24,7 +24,7 @@ from solo_leveling.application.paper_detail.service import PaperDetailService
 from .registration_consent import (
     RegistrationGate, REGISTRATION_NOTICE, REGISTRATION_APP_URI, register_registration_app,
 )
-from .errors import to_tool_error
+from .errors import registration_input_error, to_tool_error
 from .detail_app import DETAIL_APP_URI, register_detail_app
 from .question_card import QuestionKeys, register_question_card
 from .status_app import STATUS_APP_URI, register_status_app
@@ -543,8 +543,9 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         async def prepare_paper_registration(
             source: PaperSource,
             request_key: Annotated[str, Field(
+                strict=True, min_length=1, max_length=200, pattern=r'\S',
                 description=(
-                    '등록 요청의 멱등 키입니다. 비어 있지 않은 문자열을 사용하고, 같은 파일의 '
+                    '등록 요청의 멱등 키입니다. 공백만으로 이루어지지 않은 1~200자 문자열을 사용하고, 같은 파일의 '
                     '동일 요청을 재시도할 때는 같은 값을 재사용하세요.'
                 ),
                 examples=['glove-registration-20261114-01'],
@@ -565,6 +566,10 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                 await anyio.to_thread.run_sync(
                     lambda: services.ingestion.validate_local_pdf(
                         source.relative_path, request_key))
+            except LocalPdfNotFoundError as error:
+                raise to_tool_error(error) from None
+            except InvalidArgumentError:
+                raise registration_input_error('source.relative_path') from None
             except Exception as error:
                 raise to_tool_error(error) from None
             # 일회성 토큰은 모델에 보이는 응답 대신 카드용 메타데이터에만 전달한다.

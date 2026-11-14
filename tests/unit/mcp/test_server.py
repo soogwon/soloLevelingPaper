@@ -575,3 +575,45 @@ async def confirmed_registration(server, arguments):
     return await server.call_tool('add_paper', {
         **arguments, 'confirmation_token': prepared.meta['confirmation_token'],
     })
+
+
+@pytest.mark.parametrize(('arguments', 'field'), [
+    ({'request_key': 'key'}, 'source'),
+    ({'source': 'private-file-name.pdf', 'request_key': 'key'}, 'source'),
+    ({'source': {'relative_path': 'private-file-name.pdf'}, 'request_key': 'key'}, 'source.kind'),
+    ({'source': {'kind': 'private-kind', 'relative_path': 'glove.pdf'}, 'request_key': 'key'}, 'source.kind'),
+    ({'source': {'kind': 'local_file'}, 'request_key': 'key'}, 'source.relative_path'),
+    ({'source': {'kind': 'local_file', 'relative_path': 'glove.pdf'}}, 'request_key'),
+    ({'source': {'kind': 'local_file', 'relative_path': 'glove.pdf'}, 'request_key': ''}, 'request_key'),
+    ({'source': {'kind': 'local_file', 'relative_path': 'glove.pdf'}, 'request_key': '   '}, 'request_key'),
+    ({'source': {'kind': 'local_file', 'relative_path': 'glove.pdf'}, 'request_key': 'x' * 201}, 'request_key'),
+])
+def test_registration_input_errors_explain_safe_correction(arguments, field):
+    ingestion = Mock()
+    server, _, _ = make_server(ingestion=ingestion)
+    with pytest.raises(ToolError) as error:
+        run(server.call_tool('prepare_paper_registration', arguments))
+    message = str(error.value)
+    assert 'INVALID_ARGUMENT:' in message
+    assert f'field={field}:' in message
+    assert '"source":{"kind":"local_file","relative_path":"glove.pdf"}' in message
+    assert '"request_key"' in message
+    assert 'private-file-name' not in message
+    assert 'private-kind' not in message
+    ingestion.validate_local_pdf.assert_not_called()
+    ingestion.add_local_pdf.assert_not_called()
+
+
+def test_registration_invalid_path_has_safe_example():
+    ingestion = Mock()
+    ingestion.validate_local_pdf.side_effect = InvalidArgumentError('private-path')
+    server, _, _ = make_server(ingestion=ingestion)
+    with pytest.raises(ToolError) as error:
+        run(server.call_tool('prepare_paper_registration', {
+            'source': {'kind': 'local_file', 'relative_path': '../private-path.pdf'},
+            'request_key': 'key',
+        }))
+    assert 'field=source.relative_path:' in str(error.value)
+    assert '"source":{"kind":"local_file"' in str(error.value)
+    assert 'private-path' not in str(error.value)
+    ingestion.add_local_pdf.assert_not_called()

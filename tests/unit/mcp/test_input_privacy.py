@@ -25,6 +25,8 @@ INTERNAL_ERROR = 'INTERNAL_ERROR: 요청을 처리하지 못했습니다.'
     ('ask_paper', {'context_id': 'ctx', 'question': '질문',
                    'focus': {'unexpected': MARKER}}),
     ('get_evidence', {'context_id': 'ctx', 'evidence_ids': [ {'private': MARKER} ]}),
+    ('prepare_paper_registration', {'source': {'kind': MARKER, 'relative_path': MARKER}, 'request_key': 'key'}),
+    ('prepare_paper_registration', {'source': {'kind': 'local_file', 'relative_path': 'paper.pdf', MARKER: MARKER}, 'request_key': 'key'}),
     (MARKER, {}),
 ])
 def test_protocol_input_error_is_safe_and_session_survives(name, arguments, caplog, capsys):

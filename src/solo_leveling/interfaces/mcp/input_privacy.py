@@ -9,7 +9,7 @@ from jsonschema import validate, ValidationError as SchemaValidationError
 from uuid import UUID
 
 from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
-from .errors import invalid_input, to_tool_error
+from .errors import invalid_input, registration_input_error, to_tool_error
 
 
 def model_error_field(error: ValidationError, fields, prefix: str = '') -> str | None:
@@ -77,6 +77,17 @@ class SafeInputServer(FastMCP):
     @staticmethod
     def _invalid_input(error: Exception, tool=None) -> ToolError:
         """입력값을 노출하지 않고 공개 스키마의 필드명만 오류에 포함한다."""
+        if tool is not None and tool.name == 'prepare_paper_registration':
+            field = None
+            if isinstance(error, ValidationError):
+                # 알려진 필드 경로만 허용한다. 추가 키 이름과 입력값은 노출하지 않는다.
+                allowed = {'source', 'source.kind', 'source.relative_path', 'request_key'}
+                for issue in error.errors(include_url=False, include_context=False, include_input=False):
+                    path = '.'.join(str(part) for part in issue.get('loc', ()))
+                    if path in allowed:
+                        field = path
+                        break
+            return registration_input_error(field)
         if not isinstance(error, ValidationError):
             return invalid_input(reason='INVALID_JSON')
         fields = set(tool.parameters.get('properties', {})) if tool is not None else set()
