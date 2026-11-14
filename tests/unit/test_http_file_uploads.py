@@ -7,17 +7,19 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from pydantic import ValidationError
 
 from solo_leveling.interfaces.http.app import create_app
 from solo_leveling.interfaces.http.auth import AuthenticatedPrincipal
 from solo_leveling.interfaces.http.file_uploads import (
-    MAX_FILE_BYTES, CompletedUpload, PendingUpload, PostgresFileUploadStore,
+    MAX_FILE_BYTES, CompletedUpload, FileAccessRecord, PendingUpload, PostgresFileUploadStore,
     UploadAlreadyReady, UploadExpired, UploadNotFound, UploadQuotaExceeded,
     UploadReservation, UploadReservationConflict, UploadTargetNotFound,
 )
-from solo_leveling.interfaces.http.object_storage import PresignedUpload, S3ObjectStorage, StoredObject
+from solo_leveling.interfaces.http.object_storage import (
+    PresignedDownload, PresignedUpload, S3ObjectStorage, StoredObject,
+)
 from solo_leveling.interfaces.http.settings import load_object_storage_settings
 
 
@@ -51,6 +53,13 @@ class UploadStore:
         self.calls.append(("ready", *args))
         return completed_upload(object_key=args[-1])
 
+    def get_file_access(self, *args):
+        self.calls.append(("access", *args))
+        if self.error:
+            raise self.error
+        return FileAccessRecord(
+            "ready", "paper.pdf", 1234, "application/pdf", "private/final.pdf")
+
 
 class Storage:
     def __init__(self):
@@ -72,6 +81,10 @@ class Storage:
 
     def delete_upload(self, object_key):
         self.calls.append(("delete", object_key))
+
+    def prepare_download(self, file):
+        self.calls.append(("download", file))
+        return PresignedDownload("https://objects.example/read", NOW)
 
 
 def route(store=None, storage=None):
@@ -97,6 +110,14 @@ def complete_route(store=None, storage=None):
     )
     endpoint = next(item.endpoint for item in app.routes
                     if item.path == "/v1/uploads/{upload_id}/complete")
+    return endpoint
+
+
+def file_access_route(store=None, storage=None):
+    store, storage = store or UploadStore(), storage or Storage()
+    app = create_app(file_upload_store=store, object_storage=storage)
+    endpoint = next(item.endpoint for item in app.routes
+                    if item.path == "/v1/papers/{paper_id}/versions/{version_id}/file-access")
     return endpoint
 
 
@@ -288,6 +309,57 @@ def test_web_session_cannot_complete_device_upload():
     assert not store.calls
 
 
+def test_web_session_gets_short_lived_pdf_url_without_object_key():
+    store, storage = UploadStore(), Storage()
+    headers = Response()
+    response = file_access_route(store, storage)(
+        UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "web_session"), headers)
+
+    assert headers.headers["Cache-Control"] == "no-store"
+    assert response.model_dump(mode="json") == {
+        "status": "ready", "url": "https://objects.example/read",
+        "expires_at": NOW.isoformat(), "file_name": "paper.pdf", "file_size": 1234,
+        "content_type": "application/pdf", "reason": None,
+    }
+    assert "private/final.pdf" not in response.model_dump_json()
+    assert store.calls == [("access", "user-1", PAPER_ID, "version-1")]
+
+
+@pytest.mark.parametrize(("record", "status", "reason"), [
+    (None, "not_uploaded", "not_uploaded"),
+    (FileAccessRecord("pending", "paper.pdf", 1234, "application/pdf", None),
+     "pending", "upload_pending"),
+    (FileAccessRecord("failed", "paper.pdf", 1234, "application/pdf", None,
+                      "upload_checksum_mismatch"),
+     "failed", "upload_checksum_mismatch"),
+])
+def test_file_access_distinguishes_non_ready_states_without_url(record, status, reason):
+    store = UploadStore()
+    store.get_file_access = lambda *_: record
+    response = file_access_route(store)(
+        UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "web_session"), Response())
+    assert response.status == status
+    assert response.reason == reason
+    assert response.url is None and response.expires_at is None
+
+
+def test_file_access_hides_foreign_or_unknown_paper_version():
+    with pytest.raises(HTTPException) as failure:
+        file_access_route(UploadStore(UploadTargetNotFound()))(
+            UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "web_session"), Response())
+    assert failure.value.status_code == 404
+    assert failure.value.detail["code"] == "paper_version_not_found"
+
+
+def test_device_token_cannot_use_external_site_file_access():
+    store = UploadStore()
+    with pytest.raises(HTTPException) as failure:
+        file_access_route(store)(
+            UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "device", "device-1"), Response())
+    assert failure.value.status_code == 403
+    assert not store.calls
+
+
 def test_object_storage_settings_are_all_or_nothing_and_https_only():
     assert load_object_storage_settings({}) is None
     with pytest.raises(ValueError):
@@ -364,6 +436,24 @@ def test_s3_completion_reads_checksum_and_copies_to_immutable_key():
     assert raw.calls[-1][0] == "delete"
     assert raw.calls[-1][1]["Key"] == raw.calls[-2][1]["Key"]
     assert raw.calls[-1][1]["Key"] != finalized.object_key
+
+
+def test_s3_download_presign_is_get_only_and_uses_safe_inline_filename():
+    class Client:
+        def generate_presigned_url(self, operation, **kwargs):
+            self.call = (operation, kwargs)
+            return "https://objects.example/read"
+
+    raw = Client()
+    result = S3ObjectStorage(raw, "private-bucket").prepare_download(
+        FileAccessRecord("ready", "논문.pdf", 1234, "application/pdf", "private/final.pdf"))
+    operation, sent = raw.call
+    assert operation == "get_object" and sent["HttpMethod"] == "GET"
+    assert sent["ExpiresIn"] == 300
+    assert sent["Params"]["Key"] == "private/final.pdf"
+    assert sent["Params"]["ResponseContentType"] == "application/pdf"
+    assert "filename*=UTF-8''%EB%85%BC%EB%AC%B8.pdf" in sent["Params"]["ResponseContentDisposition"]
+    assert result.url == "https://objects.example/read"
 
 
 class Result:
@@ -474,3 +564,39 @@ def test_postgres_completion_expires_pending_reservation_atomically():
     with pytest.raises(UploadExpired):
         PostgresFileUploadStore(pool, now=lambda: NOW).get_for_completion("user-1", UPLOAD_ID)
     assert "failure_reason='upload_expired'" in pool.conn.calls[1][0]
+
+
+def test_postgres_file_access_requires_owned_version_and_returns_ready_object():
+    pool = Pool([
+        Result({"exists": 1}),
+        Result({
+            "file_name": "paper.pdf", "file_size": 1234,
+            "content_type": "application/pdf", "object_key": "private/final.pdf",
+            "status": "ready", "failure_reason": None,
+            "expires_at": NOW + timedelta(minutes=10),
+        }),
+    ])
+    result = PostgresFileUploadStore(pool, now=lambda: NOW).get_file_access(
+        "user-1", PAPER_ID, "version-1")
+    assert result == FileAccessRecord(
+        "ready", "paper.pdf", 1234, "application/pdf", "private/final.pdf")
+    assert pool.conn.calls[0][1] == (PAPER_ID, "user-1", "version-1")
+    assert pool.conn.calls[1][1] == ("user-1", PAPER_ID, "version-1")
+
+
+def test_postgres_file_access_expires_pending_without_exposing_object_key():
+    pool = Pool([
+        Result({"exists": 1}),
+        Result({
+            "file_name": "paper.pdf", "file_size": 1234,
+            "content_type": "application/pdf", "object_key": "private/staging.pdf",
+            "status": "pending", "failure_reason": None,
+            "expires_at": NOW - timedelta(seconds=1),
+        }),
+        Result(),
+    ])
+    result = PostgresFileUploadStore(pool, now=lambda: NOW).get_file_access(
+        "user-1", PAPER_ID, "version-1")
+    assert result.status == "failed" and result.failure_reason == "upload_expired"
+    assert result.object_key is None
+    assert "status='failed'" in pool.conn.calls[2][0]

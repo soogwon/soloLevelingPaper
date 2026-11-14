@@ -181,6 +181,14 @@ export default async function paperDetailPage({ view, params, query }) {
         toast('이 원문 버전의 PDF가 서버에 업로드되지 않았어요.');
         return;
       }
+      if (res.status === 'pending') {
+        toast('PDF 업로드 확인이 진행 중이에요. 잠시 뒤 다시 시도해 주세요.');
+        return;
+      }
+      if (res.status === 'failed') {
+        toast('PDF 업로드 확인에 실패했어요. 연결된 PC에서 다시 업로드해 주세요.');
+        return;
+      }
       if (!res.url) {
         toast(CONFIG.USE_MOCK ? `예시 데이터에는 실제 파일이 없어요. (${res.file_name})` : '원문 주소를 받지 못했어요.');
         return;

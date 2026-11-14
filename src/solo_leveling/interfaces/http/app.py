@@ -153,7 +153,8 @@ def create_app(
     app.include_router(create_device_router(require_principal, selected_store))
     app.include_router(create_device_token_router(selected_store))
     app.include_router(create_paper_router(require_principal, selected_paper_store))
-    app.include_router(create_web_paper_router(require_principal, selected_paper_store))
+    app.include_router(create_web_paper_router(
+        require_principal, selected_paper_store, selected_file_upload_store))
     app.include_router(create_file_router(require_principal, selected_file_upload_store, object_storage))
     app.include_router(create_annotation_router(require_principal, selected_paper_store))
     app.include_router(create_collection_router(require_principal, selected_collection_store))
