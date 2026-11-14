@@ -426,6 +426,16 @@ def test_nested_schema_defaults_and_nullable_fields():
     assert source['additionalProperties'] is False
     assert set(source['required']) == {'kind', 'relative_path'}
     assert source['properties']['kind']['const'] == 'local_file'
+    assert source['examples'] == [{'kind': 'local_file', 'relative_path': 'glove.pdf'}]
+    assert source['properties']['kind']['examples'] == ['local_file']
+    assert source['properties']['relative_path']['examples'] == ['glove.pdf']
+    assert 'imports/ 접두사를 붙이지 마세요' in source['properties']['relative_path']['description']
+    registration = tools['prepare_paper_registration']
+    request_key = registration.inputSchema['properties']['request_key']
+    assert request_key['examples'] == ['glove-registration-20261114-01']
+    assert '동일 요청을 재시도할 때는 같은 값을 재사용' in request_key['description']
+    assert '"relative_path":"glove.pdf"' in registration.description
+    assert 'imports/glove.pdf가 아니라 glove.pdf' in registration.description
     definitions = ask.outputSchema['$defs']
     assert set(definitions['ClaimOutput']['required']) == {'claim_id', 'text', 'evidence_ids'}
     citation = definitions['CitationOutput']

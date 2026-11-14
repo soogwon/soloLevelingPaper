@@ -45,6 +45,9 @@ prepare_paper_registration → 사용자 카드 확인 → get_paper_status → 
 Desktop에서 복원 가능한 새 질문이나 이전 질문 조회를 요청하면 open_paper_question_card에 기존 context_id를 전달하세요.
 등록·질문을 시작하기 전에 각 도구 설명에 있는 OpenAI 전송 데이터와 시점을 사용자에게 안내하세요.
 등록 요청에는 prepare_paper_registration으로 안내 카드를 표시하세요. 이 단계는 등록 완료가 아닙니다.
+등록 source는 반드시 {"kind":"local_file","relative_path":"파일명.pdf"} 형식입니다.
+relative_path는 설정된 import 루트 기준이므로 imports/ 접두사를 붙이지 마세요.
+request_key는 같은 파일의 동일 요청을 재시도할 때 재사용할 비어 있지 않은 문자열입니다.
 사용자가 카드에서 동의하고 등록해야 작업이 시작됩니다. add_paper는 카드 전용이며 대신 호출하지 마세요.
 거절·취소 후 자동 재호출하지 마세요. 카드 미지원 호스트에서는 등록할 수 없습니다.
 반환된 version_id, job_id, context_id, evidence_id를 다음 호출에 그대로 전달합니다.
@@ -161,10 +164,24 @@ class Focus(BaseModel):
 
 class PaperSource(BaseModel):
     """설정된 import 루트 아래의 PDF 한 개만 지정한다."""
-    model_config = ConfigDict(extra='forbid', frozen=True)
+    model_config = ConfigDict(
+        extra='forbid', frozen=True,
+        json_schema_extra={
+            'examples': [{'kind': 'local_file', 'relative_path': 'glove.pdf'}],
+        },
+    )
 
-    kind: Literal['local_file']
-    relative_path: str
+    kind: Literal['local_file'] = Field(
+        description='로컬 import 루트의 파일을 뜻하는 고정값입니다. 항상 local_file을 사용하세요.',
+        examples=['local_file'],
+    )
+    relative_path: str = Field(
+        description=(
+            '설정된 import 루트 기준 PDF 상대 경로입니다. import 루트가 이미 적용되므로 '
+            'imports/ 접두사를 붙이지 마세요. 예: glove.pdf 또는 papers/glove.pdf'
+        ),
+        examples=['glove.pdf'],
+    )
 
 
 class ClaimOutput(TypedDict):
@@ -524,9 +541,22 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                         idempotentHint=False, openWorldHint=False))
         async def prepare_paper_registration(
-            source: PaperSource, request_key: str,
+            source: PaperSource,
+            request_key: Annotated[str, Field(
+                description=(
+                    '등록 요청의 멱등 키입니다. 비어 있지 않은 문자열을 사용하고, 같은 파일의 '
+                    '동일 요청을 재시도할 때는 같은 값을 재사용하세요.'
+                ),
+                examples=['glove-registration-20261114-01'],
+            )],
         ) -> Annotated[CallToolResult, RegistrationPreview]:
             """외부 전송 안내 카드를 표시합니다. 아직 파일 복사나 등록을 시작하지 않습니다.
+
+            호출 예시:
+            {"source":{"kind":"local_file","relative_path":"glove.pdf"},
+             "request_key":"glove-registration-20261114-01"}
+            relative_path는 설정된 import 루트 기준이므로 imports/glove.pdf가 아니라 glove.pdf를
+            전달하세요. 동일 요청의 재시도에는 같은 request_key를 재사용하세요.
 
             외부 API 호출을 허용한 경우, 등록 후 백그라운드 번역에서 원문 청크와 대상 언어를
             OpenAI로 보냅니다. 논문 전체 원문이 전송될 수 있습니다. 사용자에게 카드 확인을 요청하세요.
