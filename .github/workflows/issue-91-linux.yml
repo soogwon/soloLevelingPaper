@@ -1,8 +1,6 @@
 name: "#91 Linux 자원 수명 검증"
 
 on:
-  push:
-    branches: [feat/issue-91-runtime-lifecycle]
   workflow_dispatch:
 
 permissions:

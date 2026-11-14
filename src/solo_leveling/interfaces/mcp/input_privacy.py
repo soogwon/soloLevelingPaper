@@ -1,17 +1,56 @@
 """SDK의 입출력 검증 오류에서 본문이 노출되지 않도록 보호한다."""
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolRequest, CallToolResult, ServerResult, TextContent
 from pydantic import ValidationError
 from jsonschema import validate, ValidationError as SchemaValidationError
+from uuid import UUID
 
 from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
-from .errors import to_tool_error
+from .errors import invalid_input, to_tool_error
+
+
+def model_error_field(error: ValidationError, fields, prefix: str = '') -> str | None:
+    """Pydantic 오류에서 공개 스키마에 있는 첫 필드 이름만 꺼낸다. 입력값은 읽지 않는다."""
+    for issue in error.errors(include_url=False, include_context=False, include_input=False):
+        location = issue.get('loc', ())
+        if location and location[0] in fields:
+            return f'{prefix}{location[0]}'
+    return None
+
+
+def schema_error_field(error: SchemaValidationError, schema: dict) -> str | None:
+    """JSON 스키마 오류에서 공개 필드 이름만 꺼낸다. 알 수 없는 키 이름은 사용자 입력이라 넣지 않는다."""
+    properties = set(schema.get('properties', {}))
+    path = list(error.absolute_path)
+    if path and path[0] in properties:
+        return path[0]
+    if error.validator == 'required' and isinstance(error.instance, dict):
+        missing = [name for name in schema.get('required', []) if name not in error.instance]
+        if missing and missing[0] in properties:
+            return missing[0]
+    return None
+
+
+def is_malformed_context_id(arguments) -> bool:
+    """학습 맥락 ID는 UUID로 발급된다. 없는 ID 중 형식부터 틀린 값은 입력 오류로 구분한다."""
+    value = arguments.get('context_id') if isinstance(arguments, dict) else None
+    if not isinstance(value, str):
+        return False
+    try:
+        UUID(value)
+    except ValueError:
+        return True
+    return False
 
 
 class SafeInputServer(FastMCP):
     """SDK 입력 모델을 공유하고 잘못된 입력은 고정 오류로 반환한다."""
+
+    # 학습 맥락 저장소(get_context). 있으면 없는 맥락 중 형식이 틀린 ID를 입력 오류로 구분한다.
+    context_reader = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -38,16 +77,21 @@ class SafeInputServer(FastMCP):
     @staticmethod
     def _invalid_input(error: Exception, tool=None) -> ToolError:
         """입력값을 노출하지 않고 공개 스키마의 필드명만 오류에 포함한다."""
-        if isinstance(error, ValidationError) and tool is not None:
-            properties = set(tool.parameters.get('properties', {}))
-            for issue in error.errors(include_url=False, include_context=False, include_input=False):
-                location = issue.get('loc', ())
-                if location and location[0] in properties:
-                    field = location[0]
-                    return ToolError(
-                        f'INVALID_ARGUMENT: INVALID_INPUT: field={field}: 입력값을 확인해주세요.')
-        reason = 'INVALID_JSON' if not isinstance(error, ValidationError) else 'INVALID_INPUT'
-        return ToolError(f'INVALID_ARGUMENT: {reason}: 입력값을 확인해주세요.')
+        if not isinstance(error, ValidationError):
+            return invalid_input(reason='INVALID_JSON')
+        fields = set(tool.parameters.get('properties', {})) if tool is not None else set()
+        return invalid_input(model_error_field(error, fields))
+
+    async def _missing_malformed_context(self, arguments) -> bool:
+        """UUID가 아니면서 저장되지 않은 context_id인지 본다. 저장된 레거시 ID는 그대로 둔다."""
+        if self.context_reader is None or not is_malformed_context_id(arguments):
+            return False
+        context_id = arguments['context_id']
+        try:
+            found = await anyio.to_thread.run_sync(lambda: self.context_reader.get_context(context_id))
+        except Exception:
+            return False
+        return found is None
 
     async def call_tool(self, name, arguments):
         tool = self._find_tool(name)
@@ -65,7 +109,12 @@ class SafeInputServer(FastMCP):
             # 입력 검사를 통과한 뒤 SDK 출력 검증·직렬화가 실패한 경우다.
             # 기존 서비스의 고정 오류 코드는 그대로 유지한다.
             if isinstance(error.__cause__, ToolError):
-                raise error.__cause__ from None
+                public = error.__cause__
+                # 없음이나 필드 없는 입력 오류가 형식이 틀린 미저장 context_id 때문이면 필드를 알려 준다.
+                vague = str(public).startswith('NOT_FOUND:') or str(public) == str(invalid_input())
+                if vague and await self._missing_malformed_context(arguments):
+                    raise invalid_input('context_id') from None
+                raise public from None
             raise to_tool_error(RuntimeError()) from None
 
         if tool.output_schema is not None:

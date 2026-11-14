@@ -9,6 +9,7 @@
 - `Dockerfile`: 서버 의존성과 API·웹 파일을 포함한 이미지
 - `deploy/render-start.sh`: 서버 시작 전 PostgreSQL 마이그레이션 실행
 - `WEB_STATIC_ROOT=/app/web`: API route 등록 후 외부 사이트를 `/`에 mount
+  - 웹 파일(HTML·JS·CSS)은 `Cache-Control: no-cache`로 응답한다. 브라우저는 매번 ETag로 재확인하고, 바뀌지 않은 파일은 304로 재사용한다. 배포 직후에도 새로고침하면 새 파일을 받는다(이미 열린 탭은 다시 불러와야 한다).
 - Render가 주입하는 `PORT`: `API_PORT`가 없을 때 자동 사용
 
 무료 Web Service에는 Render의 pre-deploy command가 제공되지 않습니다. 따라서 스테이징의 단일 인스턴스가

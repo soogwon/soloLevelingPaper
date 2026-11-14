@@ -13,6 +13,23 @@ from solo_leveling.infrastructure.storage.pdf_store import UnsupportedDocumentEr
 from .ingestion import IngestionShuttingDownError
 
 
+INVALID_INPUT_MESSAGE = '입력값을 확인해주세요.'
+NOT_FOUND_MESSAGE = '요청한 자료를 찾을 수 없습니다.'
+
+
+def tool_error(code: str, message: str, *, reason: str | None = None, field: str | None = None) -> ToolError:
+    """모든 MCP 오류를 ``CODE[: REASON][: field=이름]: 안내`` 한 가지 형식으로 만든다.
+
+    field에는 공개 입력 스키마의 필드 이름만 넣는다. 사용자가 보낸 값은 넣지 않는다.
+    """
+    parts = [code, *([reason] if reason else []), *([f'field={field}'] if field else []), message]
+    return ToolError(': '.join(parts))
+
+
+def invalid_input(field: str | None = None, reason: str = 'INVALID_INPUT') -> ToolError:
+    return tool_error('INVALID_ARGUMENT', INVALID_INPUT_MESSAGE, reason=reason, field=field)
+
+
 def to_tool_error(error: Exception) -> ToolError:
     """원래 예외 메시지·경로·스택을 MCP 응답에 포함하지 않는다."""
     if isinstance(error, IngestionShuttingDownError):
@@ -24,11 +41,12 @@ def to_tool_error(error: Exception) -> ToolError:
             f'SOURCE_NOT_FOUND: PDF 파일을 찾을 수 없습니다. '
             f'{error.relative_path}에 파일을 복사한 뒤 다시 시도하세요.')
     if isinstance(error, InvalidArgumentError):
-        return ToolError('INVALID_ARGUMENT: INVALID_INPUT: 입력값을 확인해주세요.')
+        return invalid_input()
     if isinstance(error, ResourceNotFoundError):
-        return ToolError('NOT_FOUND: 요청한 자료를 찾을 수 없습니다.')
+        return tool_error('NOT_FOUND', NOT_FOUND_MESSAGE)
     if isinstance(error, RequestConflictError):
-        return ToolError('CONFLICT: request_key가 이전 요청과 일치하지 않습니다.')
+        # 같은 request_key의 다른 요청은 퀴즈·재파싱·복구와 같은 REQUEST_CONFLICT로 알린다.
+        return tool_error('REQUEST_CONFLICT', 'request_key가 이전 요청과 일치하지 않습니다.')
     if isinstance(error, UnsupportedDocumentError):
         return ToolError('UNSUPPORTED_DOCUMENT: 지원하는 PDF 파일인지 확인해주세요.')
     if isinstance(error, ContextNotReadyError):

@@ -37,7 +37,7 @@ class ReparseManager:
     def _context(self, context_id):
         context = repo.get_learning_context(self.db, context_id)
         if not context or not context.embedding_set_id:
-            raise ToolError('REPARSE_CONTEXT_UNAVAILABLE')
+            raise ToolError('REPARSE_CONTEXT_UNAVAILABLE: 재파싱할 수 있는 학습 맥락을 찾을 수 없습니다.')
         return context
 
     def _args(self, context, key):
@@ -69,7 +69,7 @@ class ReparseManager:
     def submit(self, context_id, request_key):
         with self.condition:
             if not self.accepting or len(self.pending) >= 16:
-                raise ToolError('REPARSE_WORKER_UNAVAILABLE')
+                raise ToolError('REPARSE_WORKER_UNAVAILABLE: 재파싱 작업을 지금 시작할 수 없습니다. 잠시 후 다시 시도하세요.')
             result = self.service.prepare(*self._args(self._context(context_id), request_key))
             if result.status == 'ACCEPTED':
                 try:
@@ -99,7 +99,7 @@ class ReparseManager:
         old = self._context(context_id)
         result = self.lookup(context_id, request_key)
         if result['status'] != 'COMPLETED' or not result['result_available'] or result['job_id'] != job_id:
-            raise ToolError('REPARSE_RESULT_UNAVAILABLE')
+            raise ToolError('REPARSE_RESULT_UNAVAILABLE: 선택할 수 있는 완료된 재파싱 결과가 없습니다.')
         # 같은 작업의 선택 응답이 유실돼도 같은 학습 맥락을 반환한다.
         new_id = str(uuid5(NAMESPACE_URL, json.dumps(['solo-leveling/reparse', context_id, job_id])))
         new = replace(old, created_at=now_iso(), context_id=new_id, parse_revision_id=result['new_parse_revision_id'],
@@ -109,7 +109,7 @@ class ReparseManager:
         except sqlite3.IntegrityError:
             saved = repo.get_learning_context(self.db, new_id)
             if not saved or replace(saved, created_at=new.created_at) != new:
-                raise ToolError('REPARSE_CONTEXT_CONFLICT') from None
+                raise ToolError('REPARSE_CONTEXT_CONFLICT: 같은 작업으로 만든 학습 맥락이 다른 내용으로 저장되어 있습니다.') from None
         return {'context_id': new_id, 'embedding_set_id': new.embedding_set_id, 'job_id': job_id}
 
 
@@ -121,7 +121,7 @@ def _public_errors(function):
         except ToolError:
             raise
         except Exception:
-            raise ToolError('REPARSE_STATE_UNAVAILABLE') from None
+            raise ToolError('REPARSE_STATE_UNAVAILABLE: 재파싱 상태를 확인하지 못했습니다.') from None
     return wrapped
 
 

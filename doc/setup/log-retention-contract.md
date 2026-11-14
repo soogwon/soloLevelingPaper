@@ -18,7 +18,7 @@
 최신 main의 공통 계약을 유지하고, Windows/NTFS에서 잠금·미상속·파일 동일성·
 무덮어쓰기 게시를 합성 테스트로 확인했다. 종료 정리·경쟁 게시 보완 후 관련 회귀
 246개 통과, symlink 권한 부족
-1개 건너뜀. [결과와 어댑터 구현 전 확인 사항](log-retention-windows-validation.md)을
+1개 건너뜀. [결과와 어댑터 구현 전 확인 사항](../history/log-retention-windows-validation.md)을
 참고한다. 실제 OS 어댑터·생산자 연결·삭제 기능은 아직 제공하지 않는다.
 
 ## 2026-11-05: POSIX MCP 안전 로그 생성·종료 연결
