@@ -130,6 +130,8 @@ test('재시도는 새 안내만 요청하고 다시 동의를 요구한다', as
   app.callServerTool = async input => {
     calls.push(input);
     if (input.name === 'upload_paper_pdf_to_server') throw new Error('network');
+    if (input.name === 'check_paper_pdf_upload_status')
+      return {structuredContent: {status: 'failed'}};
     return {structuredContent: {
       status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-2',
       file_name: 'paper.pdf', file_size: 1234, notice: '새 안내',
@@ -195,6 +197,8 @@ for (const [code, message] of [
     const {app, doc, calls} = setup();
     app.callServerTool = async call => {
       calls.push(call);
+      if (call.name === 'check_paper_pdf_upload_status')
+        return {structuredContent: {status: 'failed'}};
       return {structuredContent: {status: 'failed', error_code: code}};
     };
     app.ontoolresult({structuredContent: {
@@ -208,7 +212,7 @@ for (const [code, message] of [
     assert.equal(doc.getElementById('retry').hidden, false);
     assert.equal(doc.getElementById('confirm').disabled, true);
     await doc.getElementById('confirm').onclick();
-    assert.equal(calls.length, code === 'PDF_UPLOAD_COMPLETE_FAILED' ? 2 : 1);
+    assert.equal(calls.length, ['PDF_UPLOAD_COMPLETE_FAILED', 'PRIVATE_UNKNOWN'].includes(code) ? 2 : 1);
   });
 }
 
@@ -231,6 +235,8 @@ for (const [name, response] of [
         prepareCalls += 1;
         return prepareCalls === 1 ? response : {structuredContent: preview};
       }
+      if (call.name === 'upload_paper_pdf_to_server')
+        return {structuredContent: {status: 'failed', error_code: 'PDF_UPLOAD_TRANSFER_FAILED'}};
       return response;
     };
     doc.getElementById('agree').checked = true;
@@ -247,3 +253,54 @@ for (const [name, response] of [
     assert.equal(doc.getElementById('confirm').disabled, true);
   });
 }
+
+for (const statusResult of [
+  {structuredContent: {status: 'pending'}},
+  {structuredContent: {status: 'failed', error_code: 'PDF_UPLOAD_STATUS_FAILED'}},
+  {isError: true},
+]) {
+  test(`불확실한 상태 ${JSON.stringify(statusResult)}에서는 상태만 재조회한다`, async () => {
+    const {app, doc, calls} = setup();
+    app.ontoolresult({structuredContent: {
+      status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-1',
+      file_name: 'paper.pdf', file_size: 1234, notice: '안내', confirmation_token: 'secret',
+    }});
+    app.callServerTool = async call => {
+      calls.push(call);
+      if (call.name === 'upload_paper_pdf_to_server')
+        return {structuredContent: {status: 'failed', error_code: 'PDF_UPLOAD_FAILED'}};
+      return calls.length === 2 ? statusResult : {structuredContent: {status: 'ready'}};
+    };
+    doc.getElementById('agree').checked = true;
+    await doc.getElementById('confirm').onclick();
+    assert.match(doc.getElementById('retry').textContent, /상태 다시 확인/);
+    assert.equal(doc.getElementById('confirm').disabled, true);
+    await doc.getElementById('retry').onclick();
+    assert.deepEqual(calls.map(call => call.name), [
+      'upload_paper_pdf_to_server', 'check_paper_pdf_upload_status',
+      'check_paper_pdf_upload_status']);
+    assert.match(doc.getElementById('status').textContent, /서버에서 저장 상태를 확인/);
+    assert.equal(doc.getElementById('retry').hidden, true);
+  });
+}
+
+test('이전 상태 조회가 늦게 완료되어도 새 카드에 반영하지 않는다', async () => {
+  const {app, doc} = setup();
+  app.ontoolresult({structuredContent: {
+    status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-1',
+    file_name: 'paper.pdf', file_size: 1234, notice: '안내', confirmation_token: 'secret',
+  }});
+  let finish;
+  app.callServerTool = async call => {
+    if (call.name === 'upload_paper_pdf_to_server') throw new Error('lost');
+    return await new Promise(resolve => { finish = resolve; });
+  };
+  doc.getElementById('agree').checked = true;
+  const submitting = doc.getElementById('confirm').onclick();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  app.ontoolinput({arguments: {paper_id: 'other'}});
+  finish({structuredContent: {status: 'ready'}});
+  await submitting;
+  assert.equal(doc.getElementById('status').textContent, '');
+  assert.equal(doc.getElementById('retry').hidden, true);
+});
