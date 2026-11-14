@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from solo_leveling.interfaces.cli.prepare_embedding_model import main, prepare, subprocess
+from solo_leveling.interfaces.cli.prepare_embedding_model import main, prepare, subprocess  # noqa: F401 - 기존 경로 호환용 재노출
 
 
 if __name__ == '__main__':

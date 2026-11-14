@@ -39,7 +39,7 @@ def preload_embedding_library():
     @traced('startup_embedding_import', request=True)
     def load():
         with import_watchdog():
-            from sentence_transformers import SentenceTransformer
+            from sentence_transformers import SentenceTransformer  # noqa: F401 - import 시간 측정용
 
     load()
 

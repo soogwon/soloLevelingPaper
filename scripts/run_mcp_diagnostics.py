@@ -5,7 +5,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
-from solo_leveling.interfaces.cli.mcp_diagnostics import main as packaged_main, preload_embedding_library
+from solo_leveling.interfaces.cli.mcp_diagnostics import main as packaged_main, preload_embedding_library  # noqa: F401 - 테스트가 여기서 가져간다
 
 
 def main(argv=None):

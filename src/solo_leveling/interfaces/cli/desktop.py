@@ -58,9 +58,9 @@ def main(argv=None):
             validate_runtime_settings(values)
         if args.action == 'check':
             # DB 생성·API 호출·모델 다운로드 없이 설치와 설정만 검사한다.
-            import chromadb
-            import mcp
-            import pdfplumber
+            import chromadb  # noqa: F401 - 설치 여부 확인
+            import mcp  # noqa: F401 - 설치 여부 확인
+            import pdfplumber  # noqa: F401 - 설치 여부 확인
             from importlib.resources import files
             from importlib.util import find_spec
             if find_spec('sentence_transformers') is None:
