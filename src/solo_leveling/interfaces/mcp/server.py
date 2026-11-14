@@ -261,6 +261,7 @@ class EvidenceAnnotationPage(TypedDict):
 
 
 class DetailEvidenceOutput(EvidenceOutput):
+    translation_annotation_start: NotRequired[int | None]
     annotation_count: int
     annotation_cursor: str | None
     annotation_start: int | None

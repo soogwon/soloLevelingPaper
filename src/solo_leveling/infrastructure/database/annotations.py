@@ -5,7 +5,7 @@
 - 수정·삭제는 expected_revision과 현재 revision이 같을 때만 반영한다. 다르면 아무것도 바꾸지 않고 CONFLICT.
 - 위치(맥락·청크·구간)는 바꾸지 않는다. 본문과 학습 단계만 수정한다.
 - 원문 구간은 저장 시점에 청크 원문의 해당 구간과 인용문 스냅샷이 같은지 확인한다.
-  번역 구간은 번역 리비전이 맥락의 것과 같은지만 확인하고 인용문 대조는 하지 않는다(번역 저장 구조가 #30에서 바뀔 수 있다).
+  번역 구간은 맥락의 번역 리비전에 저장된 성공 번역문과 위치·인용문을 대조한다.
 - 단건 조회·수정·삭제·구간 원문 조회는 호출자의 context_id를 받아 DB 조건에서 소속을 확인한다. 다른 맥락의 기록은
   없는 것(NOT_FOUND / None / ResourceNotFoundError)과 똑같이 처리하고, 수정·삭제는 이 확인을 revision 판정보다 먼저 한다.
 - 목록은 한 번의 읽기 트랜잭션(스냅샷)에서 목록과 구간을 함께 읽어, 동시에 삭제돼도 응답 항목이 온전하다.
@@ -70,8 +70,21 @@ def _check_segment(conn, context, segment: SegmentInput):
             return None, OFFSET_OUT_OF_RANGE
         if text[segment.start_offset:segment.end_offset] != segment.quote_snapshot:
             return None, QUOTE_MISMATCH
-    elif segment.translation_revision_id != context['translation_revision_id']:
-        return None, TRANSLATION_REVISION_MISMATCH
+    else:
+        if segment.translation_revision_id != context['translation_revision_id']:
+            return None, TRANSLATION_REVISION_MISMATCH
+        result = conn.execute('SELECT r.translated_text FROM translation_results r '
+            'JOIN translation_revisions t USING(translation_revision_id) '
+            'WHERE r.translation_revision_id=? AND r.chunk_id=? AND t.parse_revision_id=? '
+            'AND r.failure_code IS NULL AND r.translated_text IS NOT NULL',
+            (segment.translation_revision_id, segment.chunk_id, context['parse_revision_id'])).fetchone()
+        if result is None:
+            return None, 'TRANSLATION_NOT_AVAILABLE'
+        text = result['translated_text']
+        if segment.end_offset > len(text):
+            return None, OFFSET_OUT_OF_RANGE
+        if text[segment.start_offset:segment.end_offset] != segment.quote_snapshot:
+            return None, QUOTE_MISMATCH
     return chunk, None
 
 
@@ -248,17 +261,22 @@ def list_annotation_page(db_path: str, context_id: str, step: Optional[str] = No
 
 
 def get_annotation_with_originals(db_path: str, context_id: str, annotation_id: str):
-    """메모와 현재 원문을 같은 읽기 시점·학습 맥락·파싱 리비전으로 제한한다."""
+    """메모와 원문 또는 지정 번역문을 같은 읽기 시점·맥락·리비전으로 제한한다."""
     with closing(get_connection(db_path)) as conn:
         conn.execute('BEGIN')
         record = _load(conn, annotation_id, context_id)
         if record is None:
             raise ResourceNotFoundError('annotation not found')
         rows = conn.execute("""
-            SELECT s.position, c.original_text, c.pdf_page FROM annotation_segments s
+            SELECT s.position, CASE WHEN s.target='original' THEN c.original_text
+                ELSE r.translated_text END AS original_text, c.pdf_page FROM annotation_segments s
             JOIN chunks c ON c.chunk_id=s.chunk_id AND c.parse_revision_id=s.parse_revision_id
             JOIN learning_contexts l ON l.context_id=? AND l.parse_revision_id=c.parse_revision_id
-            WHERE s.annotation_id=? AND s.target='original'
+            LEFT JOIN translation_revisions t ON t.translation_revision_id=s.translation_revision_id
+                AND t.parse_revision_id=c.parse_revision_id AND t.translation_revision_id=l.translation_revision_id
+            LEFT JOIN translation_results r ON r.translation_revision_id=t.translation_revision_id
+                AND r.chunk_id=c.chunk_id AND r.failure_code IS NULL
+            WHERE s.annotation_id=?
         """, (context_id, annotation_id))
         return record, {row['position']: (row['original_text'], row['pdf_page']) for row in rows}
 

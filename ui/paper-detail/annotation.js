@@ -25,15 +25,15 @@ export function mountAnnotation(app, doc) {
     for (const [i, segment] of record.segments.entries()) {
       const row = doc.createElement('li');
       const quote = doc.createElement('p');
-      quote.textContent = segment.quote_snapshot;
+      quote.textContent = (segment.target === 'translation' ? '번역문 · ' : '원문 · ') + segment.quote_snapshot;
       row.append(quote);
       if (data.segment_available[i] === true) {
         const button = doc.createElement('button');
-        button.textContent = '원문 보기';
+        button.textContent = segment.target === 'translation' ? '저장 번역문 보기' : '원문 보기';
         button.onclick = () => open(record, segment.position);
         row.append(button);
       } else {
-        row.append('현재 원문에서 이 구간을 찾을 수 없습니다.');
+        row.append('현재 저장된 대상에서 이 구간을 찾을 수 없습니다.');
       }
       el('segments').append(row);
     }
@@ -41,7 +41,8 @@ export function mountAnnotation(app, doc) {
     if (!source || (selected !== undefined && source.position !== selected)) return;
     const i = record.segments.findIndex(s => s.position === source.position && s.quote_snapshot === source.quote);
     if (i < 0 || data.segment_available[i] !== true) return;
-    el('location').textContent = source.pdf_page ? `PDF ${source.pdf_page}페이지 · 원문` : '원문';
+    const label = record.segments[i].target === 'translation' ? '저장 번역문' : '원문';
+    el('location').textContent = source.pdf_page ? `PDF ${source.pdf_page}페이지 · ${label}` : label;
     const mark = doc.createElement('mark');
     mark.textContent = source.quote;
     el('excerpt').append(source.before, mark, source.after);

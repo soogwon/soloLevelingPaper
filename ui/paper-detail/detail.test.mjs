@@ -272,6 +272,24 @@ test('다음 페이지의 기존 기록 재사용은 건수를 늘리지 않고 
   assert.match(el('records').textContent, /수정된 메모/);
 });
 
+test('번역문 하이라이트는 번역 위치·리비전을 보내고 원문 목록 건수와 섞지 않는다', async () => {
+  const {app, el} = setup();
+  let request;
+  app.callServerTool = async call => {
+    request = call.arguments.request;
+    return {structuredContent:{outcome:'saved',annotation:{...request,annotation_id:'translation'}}};
+  };
+  app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,
+    translation_annotation_start:2,annotations:[],annotation_count:0})]}));
+  await el('save-translation-highlight').onclick();
+  assert.equal(request.segments[0].target, 'translation');
+  assert.equal(request.segments[0].translation_revision_id, 't');
+  assert.equal(request.segments[0].start_offset, 2);
+  assert.equal(request.segments[0].quote_snapshot, 'A가 빠른 조건');
+  assert.equal(el('records').children.length, 0);
+  assert.match(el('record-status').textContent, /번역문 하이라이트를 저장/);
+});
+
 test('저장된 추출·생성 항목을 구분하고 잘못된 번역 출처의 본문은 숨긴다',()=>{
  const {app,el}=setup();
  const source={insight_id:'i1',text:'🧪',content_kind:'extracted',producer:'extractor',chunk_id:'c',parse_revision_id:'p',translation_revision_id:null,start_offset:1,end_offset:2,quote_original:'🧪',pdf_page:6,section_id:null};

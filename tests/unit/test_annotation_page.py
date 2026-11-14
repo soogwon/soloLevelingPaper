@@ -191,8 +191,8 @@ def test_duplicate_segment_is_rejected_but_overlap_is_allowed(env):
 def test_duplicate_compares_translation_revision_and_original_as_null(env):
     db, ctx = env
     original = seg()
-    translated_a = SegmentInput('c1', 0, 5, 'First', target='translation', translation_revision_id='t1')
-    translated_b = SegmentInput('c1', 0, 5, 'First', target='translation', translation_revision_id='t2')
+    translated_a = SegmentInput('c1', 0, 3, '첫째.', target='translation', translation_revision_id='t1')
+    translated_b = SegmentInput('c1', 0, 3, '첫째.', target='translation', translation_revision_id='t2')
     # 대상·리비전이 다르면 같은 위치여도 중복이 아니다(저장소는 번역 구간을 계속 지원한다).
     assert ann.create_annotation(db, ctx, 'highlight', '', [original, translated_a]).outcome \
         is AnnotationOutcome.SAVED
