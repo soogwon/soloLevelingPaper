@@ -388,6 +388,10 @@ UI 미지원 호스트도 텍스트로 조회할 수 있다. [Claude Desktop UI 
 Desktop 실측) 작업은 끝까지 진행된다. 요청 키가 있는 `submit_paper_question`은 결과를 나중에
 조회해야 하므로 취소 알림으로 멈추지 않는다(#119).
 
+호스트가 요청에 `progressToken`을 넣으면 `ask_paper`와 `submit_paper_question`은 작업이 끝날 때까지
+10초마다 진행 알림(`notifications/progress`, 고정 문구)을 보낸다. 진행 알림을 받을 때마다 대기 시간을
+다시 세는 호스트에서는 60초 제한에 덜 걸린다. Claude Desktop이 그렇게 동작하는지는 실측으로 확인해야 한다.
+
 서버가 시작되면 가장 최근 기본 색인의 임베딩 모델로 worker를 미리 준비한다. 첫 질문이 라이브러리
 import·모델 로딩을 기다리지 않게 하려는 것이다. 등록된 색인이 없으면 준비하지 않고, 준비 문장은
 질문·논문과 무관한 고정 문자열이다. 메모리를 아끼려면 `SOLO_LEVELING_EMBEDDING_WARMUP=0`으로 끈다.
