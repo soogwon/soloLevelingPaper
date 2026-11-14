@@ -590,7 +590,7 @@
     {
       "key": "attention-is-all-you-need",
       "label": "Attention Is All You Need",
-      "file_sha256": null,
+      "file_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
       "source_url": "https://arxiv.org/pdf/1706.03762v7",
       "concepts": [
         {
@@ -700,7 +700,6 @@
         {
           "id": "positional-encoding",
           "pdf_pages": [
-            5,
             6
           ],
           "section_hint": "3.5 Positional Encoding"
@@ -723,9 +722,9 @@
         {
           "id": "dropout",
           "pdf_pages": [
-            7
+            8
           ],
-          "section_hint": "5.4 Regularization"
+          "section_hint": "5.4 Regularization (Residual Dropout)"
         },
         {
           "id": "label-smoothing",
@@ -784,7 +783,7 @@
     {
       "key": "bert",
       "label": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
-      "file_sha256": null,
+      "file_sha256": "5692a5514787a8c6727b4ff3b726a3385798bc68e12138d1d4af83947e2acf6e",
       "source_url": "https://arxiv.org/pdf/1810.04805v2",
       "concepts": [
         {
@@ -834,9 +833,10 @@
         {
           "id": "positional-encoding",
           "pdf_pages": [
+            4,
             5
           ],
-          "section_hint": "3 BERT (Figure 2)"
+          "section_hint": "3 BERT (Input/Output Representations, Figure 2)"
         },
         {
           "id": "masked-language-model",
@@ -909,7 +909,7 @@
     {
       "key": "vision-transformer",
       "label": "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale",
-      "file_sha256": null,
+      "file_sha256": "8ce7b83971a14508ca711a27c875c9b6914c4f6767cf3150fb1ca6c07aa056d6",
       "source_url": "https://arxiv.org/pdf/2010.11929v2",
       "concepts": [
         {

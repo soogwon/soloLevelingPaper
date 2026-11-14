@@ -49,6 +49,7 @@ GoalConceptPlan을 마감 전 범위로 줄인 구현이다.
    출력된 64자 해시를 해당 논문의 `file_sha256`에 넣는다. 앱은 PDF 전체 바이트의 SHA-256을
    소문자로 저장하므로(`storage/pdf_store.py`) 같은 파일이면 그대로 일치한다.
 3. 같은 PDF로 각 개념의 `pdf_pages`와 `section_hint`를 확인한다. 초안 값은 기억에 의존해 적었으므로 반드시 검수한다.
+   2026-11-14에 세 논문 모두 해시를 채우고 pypdf 본문 추출로 페이지를 대조했다(Attention 2건, BERT 1건 수정).
 4. `solo-leveling-kg-check`로 검증한다. 문제가 있으면 모두 나열하고 종료 코드 1을 돌려준다.
    - id 형식, 이름·별칭 충돌, 없는 개념 참조, 자기 참조, 중복 관계, 순환
    - 목적마다 target 1개 이상, target·optional 중복 금지, 모든 항목에 reasons
