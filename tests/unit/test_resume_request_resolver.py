@@ -1,7 +1,9 @@
 import pytest
 
+import solo_leveling.application.server_sync.resume as resume_module
 from solo_leveling.application.server_sync.resume import (
     ResumeRequestExpired, ResumeRequestResolver, ResumeRequestUnavailable,
+    _available_search_data,
 )
 from solo_leveling.infrastructure.storage.server_client import ServerResponseInvalid
 
@@ -114,6 +116,34 @@ def test_resolver_reports_same_pc_file_without_claiming_search_ready(tmp_path):
     assert result["reason"] == "local_search_data_check_required"
 
 
+@pytest.mark.parametrize("ready,reason", [
+    (True, "local_search_data_ready"),
+    (False, "local_search_data_check_required"),
+])
+def test_resolver_reports_search_readiness_when_chroma_is_configured(
+        tmp_path, monkeypatch, ready, reason):
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF fixture")
+    db = local_database(tmp_path, stored_path=pdf)
+    checked = []
+    chroma = object()
+
+    def search_status(*args):
+        checked.append(args)
+        return ready
+
+    monkeypatch.setattr(resume_module, "_available_search_data", search_status)
+    result = ResumeRequestResolver(
+        Client(Response(200, payload())), str(db), tmp_path, chroma,
+    ).resolve("resume_code")
+
+    assert result["file_access_status"] == "local_file_ready"
+    assert result["status"] == "prepared"
+    assert result["reason"] == reason
+    assert checked == [(str(db), chroma, "local-paper", "local-context",
+                        "version-1")]
+
+
 def test_resolver_reports_missing_mapping_on_a_different_pc(tmp_path):
     db = local_database(tmp_path, stored_path=tmp_path / "paper.pdf")
     import sqlite3
@@ -175,3 +205,67 @@ def test_file_outside_managed_root_is_unavailable(tmp_path):
     db = local_database(tmp_path, stored_path=other)
     resolver = ResumeRequestResolver(Client(Response(200, payload())), str(db), root)
     assert resolver.resolve("resume_code")["file_access_status"] == "local_file_missing"
+
+
+def test_search_readiness_requires_matching_db_members_and_vector_metadata(tmp_path):
+    import sqlite3
+
+    db = tmp_path / "search.sqlite3"
+    conn = sqlite3.connect(db)
+    conn.executescript("""
+        CREATE TABLE learning_contexts (
+            context_id TEXT PRIMARY KEY, version_id TEXT, embedding_set_id TEXT
+        );
+        CREATE TABLE search_indexes (
+            embedding_set_id TEXT PRIMARY KEY, version_id TEXT, chunk_count INTEGER
+        );
+        CREATE TABLE search_index_chunks (embedding_set_id TEXT, chunk_id TEXT);
+        INSERT INTO learning_contexts VALUES ('context', 'version', 'embedding');
+        INSERT INTO search_indexes VALUES ('embedding', 'version', 2);
+        INSERT INTO search_index_chunks VALUES ('embedding', 'chunk-1');
+        INSERT INTO search_index_chunks VALUES ('embedding', 'chunk-2');
+    """)
+    conn.commit()
+    conn.close()
+
+    class Collection:
+        size = 2
+        metadata_count = 2
+
+        def count(self):
+            return self.size
+
+        def get(self, *, ids, include):
+            assert set(ids) == {"chunk-1", "chunk-2"}
+            assert include == ["metadatas"]
+            metadata = {"embedding_set_id": "embedding", "paper_id": "paper",
+                        "version_id": "version"}
+            return {"ids": ids, "metadatas": [metadata.copy() for _ in range(self.metadata_count)]}
+
+    class ChromaClient:
+        def get_collection(self, name):
+            assert name == "chunks-embedding"
+            return Collection()
+
+    client = ChromaClient()
+    def ready():
+        return _available_search_data(str(db), client, "paper", "context", "version")
+
+    assert ready()
+    Collection.metadata_count = 1
+    assert not ready()
+    Collection.metadata_count = 2
+    Collection.size = 3
+    assert not ready()
+    Collection.size = 2
+    conn = sqlite3.connect(db)
+    conn.execute("DELETE FROM search_index_chunks WHERE chunk_id='chunk-2'")
+    conn.commit()
+    conn.close()
+    assert not ready()
+
+    conn = sqlite3.connect(db)
+    conn.execute("DROP TABLE search_indexes")
+    conn.commit()
+    conn.close()
+    assert not ready()
