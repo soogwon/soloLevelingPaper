@@ -5,7 +5,8 @@ import { mountPdfUpload } from './pdf-upload.js';
 
 function setup() {
   const dom = new JSDOM(`<p id="file"></p><p id="notice"></p><input id="agree" type="checkbox">
-    <button id="confirm"></button><button id="cancel"></button><p id="status"></p>`);
+    <button id="confirm"></button><button id="cancel"></button><button id="retry" hidden></button>
+    <p id="status"></p>`);
   const calls = [];
   const app = {connect: async () => {}, callServerTool: async input => {
     calls.push(input); return {structuredContent: {status: 'ready', upload_id: 'upload-1'}};
@@ -61,4 +62,68 @@ test('같은 논문의 다른 판본 응답은 승인 대상에 넣지 않는다
   }, _meta: {confirmation_token: 'old'}});
   assert.equal(doc.getElementById('agree').disabled, true);
   assert.equal(doc.getElementById('file').textContent, '');
+});
+
+test('파일 전송 실패 이유를 표시하고 자동 재전송하지 않는다', async () => {
+  const {app, doc, calls} = setup();
+  app.callServerTool = async input => {
+    calls.push(input);
+    return {isError: true, content: [{type: 'text',
+      text: 'PDF_UPLOAD_TRANSFER_FAILED: PDF 파일 전송에 실패했습니다. (HTTP 403)'}]};
+  };
+  app.ontoolresult({structuredContent: {
+    status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-1',
+    file_name: 'paper.pdf', file_size: 1234, notice: 'PDF 전체 전송',
+    confirmation_token: 'secret',
+  }});
+  doc.getElementById('agree').checked = true;
+  doc.getElementById('agree').onchange();
+  await doc.getElementById('confirm').onclick();
+  assert.match(doc.getElementById('status').textContent, /저장소로 전송하지 못했습니다/);
+  assert.match(doc.getElementById('status').textContent, /자동으로 다시 전송하지 않습니다/);
+  assert.equal(doc.getElementById('retry').hidden, false);
+  assert.equal(calls.length, 1);
+});
+
+test('재시도는 새 안내만 요청하고 다시 동의를 요구한다', async () => {
+  const {app, doc, calls} = setup();
+  app.callServerTool = async input => {
+    calls.push(input);
+    if (input.name === 'upload_paper_pdf_to_server') throw new Error('network');
+    return {structuredContent: {
+      status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-2',
+      file_name: 'paper.pdf', file_size: 1234, notice: '새 안내',
+      confirmation_token: 'new-secret',
+    }};
+  };
+  app.ontoolresult({structuredContent: {
+    status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-2',
+    file_name: 'paper.pdf', file_size: 1234, notice: '기존 안내',
+    confirmation_token: 'old-secret',
+  }});
+  doc.getElementById('agree').checked = true;
+  doc.getElementById('agree').onchange();
+  await doc.getElementById('confirm').onclick();
+  await doc.getElementById('retry').onclick();
+  assert.equal(calls[1].name, 'prepare_paper_pdf_upload');
+  assert.deepEqual(calls[1].arguments, {paper_id: 'paper-1'});
+  assert.equal(doc.getElementById('notice').textContent, '새 안내');
+  assert.equal(doc.getElementById('agree').checked, false);
+  assert.equal(doc.getElementById('confirm').disabled, true);
+});
+
+test('이미 업로드된 원문은 성공 상태로 안내하고 재시도를 숨긴다', async () => {
+  const {app, doc} = setup();
+  app.callServerTool = async () => ({isError: true, content: [{type: 'text',
+    text: 'PDF_ALREADY_UPLOADED: 이 원문 버전의 PDF가 이미 준비되어 있습니다.'}]});
+  app.ontoolresult({structuredContent: {
+    status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-1',
+    file_name: 'paper.pdf', file_size: 1234, notice: 'PDF 전체 전송',
+    confirmation_token: 'secret',
+  }});
+  doc.getElementById('agree').checked = true;
+  doc.getElementById('agree').onchange();
+  await doc.getElementById('confirm').onclick();
+  assert.match(doc.getElementById('status').textContent, /이미 업로드된 원문/);
+  assert.equal(doc.getElementById('retry').hidden, true);
 });

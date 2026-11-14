@@ -18,6 +18,17 @@ from solo_leveling.infrastructure.storage.server_client import (
 PDF_UPLOAD_NOTICE_VERSION = "paper-pdf-upload-v1"
 
 
+class PdfUploadStageError(ServerResponseInvalid):
+    """업로드 단계와 안전한 서버 오류 정보만 상위 계층에 전달한다."""
+
+    def __init__(self, stage: str, status_code: int | None = None,
+                 detail_code: str | None = None):
+        super().__init__(stage)
+        self.stage = stage
+        self.status_code = status_code
+        self.detail_code = detail_code
+
+
 @dataclass(frozen=True)
 class PdfUploadPreview:
     account_id: str
@@ -113,12 +124,16 @@ class PaperPdfUploadService:
         )
         try:
             if response.status_code == 409:
-                data = _response_json(response)
+                data = _stage_response_json(response, "prepare")
                 if _detail_code(data) == "pdf_already_uploaded":
                     raise FileExistsError("PDF_ALREADY_UPLOADED")
             if response.status_code != 201:
-                raise ServerResponseInvalid
-            prepared = _validate_prepare(_response_json(response), current.file_size)
+                raise PdfUploadStageError(
+                    "prepare", response.status_code, _safe_detail_code(response))
+            try:
+                prepared = _validate_prepare(_response_json(response), current.file_size)
+            except ServerResponseInvalid:
+                raise PdfUploadStageError("prepare", response.status_code) from None
         finally:
             response.close()
 
@@ -134,7 +149,7 @@ class PaperPdfUploadService:
             )
         try:
             if not 200 <= uploaded.status_code < 300:
-                raise ServerResponseInvalid
+                raise PdfUploadStageError("transfer", uploaded.status_code)
         finally:
             uploaded.close()
 
@@ -144,8 +159,13 @@ class PaperPdfUploadService:
         )
         try:
             if completed.status_code != 200:
-                raise ServerResponseInvalid
-            data = _validate_complete(_response_json(completed), current, prepared["upload_id"])
+                raise PdfUploadStageError(
+                    "complete", completed.status_code, _safe_detail_code(completed))
+            try:
+                data = _validate_complete(
+                    _response_json(completed), current, prepared["upload_id"])
+            except ServerResponseInvalid:
+                raise PdfUploadStageError("complete", completed.status_code) from None
         finally:
             completed.close()
         return PdfUploadResult(
@@ -178,8 +198,28 @@ def _response_json(response) -> Any:
         raise ServerResponseInvalid from None
 
 
+def _stage_response_json(response, stage: str) -> Any:
+    try:
+        return _response_json(response)
+    except ServerResponseInvalid:
+        raise PdfUploadStageError(stage, response.status_code) from None
+
+
+def _safe_detail_code(response) -> str | None:
+    try:
+        return _detail_code(response.json())
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def _detail_code(data: Any) -> str | None:
-    return data.get("detail", {}).get("code") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or not isinstance(data.get("detail"), dict):
+        return None
+    code = data["detail"].get("code")
+    if (not isinstance(code, str) or not 1 <= len(code) <= 64
+            or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_" for character in code)):
+        return None
+    return code
 
 
 def _validate_prepare(data: Any, size: int) -> dict[str, Any]:

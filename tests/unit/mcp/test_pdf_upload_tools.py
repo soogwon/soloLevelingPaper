@@ -7,8 +7,12 @@ from unittest.mock import Mock
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
-from solo_leveling.application.server_sync.pdf_upload import PdfUploadPreview, PdfUploadResult
-from solo_leveling.interfaces.mcp.pdf_upload_tools import PDF_UPLOAD_APP_URI
+from solo_leveling.application.server_sync.pdf_upload import (
+    PdfUploadPreview, PdfUploadResult, PdfUploadStageError,
+)
+from solo_leveling.interfaces.mcp.pdf_upload_tools import (
+    PDF_UPLOAD_APP_URI, _pdf_upload_stage_tool_error,
+)
 from solo_leveling.interfaces.mcp.server import MCPServices, create_server
 
 
@@ -64,3 +68,16 @@ def test_pdf_upload_resource_is_bundled():
         assert '<script src=' not in content[0].content
 
     asyncio.run(check())
+
+
+@pytest.mark.parametrize(("stage", "expected"), [
+    ("prepare", "PDF_UPLOAD_PREPARE_FAILED"),
+    ("transfer", "PDF_UPLOAD_TRANSFER_FAILED"),
+    ("complete", "PDF_UPLOAD_COMPLETE_FAILED"),
+])
+def test_upload_stage_failure_has_stable_tool_error(stage, expected):
+    error = _pdf_upload_stage_tool_error(
+        PdfUploadStageError(stage, 503, "storage_unavailable"))
+    assert expected in str(error)
+    assert "HTTP 503" in str(error)
+    assert "storage_unavailable" in str(error)
