@@ -17,7 +17,7 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def create_file_router(require_principal: Any, store: FileUploadStore, object_storage: Any):
-    from fastapi import APIRouter, Depends, HTTPException, status
+    from fastapi import APIRouter, Depends, HTTPException, Response, status
     from pydantic import BaseModel, ConfigDict, Field, field_validator
 
     class UploadPrepare(BaseModel):
@@ -159,7 +159,8 @@ def create_file_router(require_principal: Any, store: FileUploadStore, object_st
 
     @router.get("/papers/{paper_id}/versions/{version_id}/file-access",
                 response_model=FileAccessView)
-    def get_file_access(paper_id: UUID, version_id: str, principal: Principal):
+    def get_file_access(paper_id: UUID, version_id: str, principal: Principal, response: Response):
+        response.headers["Cache-Control"] = "no-store"
         if principal.credential_type != "web_session":
             raise HTTPException(status_code=403, detail={"code": "web_session_required"})
         version_id = version_id.strip()

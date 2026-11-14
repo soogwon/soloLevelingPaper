@@ -522,7 +522,7 @@ def test_web_detail_uses_session_owner_and_reports_unavailable_dependencies():
         "learning_record_id": str(record_id), "version_id": "version-1",
     })]
     assert result.summary is None
-    assert (result.file_access.available, result.file_access.reason) == (False, "not_uploaded")
+    assert (result.file_access.available, result.file_access.reason) == (False, "pdf_access_unavailable")
     assert (result.resume.available, result.resume.reason) == (True, "resume_code_available")
 
 

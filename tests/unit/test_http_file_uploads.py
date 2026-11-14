@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from pydantic import ValidationError
 
 from solo_leveling.interfaces.http.app import create_app
@@ -311,9 +311,11 @@ def test_web_session_cannot_complete_device_upload():
 
 def test_web_session_gets_short_lived_pdf_url_without_object_key():
     store, storage = UploadStore(), Storage()
+    headers = Response()
     response = file_access_route(store, storage)(
-        UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "web_session"))
+        UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "web_session"), headers)
 
+    assert headers.headers["Cache-Control"] == "no-store"
     assert response.model_dump(mode="json") == {
         "status": "ready", "url": "https://objects.example/read",
         "expires_at": NOW.isoformat(), "file_name": "paper.pdf", "file_size": 1234,
@@ -335,7 +337,7 @@ def test_file_access_distinguishes_non_ready_states_without_url(record, status, 
     store = UploadStore()
     store.get_file_access = lambda *_: record
     response = file_access_route(store)(
-        UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "web_session"))
+        UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "web_session"), Response())
     assert response.status == status
     assert response.reason == reason
     assert response.url is None and response.expires_at is None
@@ -344,7 +346,7 @@ def test_file_access_distinguishes_non_ready_states_without_url(record, status, 
 def test_file_access_hides_foreign_or_unknown_paper_version():
     with pytest.raises(HTTPException) as failure:
         file_access_route(UploadStore(UploadTargetNotFound()))(
-            UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "web_session"))
+            UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "web_session"), Response())
     assert failure.value.status_code == 404
     assert failure.value.detail["code"] == "paper_version_not_found"
 
@@ -353,7 +355,7 @@ def test_device_token_cannot_use_external_site_file_access():
     store = UploadStore()
     with pytest.raises(HTTPException) as failure:
         file_access_route(store)(
-            UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "device", "device-1"))
+            UUID(PAPER_ID), "version-1", AuthenticatedPrincipal("user-1", "device", "device-1"), Response())
     assert failure.value.status_code == 403
     assert not store.calls
 

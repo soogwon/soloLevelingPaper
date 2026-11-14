@@ -578,9 +578,13 @@ def create_web_paper_router(require_principal: Any, store: PaperStore, file_stor
                         available=False, reason=uploaded.failure_reason or "upload_failed",
                         message="PDF 업로드 확인에 실패했어요. 다시 업로드해 주세요.",
                     )
-            except (UploadTargetNotFound, UploadUnavailable):
-                # 논문 상세 자체는 파일 저장소의 일시 장애와 독립적으로 조회한다.
+            except UploadTargetNotFound:
                 pass
+            except UploadUnavailable:
+                file_access = AvailabilityView(
+                    available=False, reason="pdf_access_unavailable",
+                    message="PDF 보관 상태를 확인할 수 없어요. 잠시 뒤 다시 시도해 주세요.",
+                )
         return PaperDetailView(
             paper_id=item.paper_id, title=item.title,
             authors=list(item.authors) if item.authors else None, file_name=item.file_name,
