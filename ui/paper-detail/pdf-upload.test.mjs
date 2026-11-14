@@ -128,6 +128,23 @@ test('이미 업로드된 원문은 성공 상태로 안내하고 재시도를 �
   assert.equal(doc.getElementById('retry').hidden, true);
 });
 
+test('호스트 오류 채널 없이 이미 업로드 상태를 안내한다', async () => {
+  const {app, doc} = setup();
+  app.callServerTool = async () => ({structuredContent: {
+    status: 'already_uploaded', error_code: 'PDF_ALREADY_UPLOADED',
+  }});
+  app.ontoolresult({structuredContent: {
+    status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-1',
+    file_name: 'paper.pdf', file_size: 1234, notice: 'PDF 전체 전송',
+    confirmation_token: 'secret',
+  }});
+  doc.getElementById('agree').checked = true;
+  doc.getElementById('agree').onchange();
+  await doc.getElementById('confirm').onclick();
+  assert.match(doc.getElementById('status').textContent, /이미 업로드된 원문/);
+  assert.equal(doc.getElementById('retry').hidden, true);
+});
+
 for (const [name, response] of [
   ['도구 오류', {isError: true, content: [{type: 'text', text: 'private error'}]}],
   ['빈 응답', {}],
