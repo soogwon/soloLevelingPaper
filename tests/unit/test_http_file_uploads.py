@@ -427,14 +427,6 @@ def test_s3_completion_reads_checksum_and_copies_to_immutable_key():
         "Bucket": "private-bucket", "Key": "private/key.pdf"}
     assert ("delete", {"Bucket": "private-bucket", "Key": "private/key.pdf"}) in raw.calls
 
-    temporary = pending_upload(
-        object_key="private/tmp/owner/paper-1/version-1/upload.pdf")
-    lifecycle_safe = storage.finalize_upload(temporary)
-    assert lifecycle_safe.object_key.startswith(
-        "private/files/owner/paper-1/version-1/")
-    assert not lifecycle_safe.object_key.startswith("private/tmp/")
-
-
     def failed_read(**kwargs):
         raise RuntimeError("unavailable")
     raw.get_object = failed_read
@@ -443,6 +435,41 @@ def test_s3_completion_reads_checksum_and_copies_to_immutable_key():
     assert raw.calls[-1][0] == "delete"
     assert raw.calls[-1][1]["Key"] == raw.calls[-2][1]["Key"]
     assert raw.calls[-1][1]["Key"] != finalized.object_key
+
+
+@pytest.mark.parametrize('source_key, final_prefix', [
+    ('private/tmp/owner/paper-1/version-1/upload.pdf',
+     'private/files/owner/paper-1/version-1/'),
+    ('private/owner/paper-1/version-1/upload.pdf',
+     'private/owner/paper-1/version-1/files/'),
+])
+def test_new_and_legacy_uploads_survive_temporary_object_lifecycle(source_key, final_prefix):
+    payload = b'%PDF-1.7 lifecycle fixture'
+
+    class Client:
+        def __init__(self):
+            self.objects = {source_key: payload}
+
+        def copy_object(self, **kwargs):
+            self.objects[kwargs['Key']] = self.objects[kwargs['CopySource']['Key']]
+
+        def get_object(self, **kwargs):
+            data = self.objects[kwargs['Key']]
+            return {'ContentLength': len(data), 'ContentType': 'application/pdf',
+                    'Body': io.BytesIO(data)}
+
+    raw = Client()
+    storage = S3ObjectStorage(raw, 'private-bucket')
+    finalized = storage.finalize_upload(pending_upload(
+        object_key=source_key, file_size=len(payload)))
+    assert finalized.object_key.startswith(final_prefix)
+    # 외부 저장소 규칙의 prefix 선택만 모사하며 실제 R2 삭제를 실행하지 않는다.
+    for key in list(raw.objects):
+        if key.startswith('private/tmp/'):
+            del raw.objects[key]
+    assert raw.objects[finalized.object_key] == payload
+    assert finalized.sha256_hex == sha256(payload).hexdigest()
+    assert finalized.pdf_header_valid
 
 
 def test_s3_download_presign_is_get_only_and_uses_safe_inline_filename():
