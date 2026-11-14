@@ -46,12 +46,18 @@ def test_following_chunks_missing_index_does_not_skip(setup_search):
     assert retriever.following_chunks(search, (99,)) == ()
 
 
+def _extend_page_count(conn, page_count):
+    """청크를 뒤 페이지로 옮긴 만큼 파싱 결과의 문서 페이지 수도 맞춘다."""
+    conn.execute("UPDATE parse_revisions SET page_count=? WHERE parse_revision_id='p'", (page_count,))
+
+
 def test_cross_page_candidate_is_saved_and_read_with_own_page(setup_search):
     db, _, retriever, _, _ = setup_search
     # 임시 DB에서만 원문 경계와 페이지를 재현한다. 번역문·벡터는 유지한다.
     with closing(get_connection(db)) as conn, conn:
         conn.execute("UPDATE chunks SET original_text='Faster when the sequence', pdf_page=6 WHERE chunk_id='a'")
         conn.execute("UPDATE chunks SET original_text='length is smaller.', pdf_page=7 WHERE chunk_id='b'")
+        _extend_page_count(conn, 7)
     def generate(question, evidence):
         assert [e.chunk_id for e in evidence] == ['a', 'b']
         assert evidence[1].follows_evidence_id == evidence[0].evidence_id
@@ -71,6 +77,7 @@ def test_page_completion_through_real_stores(setup_search, strict):
     with closing(get_connection(db)) as conn, conn:
         conn.execute("UPDATE chunks SET original_text='Faster when the sequence', pdf_page=6 WHERE chunk_id='a'")
         conn.execute("UPDATE chunks SET original_text='length n is below d.Other claim.', pdf_page=7, section_id='intro' WHERE chunk_id='b'")
+        _extend_page_count(conn, 7)
     def generate(question, evidence):
         assert [e.chunk_id for e in evidence] == (['a'] if strict else ['a', 'b'])
         if strict:
