@@ -144,17 +144,26 @@ class SQLiteChromaRetriever:
 
     @staticmethod
     def _fuse_lexical(question, ranked, eligible):
-        """벡터 순위와 원문+번역문 BM25 순위를 RRF로 합친다. 어휘가 겹치지 않으면 벡터 순위를 그대로 쓴다.
+        """벡터 순위와 원문·번역문 중 더 높은 BM25 순위를 RRF로 합친다. 어휘가 겹치지 않으면 벡터 순위를 그대로 쓴다.
 
         score는 합친 RRF 점수다. 같은 결과 안에서 높을수록 관련성이 높다는 설계 규칙을 지킨다.
         """
         with stage('lexical_search'):
-            lexical = bm25_scores(question, {
-                key: f'{chunk.original_text}\n{chunk.text}' for key, chunk in eligible.items()})
-        if not lexical:
+            lexical_ranks = {}
+            for field in ('original_text', 'text'):
+                scores = bm25_scores(question, {
+                    key: getattr(chunk, field) or '' for key, chunk in eligible.items()})
+                order = sorted(scores, key=lambda key: (-scores[key], key))
+                for rank, key in enumerate(order, 1):
+                    lexical_ranks[key] = min(rank, lexical_ranks.get(key, rank))
+        if not lexical_ranks:
             return ranked
-        lexical_order = sorted(lexical, key=lambda key: (-lexical[key], key))
-        fused = reciprocal_rank_fusion([[key for key, _ in ranked], lexical_order])
+        # 번역에 없는 원문 용어도 살리고, 양쪽에 있는 청크를 중복 가산하지 않는다.
+        lexical_order = sorted(lexical_ranks, key=lambda key: (lexical_ranks[key], key))
+        fused = reciprocal_rank_fusion([[key for key, _ in ranked]])
+        # 질문에 명시된 용어의 순위를 더 반영한다. 두 언어는 하나의 어휘 순위로 취급한다.
+        for key, score in reciprocal_rank_fusion([lexical_order]).items():
+            fused[key] = fused.get(key, 0.0) + 2.0 * score
         return sorted(((key, fused[key]) for key, _ in ranked), key=lambda hit: (-hit[1], hit[0]))
 
     def search(self, question: str, scope: SearchScope, top_k: int) -> SearchResult:

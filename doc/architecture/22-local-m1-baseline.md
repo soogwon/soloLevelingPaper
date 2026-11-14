@@ -68,7 +68,32 @@ flowchart TB
 - SQLite FK는 연결마다 활성화하고 테스트한다. Chroma에는 SQLite 복합 FK를 적용할 수 없으므로 안정적인 청크 ID로 대조한다.
 - SQLite와 Chroma 쓰기는 하나의 트랜잭션이 아니다. 파생 색인을 먼저 준비·검증한 후 SQLite의 ready 상태·활성 참조를 게시한다. 실패 시 재구축/정리한다.
 - 삭제는 SQLite에서 접근 차단 후 파일·벡터·컨텍스트 정리 순서다. 외부에서 사용자가 제공한 원본 파일은 삭제하지 않는다.
-- 키워드 검색과 벡터 검색을 결합한다(#284). 번역문 벡터 순위와, 원문+번역문에 대한 BM25 어휘 순위를 RRF(k=60)로 합친다. 어휘는 영어 단어(하이픈 단어는 나눈 형태와 붙인 형태)와 한글 음절 2-gram이며, 논문 하나의 청크만 다루므로 별도 색인 없이 조회 시점에 계산한다(`infrastructure/retrieval/lexical.py`). 질문과 어휘가 겹치지 않으면 벡터 순위를 그대로 쓴다. 결과의 `retrieval_method`는 `hybrid`다. 실제 색인에서의 순위 비교는 `scripts/measure_retrieval.py`로 한다. PostgreSQL SQL이나 pgvector 인덱스 전제는 적용하지 않는다.
+- 키워드 검색과 벡터 검색을 결합한다(#284). 원문과 번역문에 각각 BM25를 계산하고 청크별 더 높은 순위로 하나의 어휘 목록을 만든다. 번역 길이 때문에 원문의 영어 용어가 희석되는 것을 막고, 양쪽에 등장하는 청크를 중복 가산하지 않는다. 번역문 벡터 순위와 어휘 순위를 가중 RRF(k=60, 벡터 1·어휘 2)로 합쳐 혼합 언어 질문의 명시적인 용어를 더 반영한다. 어휘는 영어 단어(하이픈 단어는 나눈 형태와 붙인 형태)와 한글 음절 2-gram이며, 논문 하나의 청크만 다루므로 별도 색인 없이 조회 시점에 계산한다(`infrastructure/retrieval/lexical.py`). 질문과 어휘가 겹치지 않으면 벡터 순위를 그대로 쓴다. 결과의 `retrieval_method`는 `hybrid`다. 실제 색인에서의 순위 비교는 `scripts/measure_retrieval.py`로 한다. PostgreSQL SQL이나 pgvector 인덱스 전제는 적용하지 않는다.
+
+### #355 혼합 언어 검색 실측 (2026-11-14)
+
+macOS의 실제 Attention Is All You Need v7 저장 DB·번역문·Chroma 색인을 복사해 확인했다.
+기존에 저장된 `paraphrase-multilingual-MiniLM-L12-v2` 모델을 오프라인으로 사용했으며,
+외부 API 호출이나 원본 데이터 변경은 하지 않았다. 대상 근거는 물리 5페이지의 청크 33,
+`representation subspaces`를 설명하는 부분이다. 아래는 페이지 제한 없는 전체 논문 검색 순위다.
+
+| 질문 | 벡터만 | 보완 전 #355 (`0f76c20`) | 보완 후 |
+|---|---:|---:|---:|
+| Multi-head attention은 왜 여러 개의 head를 쓰나요? | 15 | 13 | 4 |
+| Multi head attention에서 여러 head를 사용하는 이유는? | 16 | 13 | 5 |
+| 멀티헤드 어텐션은 왜 여러 개의 헤드를 쓰나요? | 8 | 2 | 2 |
+| Why does multi-head attention use multiple heads? | 13 | 12 | 4 |
+
+보완 후 네 질문 모두 기본 `top_k=5`에 근거가 포함된다. 5페이지로 제한하면 앞의 세 질문은 1위,
+영어 질문은 3위다. 긴 번역문에 의해 영어 원문 근거가 밀리는 회귀 테스트는 보완 전 실패,
+보완 후 통과했다. 양쪽 언어 중복 가산 방지와 어휘 불일치 시 벡터 점수 보존도 검사한다.
+이 결과는 한 논문의 네 질문에 대한 검색 검증이며, 전체 질의 품질이나 생성 답변의 정확성을 보장하지 않는다.
+가중치는 더 넓은 평가 자료로 추가 검증할 필요가 있다.
+
+재현 시 `scripts/measure_retrieval.py`에 설치본의 `--data-root`, `--sqlite-filename`,
+`--context-id`, 위 질문의 `--question`, `--needle 'representation subspaces'`, `--top-k 5`를 지정한다.
+이 스크립트의 변경 전 표시는 벡터 전용 기준이며, 위 보완 전 열은 `0f76c20`의 하이브리드 검색을
+같은 데이터·질문으로 별도 실행한 값이다.
 
 ## 텍스트·페이지 합의 (2026-09-07)
 
