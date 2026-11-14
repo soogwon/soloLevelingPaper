@@ -29,14 +29,22 @@ def test_resume_tool_registers_with_read_only_structured_contract():
     resolver.resolve.assert_not_called()
 
 
-def test_invalid_server_response_does_not_request_reconnection():
-    import asyncio
+def test_invalid_server_response_does_not_request_reconnection(monkeypatch):
+    from types import SimpleNamespace
     import pytest
     from mcp.server.fastmcp.exceptions import ToolError
     from solo_leveling.infrastructure.storage.server_client import ServerResponseInvalid
+    import solo_leveling.interfaces.mcp.resume_tools as resume_tools
+
+    async def invalid_response(*args):
+        raise ServerResponseInvalid
+
+    monkeypatch.setattr(
+        resume_tools, "anyio",
+        SimpleNamespace(to_thread=SimpleNamespace(run_sync=invalid_response)),
+    )
 
     resolver = Mock()
-    resolver.resolve.side_effect = ServerResponseInvalid
     tool = make_server(resolver)._tool_manager._tools["resolve_resume_request"]
     with pytest.raises(ToolError, match="INVALID_SERVER_RESPONSE"):
-        asyncio.run(tool.fn("resume_code"))
+        tool.fn("resume_code").send(None)
