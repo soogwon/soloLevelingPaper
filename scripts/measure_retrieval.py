@@ -45,6 +45,8 @@ def _measure(service, args, needle, *, pages=()):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description='근거 청크 검색 순위 비교(읽기 전용)')
     parser.add_argument('--data-root', type=Path, required=True, help='MCP 서버의 DATA_ROOT')
+    parser.add_argument('--sqlite-filename', default='solo_leveling.sqlite3', help='설치 설정의 SQLITE_FILENAME')
+    parser.add_argument('--chroma-subdir', default='chroma', help='설치 설정의 CHROMA_SUBDIR')
     parser.add_argument('--context-id', required=True)
     parser.add_argument('--question', required=True)
     parser.add_argument('--needle', required=True, help='근거 청크 원문에 들어 있는 짧은 구절')
@@ -52,7 +54,8 @@ def main(argv=None) -> int:
     parser.add_argument('--top-k', type=int, default=10)
     args = parser.parse_args(argv)
 
-    paths = runtime_paths({'DATA_ROOT': str(args.data_root)})
+    paths = runtime_paths({'DATA_ROOT': str(args.data_root), 'SQLITE_FILENAME': args.sqlite_filename,
+                           'CHROMA_SUBDIR': args.chroma_subdir})
     if not paths.db_path.is_file():
         print('DB 파일을 찾을 수 없습니다. --data-root를 확인하세요.', file=sys.stderr)
         return 2
