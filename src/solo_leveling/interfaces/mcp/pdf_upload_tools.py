@@ -4,7 +4,7 @@ from dataclasses import asdict
 from importlib.resources import files
 from secrets import token_urlsafe
 from time import monotonic
-from typing import Any, Protocol
+from typing import Protocol
 
 import anyio
 from mcp.server.fastmcp.exceptions import ToolError
@@ -68,6 +68,14 @@ def _pdf_upload_stage_tool_error(exc: PdfUploadStageError) -> ToolError:
     return ToolError(f"{code}: {message}{suffix} 자동으로 다시 전송하지 않습니다.")
 
 
+def _pdf_upload_error_result(error: ToolError) -> CallToolResult:
+    """카드가 호스트 종류와 무관하게 업무 오류 코드를 읽을 수 있게 반환한다."""
+    return CallToolResult(
+        isError=True,
+        content=[TextContent(type="text", text=str(error))],
+    )
+
+
 def register_pdf_upload(server, service: PdfUploadService) -> None:
     gate = PdfUploadGate()
 
@@ -122,25 +130,34 @@ def register_pdf_upload(server, service: PdfUploadService) -> None:
     )
     async def upload_paper_pdf_to_server(
         paper_id: str, version_id: str, confirmation_token: str,
-    ) -> dict[str, Any]:
+    ) -> CallToolResult:
         """카드에서 승인한 PDF 파일을 비공개 서버 저장소에 업로드하고 검증합니다."""
-        preview = gate.consume(confirmation_token, paper_id, version_id)
         try:
-            return asdict(await anyio.to_thread.run_sync(service.upload, preview))
+            preview = gate.consume(confirmation_token, paper_id, version_id)
+            data = asdict(await anyio.to_thread.run_sync(service.upload, preview))
+            return CallToolResult(
+                content=[TextContent(type="text", text="PDF 업로드를 완료했습니다.")],
+                structuredContent=data,
+            )
         except FileExistsError:
-            raise ToolError("PDF_ALREADY_UPLOADED: 이 원문 버전의 PDF가 이미 준비되어 있습니다.") from None
+            error = ToolError("PDF_ALREADY_UPLOADED: 이 원문 버전의 PDF가 이미 준비되어 있습니다.")
         except PdfUploadStageError as exc:
-            raise _pdf_upload_stage_tool_error(exc) from None
+            error = _pdf_upload_stage_tool_error(exc)
         except ServerResponseInvalid:
-            raise ToolError("PDF_UPLOAD_FAILED: 업로드 응답을 확인할 수 없습니다.") from None
+            error = ToolError("PDF_UPLOAD_FAILED: 업로드 응답을 확인할 수 없습니다.")
         except ServerConnectionRequired:
-            raise ToolError("SERVER_CONNECTION_REQUIRED: 서버 계정을 다시 연결하세요.") from None
+            error = ToolError("SERVER_CONNECTION_REQUIRED: 서버 계정을 다시 연결하세요.")
         except ValueError as exc:
             if str(exc) == "PDF_UPLOAD_PREVIEW_CHANGED":
-                raise ToolError("PDF_UPLOAD_PREVIEW_CHANGED: 파일이 변경되었습니다. 안내 카드를 다시 확인하세요.") from None
-            raise ToolError("PDF_UPLOAD_FAILED: 서버가 업로드 응답을 확인하지 못했습니다.") from None
+                error = ToolError(
+                    "PDF_UPLOAD_PREVIEW_CHANGED: 파일이 변경되었습니다. 안내 카드를 다시 확인하세요.")
+            else:
+                error = ToolError("PDF_UPLOAD_FAILED: 서버가 업로드 응답을 확인하지 못했습니다.")
+        except ToolError as exc:
+            error = exc
         except Exception:
-            raise ToolError("PDF_UPLOAD_FAILED: PDF 업로드를 완료하지 못했습니다.") from None
+            error = ToolError("PDF_UPLOAD_FAILED: PDF 업로드를 완료하지 못했습니다.")
+        return _pdf_upload_error_result(error)
 
     @server.tool(
         name="cancel_paper_pdf_upload", structured_output=True,
