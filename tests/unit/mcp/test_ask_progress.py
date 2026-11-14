@@ -2,6 +2,8 @@
 
 import asyncio
 from threading import Event
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import anyio
 import pytest
@@ -9,6 +11,7 @@ from mcp import types
 from mcp.shared.exceptions import McpError
 from mcp.shared.memory import create_connected_server_and_client_session
 
+from solo_leveling.domain.ask_execution import ExecutionOutcome, ExecutionResult
 from solo_leveling.cancellation import RequestCancelled, raise_if_cancelled
 from solo_leveling.interfaces.mcp import server as server_module
 from tests.unit.mcp.test_server import answer_response, make_server
@@ -135,3 +138,85 @@ def test_cancel_with_progress_token_still_stops_next_stage():
     asyncio.run(scenario())
     assert replies == ['Request cancelled']
     assert outcomes == ['cancelled']
+
+
+def test_submit_question_reports_progress_without_reexecuting():
+    release = Event()
+    progress = []
+    executions = Mock()
+
+    def run(*args, **kwargs):
+        if not release.wait(5):
+            raise RuntimeError('TEST_RELEASE_TIMEOUT')
+        return ExecutionResult(ExecutionOutcome.IN_PROGRESS)
+
+    executions.run.side_effect = run
+    server = server_module.create_server(
+        server_module.MCPServices(Mock(), Mock(), executions=executions))
+
+    async def on_progress(value, total, message):
+        progress.append((value, total, message))
+        if len(progress) >= 2:
+            release.set()
+
+    async def scenario():
+        with anyio.fail_after(10):
+            async with create_connected_server_and_client_session(server) as client:
+                result = await client.call_tool('submit_paper_question', {
+                    'context_id': 'context', 'request_key': 'key', 'question': '합성 질문',
+                }, progress_callback=on_progress)
+                assert not result.isError
+                assert result.structuredContent['state'] == 'in_progress'
+                # 응답 완료 뒤에는 진행 알림 작업도 끝나야 한다.
+                count = len(progress)
+                await anyio.sleep(server_module.PROGRESS_INTERVAL_SECONDS * 3)
+                assert len(progress) == count
+                await client.send_ping()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+    values = [value for value, _, _ in progress]
+    assert len(values) >= 2 and values == sorted(set(values))
+    assert all(total is None and message == server_module.PROGRESS_MESSAGE
+               for _, total, message in progress)
+    executions.run.assert_called_once_with(
+        'key', '합성 질문', context_id='context', top_k=5,
+        pdf_pages=(), section_ids=(), strict_pages=False)
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_notification_failure_preserves_work_result_and_original_exception(fails):
+    async def scenario():
+        with anyio.fail_after(5):
+            sent = anyio.Event()
+            original = ValueError('SYNTHETIC_PRIVATE_FAILURE')
+            notifications = []
+
+            async def report(*args):
+                notifications.append(args)
+                sent.set()
+                raise RuntimeError('SYNTHETIC_NOTIFICATION_FAILURE')
+
+            # 숫자 0도 유효한 진행 토큰이며 알림 전송을 생략하면 안 된다.
+            context = SimpleNamespace(
+                request_context=SimpleNamespace(meta=SimpleNamespace(progressToken=0)),
+                report_progress=report)
+            server = SimpleNamespace(get_context=lambda: context)
+
+            async def work():
+                await sent.wait()
+                if fails:
+                    raise original
+                return 'completed'
+
+            if fails:
+                with pytest.raises(ValueError) as failure:
+                    await server_module._with_progress(server, work)
+                assert failure.value is original
+            else:
+                assert await server_module._with_progress(server, work) == 'completed'
+            assert notifications == [(1, None, server_module.PROGRESS_MESSAGE)]
+
+    asyncio.run(scenario())
