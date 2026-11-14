@@ -21,7 +21,10 @@ def path_view(path: LearningPath) -> dict:
     return {
         'steps': [{
             'order': step.order, **concept_view(step.concept), 'role': step.role,
-            'reason_ko': step.reason_ko, 'prerequisite_ids': list(step.prerequisite_ids),
+            'reason_ko': step.reason_ko,
+            'needed_for': ({'concept_id': step.needed_for.concept_id, 'name_ko': step.needed_for.name_ko}
+                           if step.needed_for else None),
+            'prerequisite_ids': list(step.prerequisite_ids),
             'paper_locations': locations_view(step.locations),
         } for step in path.steps],
         'skipped': [{'concept_id': s.concept.concept_id, 'name_ko': s.concept.name_ko,

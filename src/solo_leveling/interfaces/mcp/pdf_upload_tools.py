@@ -86,15 +86,17 @@ def register_pdf_upload(server, service: PdfUploadService) -> None:
             raise ToolError("PDF_UNAVAILABLE: 관리 PDF 파일을 안전하게 확인할 수 없습니다.") from None
         notice = (f"{PDF_UPLOAD_NOTICE}\n파일명 {preview.file_name} · 크기 {preview.file_size}바이트 · "
                   f"SHA-256 {preview.sha256_hex}")
+        confirmation_token = gate.prepare(preview)
         data = {
             "status": "confirmation_required", "notice": notice,
             "paper_id": preview.paper_id, "server_paper_id": preview.server_paper_id,
             "version_id": preview.version_id, "file_name": preview.file_name,
             "file_size": preview.file_size, "sha256": preview.sha256_hex,
+            "confirmation_token": confirmation_token,
         }
         return CallToolResult(
             content=[TextContent(type="text", text=notice)], structuredContent=data,
-            _meta={"confirmation_token": gate.prepare(preview)},
+            _meta={"confirmation_token": confirmation_token},
         )
 
     @server.tool(

@@ -345,6 +345,8 @@ class PathStep:
     reason_ko: str
     prerequisite_ids: tuple[str, ...]
     locations: PaperConcept | None
+    # required일 때 reason_ko가 설명하는 관계의 상대, 즉 이 개념을 경로에서 처음 필요로 하는 개념
+    needed_for: Concept | None = None
 
 
 @dataclass(frozen=True)
@@ -430,18 +432,20 @@ def learning_path(graph: KnowledgeGraph, paper: PaperGraph, goal: str,
 
     steps = []
     for index, cid in enumerate(ordered):
+        needed_for = None
         if cid in plan.reasons and role[cid] != 'required':
             reason = plan.reasons[cid]
         else:
             users = sorted((e for e in graph.required_by(cid) if e.concept_id in order_of),
                            key=lambda e: order_of[e.concept_id])
             reason = users[0].rationale_ko if users else plan.reasons.get(cid, '')
+            needed_for = graph.concepts[users[0].concept_id] if users else None
         steps.append(PathStep(
             order=index + 1, concept=graph.concepts[cid], role=role[cid], reason_ko=reason,
             prerequisite_ids=tuple(sorted((e.prerequisite_id for e in graph.requires(cid)
                                            if e.prerequisite_id in included),
                                           key=lambda p: order_of[p])),
-            locations=paper.concepts.get(cid)))
+            locations=paper.concepts.get(cid), needed_for=needed_for))
 
     skipped = []
     for cid in sorted(everything - included, key=lambda c: (rank.get(c, 0), c)):

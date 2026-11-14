@@ -14,10 +14,15 @@ function setup() {
   }};
   mountServerSync(app, doc);
   app.ontoolresult({structuredContent: {status: 'confirmation_required', notice: '메타데이터만 전송',
-    paper_id: 'paper-1', operation_id: 'op-1', title: '<img src=x onerror=alert(1)>'},
-    _meta: {confirmation_token: 'secret'}});
+    paper_id: 'paper-1', operation_id: 'op-1', title: '<img src=x onerror=alert(1)>',
+    confirmation_token: 'secret'}});
   return {doc, calls, app, el: id => doc.getElementById(id)};
 }
+
+test('호스트가 결과 메타를 제거해도 구조화 응답 토큰으로 승인할 수 있다', () => {
+  const {el} = setup();
+  assert.equal(el('agree').disabled, false);
+});
 
 test('명시적 체크와 클릭 전에는 동기화하지 않고 텍스트를 안전하게 표시한다', async () => {
   const {doc, calls, el} = setup();

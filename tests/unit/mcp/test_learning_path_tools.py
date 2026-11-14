@@ -42,6 +42,8 @@ def test_tools_are_read_only_and_return_the_path(service):
     assert result['goal'] == 'understand' and result['mode'] == 'compact'
     # 맥락에 저장된 known_concepts('어텐션')는 그래프에 없으므로 경로를 줄이지 않는다.
     assert [s['concept_id'] for s in result['steps']] == ['vector', 'dot', 'softmax', 'attention', 'transformer']
+    assert result['steps'][1]['needed_for'] == {'concept_id': 'attention', 'name_ko': 'attention 한글'}
+    assert result['steps'][-1]['needed_for'] is None
     assert result['unresolved_concepts'] == ['어텐션']
     assert result['steps'][3]['paper_locations'] == [
         {'pdf_page': 1, 'section_hint': None, 'search_phrase': None}, {'pdf_page': 2, 'section_hint': None, 'search_phrase': None}]

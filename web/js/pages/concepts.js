@@ -150,7 +150,7 @@ async function graphPage(view, paperKey, query) {
             <span class="kg-step-no">${s.order}</span>
             <span class="kg-step-main">
               <span class="kg-step-name">${s.name_ko} <span class="hint">${s.name_en}</span></span>
-              <span class="kg-step-reason">${s.reason_ko}</span>
+              <span class="kg-step-reason">${s.needed_for ? html`<span class="kg-step-for">→ ${s.needed_for.name_ko}에 필요</span> ` : ''}${s.reason_ko}</span>
             </span>
             <span class="badge ${s.role === 'target' ? 'b-reading' : s.role === 'optional' ? 'b-gray' : 'b-ok'}">${ROLE_LABEL[s.role]}</span>
           </button>

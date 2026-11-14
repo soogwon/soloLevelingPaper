@@ -326,6 +326,7 @@ dialog.dialog::backdrop { background: rgba(22, 22, 29, 0.45); }
 .kg-step-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .kg-step-name { font-weight: 600; }
 .kg-step-reason { font-size: 13px; color: var(--muted); }
+.kg-step-for { display: block; font-weight: 600; color: var(--accent); }
 .kg-pages { display: block; padding: 0 8px 0 44px; font-size: 12px; color: var(--muted); }
 .kg-map-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .kg-map-head .chip.sm { order: 3; min-height: 30px; padding: 0 10px; font-size: 13px; }

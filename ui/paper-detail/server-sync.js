@@ -16,14 +16,15 @@ export function mountServerSync(app, doc) {
   app.ontoolinput = event => { input = event.arguments; reset(); };
   app.ontoolresult = result => {
     const data = result?.structuredContent;
+    const confirmationToken = data?.confirmation_token ?? result?._meta?.confirmation_token;
     if (input === null || (input && input.paper_id !== data?.paper_id)) return;
     reset();
     if (!result?.isError && data?.status === 'confirmation_required'
         && typeof data.notice === 'string' && typeof data.paper_id === 'string'
         && typeof data.operation_id === 'string'
         && (data.title === null || typeof data.title === 'string')
-        && typeof result._meta?.confirmation_token === 'string') {
-      pending = {...data, confirmation_token: result._meta.confirmation_token};
+        && typeof confirmationToken === 'string') {
+      pending = {...data, confirmation_token: confirmationToken};
       el('paper').textContent = `논문: ${data.title || '(제목 없음)'} · 로컬 ID: ${data.paper_id}`;
       el('notice').textContent = data.notice;
       el('status').textContent = '아직 서버 전송 작업을 만들지 않았습니다.';
