@@ -120,4 +120,4 @@ C에서 청크를 임의 결합하거나 근거에 없는 내용을 보충하는
 명시적 페이지 범위, 후보 분량 제한, 근거 ID·페이지 보존, 손상된 수식을 포함한다.
 실제 Claude 테스트에서는 동일 context로 질문한 뒤 `get_evidence`의 반환값까지 확인한다.
 
-별도 이슈: [부분 번역 실패 보완 계획](translation-failure-recovery-plan.md).
+별도 이슈: [부분 번역 실패 보완 계획](../setup/translation-failure-recovery-plan.md).

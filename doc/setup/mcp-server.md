@@ -53,7 +53,7 @@ stdout의 MCP 통신은 유지한다.
 일반 실행의 부모 stderr에는 진단 실행기의 필터가 적용되지 않으므로 같은 보호가 필요하면
 진단 실행기 또는 Desktop `serve`를 사용한다. 변경 후에는 서버를 재시작한다.
 자식 기본 로그에는 `worker_enter`와 허용된 단계의 시작·종료·소요 시간 또는 고정 오류 코드가 남는다. 워치독 스택은 원본 수집을 켠 경우에만 남긴다.
-상세 계약과 제한은 [임베딩 로그 협의 사항](embedding-log-privacy-coordination.md)을 참고한다.
+상세 계약과 제한은 [임베딩 로그 협의 사항](../history/embedding-log-privacy-coordination.md)을 참고한다.
 
 ## 공용 PDF 저장 인터페이스 (#28)
 
@@ -223,7 +223,7 @@ VERIFICATION_MAX_INPUT_CHARS=60000
   정상 세부 체크와 정상 coverage/repairs 종합 판정은 `--detailed-diagnostics`에서만 기록한다.
   Desktop 설정의 `serve` 인자에도 같은 옵션을 추가할 수 있다. 원본 로그 수집 옵션과는 다르며,
   상세 모드에서도 본문·임의 stderr는 안전 필터가 폐기한다.
-  코드·PR 분리 기준과 제외 자료는 [변경 범위](semantic-verification-change-scope.md)에 정리한다.
+  코드·PR 분리 기준과 제외 자료는 [변경 범위](../history/semantic-verification-change-scope.md)에 정리한다.
   원문은 `repair_quote_options`로만 전달한다. `evidence`·`repair_contexts`의 전체 원문·번역문과
   초안의 기존 supports는 보완 요청에서 제외하여 제한 밖 설명이 다른 필드로 전달되지 않게 한다.
   보완 응답은 `source_claim_number`로 원래 보완 대상에 연결한다. 한 대상을 여러 주장으로
@@ -340,7 +340,7 @@ Windows 재분석 지점 경쟁, import 루트 상위 폴더·관리 저장소 �
 ### get_paper_status
 
 MCP Apps 지원 호스트에는 읽기 전용 상태 카드를 연결한다. 기존 입력·응답은 그대로이며
-UI 미지원 호스트도 텍스트로 조회할 수 있다. [Claude Desktop UI 검증](mcp-app-ui.md)을 참고한다.
+UI 미지원 호스트도 텍스트로 조회할 수 있다. [Claude Desktop UI 검증](../history/mcp-app-ui.md)을 참고한다.
 
 `job_id`로 `processing`, `ready`, `failed`, `interrupted` 상태와 현재 단계,
 제한 사항을 조회한다. `ready`일 때만 `start_learning`을 capabilities에
@@ -434,7 +434,7 @@ stdio 테스트는 실제 실행 구성의 도구 목록·오류와, 모의 서�
 이 지침은 호스트에 전달하는 사용 안내이며 별도 셸·파일 권한을 강제 차단하는 기능은 아니다.
 청크 분할과 인접 근거 보충 품질은 A·B가 함께 검토한다.
 의미 검증 품질 평가는 #81, 별도 이력 저장 도입 후 보존·정리 정책은 #82에서 다룬다.
-상세 계획은 [담당별 진단 문서](evidence-boundary-diagnosis-and-ownership.md)를 참조한다.
+상세 계획은 [담당별 진단 문서](../history/evidence-boundary-diagnosis-and-ownership.md)를 참조한다.
 
 Claude Code는 등록된 프로젝트 폴더에서 실행한다. 코드를 갱신한 후 기존 MCP 프로세스를
 재연결하거나 Claude Code 세션을 다시 시작해 새 instructions와 도구 설명을 받는다.

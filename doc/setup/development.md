@@ -225,7 +225,7 @@ Python 3.11 이상이 필요하다. `ulimit -Sn`은 현재 열린 파일 수 제
 `OSError: [Errno 24] Too many open files`가 발생할 수 있다. 4096으로 높이는 것은
 검증된 임시 우회이며 리소스 정리 자체를 해결하지는 않는다. 실제 기본 제한은
 환경마다 다르므로 256이라고 가정하지 않는다. 측정 결과와 별도 실패는
-[#67 macOS 파일 핸들 검증 기록](macos-file-handles.md)을 참고한다.
+[#67 macOS 파일 핸들 검증 기록](../history/macos-file-handles.md)을 참고한다.
 
 ## 서비스 연결 전 확인 사항
 
