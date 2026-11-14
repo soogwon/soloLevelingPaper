@@ -50,6 +50,8 @@ def test_cross_page_candidate_is_saved_and_read_with_own_page(setup_search):
     db, _, retriever, _, _ = setup_search
     # 임시 DB에서만 원문 경계와 페이지를 재현한다. 번역문·벡터는 유지한다.
     with closing(get_connection(db)) as conn, conn:
+        # 청크를 옮긴 페이지에 맞춰 합성 문서의 전체 쪽수도 갱신한다.
+        conn.execute("UPDATE parse_revisions SET page_count=7 WHERE parse_revision_id='p'")
         conn.execute("UPDATE chunks SET original_text='Faster when the sequence', pdf_page=6 WHERE chunk_id='a'")
         conn.execute("UPDATE chunks SET original_text='length is smaller.', pdf_page=7 WHERE chunk_id='b'")
     def generate(question, evidence):
@@ -69,6 +71,8 @@ def test_cross_page_candidate_is_saved_and_read_with_own_page(setup_search):
 def test_page_completion_through_real_stores(setup_search, strict):
     db, _, retriever, _, _ = setup_search
     with closing(get_connection(db)) as conn, conn:
+        # 청크를 옮긴 페이지에 맞춰 합성 문서의 전체 쪽수도 갱신한다.
+        conn.execute("UPDATE parse_revisions SET page_count=7 WHERE parse_revision_id='p'")
         conn.execute("UPDATE chunks SET original_text='Faster when the sequence', pdf_page=6 WHERE chunk_id='a'")
         conn.execute("UPDATE chunks SET original_text='length n is below d.Other claim.', pdf_page=7, section_id='intro' WHERE chunk_id='b'")
     def generate(question, evidence):

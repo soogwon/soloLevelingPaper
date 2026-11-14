@@ -58,7 +58,8 @@ type: short description
 
 ## 5. Pull Request
 
-Pull Request에는 변경 내용과 이유, 실행·테스트 방법, 영향받는 영역, 남은 TODO를 포함합니다. 가능하면 하나의 Pull Request에는 하나의 주요 목적만 포함합니다.
+Pull Request에는 변경 내용과 이유, 실행·테스트 방법, 영향받는 영역, 남은 TODO를 포함합니다.
+Pull Request를 올리면 `.github/workflows/ci.yml`이 Python 단위·통합 테스트, 웹 테스트, MCP UI 테스트를 자동으로 실행합니다. 가능하면 하나의 Pull Request에는 하나의 주요 목적만 포함합니다.
 
 ## 6. Data, Security and Copyright
 
@@ -78,3 +79,10 @@ Pull Request에는 변경 내용과 이유, 실행·테스트 방법, 영향받�
 
 Mini Project를 통합할 때는 실험 코드를 그대로 복사하기보다 검증된 설계와 핵심 로직을 정리하고, 팀이 합의한 공통 인터페이스·코드 스타일·테스트 방식에 맞춥니다.
 
+
+설치본·플랫폼 전용 검증은 Actions의 수동 워크플로로 유지합니다.
+- `issue-101-installed-linux.yml`: 별도 가상환경의 wheel 설치본과 stdio 계약
+- `issue-91-linux.yml`: 실제 Chroma 수명 및 파일 핸들 제한 회귀
+- `log-cleanup-platforms.yml`: Windows NTFS와 Linux 로그 정리·잠금 회귀
+
+공통 CI 통과가 위 수동 검증의 통과를 의미하지는 않습니다.
