@@ -94,15 +94,17 @@ def register_server_sync(server, service: ServerSyncService) -> None:
                   f"저장된 전체 논문 요약 {preview.summary_count}건 · "
                   f"메모·하이라이트 {preview.annotation_count}건 · "
                   f"마지막 학습 시각 {preview.last_studied_at or '기록 없음'}")
+        confirmation_token = gate.prepare(preview, operation_id)
         data = {"status": "confirmation_required", "notice": notice,
                 "operation_id": operation_id, "paper_id": preview.paper_id, "title": preview.title,
+                "confirmation_token": confirmation_token,
                 "learning_record_count": preview.learning_record_count,
                 "summary_count": preview.summary_count,
                 "annotation_count": preview.annotation_count,
                 "last_studied_at": preview.last_studied_at}
         return CallToolResult(
             content=[TextContent(type="text", text=notice)], structuredContent=data,
-            _meta={"confirmation_token": gate.prepare(preview, operation_id)},
+            _meta={"confirmation_token": confirmation_token},
         )
 
     @server.tool(

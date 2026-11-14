@@ -20,10 +20,21 @@ test('승인 전에는 PDF를 전송하지 않고 카드 메타데이터를 표�
   app.ontoolresult({structuredContent: {
     status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-1',
     file_name: 'paper.pdf', file_size: 1234, notice: 'PDF 전체 전송',
-  }, _meta: {confirmation_token: 'secret'}});
+    confirmation_token: 'secret',
+  }});
   assert.equal(doc.getElementById('file').textContent, 'paper.pdf · 1,234바이트');
   assert.equal(doc.getElementById('confirm').disabled, true);
   assert.equal(calls.length, 0);
+});
+
+test('호스트가 결과 메타를 제거해도 구조화 응답 토큰으로 승인할 수 있다', () => {
+  const {app, doc} = setup();
+  app.ontoolresult({structuredContent: {
+    status: 'confirmation_required', paper_id: 'paper-1', version_id: 'version-1',
+    file_name: 'paper.pdf', file_size: 1234, notice: 'PDF 전체 전송',
+    confirmation_token: 'secret',
+  }});
+  assert.equal(doc.getElementById('agree').disabled, false);
 });
 
 test('체크 후 버튼만 숨겨진 업로드 도구를 호출한다', async () => {

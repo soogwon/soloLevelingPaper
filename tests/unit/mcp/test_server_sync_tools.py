@@ -30,7 +30,7 @@ def test_card_approval_creates_and_sends_exactly_one_operation():
             assert tools[name].meta["ui"]["visibility"] == ["app"]
         prepared = await server.call_tool("prepare_paper_server_sync", {"paper_id": "paper-1"})
         service.grant_and_queue.assert_not_called()
-        assert "confirmation_token" not in prepared.structuredContent
+        assert prepared.structuredContent["confirmation_token"] == prepared.meta["confirmation_token"]
         assert prepared.structuredContent["title"] == "Paper"
         operation_id = prepared.structuredContent["operation_id"]
         assert all(term in prepared.structuredContent["notice"] for term in

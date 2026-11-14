@@ -15,6 +15,7 @@ export function mountPdfUpload(app, doc) {
   app.ontoolinput = event => { input = event.arguments; reset(); };
   app.ontoolresult = result => {
     const data = result?.structuredContent;
+    const confirmationToken = data?.confirmation_token ?? result?._meta?.confirmation_token;
     if (!input || input.paper_id !== data?.paper_id
         || (input.version_id != null && input.version_id !== data?.version_id)) return;
     reset();
@@ -22,8 +23,8 @@ export function mountPdfUpload(app, doc) {
         && typeof data.notice === 'string' && typeof data.paper_id === 'string'
         && typeof data.version_id === 'string' && typeof data.file_name === 'string'
         && Number.isSafeInteger(data.file_size) && data.file_size > 0
-        && typeof result._meta?.confirmation_token === 'string') {
-      pending = {...data, confirmation_token: result._meta.confirmation_token};
+        && typeof confirmationToken === 'string') {
+      pending = {...data, confirmation_token: confirmationToken};
       el('file').textContent = `${data.file_name} · ${data.file_size.toLocaleString()}바이트`;
       el('notice').textContent = data.notice;
       el('status').textContent = '아직 PDF를 서버에 전송하지 않았습니다.';
