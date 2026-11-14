@@ -25,6 +25,11 @@ class PaperLocationOutput(TypedDict):
     section_hint: str | None
 
 
+class NeededForOutput(TypedDict):
+    concept_id: str
+    name_ko: str
+
+
 class PathStepOutput(TypedDict):
     order: int
     concept_id: str
@@ -33,6 +38,7 @@ class PathStepOutput(TypedDict):
     description_ko: str
     role: Literal['target', 'required', 'optional']
     reason_ko: str
+    needed_for: NeededForOutput | None
     prerequisite_ids: list[str]
     paper_locations: list[PaperLocationOutput]
 
