@@ -4,7 +4,7 @@
 import { api } from '../api/index.js';
 import { html, esc, setHTML } from '../lib/html.js';
 import { replaceQuery } from '../router.js';
-import { loadingBlock, emptyBlock, errorBlock } from '../lib/ui.js';
+import { loadingBlock, emptyBlock, errorBlock, copyText, toast } from '../lib/ui.js';
 
 const GOALS = [['understand', '이해'], ['implement', '구현'], ['skim', '훑어보기']];
 const MODES = [['compact', '필수만'], ['expanded', '선택 포함']];
@@ -58,14 +58,6 @@ function sourceLink(value) {
   }
 }
 
-// 기준 PDF(시드의 버전 고정 주소)를 해당 페이지로 연다. 브라우저 PDF 뷰어는 #page=N을 따른다.
-function pageLink(source, page) {
-  if (!source || !Number.isInteger(page) || page < 1) return null;
-  const url = new URL(source);
-  url.hash = `page=${page}`;
-  return url.href;
-}
-
 // 경로에 나온 개념(단계와 건너뜀)만 남긴 그래프. 비어 있으면 전체를 그린다.
 function focusGraph(graph, path) {
   if (!path) return graph;
@@ -91,10 +83,11 @@ async function graphPage(view, paperKey, query) {
   let shown = graph;
   let layout = layoutGraph(graph);
 
-  const pages = (locations) => html`PDF 기준 ${locations.map((l, i) => {
-    const href = pageLink(source, l.pdf_page);
-    return html`${i ? ', ' : ''}${href ? html`<a href="${href}" target="_blank" rel="noopener noreferrer" title="원문 PDF ${l.pdf_page}페이지 열기">${l.pdf_page}</a>` : l.pdf_page}`;
-  })}페이지`;
+  // 논문 위치는 페이지와 '찾을 말'로 안내한다. 사용자는 자기 PDF에서 Ctrl+F(⌘F)로 찾는다.
+  const pages = (locations) => {
+    const phrase = locations[0]?.search_phrase;
+    return html`PDF 기준 ${locations.map((l) => l.pdf_page).join(', ')}페이지${phrase ? html` · 찾을 말 <q class="kg-phrase">${phrase}</q> <button type="button" class="link-btn kg-copy" data-copy="${phrase}" aria-label="찾을 말 ${phrase} 복사">복사</button>` : ''}`;
+  };
 
   setHTML(view, html`
     <div class="page-head">
@@ -240,7 +233,13 @@ async function graphPage(view, paperKey, query) {
     renderDetail();
   }
 
-  view.addEventListener('click', (e) => {
+  view.addEventListener('click', async (e) => {
+    const copy = e.target.closest('[data-copy]');
+    if (copy) {
+      const ok = await copyText(copy.dataset.copy);
+      toast(ok ? '복사했어요. 내 PDF에서 Ctrl+F(Mac은 ⌘F)로 찾아보세요.' : '복사하지 못했어요. 직접 선택해서 복사해 주세요.');
+      return;
+    }
     const goal = e.target.closest('[data-goal]');
     const mode = e.target.closest('[data-mode]');
     const concept = e.target.closest('[data-concept]');
@@ -369,4 +368,4 @@ function drawSvg(graph, layout, roleOf, selected) {
     + edges + nodes + '</svg>';
 }
 
-export { layoutGraph, sourceLink, pageLink, focusGraph };
+export { layoutGraph, sourceLink, focusGraph };

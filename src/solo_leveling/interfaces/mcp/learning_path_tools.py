@@ -23,6 +23,7 @@ class LearningPathReader(Protocol):
 class PaperLocationOutput(TypedDict):
     pdf_page: int
     section_hint: str | None
+    search_phrase: str | None
 
 
 class PathStepOutput(TypedDict):
@@ -99,7 +100,8 @@ def register_learning_path(server, reader: LearningPathReader):
         그래프와 맞지 않는 이름은 unresolved_concepts로 돌려주고 경로에 반영하지 않습니다.
         graph_status=no_graph이면 이 논문에 검수 그래프가 없습니다. 경로를 추측하지 말고 ask_paper로 안내하세요.
         선수 관계는 팀이 검수한 교육적 판단이며 논문 본문의 주장이 아닙니다.
-        paper_locations의 pdf_page는 'PDF 기준 N페이지'로 표시하세요.
+        paper_locations의 pdf_page는 'PDF 기준 N페이지'로 표시하세요. search_phrase는 사용자가 자기 PDF에서
+        검색해 찾을 수 있는 논문 속 용어·소제목이니 그대로 안내하세요.
         """
         try:
             return await anyio.to_thread.run_sync(
