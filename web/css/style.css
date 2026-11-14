@@ -74,7 +74,11 @@ body.bare .sidebar, body.bare .topbar { display: none; }
 body.bare .view { max-width: none; padding: 0; }
 
 @media (max-width: 820px) {
-  .sidebar { border-right: 0; border-bottom: 1px solid var(--line); padding: 16px; gap: 12px; }
+  /* 메뉴와 본문을 세로로 쌓는다. 줄바꿈(wrap)으로 두 줄을 만들면 본문이 짧을 때(로딩 중 등)
+     min-height: 100vh의 남는 높이가 메뉴 줄에도 나눠져 메뉴 아래에 빈 공간이 생긴다 (#353). */
+  .app { flex-direction: column; flex-wrap: nowrap; }
+  .content { flex: 1 0 auto; }
+  .sidebar { flex: none; border-right: 0; border-bottom: 1px solid var(--line); padding: 16px; gap: 12px; }
   .nav { flex-direction: row; overflow-x: auto; }
   .sidebar-foot { display: none; }
 }
