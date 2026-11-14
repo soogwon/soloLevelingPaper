@@ -29,7 +29,6 @@ extract_words() 기반 재구성은 오히려 단어 자체를 잘못 묶어 도
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import List
 from uuid import uuid4
 

@@ -23,7 +23,6 @@ from solo_leveling.domain.models import (
     ProcessingJob,
     IngestionDisposition,
     IngestionRegistration,
-    TranslationRevision,
     EmbeddingSet,
     LearningContext,
     Evidence,

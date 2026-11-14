@@ -265,7 +265,7 @@ def coverage_reference_error(item, known):
     return None
 
 
-from .semantic_guards import metric_substitution, variable_only_condition
+from .semantic_guards import metric_substitution, variable_only_condition  # noqa: F401 - semantic.py가 여기서 가져간다
 
 
 def audit_effects(audit, repair_groups, supported):

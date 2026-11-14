@@ -4,7 +4,7 @@
 근거가 없는 항목은 검증된 요약으로 저장하지 않는다(저장소가 거부한다).
 """
 from dataclasses import dataclass
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Tuple
 
 SUMMARY_KINDS = ('claim', 'method', 'result', 'limitation')
 PAPER_SCOPE = 'paper'  # 전체 요약의 scope. 섹션 요약은 section_id를 scope로 쓴다.

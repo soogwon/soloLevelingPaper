@@ -10,8 +10,7 @@ from solo_leveling.application.evidence_qa.answer import AnswerGenerationError
 from solo_leveling.application.evidence_qa.errors import InvalidArgumentError
 from solo_leveling.application.evidence_qa.serialization import public_answer_payload
 from solo_leveling.domain.ask_execution import (
-    ExecutionOutcome as Outcome, ExecutionResult, ExecutionState, ExecutionView,
-    HEARTBEAT_SECONDS, check_text,
+    ExecutionOutcome as Outcome, ExecutionResult, HEARTBEAT_SECONDS,
 )
 from solo_leveling.application.evidence_qa.entry import validate_search_input
 from solo_leveling.infrastructure.database import ask_executions as store

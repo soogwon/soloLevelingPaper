@@ -47,3 +47,11 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# 정의되지 않은 이름·미사용 import 같은 실수만 잡는다. 테스트는 pytest fixture import가 많아 제외한다.
+select = ["F"]
