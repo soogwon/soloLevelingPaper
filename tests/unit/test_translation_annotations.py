@@ -49,3 +49,26 @@ def test_translation_mcp_roundtrip(env):
                 'annotation_id':saved['annotation']['annotation_id'],'source_position':0})
             assert detail['source']['quote'] == '첫째.'
     asyncio.run(scenario())
+
+
+def test_unicode_crlf_exact_offsets_and_replay_after_translation_loss(env):
+    db, ctx = env
+    service = AnnotationService(db)
+    text = '😀e\u0301\r\n반복 반복 <b>인용</b>'
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute("UPDATE translation_results SET translated_text=? WHERE chunk_id='c1' AND translation_revision_id='t1'", (text,))
+    start = text.rindex('반복')
+    segment = SegmentInput('c1', start, start+2, '반복', 'translation', 't1')
+    saved = service.create(ctx, 'highlight', '', segments=[segment], request_key='unicode').annotation
+    assert saved.segments[0].start_offset == start
+    assert service.create(ctx, 'highlight', '', segments=[SegmentInput(
+        'c1', start+1, start+3, '반복', 'translation', 't1')]).code == 'QUOTE_MISMATCH'
+    full = service.create(ctx, 'highlight', '', segments=[SegmentInput('c1', 0, len(text), text, 'translation', 't1')]).annotation
+    assert full.segments[0].quote_snapshot == text
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute("DELETE FROM translation_results WHERE chunk_id='c1' AND translation_revision_id='t1'")
+    replay = service.create(ctx, 'highlight', '', segments=[segment], request_key='unicode')
+    assert replay.reused and replay.annotation == saved
+    detail = service.get(ctx, saved.annotation_id, source_position=0)
+    assert detail.location_status == 'unavailable'
+    assert detail.annotation.segments[0].quote_snapshot == '반복'
