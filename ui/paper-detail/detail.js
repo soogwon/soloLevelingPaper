@@ -249,9 +249,12 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
       }
       if (selected === e) showRecords(e);
     }
-    async function save(e, kind) {
+    async function save(e, kind, target = 'original') {
       if (selected !== e || uncertain.has(e) || loading.has(e) || pending.has(e) || !Number.isSafeInteger(e.annotation_start)) return;
       const body = kind === 'note' ? el('note-body').value : '';
+      const start = target === 'translation' ? e.translation_annotation_start : e.annotation_start;
+      const quote = target === 'translation' ? e.quote_ko : e.quote_original;
+      if (!Number.isSafeInteger(start) || !nonempty(quote)) return;
       if (kind === 'note' && !body.trim()) {
         el('record-status').textContent = '메모 내용을 입력하세요.';
         return;
@@ -262,8 +265,9 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
       try {
         prepared = await prepareAnnotationRequest({
           context_id: data.context_id, kind, body, segments: [{chunk_id: e.chunk_id,
-            start_offset: e.annotation_start, end_offset: e.annotation_start + Array.from(e.quote_original).length,
-            quote_snapshot: e.quote_original}],
+            start_offset: start, end_offset: start + Array.from(quote).length,
+            quote_snapshot: quote,
+            ...(target === 'translation' ? {target,translation_revision_id:e.translation_revision_id} : {})}],
         }, doc.defaultView.localStorage, doc.defaultView.crypto);
       } catch {
         pending.delete(e);
@@ -281,7 +285,9 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
             || record.kind !== kind || typeof record.body !== 'string' || !nonempty(record.annotation_id)
             || (saved.reused !== true && record.body !== body)) throw new Error();
         const index = e.annotations.findIndex(item => item.annotation_id === record.annotation_id);
-        if (index < 0) {
+        if (target === 'translation') {
+          // 원문 구간별 목록과 건수에는 번역 구간을 섞지 않는다. 전체 기록에서 조회한다.
+        } else if (index < 0) {
           if (!saved.reused) e.annotation_count = (e.annotation_count ?? e.annotations.length) + 1;
           e.annotations.unshift(record);
           if (e.annotation_count != null) e.annotation_count = Math.max(e.annotation_count, e.annotations.length);
@@ -297,6 +303,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
       }
       pending.delete(e);
       if (selected === e) showRecords(e);
+      if (selected === e && target === 'translation') el('record-status').textContent = '번역문 하이라이트를 저장했습니다. 전체 기록 또는 메모 조회에서 확인하세요.';
     }
     function select(e, focus = false) {
       selected = e;
@@ -309,6 +316,10 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
         showRecords(e);
         el('save-note').onclick = () => save(e, 'note');
         el('save-highlight').onclick = () => save(e, 'highlight');
+        if (el('save-translation-highlight')) {
+          el('save-translation-highlight').disabled = !Number.isSafeInteger(e.translation_annotation_start);
+          el('save-translation-highlight').onclick = () => save(e, 'highlight', 'translation');
+        }
       }
       el('location').textContent = `PDF 기준 ${e.pdf_page}페이지${titles.has(e.section_id) ? ` · ${titles.get(e.section_id)}` : e.section_id ? ` · 섹션 ID ${e.section_id}` : ''}${e.printed_page_label ? ` · 인쇄 표기 ${e.printed_page_label}` : ''}`;
       el('file').textContent = e.file_display_name ?? '파일명은 이 응답에서 제공되지 않았습니다.';
@@ -363,7 +374,9 @@ function showContextRecords(app, doc, contextId, firstPage, syncEvidence) {
     function describe(current) {
       const label = current.kind === 'note' ? '메모' : '하이라이트';
       const body = current.body || (current.segments ?? []).map(s => s.quote_snapshot).join(' … ');
-      summary.textContent = `${label} · ${current.segments?.length ? '원문 구간 연결' : '학습 맥락에만 저장'} · ${body}`;
+      const link = current.segments?.some(s => s.target === 'translation') ? '번역문 구간 포함'
+        : current.segments?.length ? '원문 구간 연결' : '학습 맥락에만 저장';
+      summary.textContent = `${label} · ${link} · ${body}`;
     }
     describe(record);
     if (syncEvidence && Number.isSafeInteger(record.revision) && record.revision > 0) {

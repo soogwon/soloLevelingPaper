@@ -60,15 +60,14 @@ def test_foreign_context_and_missing_list(env):
         service.list('missing')
 
 
-def test_translation_segments_are_not_reported_as_verified(env):
+def test_translation_segments_are_verified_against_stored_revision(env):
     db, ctx = env
     service = AnnotationService(db)
     translated = SegmentInput('c1', 0, 1, '첫', 'translation', 't1')
-    with pytest.raises(AnnotationValidationError):
-        service.create(ctx, 'highlight', '', segments=[translated])
-    assert service.list(ctx).items == ()
+    saved = service.create(ctx, 'highlight', '', segments=[translated]).annotation
+    assert service.get(ctx, saved.annotation_id).segment_available == (True,)
     existing = store.create_annotation(db, ctx, 'highlight', '', [translated]).annotation
-    assert service.get(ctx, existing.annotation_id).location_status == 'unavailable'
+    assert service.get(ctx, existing.annotation_id).location_status == 'available'
 
 
 def test_partial_update_only_copies_fields_from_expected_revision(env, monkeypatch):
@@ -135,26 +134,27 @@ def test_page_cursor_and_limit_contract(env):
         assert caught.value.code == code
 
 
-def test_mixed_translation_rejected_before_repository_and_edits_are_atomic(env, monkeypatch):
+def test_mixed_translation_creation_and_immutable_segments(env, monkeypatch):
     db, ctx = env
     service = AnnotationService(db)
     original = SegmentInput('c1', 0, 5, 'First')
     translated = SegmentInput('c1', 0, 1, '첫', 'translation', 't1')
     saved = service.create(ctx, 'note', '기존', segments=[original]).annotation
+    mixed = service.create(ctx, 'note', '혼합', segments=[original, translated]).annotation
+    assert service.get(ctx, mixed.annotation_id).segment_available == (True, True)
     with monkeypatch.context() as guard:
         for name in ('get_annotation', 'update_annotation', 'create_annotation'):
             guard.setattr(store, name, lambda *a, **kw: pytest.fail('unexpected store call'))
         for action in (
-            lambda: service.create(ctx, 'note', '새 기록', segments=[original, translated]),
             lambda: service.update(ctx, saved.annotation_id, 1, body='수정', segments=[original, translated]),
         ):
             with pytest.raises(AnnotationValidationError) as caught:
                 action()
-            assert caught.value.code == 'TRANSLATION_NOT_SUPPORTED'
+            assert caught.value.code is None
         with pytest.raises(AnnotationValidationError) as caught:
             service.update(ctx, saved.annotation_id, 1, body='수정', segments=[original])
         assert caught.value.code is None
-    assert service.list(ctx).items == (saved,)
+    assert service.list(ctx).items == (saved, mixed)
 
 
 def test_create_preserves_repository_limit_codes(env):

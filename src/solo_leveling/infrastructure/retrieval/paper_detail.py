@@ -157,6 +157,11 @@ class SQLitePaperDetailReader:
                     raise ValueError('invalid quote')
                 known[eid] = {**asdict(detail), 'section_id': e['section_id'],
                               **self._annotation_fields(conn, context_id, e)}
+                quote_ko = detail.quote_ko
+                translation_start = e['text'].find(quote_ko) if quote_ko else -1
+                known[eid]['translation_annotation_start'] = (
+                    translation_start if quote_ko and len(quote_ko) <= MAX_QUOTE_LENGTH
+                    and translation_start >= 0 and e['text'].find(quote_ko, translation_start + 1) == -1 else None)
         result['summary'] = {
             'summary_id': saved['summary_id'], 'created_at': saved['created_at'],
             'items': items, 'total_items': count,
