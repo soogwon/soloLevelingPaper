@@ -67,6 +67,8 @@ class PostgresRemoteScopedSearch:
                 """SELECT c.chunk_id, c.pdf_page, c.section_id,
                           (v.embedding <=> %s::vector) AS cosine_distance
                    FROM server_embedding_vectors v
+                   JOIN server_papers paper ON paper.owner_user_id=v.owner_user_id
+                     AND paper.paper_id=v.paper_id AND paper.deleted_at IS NULL
                    JOIN server_processing_chunks c
                      ON c.owner_user_id=v.owner_user_id
                     AND c.paper_id=v.paper_id

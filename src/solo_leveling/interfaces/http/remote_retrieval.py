@@ -20,6 +20,8 @@ class PostgresRemoteContextResolver:
                           p.publication_id, p.parse_revision_id, p.translation_revision_id,
                           p.embedding_set_id, p.publication_policy, e.model_fingerprint
                    FROM server_execution_contexts c
+                   JOIN server_papers paper ON paper.owner_user_id=c.owner_user_id
+                     AND paper.paper_id=c.paper_id AND paper.deleted_at IS NULL
                    JOIN server_processing_publications p
                      ON p.owner_user_id=c.owner_user_id
                     AND p.paper_id=c.paper_id

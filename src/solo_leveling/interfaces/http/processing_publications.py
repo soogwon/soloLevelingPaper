@@ -235,7 +235,11 @@ class PostgresProcessingPublicationStore:
                  AND parse_revision_id=%s AND translation_revision_id=%s
                  AND embedding_set_id=%s
                  AND source_job_id=%s AND source_lease_token=%s
-                 AND publication_policy=%s""",
+                 AND publication_policy=%s
+                 AND EXISTS (SELECT 1 FROM server_papers paper
+                              WHERE paper.owner_user_id=server_processing_publications.owner_user_id
+                                AND paper.paper_id=server_processing_publications.paper_id
+                                AND paper.deleted_at IS NULL)""",
             (
                 owner_user_id,
                 paper_id,
@@ -275,7 +279,9 @@ class PostgresProcessingPublicationStore:
                     AND p.paper_id=v.paper_id
                     AND p.server_version_id=v.server_version_id
                     AND p.publication_id=v.active_publication_id
-                   WHERE v.owner_user_id=%s AND v.paper_id=%s AND v.server_version_id=%s""",
+                   WHERE v.owner_user_id=%s AND v.paper_id=%s AND v.server_version_id=%s
+                     AND EXISTS (SELECT 1 FROM server_papers paper WHERE paper.owner_user_id=v.owner_user_id
+                                 AND paper.paper_id=v.paper_id AND paper.deleted_at IS NULL)""",
                 (owner_user_id, paper_id, server_version_id),
             ).fetchone()
         if row is None:
