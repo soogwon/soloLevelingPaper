@@ -20,7 +20,7 @@ _DERIVED_DELETES = (
        WHERE e.owner_user_id=%s AND c.owner_user_id=e.owner_user_id
          AND c.context_id=e.context_id AND c.paper_id=%s""",
     "DELETE FROM server_execution_contexts WHERE owner_user_id=%s AND paper_id=%s",
-    "UPDATE server_processing_versions SET active_publication_id=NULL WHERE owner_user_id=%s AND paper_id=%s",
+    "UPDATE server_processing_versions SET active_publication_id=NULL WHERE owner_user_id=%s AND paper_id=%s AND active_publication_id IS NOT NULL",
     "DELETE FROM server_processing_publications WHERE owner_user_id=%s AND paper_id=%s",
     "DELETE FROM server_embedding_vectors WHERE owner_user_id=%s AND paper_id=%s",
     "DELETE FROM server_embedding_sets WHERE owner_user_id=%s AND paper_id=%s",
