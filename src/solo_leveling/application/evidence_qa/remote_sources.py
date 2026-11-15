@@ -86,6 +86,18 @@ def assemble_remote_sources(question, binding, filters, ranked_hits, reader: Rem
 
 
 def supplement_remote_sources(pinned: PinnedRemoteSearch, filters: RemoteSearchFilters, reader: RemoteSourceReader):
+    _validate_pinned_scope(pinned, filters)
+    try:
+        result = supplement_continuations(pinned.search,
+            RemoteContinuationReader(pinned.binding, filters, reader), allow_page_completion=not filters.strict_pages)
+        return PinnedRemoteSearch(pinned.binding, result)
+    except RemoteRetrievalContractError:
+        raise
+    except Exception:
+        raise RemoteRetrievalContractError('REMOTE_SOURCE_UNAVAILABLE') from None
+
+
+def _validate_pinned_scope(pinned, filters):
     if not isinstance(pinned, PinnedRemoteSearch) or not isinstance(filters, RemoteSearchFilters):
         raise RemoteRetrievalContractError('REMOTE_SOURCE_SCOPE_MISMATCH')
     binding, search = pinned.binding, pinned.search
@@ -94,20 +106,25 @@ def supplement_remote_sources(pinned: PinnedRemoteSearch, filters: RemoteSearchF
             or search.embedding_set_id != binding.embedding_set_id or search.scope.pdf_pages != filters.pdf_pages
             or search.scope.section_ids != filters.section_ids):
         raise RemoteRetrievalContractError('REMOTE_SOURCE_SCOPE_MISMATCH')
-    class Following:
-        def following_chunks(self, current, indices):
-            rows = reader.following_chunks(binding, indices)
-            if not isinstance(rows, tuple) or any(not isinstance(r, RemoteSourceChunk) or r.binding != binding
+
+
+class RemoteContinuationReader:
+    """기존 AnswerService에 주입할 고정 출처의 인접 reader. 권한 검사는 A reader 책임이다."""
+    def __init__(self, binding, filters, reader):
+        self.binding, self.filters, self.reader = binding, filters, reader
+
+    def following_chunks(self, current, indices):
+        _validate_pinned_scope(PinnedRemoteSearch(self.binding, current), self.filters)
+        try:
+            rows = self.reader.following_chunks(self.binding, indices)
+            if not isinstance(rows, tuple) or any(not isinstance(r, RemoteSourceChunk) or r.binding != self.binding
                                                   or r.ordinal not in indices for r in rows):
                 raise RemoteRetrievalContractError('REMOTE_SOURCE_SCOPE_MISMATCH')
             if len({r.chunk_id for r in rows}) != len(rows) or any(
                     r.chunk_id in {c.chunk_id for c in current.candidate_chunks} for r in rows):
                 raise RemoteRetrievalContractError('REMOTE_SOURCE_IDS_MISMATCH')
             return tuple(r.to_chunk() for r in rows)
-    try:
-        result = supplement_continuations(search, Following(), allow_page_completion=not filters.strict_pages)
-        return PinnedRemoteSearch(binding, result)
-    except RemoteRetrievalContractError:
-        raise
-    except Exception:
-        raise RemoteRetrievalContractError('REMOTE_SOURCE_UNAVAILABLE') from None
+        except RemoteRetrievalContractError:
+            raise
+        except Exception:
+            raise RemoteRetrievalContractError('REMOTE_SOURCE_UNAVAILABLE') from None
