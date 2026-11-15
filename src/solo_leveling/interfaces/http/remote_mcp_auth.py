@@ -5,8 +5,20 @@ from json import JSONDecodeError
 from typing import Any
 
 from mcp.server.auth.provider import AccessToken, TokenVerifier
+from pydantic import PrivateAttr
+
+from solo_leveling.application.evidence_qa.remote_contract import VerifiedRemoteIdentity
 
 from .settings import RemoteMcpSettings
+
+
+class RemoteIdentityAccessToken(AccessToken):
+    """검증된 identity는 직렬화/일반 claims에 넣지 않고 요청 내부에서만 전달한다."""
+
+    _verified_identity: VerifiedRemoteIdentity | None = PrivateAttr(default=None)
+
+    def verified_identity(self) -> VerifiedRemoteIdentity | None:
+        return self._verified_identity
 
 
 class Auth0McpTokenVerifier(TokenVerifier):
@@ -37,6 +49,8 @@ class Auth0McpTokenVerifier(TokenVerifier):
             # 이 스파이크의 Auth0 JWT profile은 typ=JWT를 사용한다. 다른 profile은 별도 검토한다.
             if header.get("alg") != "RS256" or header.get("typ") != "JWT":
                 return None
+            if not isinstance(header.get('kid'), str) or not header['kid'] or header.get('crit'):
+                return None
             signing_key = self._jwks_client.get_signing_key_from_jwt(token)
             claims = jwt.decode(
                 token,
@@ -52,17 +66,20 @@ class Auth0McpTokenVerifier(TokenVerifier):
             client_id = claims.get("azp")
             expires_at = claims.get("exp")
             if (not isinstance(subject, str) or not subject.strip()
+                    or subject != subject.strip() or len(subject) > 512
                     or subject.endswith('@clients')
                     or claims.get('gty') not in (None, 'authorization_code', 'refresh_token')
                     or 'credential_type' in claims or 'device_id' in claims
                     or not isinstance(raw_scopes, str)
-                    or not isinstance(client_id, str) or not client_id.strip()
+                    or not isinstance(client_id, str) or client_id not in self._settings.allowed_client_ids
                     or not isinstance(expires_at, int) or isinstance(expires_at, bool)):
+                return None
+            if any(field in claims and type(claims[field]) is not int for field in ('exp', 'iat', 'nbf')):
                 return None
             scopes = raw_scopes.split()
             if self._settings.required_scope not in scopes:
                 return None
-            return AccessToken(
+            result = RemoteIdentityAccessToken(
                 token=token,
                 client_id=client_id,
                 subject=f"{self._settings.issuer}#{subject}",
@@ -70,5 +87,7 @@ class Auth0McpTokenVerifier(TokenVerifier):
                 scopes=scopes,
                 expires_at=expires_at,
             )
+            result._verified_identity = VerifiedRemoteIdentity(self._settings.issuer, subject)
+            return result
         except (jwt.PyJWTError, JSONDecodeError, ValueError, TypeError, KeyError):
             return None

@@ -3,7 +3,10 @@ from dataclasses import replace
 
 import pytest
 
-from solo_leveling.application.evidence_qa.remote_contract import RemoteSearchBinding, RemoteSearchFilters
+from solo_leveling.application.evidence_qa.remote_contract import (
+    RemoteSearchBinding,
+    RemoteSearchFilters,
+)
 from solo_leveling.interfaces.http.remote_vectors import (
     EmbeddingWriteScope,
     PostgresEmbeddingVectorWriter,
@@ -50,7 +53,9 @@ def binding():
 
 
 def test_search_applies_all_scope_filters_before_limit(binding):
-    pool = Pool([{"chunk_id": "c1", "pdf_page": 6, "section_id": "method", "cosine_distance": 0.25}])
+    pool = Pool(
+        [{"chunk_id": "c1", "pdf_page": 6, "section_id": "method", "cosine_distance": 0.25}]
+    )
     search = PostgresRemoteScopedSearch(pool, lambda question, scope: [0.1, 0.2, 0.3])
 
     hits = search.search("질문", binding, RemoteSearchFilters((6,), ("method",)), 2)
@@ -59,8 +64,10 @@ def test_search_applies_all_scope_filters_before_limit(binding):
     sql, params = pool.conn.calls[0]
     assert sql.index("v.owner_user_id=%s") < sql.index("ORDER BY") < sql.index("LIMIT")
     assert "c.pdf_page = ANY" in sql and "c.section_id = ANY" in sql
+    assert "p.publication_id=%s" in sql and "v.dimension=%s" in sql
     assert params[1:7] == ("owner", "paper", "version", "parse", "translation", "set")
-    assert params[7:11] == ([6], [6], ["method"], ["method"])
+    assert params[7:9] == ("publication", 3)
+    assert params[9:13] == ([6], [6], ["method"], ["method"])
 
 
 @pytest.mark.parametrize("vector", [[1, 2], [1, 2, float("nan")], [1, 2, True], "123"])
@@ -89,6 +96,8 @@ def test_writer_requires_building_set_matching_dimension_and_chunk(binding):
     assert "e.status='building'" in sql
     assert "t.chunk_id=%s" in sql
     assert "model_fingerprint->>'dimension'" in sql
+    assert "ON CONFLICT (owner_user_id, embedding_set_id, chunk_id) DO UPDATE" in sql
+    assert "server_embedding_vectors.embedding=EXCLUDED.embedding" in sql
     assert params[-2:] == ("c1", 3)
 
 

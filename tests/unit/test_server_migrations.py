@@ -59,8 +59,13 @@ def test_remote_pgvector_rows_keep_owner_revision_and_chunk_scope():
     assert "CREATE EXTENSION IF NOT EXISTS vector" in item.sql
     assert "ADD COLUMN section_id" in item.sql
     assert "PRIMARY KEY (owner_user_id, embedding_set_id, chunk_id)" in item.sql
-    assert item.sql.count("FOREIGN KEY (owner_user_id, paper_id, server_version_id") == 2
+    assert item.sql.count("FOREIGN KEY (owner_user_id, paper_id, server_version_id") == 1
+    assert "FOREIGN KEY (owner_user_id, translation_revision_id, chunk_id)" in item.sql
     assert "CHECK (vector_dims(embedding) = dimension)" in item.sql
+    assert "CREATE TRIGGER trg_server_embedding_vectors_generation" in item.sql
+    assert "parent.status <> 'building'" in item.sql
+    assert "server_processing_require_lease(" in item.sql
+    assert "processing_row_identity_fixed" in item.sql
 
 
 def test_remote_processing_schema_uses_owner_scoped_composite_references():
