@@ -4,6 +4,17 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 
+CURRENT_TOMBSTONE_RETENTION_DAYS = 60
+CURRENT_BACKUP_EXPIRY_DAYS = 30
+CURRENT_ACCOUNT_ERASURE_DAYS = 30
+DELETION_NOTICE_KO = (
+    "삭제 요청 즉시 해당 자료에 대한 접근과 처리가 중단됩니다. "
+    "활성 저장소와 백업을 포함한 완전 삭제는 최대 30일이 걸릴 수 있습니다. "
+    "삭제된 데이터가 복원이나 지연된 작업으로 다시 생성되지 않도록 "
+    "최소한의 삭제 표식은 추가로 최대 30일간 보관됩니다."
+)
+
+
 class DeletionIntent(StrEnum):
     LOCAL_ONLY = "local_only"
     SERVER_PAPER = "server_paper"
@@ -38,6 +49,15 @@ class DeletionPolicy:
             raise ValueError("deletion_retention_policy_unapproved")
         if self.tombstone_retention_days < self.backup_expiry_days:
             raise ValueError("tombstone_must_outlive_backup")
+
+
+def current_deletion_policy() -> DeletionPolicy:
+    """2026-11-16에 승인된 현재 운영 삭제 기간을 명시적으로 선택한다."""
+    return DeletionPolicy(
+        tombstone_retention_days=CURRENT_TOMBSTONE_RETENTION_DAYS,
+        backup_expiry_days=CURRENT_BACKUP_EXPIRY_DAYS,
+        account_erasure_days=CURRENT_ACCOUNT_ERASURE_DAYS,
+    )
 
 
 def deletion_phases(intent: DeletionIntent) -> tuple[DeletionPhase, ...]:
