@@ -15,7 +15,7 @@ python3 -m http.server 8765 --bind 127.0.0.1 --directory ui/remote-upload-previe
 
 - 선택/변경/취소마다 세대를 바꾸고 이전 intent·상태를 지운다. 이전 선택의 늦은 응답을 무시한다.
 - 서버 응답은 대역이다. 향후 인증 adapter가 owner·요청 키·파일 hash·대상을 검증한 조회만 연결해야 한다.
-- 현재 Store는 create만 제공하며 웹 상태 조회 포트는 아직 없다. 선택 세대 검사는 서버 소유권 검사를 대신하지 않는다.
+- Store에는 생성·업로드 예약·검증 완료 저장·완료 조회가 구현되어 있다. 이 미리보기에 연결된 인증 웹 상태 조회 adapter는 아직 없다. 선택 세대 검사는 서버 소유권 검사를 대신하지 않는다.
 - 파일명·MIME·최대 50 MiB 검사는 화면 사전 안내다. 실제 PDF 형식·크기·SHA 검증의 대체물이 아니다.
 - created/uploading/verified/failed/expired를 처리 접수/완료와 구분한다. verified라도 AI 동의·예약·job을 만들지 않는다.
 - 동일 세대의 응답은 실제 adapter에서 직렬 조회해야 한다. 서버 revision 기반 역전 응답 방지는 계약 확정 후 연결한다.
@@ -23,3 +23,5 @@ python3 -m http.server 8765 --bind 127.0.0.1 --directory ui/remote-upload-previe
 
 A의 상태 조회·완료 검증·#396 원자 접수 계약 뒤 실제 인증 웹으로 연결한다. 운영 정책/외부 wire 코드를
 이 대역으로 확정하지 않으며 #393은 열어둔다.
+
+실제 브라우저 확인 절차와 범위는 [브라우저 검증 기록](../../doc/setup/issue-393-browser-preview-validation.md)을 참고한다.
