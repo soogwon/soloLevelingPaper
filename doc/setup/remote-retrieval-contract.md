@@ -24,12 +24,35 @@ pgvector·서버 context resolver·MCP 연결을 구현하거나 A의 저장 계
 | RemoteSearchBinding | owner·context·paper/version·publication·3개 revision/set·모델 지문·게시 정책 고정 |
 | RemoteSearchFilters | 페이지·섹션·strict_pages를 손실 없이 유지 |
 | RemoteContextResolver | owner와 context로 신뢰할 수 있는 binding을 해석하는 포트 초안 |
+| VerifiedRemoteIdentity·RemoteOwnerResolver | 검증된 issuer/불투명 subject를 서버 owner로 명시적으로 매핑하는 내부 초안 |
+| resolve_remote_binding | 매핑 성공 후에만 owner 범위의 context 조회; 매핑/조회 장애·소속 불일치 거부 |
 | RemoteScopedSearch | 고정 binding과 필터를 적용해 검색하는 포트 초안 |
 | validate_remote_hits | 혼입·필터 위반·중복·개수·순서·거리 오류 거부, 고정 오류 코드 사용 |
 
 `RemoteSearchHit`은 검증할 최소 metadata이며 본문/번역/근거 저장 모델을 대체하지 않는다.
 binding을 모델·사용자 입력에서 만들거나 그 자체를 인증·게시 증명으로 사용하지 않는다.
 `model_fingerprint` 문자열의 직렬화 방식은 A의 JSON 지문과 연결할 때 합의해야 한다.
+
+### #413 인증 경계와 owner 연결
+
+#413의 MCP verifier는 SDK subject를 `issuer#sub`로 만들고, 기존 HTTP OIDC/웹 세션 경로는
+`sub`를 user_id로 사용한다. 따라서 MCP subject를 서버 owner로 그대로 넘기면 같은 사용자의
+기존 자료를 조회하지 못할 수 있다. `#`로 분해하거나 접두사를 지워 해결하지 않는다.
+
+`VerifiedRemoteIdentity`는 신뢰하는 인증 adapter가 제공한 issuer와 **불투명 subject**를 보존한다.
+타입을 만들었다는 사실은 인증 증명이 아니며 MCP/모델/사용자 payload에서 생성해 신뢰하면 안 된다.
+`RemoteOwnerResolver`는 A·C가 확정한 명시적 매핑을 제공해야 한다. 지금은 구현하지 않았다.
+
+- owner 해석에 성공한 뒤에만 `RemoteContextResolver.resolve(owner, context_id)`를 호출한다.
+- 매핑 없음과 해당 owner의 context 없음은 모두 None. 매핑 조회 장애는 고정 내부 오류로 중단한다.
+- subject를 owner로 대체하거나 전체 사용자 검색·자동 계정 생성·최신 context 선택으로 우회하지 않는다.
+- 반환 binding의 owner/context가 요청한 값과 다르면 고정 오류로 거부한다.
+- 같은 사용자의 웹/MCP identity를 같은 owner로 연결하는 **대역 계약 테스트**와, 서로 다른 issuer의
+  같은 subject가 명시된 서로 다른 owner로 해석되는 사례를 포함한다. 실제 Auth0 계정 연결 검증은 아니다.
+
+**A·C 확인:** 인증 adapter가 어떤 issuer/subject 표현을 전달할지, 기존 서버 user_id와 매핑하는 저장소·
+수명·명시적 계정 연결 정책을 확정해야 한다. B는 원래 sub 추출·issuer 정규화·계정 병합을 구현하지 않는다.
+실제 자료 도구 연결 전 이 계약과 다른 계정 거부·매핑 장애·과거 context 보존의 종단 검증이 필요하다.
 
 ## B 제안 — 연결 전에 A와 확인
 
@@ -61,6 +84,7 @@ partial 색인이라는 이유만으로 답변을 무조건 partial/insufficient
 
 | 현 경로 | 필요한 경계 | 담당·다음 단계 |
 |---|---|---|
+| #413 remote_mcp_auth.py → 기존 서버 user_id | 검증 identity → canonical owner의 명시적 매핑 | A·C 인증/매핑 adapter 확정, B는 실패 시 조회 중단 |
 | evidence_qa/ports.py의 LearningContextReader·DefaultContextStore | 인증 owner + 서버 실행 context resolver | A 조회/생성 구현, B binding 검증; 로컬 포트 변경 없음 |
 | evidence_qa/search.py·infrastructure/retrieval/sqlite_chroma.py | 고정 scope의 pgvector candidate search | A SQL·벡터 저장, B 거리·범위 공통 테스트 |
 | evidence_qa/ports.py의 ContinuationReader·page_completion.py | 같은 게시 집합의 인접 청크·허용 구절 | B #108 회귀 재사용, 섹션·순서 데이터는 A 확인 |

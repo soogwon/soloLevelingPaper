@@ -15,6 +15,23 @@ def _require(value, code):
 
 
 @dataclass(frozen=True)
+class VerifiedRemoteIdentity:
+    """신뢰하는 인증 adapter가 생성한다. 이 객체의 생성만으로 인증이 증명되지는 않는다."""
+    issuer: str
+    subject: str
+
+    def __post_init__(self):
+        _require(all(isinstance(v, str) and v.strip() for v in (self.issuer, self.subject)),
+                 'REMOTE_IDENTITY_INVALID')
+
+
+class RemoteOwnerResolver(Protocol):
+    def resolve_owner(self, identity: VerifiedRemoteIdentity) -> str | None:
+        """검증된 identity를 기존 서버 owner로 매핑. subject를 분해하거나 계정을 자동 생성하지 않는다."""
+        ...
+
+
+@dataclass(frozen=True)
 class RemoteSearchBinding:
     """인증 owner의 저장 context에서 해석한다. 클라이언트가 만든 값은 신뢰하지 않는다."""
     owner_user_id: str
@@ -84,6 +101,28 @@ class RemoteScopedSearch(Protocol):
                top_k: int) -> tuple[RemoteSearchHit, ...]:
         """owner·revision·manifest·필터로 후보를 먼저 제한한 뒤 top_k를 적용한다."""
         ...
+
+
+def resolve_remote_binding(identity, context_id, owners: RemoteOwnerResolver, contexts: RemoteContextResolver):
+    """인증→명시적 owner 매핑→고정 context 조회. 매핑 미확정/실패 시 대체 조회하지 않는다."""
+    _require(isinstance(identity, VerifiedRemoteIdentity), 'REMOTE_IDENTITY_INVALID')
+    _require(isinstance(context_id, str) and context_id.strip(), 'REMOTE_CONTEXT_INVALID')
+    try:
+        owner = owners.resolve_owner(identity)
+    except Exception:
+        raise RemoteRetrievalContractError('REMOTE_OWNER_MAPPING_UNAVAILABLE') from None
+    if owner is None:
+        return None
+    _require(isinstance(owner, str) and owner.strip(), 'REMOTE_OWNER_MAPPING_INVALID')
+    try:
+        binding = contexts.resolve(owner, context_id)
+    except Exception:
+        raise RemoteRetrievalContractError('REMOTE_CONTEXT_LOOKUP_UNAVAILABLE') from None
+    if binding is None:
+        return None
+    _require(isinstance(binding, RemoteSearchBinding) and binding.owner_user_id == owner
+             and binding.context_id == context_id, 'REMOTE_SCOPE_MISMATCH')
+    return binding
 
 
 def validate_remote_hits(binding, filters, hits, top_k):

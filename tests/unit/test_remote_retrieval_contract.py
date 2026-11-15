@@ -6,7 +6,7 @@ import pytest
 
 from solo_leveling.application.evidence_qa.remote_contract import (
     RemoteRetrievalContractError, RemoteSearchBinding, RemoteSearchFilters, RemoteSearchHit,
-    cosine_distance_score, validate_remote_hits,
+    VerifiedRemoteIdentity, cosine_distance_score, resolve_remote_binding, validate_remote_hits,
 )
 
 
@@ -92,3 +92,86 @@ def test_filters_do_not_coerce_invalid_inputs(kwargs):
 def test_empty_scope_is_not_allowed(binding):
     with pytest.raises(RemoteRetrievalContractError, match='REMOTE_BINDING_INVALID'):
         replace(binding, owner_user_id='')
+
+
+class Owners:
+    def __init__(self, mappings):
+        self.mappings, self.calls = mappings, []
+
+    def resolve_owner(self, identity):
+        self.calls.append(identity)
+        return self.mappings.get((identity.issuer, identity.subject))
+
+
+class Contexts:
+    def __init__(self, binding):
+        self.binding, self.calls = binding, []
+
+    def resolve(self, owner, context_id):
+        self.calls.append((owner, context_id))
+        return self.binding if (owner, context_id) == (self.binding.owner_user_id, self.binding.context_id) else None
+
+
+def test_explicit_web_and_mcp_mappings_resolve_same_owner_without_parsing_subject(binding):
+    issuer = 'https://identity.example/'
+    web = VerifiedRemoteIdentity(issuer, 'auth0|synthetic-user')
+    mcp = VerifiedRemoteIdentity(issuer, issuer + '#auth0|synthetic-user')
+    # 대역에 명시한 매핑만 사용한다. 실제 Auth0/서버 identity 연결을 검증한 테스트는 아니다.
+    owners = Owners({(v.issuer, v.subject): 'alice' for v in (web, mcp)})
+    contexts = Contexts(binding)
+    assert resolve_remote_binding(web, 'ctx-old', owners, contexts) == binding
+    assert resolve_remote_binding(mcp, 'ctx-old', owners, contexts) == binding
+    assert owners.calls == [web, mcp]
+    assert contexts.calls == [('alice', 'ctx-old')] * 2
+
+
+def test_same_subject_from_different_issuer_cannot_read_first_owner_context(binding):
+    a = VerifiedRemoteIdentity('https://issuer-a.example/', 'same-subject')
+    b = VerifiedRemoteIdentity('https://issuer-b.example/', 'same-subject')
+    owners = Owners({(a.issuer, a.subject): 'alice', (b.issuer, b.subject): 'bob'})
+    contexts = Contexts(binding)
+    assert resolve_remote_binding(a, 'ctx-old', owners, contexts) == binding
+    assert resolve_remote_binding(b, 'ctx-old', owners, contexts) is None
+    assert contexts.calls[-1] == ('bob', 'ctx-old')
+
+
+def test_unknown_mapping_does_not_strip_issuer_fallback_or_query_context(binding):
+    identity = VerifiedRemoteIdentity('https://issuer.example/', 'opaque#nested#subject')
+    owners, contexts = Owners({}), Contexts(binding)
+    assert resolve_remote_binding(identity, 'ctx-old', owners, contexts) is None
+    assert owners.calls == [identity]
+    assert contexts.calls == []
+
+
+@pytest.mark.parametrize('stage', ['owner', 'context'])
+def test_lookup_failure_is_fixed_error_without_fallback_or_private_exception(binding, stage):
+    identity = VerifiedRemoteIdentity('https://issuer.example/', 'private-subject')
+    owners = Owners({(identity.issuer, identity.subject): 'alice'})
+    contexts = Contexts(binding)
+    def failed(*args):
+        raise RuntimeError('private-backend-details')
+    if stage == 'owner': owners.resolve_owner = failed
+    else: contexts.resolve = failed
+    code = 'REMOTE_OWNER_MAPPING_UNAVAILABLE' if stage == 'owner' else 'REMOTE_CONTEXT_LOOKUP_UNAVAILABLE'
+    with pytest.raises(RemoteRetrievalContractError, match='^' + code + '$') as error:
+        resolve_remote_binding(identity, 'ctx-old', owners, contexts)
+    assert 'private-' not in str(error.value)
+    if stage == 'owner': assert contexts.calls == []
+
+
+@pytest.mark.parametrize('field,value', [('owner_user_id', 'bob'), ('context_id', 'different-context')])
+def test_context_adapter_may_not_override_mapped_owner_or_requested_context(binding, field, value):
+    identity = VerifiedRemoteIdentity('https://issuer.example/', 'subject')
+    owners = Owners({(identity.issuer, identity.subject): 'alice'})
+    class BrokenContexts:
+        def resolve(self, *args): return replace(binding, **{field: value})
+    with pytest.raises(RemoteRetrievalContractError, match='REMOTE_SCOPE_MISMATCH'):
+        resolve_remote_binding(identity, 'ctx-old', owners, BrokenContexts())
+
+
+def test_unknown_context_and_unmapped_identity_return_same_none(binding):
+    identity = VerifiedRemoteIdentity('https://issuer.example/', 'subject')
+    owners = Owners({(identity.issuer, identity.subject): 'alice'})
+    contexts = Contexts(binding)
+    assert resolve_remote_binding(identity, 'not-found', owners, contexts) is None
+    assert resolve_remote_binding(identity, 'ctx-old', Owners({}), contexts) is None
