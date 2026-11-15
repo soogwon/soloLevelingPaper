@@ -25,3 +25,14 @@ A의 상태 조회·완료 검증·#396 원자 접수 계약 뒤 실제 인증 �
 이 대역으로 확정하지 않으며 #393은 열어둔다.
 
 실제 브라우저 확인 절차와 범위는 [브라우저 검증 기록](../../doc/setup/issue-393-browser-preview-validation.md)을 참고한다.
+
+## 처리 접수/복구 표시 대역
+
+verified 상태 뒤 `기존 작업 조회 대역 표시`로 queued/running/succeeded/failed/cancelled 및 응답 유실을
+검토할 수 있다. 상태 DTO는 내부 봉투 `{intentId, job: ProcessingAdmission}`이며 확정된 HTTP wire 계약이 아니다.
+job 필드는 A의 `ProcessingAdmission`과 맞추되 업로드 검증과 job 성공을 별개로 표시한다.
+버튼은 합성 결과 표시만 수행하고 파일 읽기·동의 발급·처리 접수·네트워크 요청을 하지 않는다.
+
+조회마다 새 표식을 만들고 최신 표식의 응답만 반영한다. 중복 응답/역전 응답, 다른 intent/job/version,
+파일 변경/취소 뒤 이전 응답을 거부한다. 응답 유실은 같은 작업 재조회로 복구하며 새 접수 키를 생성하지 않는다.
+표식은 권한이나 멱등성 키가 아니다. 인증 API·동의/예약 결합과 실제 브라우저→서버 검증은 남아 있다.
