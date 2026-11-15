@@ -200,3 +200,7 @@ python scripts/capture_onnx_embeddings.py --model-dir <동일 snapshot 경로> -
 새 프로세스 cold/warm/RSS와 반복 벡터를 PyTorch와 같은 형식으로 저장하지만, 이 자체 비교는 후보의
 반복 가능성만 확인한다. B가 라벨과 허용값을 후보 채점 전에 확정한 뒤 `compare_embedding_captures.py`로
 PyTorch 기준선과 비교해야 하며, 통과해도 기존 context나 embedding set을 자동 교체하지 않는다.
+
+## B 라벨 검토 제안
+
+[12개 질의의 검토표와 사전 기준 제안](label-review.md)을 참고한다. 사람 승인·수치 확정 전이므로 후보 판정과 review_status는 변경하지 않는다.
