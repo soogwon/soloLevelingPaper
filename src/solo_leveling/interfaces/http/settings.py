@@ -51,7 +51,8 @@ class RemoteMcpSettings:
     required_scope: str = "spike:read"
     allowed_hosts: tuple[str, ...] = ()
     allowed_origins: tuple[str, ...] = ()
-    clock_skew_seconds: int = 60
+    clock_skew_seconds: int = 0
+    allowed_client_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.enabled:
@@ -74,6 +75,9 @@ class RemoteMcpSettings:
             raise ValueError("REMOTE_MCP_CLOCK_SKEW_SECONDS는 0에서 300 사이여야 합니다.")
         if self.audience != self.resource_url:
             raise ValueError("원격 MCP 전용 audience는 resource URL과 같아야 합니다.")
+        if not self.allowed_client_ids or any(not x or x != x.strip() or x == self.audience
+                for x in self.allowed_client_ids):
+            raise ValueError("REMOTE_MCP_ALLOWED_CLIENT_IDS에는 확인된 전용 client ID가 필요합니다.")
         public_host = resource.netloc
         if not self.allowed_hosts or public_host not in self.allowed_hosts:
             raise ValueError("REMOTE_MCP_ALLOWED_HOSTS에는 공개 resource hostname이 필요합니다.")
@@ -204,7 +208,7 @@ def load_remote_mcp_settings(source: Mapping[str, str] | None = None) -> RemoteM
     configured_hosts = _split_csv(values.get("REMOTE_MCP_ALLOWED_HOSTS", ""))
     allowed_hosts = configured_hosts or ((public_host,) if public_host else ())
     allowed_origins = _split_csv(values.get("REMOTE_MCP_ALLOWED_ORIGINS", "https://claude.ai"))
-    raw_skew = values.get("REMOTE_MCP_CLOCK_SKEW_SECONDS", "60").strip()
+    raw_skew = values.get("REMOTE_MCP_CLOCK_SKEW_SECONDS", "0").strip()
     try:
         clock_skew_seconds = int(raw_skew)
     except ValueError as exc:
@@ -219,6 +223,7 @@ def load_remote_mcp_settings(source: Mapping[str, str] | None = None) -> RemoteM
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
         clock_skew_seconds=clock_skew_seconds,
+        allowed_client_ids=_split_csv(values.get("REMOTE_MCP_ALLOWED_CLIENT_IDS", "")),
     )
 
 
