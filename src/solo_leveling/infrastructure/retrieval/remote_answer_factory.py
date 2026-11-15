@@ -5,7 +5,7 @@ from solo_leveling.application.evidence_qa.remote_answer import RemoteAnswerPrep
 from solo_leveling.application.evidence_qa.remote_contract import RemoteSearchBinding, RemoteSearchFilters
 from solo_leveling.application.evidence_qa.remote_input import question_input_hash
 from solo_leveling.application.evidence_qa.remote_search import RemoteContextSearchService, FingerprintCheckedEmbedder
-from solo_leveling.application.provider_dispatch import DispatchIntent
+from solo_leveling.application.provider_dispatch import DispatchIntent, DispatchError
 from solo_leveling.interfaces.http.remote_answers import PostgresRemoteAnswerStore
 from solo_leveling.interfaces.http.remote_executions import validate_execution_scope
 from solo_leveling.interfaces.http.remote_sources import PostgresRemoteSourceReader
@@ -38,7 +38,9 @@ class PersistedRemoteAnswerService:
             prepared = self._preparation.prepare(question, context_id, filters=filters, top_k=top_k)
             if prepared.binding != binding:
                 raise RemoteAnswerExecutionError('REMOTE_EXECUTION_SCOPE_LOST')
-        except RemoteAnswerExecutionError:
+        except (RemoteAnswerExecutionError, DispatchError):
+            # 예산/동의 거부·usage unknown은 고정 내부 전송 오류로 유지한다.
+            # 저장소/제공자의 원시 오류를 공개하거나 근거 부족으로 바꾸지 않는다.
             raise
         except Exception:
             raise RemoteAnswerExecutionError('REMOTE_ANSWER_PREPARATION_FAILED') from None

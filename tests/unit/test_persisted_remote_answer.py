@@ -47,3 +47,36 @@ def test_binding_change_before_save_is_rejected():
     prep.prepare.return_value=replace(prep.prepare.return_value,binding=replace(binding,publication_id='other'))
     with pytest.raises(RemoteAnswerExecutionError): service.execute(intent,'질문','context')
     writer.save.assert_not_called()
+
+
+@pytest.mark.parametrize('reason', ['time', 'calls_or_tokens'])
+def test_provider_budget_limit_is_not_relabelled_as_preparation_failure(reason):
+    from solo_leveling.application.provider_dispatch import DispatchBudgetExceeded
+    service, intent, prep, writer, _, _ = setup()
+    error = DispatchBudgetExceeded(reason)
+    prep.prepare.side_effect = error
+    with pytest.raises(DispatchBudgetExceeded) as caught:
+        service.execute(intent, '질문', 'context')
+    assert caught.value is error
+    writer.save.assert_not_called()
+
+
+@pytest.mark.parametrize('code', ['DISPATCH_NOT_AUTHORIZED', 'DISPATCH_USAGE_UNKNOWN',
+                                 'DISPATCH_RECONCILIATION_UNAVAILABLE'])
+def test_fixed_dispatch_failure_survives_without_saving(code):
+    from solo_leveling.application.provider_dispatch import DispatchError
+    service, intent, prep, writer, _, _ = setup()
+    error = DispatchError(code)
+    prep.prepare.side_effect = error
+    with pytest.raises(DispatchError) as caught:
+        service.execute(intent, '질문', 'context')
+    assert caught.value is error and str(caught.value) == code
+    writer.save.assert_not_called()
+
+
+def test_unknown_preparation_error_is_still_sanitized():
+    service, intent, prep, writer, _, _ = setup()
+    prep.prepare.side_effect = RuntimeError('private-provider-body-and-token')
+    with pytest.raises(RemoteAnswerExecutionError, match='^REMOTE_ANSWER_PREPARATION_FAILED$'):
+        service.execute(intent, '질문', 'context')
+    writer.save.assert_not_called()
