@@ -194,6 +194,11 @@ def _performance_comparable(baseline, candidate):
     if baseline['synthetic']:
         return False
     a, b = baseline['measurements'], candidate['measurements']
+    if a.get('protocol_version') == 2 or b.get('protocol_version') == 2:
+        if (a.get('protocol_version') != 2 or b.get('protocol_version') != 2
+                or not a.get('input_artifacts_sha256')
+                or a['input_artifacts_sha256'] != b.get('input_artifacts_sha256')):
+            return False
     return all(a[k] == b[k] for k in ('environment', 'procedure', 'rss_method', 'batch_policy', 'threads', 'device')) \
         and all(len(a[k]) == len(b[k]) for k in ('cold_ms', 'warm_ms'))
 
