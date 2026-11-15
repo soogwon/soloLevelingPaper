@@ -12,6 +12,7 @@ pytestmark = pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'), re
 
 
 def test_verified_result_replays_after_cleanup_failure_and_expiry(pool, db):
+    db("INSERT INTO server_users(owner_user_id,display_name) VALUES ('upload-owner','합성 사용자')")
     store = PostgresRemoteUploadIntentStore(pool)
     intent = store.create('upload-owner', 'upload-key', 'paper.pdf', 10, 'application/pdf', 'a' * 64)
     class Objects:
