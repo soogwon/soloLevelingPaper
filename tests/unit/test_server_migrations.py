@@ -41,8 +41,18 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 14)]
-    assert items[-1].name == "0013_explicit_reading_status.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 15)]
+    assert items[-1].name == "0014_remote_processing_schema.sql"
+
+
+def test_remote_processing_schema_uses_owner_scoped_composite_references():
+    item = discover_migrations(__import__("pathlib").Path("migrations/server"))[-1]
+
+    assert "PRIMARY KEY (owner_user_id, paper_id, server_version_id)" in item.sql
+    assert "FOREIGN KEY (owner_user_id, paper_id, server_version_id, parse_revision_id)" in item.sql
+    assert "FOREIGN KEY (owner_user_id, paper_id, server_version_id, parse_revision_id," in item.sql
+    assert "active_publication_id" in item.sql
+    assert "publication_policy IN ('complete', 'partial')" in item.sql
 
 
 def test_rejects_gaps_and_invalid_sql_files(tmp_path):
