@@ -11,6 +11,7 @@
 - [22. M1 로컬 실행 기준과 기술 스택](architecture/22-local-m1-baseline.md)
 - [23. Evidence QA 설계](architecture/23-evidence-qa-design.md)
 - [24. 로컬 MCP와 중앙 서버 병행 전환 결정](architecture/24-hybrid-server-transition.md)
+- [25. 원격 MCP 전환 설계 (#77, 제안)](architecture/25-remote-mcp-transition.md)
 - [#110 퀴즈 MCP 연결 계약안](architecture/quiz-mcp-contract-proposal.md)
 - [전체 메모·하이라이트 저장소 계약 (#206)](annotation-library-contract.md)
 
