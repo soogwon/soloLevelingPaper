@@ -40,7 +40,9 @@ jobs:
       SOLO_TEST_POSTGRES_DSN: postgresql://postgres:ci-only@localhost:5432/postgres
     services:
       postgres:
-        image: postgres:16
+        # 원격 검색 migration이 vector extension을 사용하므로 PostgreSQL 16 호환
+        # pgvector 공식 이미지를 사용한다.
+        image: pgvector/pgvector:0.8.7-pg16
         env:
           POSTGRES_PASSWORD: ci-only
         ports:

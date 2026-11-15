@@ -102,6 +102,11 @@ vector 컬럼·embedding set 차원/거리·게시된 벡터 불변성 및 허�
 set을 조회한다. active pointer는 따라가지 않으며, embedding set의 JSON 지문은 키 정렬된 canonical JSON으로
 직렬화해 binding에 전달한다. 다른 owner의 context와 존재하지 않는 context는 모두 `None`이다.
 
+`server_embedding_vectors`는 owner·논문 버전·parse/translation revision·embedding set·chunk를 복합 FK로
+고정한다. 검색 adapter는 이 범위와 페이지·섹션을 SQL에서 먼저 제한한 뒤 cosine distance와 chunk ID로
+정렬하고 `top_k`를 적용한다. 차원이 확정되기 전에는 부정확한 공용 ANN 인덱스를 만들지 않으며, 초기
+어댑터는 정확 검색을 사용한다. 모델별 차원·운영 자료량을 확정한 뒤 partial/HNSW 인덱스를 별도 검증한다.
+
 ## 테스트의 의미와 남은 범위
 
 ```powershell
