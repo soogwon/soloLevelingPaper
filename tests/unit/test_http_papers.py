@@ -276,7 +276,7 @@ def test_status_filter_uses_synced_record_and_excludes_unknown_papers():
         "user-1", query=None, reading_status="reading", page=3, limit=10)
 
     assert result == PaperPage((), 3, 10, 0, 0)
-    assert "COALESCE(r.reading_status, 'unknown') = %s" in pool.conn.calls[1][0]
+    assert "COALESCE(rs.status, 'unknown') = %s" in pool.conn.calls[1][0]
     assert pool.conn.calls[1][1] == ("user-1", "reading")
 
 
@@ -601,7 +601,7 @@ def test_web_list_shape_matches_external_site_without_inventing_learning_data():
         "published": {"year": 2024, "month": None, "day": None, "precision": "year"},
         "selected_learning_record_id": None, "selected_version_id": None,
         "last_position": None, "last_studied_at": None, "reading_status": "unknown",
-        "collection_id": None,
+        "collection_id": None, "reading_basis_version_id": None, "reading_state_revision": 0,
     }]
 
 

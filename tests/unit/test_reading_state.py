@@ -29,8 +29,10 @@ def test_transitions_persist_and_do_not_infer_completion(setup_db):
     with closing(get_connection(db)) as conn:
         assert conn.execute('SELECT COUNT(*) FROM learning_contexts').fetchone()[0] == 1
         payload = _learning_payload(conn, 'paper', ctx.context_id, 'source')
-    assert payload['reading_status'] == 'reading'
-    assert payload['source_updated_at'] == reading.updated_at
+    assert 'reading_status' not in payload
+    assert reading.basis_version_id == 'v1'
+    assert done.basis_version_id == 'v1'
+    assert reading.action == 'reopen'
 
 
 def test_existing_database_is_unknown_not_inferred(setup_db):
