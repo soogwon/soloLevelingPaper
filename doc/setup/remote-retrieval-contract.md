@@ -115,3 +115,21 @@ python -m pytest tests/unit/test_remote_retrieval_contract.py -q
 Chroma/pgvector 실제 어댑터를 같은 fixture로 실행하는 검증, 실제 서버 owner/context 조회,
 ANN 회수, #108 전체 허용 구절·출처 저장 회귀는 어댑터 연결 후 추가해야 한다.
 이 PR의 테스트만으로 사용자 격리나 #390 완료를 주장하지 않는다. #390은 열어둔다.
+
+## C 인증 adapter 연결
+
+`RemoteIdentityAccessToken`은 서명·issuer/audience·scope/client 검증이 끝난 뒤에만
+issuer와 불투명 raw subject를 private 필드에 보관한다. 기존 SDK subject 표현은 유지하지만
+owner 조회에서 이 문자열을 분해하지 않는다. private identity는 model_dump에 포함되지 않으며
+직렬화된 토큰으로 객체를 다시 만들어도 복구되지 않는다. 토큰 객체 자체는 비밀정보이므로
+로그/도구 결과에 넣지 않는다.
+
+`interfaces/mcp/remote_context.py`는 SDK의 현재 인증 요청에서만 토큰을 가져와
+B의 `resolve_remote_binding`과 A의 owner/context 포트로 전달한다. 도구 입력으로 owner나
+identity를 받지 않는다. 만료·인증 없음·일반 AccessToken은 매핑 조회 전에 거부한다.
+매 호출마다 매핑을 다시 조회하여 폐기된 연결을 캐시로 우회하지 않는다.
+
+이 함수는 내부 연결 준비이며 현재 합성 도구 allowlist에 자료 조회를 추가하지 않는다.
+Postgres 포트를 생성/주입하는 제품 composition, 실제 Auth0 계정 연결, pgvector 검색,
+세션/철회와 조회의 동시 경합, 실제 MCP/카드 종단 검증은 #399/#390 후속이다.
+서명 토큰+SDK 요청 컨텍스트+resolver 대역 테스트는 실환경 검증이 아니다.

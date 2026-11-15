@@ -5,8 +5,20 @@ from json import JSONDecodeError
 from typing import Any
 
 from mcp.server.auth.provider import AccessToken, TokenVerifier
+from pydantic import PrivateAttr
+
+from solo_leveling.application.evidence_qa.remote_contract import VerifiedRemoteIdentity
 
 from .settings import RemoteMcpSettings
+
+
+class RemoteIdentityAccessToken(AccessToken):
+    """검증된 identity는 직렬화/일반 claims에 넣지 않고 요청 내부에서만 전달한다."""
+
+    _verified_identity: VerifiedRemoteIdentity | None = PrivateAttr(default=None)
+
+    def verified_identity(self) -> VerifiedRemoteIdentity | None:
+        return self._verified_identity
 
 
 class Auth0McpTokenVerifier(TokenVerifier):
@@ -54,6 +66,7 @@ class Auth0McpTokenVerifier(TokenVerifier):
             client_id = claims.get("azp")
             expires_at = claims.get("exp")
             if (not isinstance(subject, str) or not subject.strip()
+                    or subject != subject.strip() or len(subject) > 512
                     or subject.endswith('@clients')
                     or claims.get('gty') not in (None, 'authorization_code', 'refresh_token')
                     or 'credential_type' in claims or 'device_id' in claims
@@ -66,7 +79,7 @@ class Auth0McpTokenVerifier(TokenVerifier):
             scopes = raw_scopes.split()
             if self._settings.required_scope not in scopes:
                 return None
-            return AccessToken(
+            result = RemoteIdentityAccessToken(
                 token=token,
                 client_id=client_id,
                 subject=f"{self._settings.issuer}#{subject}",
@@ -74,5 +87,7 @@ class Auth0McpTokenVerifier(TokenVerifier):
                 scopes=scopes,
                 expires_at=expires_at,
             )
+            result._verified_identity = VerifiedRemoteIdentity(self._settings.issuer, subject)
+            return result
         except (jwt.PyJWTError, JSONDecodeError, ValueError, TypeError, KeyError):
             return None
