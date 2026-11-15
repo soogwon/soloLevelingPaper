@@ -41,8 +41,16 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 26)]
-    assert items[-1].name == "0025_remote_executions.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 27)]
+    assert items[-1].name == "0026_remote_execution_evidence.sql"
+
+
+def test_remote_evidence_is_bound_to_execution():
+    sql = (__import__("pathlib").Path("migrations/server") / "0026_remote_execution_evidence.sql").read_text(encoding="utf-8")
+
+    assert "ADD COLUMN execution_id text NULL" in sql
+    assert "FOREIGN KEY (owner_user_id, execution_id)" in sql
+    assert "uq_server_processing_evidences_execution" in sql
 
 
 def test_remote_execution_schema_binds_replay_and_dispatch_scope():
