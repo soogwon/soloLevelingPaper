@@ -23,6 +23,7 @@ _STATES = {
     'not_found': ('조회 불가', {'review_request'}),
     'unavailable': ('상태 확인 필요', {'refresh_status'}),
     **{s: (label, {'read_result', 'refresh_status'}) for s, label in (
+        ('queued', '접수 대기'), ('cancel_requested', '취소 확인 중'), ('cancelled', '취소 확정'),
         ('running', '처리 중'), ('completed', '처리 완료'),
         ('failed', '처리 실패'), ('unknown', '처리 여부 확인 중'))},
 }
