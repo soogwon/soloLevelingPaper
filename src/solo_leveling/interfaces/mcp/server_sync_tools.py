@@ -20,6 +20,7 @@ from .confirmations import ConfirmationLimitExceeded, ConfirmationStore
 
 SERVER_SYNC_APP_URI = "ui://solo-leveling/server-sync.html"
 SERVER_SYNC_NOTICE = """로컬 설치 식별자와 선택한 논문의 ID, 제목, 원래 등록 시각을 연결된 Solo Leveling Paper 서버로 전송합니다.
+논문 전체 읽기 상태, 상태 기준 원문 버전 ID와 수정 리비전도 전송합니다. 완료 표시는 해당 기준 버전에서의 신고이며 다른 판본까지 읽었다는 뜻은 아닙니다.
 이 논문의 학습 맥락 ID, 원문 버전 ID, 파일명, 마지막 학습 위치·시각과 완료한 학습 단계도 함께 전송합니다.
 저장된 전체 논문 요약의 항목 종류, 요약 본문, 근거 ID와 생성 시각도 함께 전송합니다.
 이 논문의 메모·하이라이트 종류, 본문, 단계, 선택 구간 위치와 인용문 스냅샷도 함께 전송합니다.

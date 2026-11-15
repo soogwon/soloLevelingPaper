@@ -152,6 +152,7 @@ class MCPServices:
     learning_path: object | None = None
     # 카드 확인 토큰 저장소. 없으면 프로세스마다 따로 둔다(테스트용).
     confirmations: object | None = None
+    reading_state: object | None = None
 
 
 class Focus(BaseModel):
@@ -459,6 +460,9 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
     if services.recovery is not None:
         from .recovery import register_recovery
         register_recovery(server, services.recovery, confirmations=services.confirmations)
+    if services.reading_state is not None:
+        from .reading_state_tools import register_reading_state
+        register_reading_state(server, services.reading_state)
     if services.annotations is not None:
         register_annotations(server, services.annotations)
     if services.detail is not None:
@@ -679,6 +683,8 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
                     lambda: services.contexts.get_or_create_learning_context(
                         version_id, goal, concepts,
                     ))
+                if services.reading_state is not None:
+                    await anyio.to_thread.run_sync(services.reading_state.start, version_id)
                 capabilities = ['ask_paper', 'get_evidence']
                 if services.executions is not None:
                     capabilities += ['submit_paper_question', 'get_paper_question_status']

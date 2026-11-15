@@ -28,6 +28,21 @@ CREATE TABLE IF NOT EXISTS paper_versions (
     created_at TEXT NOT NULL
 );
 
+-- 기존 논문은 상태를 추정하지 않는다. 이후 등록되는 논문만 트리거로 초기화한다.
+CREATE TABLE IF NOT EXISTS paper_reading_states (
+    paper_id TEXT PRIMARY KEY REFERENCES papers(paper_id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('unknown', 'not_started', 'reading', 'completed')),
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+    updated_at TEXT NOT NULL
+);
+INSERT OR IGNORE INTO paper_reading_states (paper_id, status, updated_at)
+    SELECT paper_id, 'unknown', created_at FROM papers;
+CREATE TRIGGER IF NOT EXISTS initialize_paper_reading_state AFTER INSERT ON papers
+BEGIN
+    INSERT INTO paper_reading_states (paper_id, status, updated_at)
+        VALUES (NEW.paper_id, 'not_started', NEW.created_at);
+END;
+
 CREATE TABLE IF NOT EXISTS parse_revisions (
     parse_revision_id TEXT PRIMARY KEY,
     version_id TEXT NOT NULL REFERENCES paper_versions(version_id),
@@ -521,6 +536,11 @@ CREATE TABLE IF NOT EXISTS sync_outbox (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+-- 승인 당시 상태와 서버 CAS 기준을 고정하며 재시도에서 변경하지 않는다.
+CREATE TABLE IF NOT EXISTS reading_state_sync_requests (
+    operation_id TEXT PRIMARY KEY REFERENCES sync_outbox(operation_id),
+    payload_json TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_sync_outbox_ready
     ON sync_outbox(account_id, status, next_attempt_at, created_at);
 
@@ -569,6 +589,12 @@ def init_db(db_path: str) -> None:
         _migrate_search_index_chunks(conn)
         _migrate_quiz_attempt_seq(conn)
         _migrate_server_sync_outbox(conn)
+        with conn:
+            columns = {r['name'] for r in conn.execute('PRAGMA table_info(paper_reading_states)')}
+            if 'basis_version_id' not in columns:
+                conn.execute('ALTER TABLE paper_reading_states ADD COLUMN basis_version_id TEXT REFERENCES paper_versions(version_id)')
+            if 'action' not in columns:
+                conn.execute("ALTER TABLE paper_reading_states ADD COLUMN action TEXT NOT NULL DEFAULT 'initial'")
         # 기존 생성된 DB에 컬럼을 추가하는 형식.
         # 초기값은 NULL로 번역 설정을 임의로 채우지 않는다.
         with conn:
