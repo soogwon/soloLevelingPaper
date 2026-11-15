@@ -41,8 +41,17 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 27)]
-    assert items[-1].name == "0026_remote_execution_evidence.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 28)]
+    assert items[-1].name == "0027_remote_processing_admission.sql"
+
+
+def test_remote_processing_job_keeps_upload_and_consent_authorization():
+    sql = (__import__("pathlib").Path("migrations/server") / "0027_remote_processing_admission.sql").read_text(encoding="utf-8")
+
+    assert "server_processing_job_authorizations" in sql
+    assert "UNIQUE (owner_user_id, upload_intent_id)" in sql
+    assert "REFERENCES server_remote_upload_intents" in sql
+    assert sql.count("REFERENCES server_remote_consents") == 2
 
 
 def test_remote_evidence_is_bound_to_execution():
