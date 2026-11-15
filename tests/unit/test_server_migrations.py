@@ -41,8 +41,8 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 22)]
-    assert items[-1].name == "0021_remote_upload_intents.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 23)]
+    assert items[-1].name == "0022_remote_upload_verification.sql"
 
 
 def test_remote_identity_mapping_uses_exact_issuer_subject_and_owner_fk():

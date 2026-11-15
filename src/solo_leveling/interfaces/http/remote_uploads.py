@@ -6,6 +6,8 @@ from hashlib import sha256
 import json
 from uuid import uuid4
 
+from .file_uploads import CompletedUpload, PendingUpload, UploadReservation
+
 
 class RemoteUploadConflict(ValueError): pass
 
@@ -77,6 +79,97 @@ class PostgresRemoteUploadIntentStore:
                  file_name, file_size, content_type, sha256_hex, expires_at),
             ).fetchone()
         return _view(row)
+
+    def reserve_upload(self, owner_user_id: str, intent_id: str) -> tuple[UploadReservation, PendingUpload]:
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                """SELECT intent_id,paper_id,server_version_id,file_name,file_size,content_type,
+                          sha256_hex,expires_at,status,upload_id
+                   FROM server_remote_upload_intents
+                   WHERE owner_user_id=%s AND intent_id=%s FOR UPDATE""",
+                (owner_user_id, intent_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("remote_upload_not_found")
+            now = self._now()
+            if row["expires_at"] <= now:
+                conn.execute("UPDATE server_remote_upload_intents SET status='expired' WHERE owner_user_id=%s AND intent_id=%s",
+                             (owner_user_id, intent_id))
+                raise ValueError("remote_upload_expired")
+            if row["status"] not in ("created", "uploading"):
+                raise ValueError("remote_upload_state_invalid")
+            upload_id = str(row["upload_id"] or uuid4())
+            owner_hash = sha256(owner_user_id.encode()).hexdigest()[:24]
+            object_key = f"private/tmp/{owner_hash}/{row['paper_id']}/{row['server_version_id']}/{upload_id}.pdf"
+            if row["upload_id"] is None:
+                conn.execute(
+                    """INSERT INTO server_pdf_uploads
+                       (upload_id,owner_user_id,paper_id,server_version_id,local_version_id,file_name,
+                        file_size,content_type,sha256_hex,object_key,status,expires_at,source_kind)
+                       VALUES (%s,%s,%s,%s,NULL,%s,%s,%s,%s,%s,'pending',%s,'remote')""",
+                    (upload_id, owner_user_id, row["paper_id"], row["server_version_id"], row["file_name"],
+                     row["file_size"], row["content_type"], row["sha256_hex"], object_key, row["expires_at"]),
+                )
+                conn.execute(
+                    """UPDATE server_remote_upload_intents SET upload_id=%s,status='uploading',updated_at=CURRENT_TIMESTAMP
+                       WHERE owner_user_id=%s AND intent_id=%s""", (upload_id, owner_user_id, intent_id))
+            pending = PendingUpload(upload_id, str(row["paper_id"]), row["server_version_id"], row["file_name"],
+                                    int(row["file_size"]), row["content_type"], row["sha256_hex"], object_key,
+                                    row["expires_at"], "pending")
+            return UploadReservation(upload_id, object_key, row["expires_at"]), pending
+
+    def mark_verified(self, owner_user_id: str, intent_id: str, final_object_key: str) -> CompletedUpload:
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                """UPDATE server_pdf_uploads u SET status='ready',object_key=%s,completed_at=CURRENT_TIMESTAMP,
+                          failure_reason=NULL,updated_at=CURRENT_TIMESTAMP
+                   FROM server_remote_upload_intents i
+                   WHERE i.owner_user_id=%s AND i.intent_id=%s AND i.status='uploading'
+                     AND u.owner_user_id=i.owner_user_id AND u.paper_id=i.paper_id
+                     AND u.server_version_id=i.server_version_id AND u.upload_id=i.upload_id
+                     AND u.status='pending' AND u.expires_at>CURRENT_TIMESTAMP
+                   RETURNING u.upload_id,u.paper_id,u.server_version_id,u.file_name,u.file_size,
+                             u.content_type,u.sha256_hex,u.object_key,u.completed_at""",
+                (final_object_key, owner_user_id, intent_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("remote_upload_state_invalid")
+            conn.execute(
+                """UPDATE server_remote_upload_intents SET status='verified',updated_at=CURRENT_TIMESTAMP
+                   WHERE owner_user_id=%s AND intent_id=%s""", (owner_user_id, intent_id))
+        return CompletedUpload(str(row["upload_id"]), str(row["paper_id"]), row["server_version_id"],
+                               row["file_name"], int(row["file_size"]), row["content_type"], row["sha256_hex"],
+                               row["object_key"], row["completed_at"])
+
+
+class RemoteUploadVerificationService:
+    def __init__(self, store, object_storage):
+        self.store, self.object_storage = store, object_storage
+
+    def prepare(self, owner_user_id, intent_id):
+        reservation, pending = self.store.reserve_upload(owner_user_id, intent_id)
+        signed = self.object_storage.prepare_upload(reservation, file_size=pending.file_size,
+                                                    content_type=pending.content_type, sha256_hex=pending.sha256_hex)
+        return reservation, signed
+
+    def complete(self, owner_user_id, intent_id):
+        _, pending = self.store.reserve_upload(owner_user_id, intent_id)
+        actual = self.object_storage.inspect_upload(pending)
+        if actual is None or _object_mismatch(pending, actual):
+            raise ValueError("remote_upload_object_invalid")
+        final = self.object_storage.finalize_upload(pending)
+        if _object_mismatch(pending, final):
+            self.object_storage.delete_upload(final.object_key)
+            raise ValueError("remote_upload_object_invalid")
+        completed = self.store.mark_verified(owner_user_id, intent_id, final.object_key)
+        self.object_storage.delete_upload(pending.object_key)
+        return completed
+
+
+def _object_mismatch(expected, actual):
+    return (actual.file_size != expected.file_size
+            or actual.content_type.split(";", 1)[0].strip().lower() != expected.content_type
+            or actual.sha256_hex != expected.sha256_hex or not actual.pdf_header_valid)
 
 
 def _view(row):

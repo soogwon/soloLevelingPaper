@@ -6,8 +6,11 @@ import pytest
 from solo_leveling.interfaces.http.remote_uploads import (
     PostgresRemoteUploadIntentStore,
     RemoteUploadConflict,
+    RemoteUploadVerificationService,
     _payload_hash,
 )
+from solo_leveling.interfaces.http.file_uploads import PendingUpload, UploadReservation
+from solo_leveling.interfaces.http.object_storage import StoredObject
 
 
 class Result:
@@ -70,3 +73,36 @@ def test_rejects_naive_server_clock_before_database():
             "owner", "key", "paper.pdf", 10, "application/pdf", SHA
         )
     assert pool.conn.calls == []
+
+
+def test_verification_service_checks_object_before_marking_verified():
+    pending = PendingUpload("u", "p", "v", "paper.pdf", 10, "application/pdf", SHA,
+                            "private/tmp/object.pdf", NOW, "pending")
+    class Store:
+        def reserve_upload(self, owner, intent):
+            return UploadReservation("u", pending.object_key, NOW), pending
+        def mark_verified(self, owner, intent, key):
+            self.marked = key
+            return key
+    class Objects:
+        def inspect_upload(self, upload):
+            return StoredObject(upload.object_key, 10, "application/pdf", SHA, True)
+        def finalize_upload(self, upload):
+            return StoredObject("private/files/final.pdf", 10, "application/pdf", SHA, True)
+        def delete_upload(self, key):
+            self.deleted = key
+    store, objects = Store(), Objects()
+    assert RemoteUploadVerificationService(store, objects).complete("owner", "intent") == "private/files/final.pdf"
+    assert store.marked == "private/files/final.pdf" and objects.deleted == pending.object_key
+
+
+def test_verification_service_rejects_checksum_without_state_change():
+    pending = PendingUpload("u", "p", "v", "paper.pdf", 10, "application/pdf", SHA,
+                            "private/tmp/object.pdf", NOW, "pending")
+    class Store:
+        def reserve_upload(self, *_): return UploadReservation("u", pending.object_key, NOW), pending
+        def mark_verified(self, *_): pytest.fail("검증 실패 객체를 게시하면 안 됨")
+    class Objects:
+        def inspect_upload(self, upload): return StoredObject(upload.object_key, 10, "application/pdf", "b"*64, True)
+    with pytest.raises(ValueError, match="remote_upload_object_invalid"):
+        RemoteUploadVerificationService(Store(), Objects()).complete("owner", "intent")
