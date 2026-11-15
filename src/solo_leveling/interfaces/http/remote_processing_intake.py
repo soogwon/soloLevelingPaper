@@ -51,6 +51,12 @@ class PostgresRemoteProcessingIntake:
             if existing is not None:
                 _validate_existing(existing, upload_intent_id, storage_consent_id, ai_consent_id, notice_version)
                 return _view(existing)
+            control = conn.execute(
+                """SELECT generation,intake_enabled FROM server_dispatch_controls
+                   WHERE control_id='provider_dispatch' FOR UPDATE"""
+            ).fetchone()
+            if control is None or not control["intake_enabled"]:
+                return None
             source = conn.execute(
                 """SELECT i.intent_id,i.paper_id,i.server_version_id,i.payload_hash
                    FROM server_remote_upload_intents i

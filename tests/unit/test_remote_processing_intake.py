@@ -58,6 +58,7 @@ def test_verified_upload_and_current_consents_create_one_authorized_job():
     pool = Pool(
         {
             "SELECT j.job_id": [None],
+            "FROM server_dispatch_controls": [{"generation": 1, "intake_enabled": True}],
             "SELECT i.intent_id": [SOURCE],
             "SELECT consent_id": [CONSENTS],
             "INSERT INTO server_processing_jobs": [JOB],
@@ -69,8 +70,9 @@ def test_verified_upload_and_current_consents_create_one_authorized_job():
     assert result.job_id == "job" and result.status == "queued"
     statements = [sql for sql, _ in pool.conn.calls]
     assert "pg_advisory_xact_lock" in statements[0]
-    assert "i.status='verified'" in statements[2] and "u.status='ready'" in statements[2]
-    assert "p.deleted_at IS NULL" in statements[2]
+    assert "intake_enabled" in statements[2]
+    assert "i.status='verified'" in statements[3] and "u.status='ready'" in statements[3]
+    assert "p.deleted_at IS NULL" in statements[3]
     assert statements[-2].startswith("INSERT INTO server_processing_jobs")
     assert statements[-1].startswith("INSERT INTO server_processing_job_authorizations")
 
@@ -109,11 +111,30 @@ def test_same_request_with_different_authorization_conflicts():
 
 @pytest.mark.parametrize("source,consents", [(None, CONSENTS), (SOURCE, CONSENTS[:1])])
 def test_unverified_missing_or_incomplete_consent_never_queues(source, consents):
-    pool = Pool({"SELECT j.job_id": [None], "SELECT i.intent_id": [source], "SELECT consent_id": [consents]})
+    pool = Pool(
+        {
+            "SELECT j.job_id": [None],
+            "FROM server_dispatch_controls": [{"generation": 1, "intake_enabled": True}],
+            "SELECT i.intent_id": [source],
+            "SELECT consent_id": [consents],
+        }
+    )
 
     assert PostgresRemoteProcessingIntake(pool).admit(*args()) is None
 
     assert not any("INSERT INTO server_processing_jobs" in sql for sql, _ in pool.conn.calls)
+
+
+def test_intake_stop_blocks_new_job_before_upload_or_consent_reads():
+    pool = Pool(
+        {
+            "SELECT j.job_id": [None],
+            "FROM server_dispatch_controls": [{"generation": 2, "intake_enabled": False}],
+        }
+    )
+
+    assert PostgresRemoteProcessingIntake(pool).admit(*args()) is None
+    assert not any("SELECT i.intent_id" in sql for sql, _ in pool.conn.calls)
 
 
 def test_invalid_input_fails_before_database():
