@@ -5,7 +5,7 @@ import os
 import pytest
 
 from tests.integration.test_remote_processing_postgres import (
-    pool, db, stores, make_paper, claimed_job, make_revision_set, publish, new_id,
+    pool, db, stores, make_paper, claimed_job, make_revision_set, mark_ready, publish, new_id,
 )
 from solo_leveling.infrastructure.storage.remote_deletion_backend import PostgresObjectDeletionBackend
 from solo_leveling.interfaces.http.remote_deletions import PostgresRemoteDeletionStore
@@ -28,7 +28,13 @@ def test_backend_removes_children_and_objects_but_preserves_tombstone(db, stores
     db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'synthetic')", (owner,))
     paper = make_paper(db, owner)
     job = claimed_job(stores[0], owner, paper)
-    revisions = make_revision_set(db, owner, paper, job, chunks=1)
+    revisions = make_revision_set(db, owner, paper, job, chunks=1, ready=False)
+    parse_id, translation_id, embedding_id, chunks = revisions
+    db("""INSERT INTO server_embedding_vectors(owner_user_id,paper_id,server_version_id,
+        parse_revision_id,translation_revision_id,embedding_set_id,chunk_id,dimension,embedding)
+        VALUES (%s,%s,'v1',%s,%s,%s,%s,2,'[1,0]'::vector)""",
+       (owner, paper, parse_id, translation_id, embedding_id, chunks[0]))
+    mark_ready(db, parse_id, translation_id, embedding_id)
     publish(stores[1], owner, paper, revisions, job)
     upload, object_key = new_id(), f"private/files/{new_id()}.pdf"
     db(
@@ -45,6 +51,8 @@ def test_backend_removes_children_and_objects_but_preserves_tombstone(db, stores
     backend = PostgresObjectDeletionBackend(pool, objects)
 
     backend.delete_derived(owner, paper)
+    for table in ('server_embedding_vectors', 'server_translation_chunks', 'server_processing_chunks'):
+        assert db(f'SELECT count(*) AS n FROM {table} WHERE paper_id=%s', (paper,))[0]['n'] == 0
     assert db("SELECT count(*) AS n FROM server_processing_publications WHERE paper_id=%s", (paper,))[0]["n"] == 0
     assert db("SELECT count(*) AS n FROM server_processing_versions WHERE paper_id=%s", (paper,))[0]["n"] == 1
 
@@ -78,7 +86,7 @@ def test_cleanup_service_handles_unpublished_and_published_paper_without_touchin
         publish(stores[1], owner, paper, revisions, job)
     request = PostgresRemoteDeletionStore(pool).request(owner, paper, new_id())
     # 이전 사례의 요청은 조정기 대상에서 제외한다. 같은 모듈의 합성 스키마만 사용한다.
-    db("UPDATE server_deletion_requests SET status='complete' WHERE request_id<>%s", (request.request_id,))
+    db("UPDATE server_deletion_requests SET status='complete',completed_at=CURRENT_TIMESTAMP WHERE request_id<>%s", (request.request_id,))
     service = create_remote_deletion_cleanup(pool, Objects(), worker_id='synthetic', lease_seconds=60)
     assert service.run_once()['status'] == 'complete'
     assert db('SELECT status FROM server_deletion_requests WHERE request_id=%s', (request.request_id,))[0]['status'] == 'complete'

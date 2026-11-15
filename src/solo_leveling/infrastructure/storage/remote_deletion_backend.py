@@ -22,11 +22,9 @@ _DERIVED_DELETES = (
     "DELETE FROM server_execution_contexts WHERE owner_user_id=%s AND paper_id=%s",
     "UPDATE server_processing_versions SET active_publication_id=NULL WHERE owner_user_id=%s AND paper_id=%s AND active_publication_id IS NOT NULL",
     "DELETE FROM server_processing_publications WHERE owner_user_id=%s AND paper_id=%s",
-    "DELETE FROM server_embedding_vectors WHERE owner_user_id=%s AND paper_id=%s",
+    # 확정된 자식 행의 보호 트리거를 유지하고 부모 삭제의 FK 연쇄 정리를 사용한다.
     "DELETE FROM server_embedding_sets WHERE owner_user_id=%s AND paper_id=%s",
-    "DELETE FROM server_translation_chunks WHERE owner_user_id=%s AND paper_id=%s",
     "DELETE FROM server_translation_revisions WHERE owner_user_id=%s AND paper_id=%s",
-    "DELETE FROM server_processing_chunks WHERE owner_user_id=%s AND paper_id=%s",
     "DELETE FROM server_parse_revisions WHERE owner_user_id=%s AND paper_id=%s",
     "DELETE FROM server_processing_jobs WHERE owner_user_id=%s AND paper_id=%s",
     "DELETE FROM server_resume_requests WHERE owner_user_id=%s AND paper_id=%s",
