@@ -36,7 +36,11 @@ def _vector_literal(values: Sequence[float], dimension: int) -> str:
 class PostgresRemoteScopedSearch:
     """owner·게시 revision·embedding set·focus를 SQL에서 top_k 전에 제한한다."""
 
-    def __init__(self, connection_pool, embed_question: Callable[[str, RemoteSearchBinding], Sequence[float]]):
+    def __init__(
+        self,
+        connection_pool,
+        embed_question: Callable[[str, RemoteSearchBinding], Sequence[float]],
+    ):
         self._pool = connection_pool
         self._embed_question = embed_question
 
@@ -49,11 +53,15 @@ class PostgresRemoteScopedSearch:
     ) -> tuple[RemoteSearchHit, ...]:
         if not isinstance(question, str) or not question.strip():
             raise ValueError("remote_question_invalid")
-        if not isinstance(binding, RemoteSearchBinding) or not isinstance(filters, RemoteSearchFilters):
+        if (
+            not isinstance(binding, RemoteSearchBinding)
+            or not isinstance(filters, RemoteSearchFilters)
+        ):
             raise ValueError("remote_search_scope_invalid")
         if type(top_k) is not int or not 1 <= top_k <= 100:
             raise ValueError("remote_top_k_invalid")
-        query_vector = _vector_literal(self._embed_question(question, binding), _fingerprint_dimension(binding))
+        dimension = _fingerprint_dimension(binding)
+        query_vector = _vector_literal(self._embed_question(question, binding), dimension)
         with self._pool.connection() as conn:
             rows = conn.execute(
                 """SELECT c.chunk_id, c.pdf_page, c.section_id,
@@ -72,10 +80,18 @@ class PostgresRemoteScopedSearch:
                     AND t.parse_revision_id=v.parse_revision_id
                     AND t.translation_revision_id=v.translation_revision_id
                     AND t.chunk_id=v.chunk_id
+                   JOIN server_processing_publications p
+                     ON p.owner_user_id=v.owner_user_id
+                    AND p.paper_id=v.paper_id
+                    AND p.server_version_id=v.server_version_id
+                    AND p.parse_revision_id=v.parse_revision_id
+                    AND p.translation_revision_id=v.translation_revision_id
+                    AND p.embedding_set_id=v.embedding_set_id
                    WHERE v.owner_user_id=%s
                      AND v.paper_id=%s AND v.server_version_id=%s
                      AND v.parse_revision_id=%s AND v.translation_revision_id=%s
-                     AND v.embedding_set_id=%s
+                     AND v.embedding_set_id=%s AND p.publication_id=%s
+                     AND v.dimension=%s
                      AND (cardinality(%s::integer[]) = 0 OR c.pdf_page = ANY(%s::integer[]))
                      AND (cardinality(%s::text[]) = 0 OR c.section_id = ANY(%s::text[]))
                    ORDER BY v.embedding <=> %s::vector, c.chunk_id
@@ -88,6 +104,8 @@ class PostgresRemoteScopedSearch:
                     binding.parse_revision_id,
                     binding.translation_revision_id,
                     binding.embedding_set_id,
+                    binding.publication_id,
+                    dimension,
                     list(filters.pdf_pages),
                     list(filters.pdf_pages),
                     list(filters.section_ids),
@@ -140,7 +158,10 @@ class PostgresEmbeddingVectorWriter:
                      AND e.embedding_set_id=%s AND e.status='building'
                      AND t.chunk_id=%s
                      AND (e.model_fingerprint->>'dimension')::integer=%s
-                   ON CONFLICT (owner_user_id, embedding_set_id, chunk_id) DO NOTHING
+                   ON CONFLICT (owner_user_id, embedding_set_id, chunk_id) DO UPDATE
+                     SET embedding=server_embedding_vectors.embedding
+                   WHERE server_embedding_vectors.dimension=EXCLUDED.dimension
+                     AND server_embedding_vectors.embedding=EXCLUDED.embedding
                    RETURNING chunk_id""",
                 (
                     dimension,
