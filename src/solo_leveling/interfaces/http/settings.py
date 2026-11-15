@@ -40,6 +40,51 @@ class OidcSettings:
 
 
 @dataclass(frozen=True)
+class RemoteMcpSettings:
+    """공개 원격 MCP 스파이크의 독립 Auth0·전송 경계."""
+
+    enabled: bool = False
+    resource_url: str = ""
+    issuer: str = ""
+    audience: str = ""
+    jwks_url: str = ""
+    required_scope: str = "spike:read"
+    allowed_hosts: tuple[str, ...] = ()
+    allowed_origins: tuple[str, ...] = ()
+    clock_skew_seconds: int = 60
+
+    def __post_init__(self) -> None:
+        if not self.enabled:
+            return
+        for name, value in (("REMOTE_MCP_RESOURCE_URL", self.resource_url),
+                            ("REMOTE_MCP_OIDC_ISSUER", self.issuer),
+                            ("REMOTE_MCP_OIDC_AUDIENCE", self.audience),
+                            ("REMOTE_MCP_OIDC_JWKS_URL", self.jwks_url)):
+            if not value.strip():
+                raise ValueError(f"{name}은 비어 있을 수 없습니다.")
+        _validate_https_url("REMOTE_MCP_RESOURCE_URL", self.resource_url)
+        _validate_https_url("REMOTE_MCP_OIDC_ISSUER", self.issuer)
+        _validate_https_url("REMOTE_MCP_OIDC_JWKS_URL", self.jwks_url)
+        resource = urlsplit(self.resource_url)
+        if resource.path != "/mcp" or resource.query:
+            raise ValueError("REMOTE_MCP_RESOURCE_URL 경로는 쿼리 없는 /mcp여야 합니다.")
+        if not self.required_scope.strip() or any(char.isspace() for char in self.required_scope):
+            raise ValueError("REMOTE_MCP_REQUIRED_SCOPE는 공백 없는 단일 scope여야 합니다.")
+        if not 0 <= self.clock_skew_seconds <= 300:
+            raise ValueError("REMOTE_MCP_CLOCK_SKEW_SECONDS는 0에서 300 사이여야 합니다.")
+        if self.audience != self.resource_url:
+            raise ValueError("원격 MCP 전용 audience는 resource URL과 같아야 합니다.")
+        public_host = resource.netloc
+        if not self.allowed_hosts or public_host not in self.allowed_hosts:
+            raise ValueError("REMOTE_MCP_ALLOWED_HOSTS에는 공개 resource hostname이 필요합니다.")
+        for host in self.allowed_hosts:
+            if not host or "://" in host or "/" in host:
+                raise ValueError("REMOTE_MCP_ALLOWED_HOSTS에는 hostname 또는 hostname:port만 지정합니다.")
+        for origin in self.allowed_origins:
+            _validate_origin("REMOTE_MCP_ALLOWED_ORIGINS", origin)
+
+
+@dataclass(frozen=True)
 class DatabaseSettings:
     dsn: str
 
@@ -144,6 +189,34 @@ def load_oidc_settings(source: Mapping[str, str] | None = None) -> OidcSettings 
     return OidcSettings(*raw)
 
 
+def load_remote_mcp_settings(source: Mapping[str, str] | None = None) -> RemoteMcpSettings:
+    values = environ if source is None else source
+    enabled = _parse_bool("REMOTE_MCP_SPIKE_ENABLED", values.get("REMOTE_MCP_SPIKE_ENABLED", "false"))
+    if not enabled:
+        return RemoteMcpSettings()
+    resource_url = values.get("REMOTE_MCP_RESOURCE_URL", "").strip()
+    public_host = urlsplit(resource_url).netloc if resource_url else ""
+    configured_hosts = _split_csv(values.get("REMOTE_MCP_ALLOWED_HOSTS", ""))
+    allowed_hosts = configured_hosts or ((public_host,) if public_host else ())
+    allowed_origins = _split_csv(values.get("REMOTE_MCP_ALLOWED_ORIGINS", "https://claude.ai"))
+    raw_skew = values.get("REMOTE_MCP_CLOCK_SKEW_SECONDS", "60").strip()
+    try:
+        clock_skew_seconds = int(raw_skew)
+    except ValueError as exc:
+        raise ValueError("REMOTE_MCP_CLOCK_SKEW_SECONDS는 정수여야 합니다.") from exc
+    return RemoteMcpSettings(
+        enabled=True,
+        resource_url=resource_url,
+        issuer=values.get("REMOTE_MCP_OIDC_ISSUER", "").strip(),
+        audience=values.get("REMOTE_MCP_OIDC_AUDIENCE", "").strip(),
+        jwks_url=values.get("REMOTE_MCP_OIDC_JWKS_URL", "").strip(),
+        required_scope=values.get("REMOTE_MCP_REQUIRED_SCOPE", "spike:read").strip(),
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+        clock_skew_seconds=clock_skew_seconds,
+    )
+
+
 def load_database_settings(source: Mapping[str, str] | None = None) -> DatabaseSettings | None:
     values = environ if source is None else source
     dsn = values.get("DATABASE_URL", "").strip()
@@ -187,3 +260,23 @@ def _validate_https_url(name: str, value: str) -> None:
     parsed = urlsplit(value)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
         raise ValueError(f"{name}은 자격정보와 fragment가 없는 https URL이어야 합니다.")
+
+
+def _validate_origin(name: str, value: str) -> None:
+    parsed = urlsplit(value)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
+        raise ValueError(f"{name}에는 자격정보·경로·쿼리 없는 https origin만 지정합니다.")
+
+
+def _split_csv(value: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(item.strip() for item in value.split(",") if item.strip()))
+
+
+def _parse_bool(name: str, value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off", ""):
+        return False
+    raise ValueError(f"{name}은 true 또는 false여야 합니다.")

@@ -40,6 +40,22 @@ services:
         value: https://solo-leveling-staging.soogyung.com/v1/auth/callback
       - key: WEB_APP_ORIGIN
         value: https://solo-leveling-staging.soogyung.com
+      - key: REMOTE_MCP_SPIKE_ENABLED
+        value: "false"
+      - key: REMOTE_MCP_RESOURCE_URL
+        value: https://solo-leveling-staging.soogyung.com/mcp
+      - key: REMOTE_MCP_OIDC_ISSUER
+        sync: false
+      - key: REMOTE_MCP_OIDC_AUDIENCE
+        sync: false
+      - key: REMOTE_MCP_OIDC_JWKS_URL
+        sync: false
+      - key: REMOTE_MCP_REQUIRED_SCOPE
+        value: spike:read
+      - key: REMOTE_MCP_ALLOWED_HOSTS
+        value: solo-leveling-staging.soogyung.com
+      - key: REMOTE_MCP_ALLOWED_ORIGINS
+        value: https://claude.ai
       - key: OBJECT_STORAGE_ENDPOINT
         sync: false
       - key: OBJECT_STORAGE_BUCKET
