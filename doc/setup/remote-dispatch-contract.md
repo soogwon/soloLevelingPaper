@@ -82,3 +82,16 @@ unknown/예산 거부 뒤 청크 재시도·다음 청크로 유료 전송이 �
 대역으로 생성·보완·의미 검증·번역의 gate 통과, unknown 후 전송 1회/추가 0회,
 전송 전 거부 0회, payload 변이 차단 및 기존 parser 사용을 검증한다.
 이는 영속 원장의 재시작/동시성 또는 유료 서비스 공개 증명이 아니다.
+
+## B 영속 Responses transport 조립
+
+`create_persisted_responses_transport`는 A의 `PostgresDispatchLedger`와
+`validate_execution_scope`, B의 `ProviderDispatch`/`GatedResponsesTransport`를 연결한다.
+반환값을 생성기·보완·coverage·의미 검증의 기존 transport 주입점에 전달한다.
+정책/window, 안전한 토큰 상한과 영속 dispatch key는 필수 외부 입력이며 기본값으로 우회하지 않는다.
+공개 도구나 제품 기본 transport는 변경하지 않는다.
+
+`test_persisted_dispatch_postgres.py`는 실제 DB의 실행/동의/예산/attempt와 합성 HTTP 응답을 사용한다.
+단계별 예약·정산, 같은 키의 재전송 금지, timeout/정산 실패 후 새 객체·새 키에도 unknown 차단,
+단계 사이 동의 철회를 검사한다. 실제 네트워크나 과금 테스트가 아니다.
+동의 발급 API, 모델별 보장 가능한 토큰 상한과 정책 수치, 실제 호스트 공개는 별도 과제다.
