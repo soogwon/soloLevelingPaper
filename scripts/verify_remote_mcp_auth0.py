@@ -1,4 +1,4 @@
-"""Issue #388 Auth0 PKCE and remote MCP verification without persisting tokens."""
+"""토큰을 저장하지 않고 #388 Auth0 PKCE와 원격 MCP 경계를 검증한다."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import hashlib
 import json
 import secrets
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
@@ -29,21 +29,30 @@ def _b64url(value: bytes) -> str:
 
 
 def _parse_callback(path: str, expected_state: str) -> tuple[int, str, dict[str, str]]:
-    query = parse_qs(urlparse(path).query)
-    if query.get("state", [""])[0] != expected_state:
+    parsed = urlparse(path)
+    if parsed.path != "/callback":
+        return 404, "Not found.", {}
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    if query.get("state") != [expected_state]:
         return 400, "OAuth state mismatch. You can close this tab.", {}
     if "error" in query:
-        return 400, "Authorization was rejected. You can close this tab.", {"error": query["error"][0]}
-    if "code" not in query:
+        return 400, "Authorization was rejected. You can close this tab.", {"error": "authorization_rejected"}
+    if len(query.get("code", [])) != 1 or not query["code"][0].strip():
         return 400, "Authorization code missing. You can close this tab.", {}
     return 200, "Authorization received. You can close this tab.", {"code": query["code"][0]}
 
 
-def _callback_server(port: int, expected_state: str, result: dict[str, str]) -> HTTPServer:
+def _callback_server(port: int, expected_state: str, result: dict[str, str]) -> ThreadingHTTPServer:
+    received = threading.Event()
+    lock = threading.Lock()
+
     class CallbackHandler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
+        def do_GET(self) -> None:  # noqa: N802 - 표준 라이브러리 콜백 이름
             status, message, callback = _parse_callback(self.path, expected_state)
-            result.update(callback)
+            with lock:
+                if callback and not received.is_set():
+                    result.update(callback)
+                    received.set()
             self.send_response(status)
             body = message.encode("utf-8")
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -54,7 +63,24 @@ def _callback_server(port: int, expected_state: str, result: dict[str, str]) -> 
         def log_message(self, _format: str, *_args: object) -> None:
             return
 
-    return HTTPServer(("127.0.0.1", port), CallbackHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", port), CallbackHandler)
+    server.callback_received = received
+    return server
+
+
+def _rpc_result(response):
+    """현재 staging의 JSON 응답을 확인하고 본문을 출력하지 않는다."""
+    if response is None or response.status_code != 200:
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    if (not isinstance(payload, dict) or payload.get("jsonrpc") != "2.0"
+            or payload.get("id") != 1 or "error" in payload
+            or not isinstance(payload.get("result"), dict)):
+        return None
+    return payload["result"]
 
 
 def _rpc(
@@ -76,7 +102,7 @@ def _rpc(
     )
 
 
-def main() -> int:
+def _main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--client-id", required=True)
     parser.add_argument("--port", type=int, default=8765)
@@ -111,12 +137,16 @@ def main() -> int:
 
     callback: dict[str, str] = {}
     server = _callback_server(args.port, state, callback)
-    worker = threading.Thread(target=server.handle_request, daemon=True)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     print(json.dumps({"authorize_url": authorize_url, "token_persisted": False}))
-    worker.join(timeout=300)
-    server.server_close()
-    if worker.is_alive() or "code" not in callback:
+    try:
+        server.callback_received.wait(timeout=300)
+    finally:
+        server.shutdown()
+        worker.join()
+        server.server_close()
+    if "code" not in callback:
         print(json.dumps({"authorization_received": False, "error": callback.get("error", "timeout")}))
         return 2
 
@@ -135,6 +165,8 @@ def main() -> int:
         print(json.dumps({"authorization_received": True, "token_status": token_response.status_code}))
         return 3
     token_payload = token_response.json()
+    if not isinstance(token_payload, dict):
+        raise ValueError("invalid_token_response")
     token = token_payload.get("access_token" if args.token_kind == "access" else "id_token")
     if not isinstance(token, str) or not token:
         print(json.dumps({"authorization_received": True, "credential_received": False}))
@@ -150,7 +182,7 @@ def main() -> int:
         },
     )
     listed = _rpc(token, "tools/list") if initialized.status_code == 200 else None
-    identity = _rpc(token, "tools/call", {"name": "whoami", "arguments": {}}) if listed and listed.status_code == 200 else None
+    identity = _rpc(token, "tools/call", {"name": "whoami", "arguments": {}}) if listed is not None and listed.status_code == 200 else None
     session_rejected = None
     denied_tool_is_error = None
     if initialized.status_code == 200:
@@ -160,8 +192,19 @@ def main() -> int:
             extra_headers={"Mcp-Session-Id": "synthetic-session"},
         ).status_code
         denied_tool = _rpc(token, "tools/call", {"name": "not_allowed_probe", "arguments": {}})
-        if denied_tool.status_code == 200:
-            denied_tool_is_error = denied_tool.json().get("result", {}).get("isError") is True
+        denied_tool_is_error = (_rpc_result(denied_tool) or {}).get("isError") is True
+    initialize_result = _rpc_result(initialized)
+    list_result = _rpc_result(listed)
+    identity_result = _rpc_result(identity)
+    allowed_checks_passed = (
+        initialize_result is not None
+        and initialize_result.get("protocolVersion") == "2025-03-26"
+        and list_result is not None and isinstance(list_result.get("tools"), list)
+        and any(isinstance(tool, dict) and tool.get("name") == "whoami" for tool in list_result["tools"])
+        and identity_result is not None and identity_result.get("isError", False) is False
+        and isinstance(identity_result.get("content"), list) and bool(identity_result["content"])
+        and session_rejected == 400 and denied_tool_is_error is True
+    )
     statuses = {
         "authorization_received": True,
         "credential_received": True,
@@ -169,15 +212,25 @@ def main() -> int:
         "requested_audience": args.audience,
         "token_kind": args.token_kind,
         "initialize_status": initialized.status_code,
-        "tools_list_status": listed.status_code if listed else None,
-        "whoami_status": identity.status_code if identity else None,
+        "tools_list_status": listed.status_code if listed is not None else None,
+        "whoami_status": identity.status_code if identity is not None else None,
         "synthetic_session_status": session_rejected,
         "denied_tool_is_error": denied_tool_is_error,
+        "allowed_checks_passed": allowed_checks_passed,
         "token_persisted": False,
     }
     print(json.dumps(statuses))
-    expected = 200 if args.expect == "allowed" else 401
-    return 0 if initialized.status_code == expected else 4
+    passed = allowed_checks_passed if args.expect == "allowed" else initialized.status_code == 401
+    return 0 if passed else 4
+
+
+def main() -> int:
+    try:
+        return _main()
+    except (requests.RequestException, ValueError, OSError):
+        # 네트워크 오류·비정상 JSON의 상세에는 응답 본문이나 인증 정보가 포함될 수 있다.
+        print(json.dumps({"verification_error": "request_or_response_invalid", "token_persisted": False}))
+        return 5
 
 
 if __name__ == "__main__":

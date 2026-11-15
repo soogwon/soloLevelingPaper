@@ -97,6 +97,22 @@ Staging API audience 시험에는 정의된 scope가 없는 사용자 위임 gra
 subject를 반환하지 않으므로 계정별 저장 데이터 격리나 서로 다른 subject의 직접 비교를
 통과 처리하지 않는다. stateless session 거부 역시 제품 상태 세션 격리의 증거가 아니다.
 
+### 로컬 검증기 판정 기준
+
+`scripts/verify_remote_mcp_auth0.py`는 현재 staging의 JSON 응답을 검증한다.
+`--expect allowed`는 initialize 성공뿐 아니라 whoami 도구 목록·호출 성공,
+합성 session ID의 400, 비허용 도구의 `isError=true`가 모두 확인돼야 종료 코드 0을 반환한다.
+HTTP 200 안의 JSON-RPC 오류나 잘못된 응답 형식도 실패로 처리한다.
+`--expect denied`는 실제 발급받은 토큰으로 initialize가 401인지 확인한다.
+
+콜백은 `/callback` 경로와 단일 state/code를 검사하며, favicon이나 잘못된 state 요청은
+인증 대기를 종료하지 않는다. 최대 300초 대기 후 서버를 닫고 첫 유효 콜백만 사용한다.
+OAuth 오류와 네트워크 오류는 고정 코드만 출력하며 응답 본문과 토큰을 출력하지 않는다.
+후속 HTTP 호출이 실패한 경우에도 관측한 상태 코드는 그대로 기록한다.
+
+PR #462 리뷰 보완은 합성 응답 및 로컬 loopback 회귀 테스트로 검증했다.
+보완된 검증기로 Auth0 로그인과 staging 실발급 시험을 다시 실행한 것은 아니다.
+
 ## 지원 대상 표: 검증 범위이며 제품 지원 확정이 아님
 
 | 호스트·요금제 | 상태 | 남은 것 |
