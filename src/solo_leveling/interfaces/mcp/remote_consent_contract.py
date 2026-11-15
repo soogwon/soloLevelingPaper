@@ -14,6 +14,9 @@ class ConsentState(Enum):
 
 class ExecutionState(Enum):
     ABSENT = 'absent'
+    QUEUED = 'queued'
+    CANCEL_REQUESTED = 'cancel_requested'
+    CANCELLED = 'cancelled'
     RUNNING = 'running'
     COMPLETED = 'completed'
     FAILED = 'failed'
@@ -104,6 +107,9 @@ def recover_guidance(reader: ConsentStatusReader, intent: Intent) -> Guidance:
     # 기존 실행은 동의/한도가 바뀌어도 재접수하지 않는다. 결과 조회 권한은 별도 서버 판정이다.
     if existing:
         messages = {
+            ExecutionState.QUEUED: '기존 작업이 접수되어 대기 중입니다. 다시 제출하지 말고 같은 작업의 상태를 확인하세요.',
+            ExecutionState.CANCEL_REQUESTED: '취소를 요청했으며 확정을 기다리는 중입니다. 이미 전송된 요청의 처리·정산은 계속될 수 있습니다.',
+            ExecutionState.CANCELLED: '기존 작업의 취소가 확정되었습니다. 이미 전송된 요청의 사용량 정산은 별도이며 자동으로 다시 제출하지 않습니다.',
             ExecutionState.RUNNING: '기존 작업을 처리 중입니다. 같은 작업의 상태를 확인하세요.',
             ExecutionState.COMPLETED: '기존 작업이 완료되었습니다. 저장된 결과를 확인하세요.',
             ExecutionState.FAILED: '기존 작업이 실패했습니다. 상태를 확인하며 자동 재실행하지 않습니다.',

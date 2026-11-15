@@ -107,3 +107,10 @@ HTML 문구는 escape하며 owner/의도/실행 ID는 표시 모델에 추가하
 ```sh
 python -m pytest tests/unit/mcp/test_remote_consent_preview.py tests/unit/mcp/test_remote_consent_contract.py -q
 ```
+
+### 대기·취소 표시
+
+내부 실행 복구와 동일하게 `queued`, `cancel_requested`, `cancelled`를 구분한다.
+취소 요청은 취소 확정이 아니며 취소 확정도 이미 전송된 요청의 무과금·환급을 뜻하지 않는다.
+기존 결과 조회는 현재 접근 허용과 저장 결과 가용성으로 결정하며, 동의 철회·usage unknown이나
+취소 상태를 이유로 새 키 접수를 만들지 않는다. 이 추가 상태도 공개 wire 계약 확정은 아니다.

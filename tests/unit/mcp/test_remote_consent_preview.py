@@ -66,3 +66,28 @@ def test_unknown_or_inconsistent_response_has_fixed_fallback(view):
     preview = render_consent_preview(view)
     assert 'secret-response' not in preview.text
     assert '상태를 확인하지 못했습니다' in preview.text
+
+
+@pytest.mark.parametrize('state,phrase', [
+    (E.QUEUED, '접수되어 대기'), (E.CANCEL_REQUESTED, '확정을 기다리는'), (E.CANCELLED, '취소가 확정'),
+])
+@pytest.mark.parametrize('readable', [False, True])
+def test_waiting_and_cancellation_preserve_read_access_without_resubmission(state, phrase, readable):
+    snapshot = replace(BASE, execution=state, execution_id='private-job', saved_result_available=readable,
+                       ai_consent=C.REVOKED, budget=B.USAGE_UNKNOWN)
+    calls = []
+    def read(intent):
+        calls.append(intent)
+        return snapshot
+    view = recover_guidance(SimpleNamespace(read=read), BASE.intent)
+    preview = render_consent_preview(view)
+    assert view.state == state.value
+    assert view.next_action == ('read_result' if readable else 'refresh_status')
+    assert phrase in view.message and '사용량 확인' in view.message
+    assert view.message in Parsed(preview.html).text and view.message in preview.text
+    assert not view.automatic_paid_retry and calls == [BASE.intent]
+    assert 'private-job' not in preview.html
+    if state in (E.CANCEL_REQUESTED, E.CANCELLED):
+        assert '정산' in view.message
+    denied = recover_guidance(SimpleNamespace(read=lambda _: replace(snapshot, access_allowed=False)), BASE.intent)
+    assert denied.state == 'not_found' and not denied.can_read_result
