@@ -41,8 +41,8 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 17)]
-    assert items[-1].name == "0016_remote_processing_integrity.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 18)]
+    assert items[-1].name == "0017_remote_processing_generation.sql"
 
 
 def test_remote_processing_schema_uses_owner_scoped_composite_references():
@@ -72,6 +72,17 @@ def test_remote_processing_integrity_adds_delete_path_and_finalized_guards():
     assert "BEFORE INSERT OR UPDATE OR DELETE ON server_processing_chunks" in item.sql
     assert "BEFORE INSERT OR UPDATE OR DELETE ON server_translation_chunks" in item.sql
     assert "FOR SHARE" in item.sql
+
+
+def test_remote_processing_generation_binds_writes_to_the_job_lease():
+    item = discover_migrations(__import__("pathlib").Path("migrations/server"))[16]
+
+    assert item.sql.count("ADD COLUMN source_lease_token uuid NULL") == 3
+    assert item.sql.count("DEFERRABLE INITIALLY DEFERRED") == 3
+    assert "processing_lease_lost" in item.sql
+    assert "processing_revision_generation_fixed" in item.sql
+    assert "uq_server_processing_publications_source_job" in item.sql
+    assert "BEFORE INSERT OR UPDATE ON server_embedding_sets" in item.sql
 
 
 def test_rejects_gaps_and_invalid_sql_files(tmp_path):

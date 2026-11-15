@@ -142,6 +142,21 @@ class PostgresProcessingPublicationStore:
                 ),
             ).fetchone()
             if row is None:
+                # 같은 실행 세대가 이미 게시한 뒤 응답을 잃고 다시 요청한 경우 그 결과를 재생한다.
+                replayed = self._replay(
+                    conn,
+                    owner_user_id,
+                    paper_id,
+                    server_version_id,
+                    parse_revision_id,
+                    translation_revision_id,
+                    embedding_set_id,
+                    source_job_id,
+                    source_lease_token,
+                    policy,
+                )
+                if replayed is not None:
+                    return replayed
                 raise ProcessingPublicationNotFound("processing_revision_set_not_found")
             manifest = _validated_manifest(row, policy)
             publication_id = str(uuid4())
@@ -174,6 +189,20 @@ class PostgresProcessingPublicationStore:
             ).fetchone()
             if updated is None:
                 raise ProcessingPublicationNotFound("processing_version_not_found")
+            # 게시와 작업 완료를 같은 transaction에서 처리한다. 게시만 되고 작업이 running으로
+            # 남으면 lease 만료 뒤 다시 claim되어 같은 처리를 반복하고 비용이 중복된다.
+            finished = conn.execute(
+                """UPDATE server_processing_jobs
+                   SET status='succeeded', error_code=NULL, lease_owner=NULL, lease_token=NULL,
+                       lease_expires_at=NULL, heartbeat_at=NULL,
+                       finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+                   WHERE owner_user_id=%s AND job_id=%s AND status='running'
+                     AND lease_token=%s AND lease_expires_at>CURRENT_TIMESTAMP
+                   RETURNING job_id""",
+                (owner_user_id, source_job_id, source_lease_token),
+            ).fetchone()
+            if finished is None:
+                raise ProcessingPublicationNotFound("processing_revision_set_not_found")
         return ProcessingPublication(
             publication_id,
             paper_id,
@@ -183,6 +212,53 @@ class PostgresProcessingPublicationStore:
             embedding_set_id,
             policy,
             manifest,
+        )
+
+    @staticmethod
+    def _replay(
+        conn,
+        owner_user_id: str,
+        paper_id: str,
+        server_version_id: str,
+        parse_revision_id: str,
+        translation_revision_id: str,
+        embedding_set_id: str,
+        source_job_id: str,
+        source_lease_token: str,
+        policy: PublicationPolicy,
+    ) -> ProcessingPublication | None:
+        """같은 job·같은 실행 세대·같은 revision 집합의 기존 게시만 돌려준다."""
+        row = conn.execute(
+            """SELECT publication_id, publication_policy, manifest
+               FROM server_processing_publications
+               WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s
+                 AND parse_revision_id=%s AND translation_revision_id=%s
+                 AND embedding_set_id=%s
+                 AND source_job_id=%s AND source_lease_token=%s
+                 AND publication_policy=%s""",
+            (
+                owner_user_id,
+                paper_id,
+                server_version_id,
+                parse_revision_id,
+                translation_revision_id,
+                embedding_set_id,
+                source_job_id,
+                source_lease_token,
+                policy,
+            ),
+        ).fetchone()
+        if row is None:
+            return None
+        return ProcessingPublication(
+            str(row["publication_id"]),
+            paper_id,
+            server_version_id,
+            parse_revision_id,
+            translation_revision_id,
+            embedding_set_id,
+            row["publication_policy"],
+            dict(row["manifest"]),
         )
 
     def get_active(

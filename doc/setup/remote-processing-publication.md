@@ -50,6 +50,32 @@ migration이나 publication의 불변 revision 연결을 다시 바꾸지 않는
 잠그고 `running` 상태, token 일치, 만료 전임을 확인한다. 임대가 끝난 worker는 새 revision을
 적재했더라도 active publication을 바꿀 수 없다.
 
+## 실행 세대에 묶인 저장
+
+파싱·번역 revision과 embedding set은 자신을 만든 job의 ID와 그때의 lease token을 고정해 가진다
+(`source_job_id`, `source_lease_token`). 이 값은 바꿀 수 없다. DB 트리거는 다음을 강제한다.
+
+- revision은 `building`으로만 만들 수 있고, 만드는 순간 그 job이 `running`이며 token이 일치하고
+  lease가 남아 있어야 한다.
+- chunk·번역 행의 추가·변경·삭제와 revision의 `ready` 전환은 그 revision을 만든 실행 세대가 아직
+  유효할 때만 된다. lease가 만료되어 다른 worker가 작업을 회수하면 token이 바뀌므로, 이전 worker는
+  자신이 만들던 `building` revision에도 더 쓰지 못한다(`processing_lease_lost`).
+- 회수한 worker는 이전 세대의 revision을 이어받지 않고 자기 token으로 새 revision을 만든다.
+- 버려진 `building` revision을 `failed`·`cancelled`로 닫는 정리는 lease 없이도 된다.
+
+트리거는 job 행을 `FOR SHARE`로 읽어 claim과 늦은 쓰기가 엇갈리지 않게 한다. job 참조 FK는
+commit 시점에 검사한다. 논문 삭제의 연쇄 삭제에서 지워지는 순서에 기대지 않기 위해서다.
+
+## 게시와 작업 완료
+
+`publish`는 publication 생성, active pointer 교체, job의 `succeeded` 전환을 한 transaction으로
+처리한다. 게시만 되고 작업이 `running`으로 남는 구간이 없으므로, 게시 직후 worker가 죽어도 그
+작업이 다시 claim되어 번역 비용이 중복되지 않는다. worker는 게시 뒤 `succeed`를 따로 부르지 않는다.
+
+한 job은 publication을 하나만 만든다(`(owner_user_id, source_job_id)` unique). 게시 응답을 잃고
+같은 사용자·revision 집합·job·lease token·정책으로 다시 요청하면 기존 publication을 그대로 돌려준다.
+하나라도 다르면 not-found로 처리한다.
+
 ## 확정 뒤 불변성
 
 `building`을 벗어난 파싱·번역 revision과 embedding set은 다시 수정할 수 없다. chunk와 번역 행은
@@ -66,12 +92,13 @@ publication, context, 근거, 작업이 함께 지워진다. 참조 중인 revis
 ## 실제 PostgreSQL 검증
 
 `tests/integration/test_remote_processing_postgres.py`는 `SOLO_TEST_POSTGRES_DSN`이 있을 때 임시
-스키마에 서버 마이그레이션 전체를 적용하고 교차 사용자 연결, 늦은 worker, 누락 목록, 확정 뒤
-쓰기, 논문 삭제를 확인한다. CI의 `python` job이 일회용 PostgreSQL 16으로 실행한다.
+스키마에 서버 마이그레이션 전체를 적용하고 교차 사용자 연결, 늦은 worker, 회수 뒤 이전 세대의
+쓰기, 게시 직후 worker 종료, 누락 목록, 확정 뒤 쓰기, 논문 삭제를 확인한다. CI의 `python` job이 일회용 PostgreSQL 16으로 실행한다.
 
 ## 운영 적용 범위
 
 `0014_remote_processing_schema.sql`은 새 테이블만 추가하고, `0016_remote_processing_integrity.sql`은
-그 테이블에 삭제 경로 FK와 불변성 트리거를 더한다. 기존 동기화·메모·PDF 테이블을
+그 테이블에 삭제 경로 FK와 불변성 트리거를, `0017_remote_processing_generation.sql`은 실행 세대
+컬럼과 lease 확인 트리거를 더한다. 기존 동기화·메모·PDF 테이블을
 변경하지 않는다. 운영 DB 적용은 백업·승인 뒤 서버 migration 절차를 따른다. 이번 변경은
 운영 DB에 자동 적용하거나 원격 처리를 공개하지 않는다.
