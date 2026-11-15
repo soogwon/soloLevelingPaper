@@ -1,5 +1,6 @@
 """네트워크 발급 없이 #388 PKCE 검증기의 로컬 경계를 확인한다."""
 
+import base64
 import importlib.util
 import json
 from pathlib import Path
@@ -159,3 +160,54 @@ def test_network_error_detail_is_not_printed(monkeypatch, capsys):
     monkeypatch.setattr(verifier, "_main", failed)
     assert verifier.main() == 5
     assert "private-token-and-body" not in capsys.readouterr().out
+
+
+def _jwt(payload):
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+    return f"header.{encoded}.signature"
+
+
+def test_expiry_wait_uses_exp_without_exposing_token():
+    assert verifier._expiry_wait_seconds(_jwt({"exp": 110}), now=100, max_wait=20) == 12
+
+
+def test_expiry_wait_rejects_missing_or_unbounded_expiry():
+    with pytest.raises(ValueError, match="token_expiry_unavailable"):
+        verifier._expiry_wait_seconds(_jwt({}), now=100, max_wait=20)
+    with pytest.raises(ValueError, match="token_expiry_wait_too_long"):
+        verifier._expiry_wait_seconds(_jwt({"exp": 500}), now=100, max_wait=20)
+
+
+@pytest.mark.parametrize('exp', [float('nan'),float('inf'),float('-inf'),True])
+def test_expiry_rejects_nonfinite_or_boolean_exp(exp):
+    with pytest.raises(ValueError,match='token_expiry_unavailable'):
+        verifier._expiry_wait_seconds(_jwt({'exp':exp}),now=100,max_wait=20)
+
+
+def test_expiry_cannot_succeed_when_initial_request_is_denied(monkeypatch,capsys):
+    import sys
+    arrange_main(monkeypatch,[response(401)])
+    monkeypatch.setattr(sys,'argv',sys.argv+['--verify-expiry'])
+    monkeypatch.setattr(verifier.time,'sleep',lambda _:pytest.fail('실패한 사전 검증 뒤 기다리면 안 됨'))
+    assert verifier.main()==4
+    assert 'pre_expiry_checks_failed' in capsys.readouterr().out
+
+
+def test_expiry_checks_same_token_after_successful_initial_checks(monkeypatch,capsys):
+    import sys
+    arrange_main(monkeypatch,successful_replies()+[response(401)])
+    monkeypatch.setattr(sys,'argv',sys.argv+['--verify-expiry'])
+    token=_jwt({'exp':110})
+    monkeypatch.setattr(verifier.requests,'post',lambda *a,**kw:response(payload={'access_token':token}))
+    monkeypatch.setattr(verifier.time,'time',lambda:100)
+    waits=[]
+    monkeypatch.setattr(verifier.time,'sleep',waits.append)
+    original=verifier._rpc
+    seen=[]
+    def rpc(value,*args,**kwargs):
+        seen.append(value)
+        return original(value,*args,**kwargs)
+    monkeypatch.setattr(verifier,'_rpc',rpc)
+    assert verifier.main()==0 and waits==[12]
+    assert set(seen)=={token} and len(seen)==6
+    assert token not in capsys.readouterr().out
