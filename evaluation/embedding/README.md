@@ -166,3 +166,17 @@ python scripts/capture_pytorch_embeddings.py --model-dir <로컬 snapshot 경로
 - 원시 벡터·캡처는 runtime에만 둔다. 결과 문서에는 본문·개인 경로·벡터를 복사하지 않는다.
 - 필수 근거 라벨은 계속 draft이다. B의 점검을 사람 승인으로 대체하지 않으며 ONNX 실측·공동 허용값
   확정·원격 set 연결은 이번 캡처 실행에 포함하지 않는다.
+
+## ONNX 후보 캡처
+
+ONNX 파일은 별도 export 검토에서 만든 고정 로컬 산출물만 받는다. 캡처 명령은 다운로드나 자동 export를
+허용하지 않으며 `onnx/` 아래 파일의 SHA-256을 runtime 지문에 포함한다. CPUExecutionProvider,
+float32, 동일 tokenizer·pooling·L2·max length·batch·thread 설정을 사용한다.
+
+```powershell
+python scripts/capture_onnx_embeddings.py --model-dir <동일 snapshot 경로> --file-name onnx/model.onnx --output runtime/onnx-candidate
+```
+
+새 프로세스 cold/warm/RSS와 반복 벡터를 PyTorch와 같은 형식으로 저장하지만, 이 자체 비교는 후보의
+반복 가능성만 확인한다. B가 라벨과 허용값을 후보 채점 전에 확정한 뒤 `compare_embedding_captures.py`로
+PyTorch 기준선과 비교해야 하며, 통과해도 기존 context나 embedding set을 자동 교체하지 않는다.
