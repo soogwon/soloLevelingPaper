@@ -150,6 +150,8 @@ class MCPServices:
     pdf_upload: object | None = None
     resume: object | None = None
     learning_path: object | None = None
+    # 카드 확인 토큰 저장소. 없으면 프로세스마다 따로 둔다(테스트용).
+    confirmations: object | None = None
 
 
 class Focus(BaseModel):
@@ -453,10 +455,10 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
     register_detail_app(server)
     if services.reparse is not None:
         from .reparse import register_reparse
-        register_reparse(server, services.reparse)
+        register_reparse(server, services.reparse, confirmations=services.confirmations)
     if services.recovery is not None:
         from .recovery import register_recovery
-        register_recovery(server, services.recovery)
+        register_recovery(server, services.recovery, confirmations=services.confirmations)
     if services.annotations is not None:
         register_annotations(server, services.annotations)
     if services.detail is not None:
@@ -503,9 +505,9 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
     if services.quiz is not None:
         register_quiz(server, services.quiz)
     if services.server_sync is not None:
-        register_server_sync(server, services.server_sync)
+        register_server_sync(server, services.server_sync, confirmations=services.confirmations)
     if services.pdf_upload is not None:
-        register_pdf_upload(server, services.pdf_upload)
+        register_pdf_upload(server, services.pdf_upload, confirmations=services.confirmations)
     if services.resume is not None:
         register_resume(server, services.resume)
     if services.learning_path is not None:
@@ -533,7 +535,7 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
             except Exception as error:
                 raise to_tool_error(error) from None
 
-        registration_gate = RegistrationGate()
+        registration_gate = RegistrationGate(store=services.confirmations)
         register_registration_app(server)
 
         @server.tool(name='prepare_paper_registration', structured_output=True,

@@ -2,8 +2,7 @@
 
 from dataclasses import asdict
 from importlib.resources import files
-from secrets import token_urlsafe
-from time import monotonic
+from time import time
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -15,6 +14,8 @@ from solo_leveling.application.server_sync.paper_metadata import (
     SERVER_SYNC_NOTICE_VERSION, PaperSyncPreview, SyncPreviewChanged,
 )
 from solo_leveling.infrastructure.storage.server_client import ServerConnectionRequired
+
+from .confirmations import ConfirmationLimitExceeded, ConfirmationStore
 
 
 SERVER_SYNC_APP_URI = "ui://solo-leveling/server-sync.html"
@@ -38,36 +39,36 @@ class ServerSyncService(Protocol):
 
 
 class ServerSyncGate:
-    def __init__(self, *, clock=monotonic):
-        self.pending: dict[str, tuple[PaperSyncPreview, str, float]] = {}
-        self.clock = clock
+    """동기화 카드의 일회성 확인 토큰. store를 공유하면 다른 MCP 프로세스에서도 소비할 수 있다."""
+
+    kind = 'server_sync'
+
+    def __init__(self, *, clock=time, store: ConfirmationStore | None = None):
+        self.store = store if store is not None else ConfirmationStore(clock=clock)
 
     def prepare(self, preview: PaperSyncPreview, operation_id: str) -> str:
-        now = self.clock()
-        self.pending = {key: value for key, value in self.pending.items() if value[2] > now}
-        if len(self.pending) >= 128:
-            raise ToolError("SERVER_SYNC_LIMIT: 잠시 후 동기화 안내를 다시 요청하세요.")
-        token = token_urlsafe(32)
-        self.pending[token] = (preview, operation_id, now + 600)
-        return token
+        try:
+            return self.store.issue(self.kind, [preview.paper_id, operation_id], asdict(preview))
+        except ConfirmationLimitExceeded:
+            raise ToolError("SERVER_SYNC_LIMIT: 잠시 후 동기화 안내를 다시 요청하세요.") from None
 
     def consume(self, token: str, paper_id: str, operation_id: str) -> PaperSyncPreview:
-        pending = self.pending.get(token)
-        if pending is None or pending[2] <= self.clock() or (pending[0].paper_id, pending[1]) != (paper_id, operation_id):
+        accepted, payload = self.store.take(self.kind, token, [paper_id, operation_id])
+        if not accepted:
             raise ToolError("SERVER_SYNC_CONFIRMATION_REQUIRED: 동기화 안내 카드를 다시 열어 확인하세요.")
-        del self.pending[token]
-        return pending[0]
+        return PaperSyncPreview(**payload)
 
     def cancel(self, token: str) -> None:
-        self.pending.pop(token, None)
+        self.store.cancel(self.kind, token)
 
 
 def _output(result) -> dict[str, Any]:
     return asdict(result)
 
 
-def register_server_sync(server, service: ServerSyncService) -> None:
-    gate = ServerSyncGate()
+def register_server_sync(server, service: ServerSyncService, *,
+                         confirmations: ConfirmationStore | None = None) -> None:
+    gate = ServerSyncGate(store=confirmations)
     retrying: set[str] = set()
 
     @server.resource(

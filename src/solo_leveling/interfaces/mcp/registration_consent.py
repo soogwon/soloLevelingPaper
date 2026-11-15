@@ -1,10 +1,11 @@
 """등록 안내 카드에 연결된 일회성 확인 요청을 관리한다."""
 
 from importlib.resources import files
-from secrets import token_urlsafe
-from time import monotonic
+from time import time
 
 from mcp.server.fastmcp.exceptions import ToolError
+
+from .confirmations import ConfirmationLimitExceeded, ConfirmationStore
 
 REGISTRATION_APP_URI = 'ui://solo-leveling/registration.html'
 REGISTRATION_NOTICE = """외부 API 호출을 허용한 경우, 등록 후 백그라운드 번역 단계에서 논문 원문 청크와 대상 언어를 OpenAI로 보냅니다.
@@ -14,32 +15,37 @@ REGISTRATION_NOTICE = """외부 API 호출을 허용한 경우, 등록 후 백�
 
 
 class RegistrationGate:
-    def __init__(self, *, clock=monotonic):
-        self.pending = {}
-        self.clock = clock
+    """등록·재처리·복구 카드의 일회성 확인 토큰.
+
+    store를 넘기면 같은 데이터 폴더를 쓰는 모든 MCP 프로세스가 토큰을 공유한다.
+    """
+
+    def __init__(self, *, clock=time, store: ConfirmationStore | None = None,
+                 kind: str = 'registration'):
+        self.store = store if store is not None else ConfirmationStore(clock=clock)
+        self.kind = kind
+
+    @property
+    def pending(self) -> list[None]:
+        """만료되지 않은 대기 토큰 수 확인용(내용은 노출하지 않는다)."""
+        return [None] * self.store.pending_count(self.kind)
 
     def prepare(self, path: str, request_key: str) -> str:
-        now = self.clock()
-        self.pending = {key: value for key, value in self.pending.items() if value[2] > now}
-        if len(self.pending) >= 128:
-            raise ToolError('REGISTRATION_LIMIT: 잠시 후 등록 안내를 다시 요청하세요.')
-        token = token_urlsafe(32)
-        self.pending[token] = (path, request_key, now + 600)
-        return token
+        try:
+            return self.store.issue(self.kind, [path, request_key])
+        except ConfirmationLimitExceeded:
+            raise ToolError('REGISTRATION_LIMIT: 잠시 후 등록 안내를 다시 요청하세요.') from None
 
     def is_prepared(self, path: str, request_key: str) -> bool:
-        now = self.clock()
-        return any(scope == path and key == request_key and expires > now
-                   for scope, key, expires in self.pending.values())
+        return self.store.has_pending(self.kind, [path, request_key])
 
     def consume(self, token: str, path: str, request_key: str) -> None:
-        pending = self.pending.get(token)
-        if pending is None or pending[2] <= self.clock() or pending[:2] != (path, request_key):
+        accepted, _ = self.store.take(self.kind, token, [path, request_key])
+        if not accepted:
             raise ToolError('REGISTRATION_CONFIRMATION_REQUIRED: 등록 안내 카드를 다시 열어 확인하세요.')
-        del self.pending[token]
 
     def cancel(self, token: str) -> None:
-        self.pending.pop(token, None)
+        self.store.cancel(self.kind, token)
 
 
 def register_registration_app(server):
