@@ -86,7 +86,7 @@ class PostgresRemoteDeletionStore:
                                str(row["paper_id"]), int(row["attempt_count"]))
 
     def mark_cleanup_failed(self, request_id: str, error_code: str) -> None:
-        if not error_code or len(error_code) > 80:
+        if error_code != "physical_cleanup_failed":
             raise ValueError("remote_deletion_error_invalid")
         with self._pool.connection() as conn:
             row = conn.execute(
@@ -125,8 +125,8 @@ class RemoteDeletionCleanupService:
         try:
             self.backend.delete_derived(cleanup.owner_user_id, cleanup.paper_id)
             self.backend.delete_source(cleanup.owner_user_id, cleanup.paper_id)
-        except Exception as exc:
-            code = getattr(exc, "error_code", None) or "physical_cleanup_failed"
+        except Exception:
+            code = "physical_cleanup_failed"
             self.store.mark_cleanup_failed(cleanup.request_id, code)
             return {"status": "failed", "attempt_count": cleanup.attempt_count,
                     "error_code": code}

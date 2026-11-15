@@ -169,3 +169,16 @@ def test_unapproved_retention_blocks_claiming_cleanup():
 
     with pytest.raises(ValueError, match="deletion_retention_policy_unapproved"):
         RemoteDeletionCleanupService(Store(), object(), DeletionPolicy()).run_once()
+
+
+@pytest.mark.parametrize('raw', ['private-token-and-source', 'x'*100, {'secret':'private'}])
+def test_backend_error_code_cannot_enter_response_or_store(raw):
+    from unittest.mock import Mock
+    store=Mock()
+    store.claim_cleanup.return_value=DeletionCleanup('r','owner','paper',1)
+    error=RuntimeError('private-body'); error.error_code=raw
+    backend=Mock(); backend.delete_derived.side_effect=error
+    result=RemoteDeletionCleanupService(store,backend,DeletionPolicy(31,30,30)).run_once()
+    assert result['error_code']=='physical_cleanup_failed'
+    store.mark_cleanup_failed.assert_called_once_with('r','physical_cleanup_failed')
+    backend.delete_source.assert_not_called()
