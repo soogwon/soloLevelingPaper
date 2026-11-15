@@ -41,12 +41,26 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 24)]
-    assert items[-1].name == "0023_remote_deletion_tombstones.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 25)]
+    assert items[-1].name == "0024_remote_dispatch_ledger.sql"
+
+
+def test_remote_dispatch_ledger_has_explicit_limits_and_unknown_state():
+    sql = (__import__("pathlib").Path("migrations/server") / "0024_remote_dispatch_ledger.sql").read_text(encoding="utf-8")
+
+    assert "server_remote_consents" in sql
+    assert "server_dispatch_controls" in sql
+    assert "server_dispatch_budget_limits" in sql
+    assert "server_provider_attempts" in sql
+    assert "UNIQUE (owner_user_id, execution_id, dispatch_key)" in sql
+    assert "status IN ('reserved', 'observed', 'unknown')" in sql
+    assert "max_input_tokens bigint NOT NULL" in sql
+    assert "max_output_tokens bigint NOT NULL" in sql
+    assert "window_key text NOT NULL" in sql
 
 
 def test_remote_deletion_tombstone_blocks_every_processing_write_path():
-    sql = (__import__("pathlib").Path("migrations/server") / "0023_remote_deletion_tombstones.sql").read_text()
+    sql = (__import__("pathlib").Path("migrations/server") / "0023_remote_deletion_tombstones.sql").read_text(encoding="utf-8")
 
     assert "deleted_at timestamptz" in sql
     assert "server_deletion_requests" in sql
