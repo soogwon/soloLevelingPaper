@@ -35,6 +35,7 @@ MAX_PAGE_SIZE = 50
 # 공개 인터페이스가 구분할 수 있는 고정 오류 코드(AnnotationValidationError.code)
 DUPLICATE_SEGMENT = 'DUPLICATE_SEGMENT'
 QUOTE_TOTAL_TOO_LONG = 'QUOTE_TOTAL_TOO_LONG'
+QUOTE_LENGTH_MISMATCH = 'QUOTE_LENGTH_MISMATCH'
 INVALID_LIMIT = 'INVALID_LIMIT'
 INVALID_CURSOR = 'INVALID_CURSOR'
 
@@ -92,7 +93,8 @@ class SegmentInput:
         if len(self.quote_snapshot) > MAX_QUOTE_LENGTH:
             raise AnnotationValidationError('인용문 스냅샷이 너무 김')
         if self.end_offset - self.start_offset != len(self.quote_snapshot):
-            raise AnnotationValidationError('인용문 길이와 오프셋 범위가 다름')
+            raise AnnotationValidationError(
+                '인용문 길이와 오프셋 범위가 다름', QUOTE_LENGTH_MISMATCH)
         if self.target == TARGET_TRANSLATION and not self.translation_revision_id:
             raise AnnotationValidationError('번역 구간에는 번역 리비전이 필요함')
         if self.target == TARGET_ORIGINAL and self.translation_revision_id is not None:
