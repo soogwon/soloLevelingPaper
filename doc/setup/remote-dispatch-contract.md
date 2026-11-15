@@ -46,7 +46,7 @@ budget_policy_version의 고정 키다. 실제 키 이름은 코드의 CONFIG_KE
 | C | 같은 실행/키 상태 조회·동의 전달·고정 내부 오류의 wire 매핑, 부분 답변 품질과 제한 상태 분리 |
 
 포트는 B 내부 연결 초안이다. 이 객체를 만들었다는 사실은 인증·동의·예산의 증명이 아니다.
-기본 허용 원장이나 실제 네트워크 adapter는 제공하지 않는다. 기존 제공자 코드를 직접 수정하지 않는다.
+기본 허용 원장은 제공하지 않는다. 아래 선택적 transport를 주입하지 않은 기존 로컬 제공자 동작은 유지한다.
 원장 없이 프로세스 카운터로 유료 기능을 공개하지 않는다. 정책 숫자·공개 API/사유 코드는 확정하지 않는다.
 
 ## 검증 범위
@@ -55,3 +55,30 @@ budget_policy_version의 고정 키다. 실제 키 이름은 코드의 CONFIG_KE
 timeout/usage 누락/정산 실패 후 추가 전송 0회, 중복 dispatch key·다른 owner 허가 거부를 대역으로 확인한다.
 대역의 원장 상태/재시작 테스트는 실제 DB 원자성·동시성·영속 복구를 증명하지 않는다.
 제품 AI·DB·Auth0·Desktop 테스트는 하지 않는다. #396은 실제 원장·pipeline·C 연결까지 열어둔다.
+
+## 선택적 Responses transport 연결
+
+`GatedResponsesTransport`를 ClaimGenerator(생성/보완), SemanticVerifier, TranslationProvider에
+명시적으로 주입할 수 있다. 제품 factory나 원격 allowlist에는 아직 등록하지 않는다.
+기존 요약·퀴즈 adapter는 이번 연결 범위가 아니다. 질문 항목 보완도 기존 repair_claims 경로를
+사용하므로 현재 stage는 repair다. 별도 coverage 계수 정책은 실제 파이프라인 연결 시 합의한다.
+
+prepare 포트는 stage와 최종 payload 사본/해시를 받아 **영속적으로 안정적인 dispatch key와
+해당 모델의 검증된 입력 토큰 상한**을 공급해야 한다. 이 구현은 상한을 추측하거나 자동 key를
+만들지 않는다. 원장과 prepare 구현이 없으면 제품에 연결하지 않는다. payload 해시는 로컬
+변이 검사용이며, 처리 설정/동의/input hash와의 신뢰 연결은 실제 prepare/원장 adapter 책임이다.
+
+송신 payload는 동결 사본으로 model/store/max_output_tokens를 설정과 대조한다.
+authorize 뒤 redirect 없는 requests.post 1회, usage 추출, 응답 close, observe 순으로 처리한다.
+HTTP 오류/JSON 오류/timeout/usage 누락은 unknown으로 차단한다. 일부 HTTP 실패가 실제 미전송인지
+입증하는 분류는 아직 없으므로 보수적으로 예약을 유지한다. 제공자 오류 본문은 공개하지 않는다.
+성공 usage가 있는 응답은 먼저 정산하고 기존 생성/번역/의미 파서가 그대로 검증한다.
+
+원격 DispatchError는 번역 서비스의 재시도 가능한 TranslationProviderUnavailable로 바꾸지 않는다.
+unknown/예산 거부 뒤 청크 재시도·다음 청크로 유료 전송이 진행되지 않고 상위 실행 경계로 전달된다.
+실제 실행 제한 응답과 검증된 기존 일부 답변 보존은 A/C 계약 연결 시 추가 검증해야 한다.
+명시적 transport 미주입 시 기존 로컬 동작/번역 재시도는 변경하지 않는다.
+
+대역으로 생성·보완·의미 검증·번역의 gate 통과, unknown 후 전송 1회/추가 0회,
+전송 전 거부 0회, payload 변이 차단 및 기존 parser 사용을 검증한다.
+이는 영속 원장의 재시작/동시성 또는 유료 서비스 공개 증명이 아니다.

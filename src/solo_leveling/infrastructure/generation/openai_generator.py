@@ -163,8 +163,9 @@ from .repair_instructions import REPAIR_INSTRUCTIONS as _REPAIR_INSTRUCTIONS
 
 
 class OpenAIClaimGenerator:
-    def __init__(self, settings: OpenAIGenerationSettings):
+    def __init__(self, settings: OpenAIGenerationSettings, *, transport=None):
         self.settings = settings
+        self.transport = transport
 
     def generate_claims(self, question: str, evidence) -> GeneratedAnswerDraft:
         return self._generate(question, evidence)
@@ -213,13 +214,18 @@ class OpenAIClaimGenerator:
                                     if repair is not None else None, support_catalog=support_catalog)}},
             'max_output_tokens': self.settings.max_output_tokens, 'store': False,
         }
-        return parse_generated_answer(_response_text(_post_responses(self.settings, payload)),
+        return parse_generated_answer(_response_text(_post_responses(self.settings, payload,
+            transport=self.transport, dispatch_stage='repair' if repair is not None else 'generation')),
             repair_numbers={t['claim_number'] for t in repair['repair_targets']} if repair is not None else None,
             support_catalog=support_catalog)
 
 
-def _post_responses(settings: OpenAIGenerationSettings, payload: dict, *, diagnostic_stage='generation_api_call'):
+def _post_responses(settings: OpenAIGenerationSettings, payload: dict, *, diagnostic_stage='generation_api_call',
+                    transport=None, dispatch_stage='generation'):
     """Responses API를 한 번 호출하고 JSON 본문을 돌려준다."""
+    if transport is not None:
+        with stage(diagnostic_stage):
+            return transport.send(settings, payload, dispatch_stage)
     try:
         # 자동 재시도하지 않는다. 불명확한 실패 뒤 중복 과금을 피하기 위한 초기 정책이다.
         with stage(diagnostic_stage):
