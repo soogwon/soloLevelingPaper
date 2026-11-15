@@ -38,6 +38,8 @@ class ProcessingPublicationStore(Protocol):
         parse_revision_id: str,
         translation_revision_id: str,
         embedding_set_id: str,
+        source_job_id: str,
+        source_lease_token: str,
         *,
         policy: PublicationPolicy,
     ) -> ProcessingPublication: ...
@@ -61,6 +63,8 @@ class PostgresProcessingPublicationStore:
         parse_revision_id: str,
         translation_revision_id: str,
         embedding_set_id: str,
+        source_job_id: str,
+        source_lease_token: str,
         *,
         policy: PublicationPolicy,
     ) -> ProcessingPublication:
@@ -100,11 +104,17 @@ class PostgresProcessingPublicationStore:
                     AND es.server_version_id=tr.server_version_id
                     AND es.parse_revision_id=tr.parse_revision_id
                     AND es.translation_revision_id=tr.translation_revision_id
+                   JOIN server_processing_jobs j
+                     ON j.owner_user_id=v.owner_user_id
+                    AND j.paper_id=v.paper_id
+                    AND j.server_version_id=v.server_version_id
                    WHERE v.owner_user_id=%s AND v.paper_id=%s AND v.server_version_id=%s
                      AND pr.parse_revision_id=%s
                      AND tr.translation_revision_id=%s
                      AND es.embedding_set_id=%s
-                   FOR UPDATE OF v, pr, tr, es""",
+                     AND j.job_id=%s AND j.status='running' AND j.lease_token=%s
+                     AND j.lease_expires_at>CURRENT_TIMESTAMP
+                   FOR UPDATE OF v, pr, tr, es, j""",
                 (
                     owner_user_id,
                     paper_id,
@@ -112,6 +122,8 @@ class PostgresProcessingPublicationStore:
                     parse_revision_id,
                     translation_revision_id,
                     embedding_set_id,
+                    source_job_id,
+                    source_lease_token,
                 ),
             ).fetchone()
             if row is None:
@@ -122,8 +134,8 @@ class PostgresProcessingPublicationStore:
                 """INSERT INTO server_processing_publications
                        (publication_id, owner_user_id, paper_id, server_version_id,
                         parse_revision_id, translation_revision_id, embedding_set_id,
-                        publication_policy, manifest)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)""",
+                        publication_policy, manifest, source_job_id, source_lease_token)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)""",
                 (
                     publication_id,
                     owner_user_id,
@@ -134,6 +146,8 @@ class PostgresProcessingPublicationStore:
                     embedding_set_id,
                     policy,
                     json.dumps(manifest, sort_keys=True, separators=(",", ":")),
+                    source_job_id,
+                    source_lease_token,
                 ),
             )
             updated = conn.execute(
