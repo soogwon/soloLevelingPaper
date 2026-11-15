@@ -120,6 +120,13 @@ class PostgresRemoteUploadIntentStore:
 
     def mark_verified(self, owner_user_id: str, intent_id: str, final_object_key: str) -> CompletedUpload:
         with self._pool.connection() as conn:
+            conn.execute(
+                "SELECT intent_id FROM server_remote_upload_intents WHERE owner_user_id=%s AND intent_id=%s FOR UPDATE",
+                (owner_user_id, intent_id),
+            ).fetchone()
+            completed = self._completed(conn, owner_user_id, intent_id)
+            if completed is not None:
+                return completed
             row = conn.execute(
                 """UPDATE server_pdf_uploads u SET status='ready',object_key=%s,completed_at=CURRENT_TIMESTAMP,
                           failure_reason=NULL,updated_at=CURRENT_TIMESTAMP
@@ -141,6 +148,28 @@ class PostgresRemoteUploadIntentStore:
                                row["file_name"], int(row["file_size"]), row["content_type"], row["sha256_hex"],
                                row["object_key"], row["completed_at"])
 
+    def get_completed(self, owner_user_id: str, intent_id: str) -> CompletedUpload | None:
+        with self._pool.connection() as conn:
+            return self._completed(conn, owner_user_id, intent_id)
+
+    @staticmethod
+    def _completed(conn, owner_user_id, intent_id):
+        row = conn.execute(
+            """SELECT u.upload_id,u.paper_id,u.server_version_id,u.file_name,u.file_size,
+                      u.content_type,u.sha256_hex,u.object_key,u.completed_at
+               FROM server_remote_upload_intents i JOIN server_pdf_uploads u
+                 ON u.owner_user_id=i.owner_user_id AND u.paper_id=i.paper_id
+                AND u.server_version_id=i.server_version_id AND u.upload_id=i.upload_id
+               WHERE i.owner_user_id=%s AND i.intent_id=%s
+                 AND i.status='verified' AND u.status='ready' AND u.source_kind='remote'""",
+            (owner_user_id, intent_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return CompletedUpload(str(row["upload_id"]), str(row["paper_id"]), row["server_version_id"],
+                               row["file_name"], int(row["file_size"]), row["content_type"], row["sha256_hex"],
+                               row["object_key"], row["completed_at"])
+
 
 class RemoteUploadVerificationService:
     def __init__(self, store, object_storage):
@@ -153,16 +182,38 @@ class RemoteUploadVerificationService:
         return reservation, signed
 
     def complete(self, owner_user_id, intent_id):
+        completed = self.store.get_completed(owner_user_id, intent_id)
+        if completed is not None:
+            return completed
+        try:
+            return self._complete_pending(owner_user_id, intent_id)
+        except Exception:
+            # 동시 완료 또는 커밋 응답 유실은 동일 소유자의 확정 결과로만 복구한다.
+            completed = self.store.get_completed(owner_user_id, intent_id)
+            if completed is not None:
+                return completed
+            raise
+
+    def _delete_best_effort(self, object_key):
+        try:
+            self.object_storage.delete_upload(object_key)
+        except Exception:
+            # 확정 결과를 취소하지 않는다. 임시 객체는 별도 수명주기 정리 대상이다.
+            pass
+
+    def _complete_pending(self, owner_user_id, intent_id):
         _, pending = self.store.reserve_upload(owner_user_id, intent_id)
         actual = self.object_storage.inspect_upload(pending)
         if actual is None or _object_mismatch(pending, actual):
             raise ValueError("remote_upload_object_invalid")
         final = self.object_storage.finalize_upload(pending)
         if _object_mismatch(pending, final):
-            self.object_storage.delete_upload(final.object_key)
+            self._delete_best_effort(final.object_key)
             raise ValueError("remote_upload_object_invalid")
         completed = self.store.mark_verified(owner_user_id, intent_id, final.object_key)
-        self.object_storage.delete_upload(pending.object_key)
+        if completed.object_key != final.object_key:
+            self._delete_best_effort(final.object_key)
+        self._delete_best_effort(pending.object_key)
         return completed
 
 
