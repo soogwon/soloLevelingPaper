@@ -2,8 +2,8 @@
 
 from dataclasses import asdict
 from importlib.resources import files
-from secrets import token_urlsafe
-from time import monotonic
+from pathlib import Path
+from time import time
 from typing import Protocol
 
 import anyio
@@ -12,6 +12,8 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from solo_leveling.application.server_sync.pdf_upload import PdfUploadPreview, PdfUploadStageError
 from solo_leveling.infrastructure.storage.server_client import ServerConnectionRequired, ServerResponseInvalid
+
+from .confirmations import ConfirmationLimitExceeded, ConfirmationStore
 
 
 PDF_UPLOAD_APP_URI = "ui://solo-leveling/pdf-upload.html"
@@ -28,41 +30,47 @@ class PdfUploadService(Protocol):
     def status(self, expected: PdfUploadPreview) -> dict: ...
 
 
+def _preview_payload(preview: PdfUploadPreview) -> dict:
+    return {**asdict(preview), "source": str(preview.source)}
+
+
+def _preview_from(payload: dict) -> PdfUploadPreview:
+    return PdfUploadPreview(**{**payload, "source": Path(payload["source"])})
+
+
 class PdfUploadGate:
-    def __init__(self, *, clock=monotonic):
-        self.pending: dict[str, tuple[PdfUploadPreview, float]] = {}
-        self.confirmed: dict[str, tuple[PdfUploadPreview, float]] = {}
-        self.clock = clock
+    """PDF 업로드 카드의 확인 토큰. 승인 뒤에는 상태 조회용으로 만료 때까지 남긴다.
+
+    store를 공유하면 카드 호출이 다른 MCP 프로세스로 가도 같은 토큰을 확인할 수 있다.
+    """
+
+    kind = "pdf_upload"
+
+    def __init__(self, *, clock=time, store: ConfirmationStore | None = None):
+        self.store = store if store is not None else ConfirmationStore(clock=clock)
 
     def prepare(self, preview: PdfUploadPreview) -> str:
-        now = self.clock()
-        self.pending = {key: value for key, value in self.pending.items() if value[1] > now}
-        self.confirmed = {key: value for key, value in self.confirmed.items() if value[1] > now}
-        if len(self.pending) >= 128:
-            raise ToolError("PDF_UPLOAD_LIMIT: 잠시 후 업로드 안내를 다시 요청하세요.")
-        token = token_urlsafe(32)
-        self.pending[token] = (preview, now + 600)
-        return token
+        try:
+            return self.store.issue(self.kind, [preview.paper_id, preview.version_id],
+                                    _preview_payload(preview))
+        except ConfirmationLimitExceeded:
+            raise ToolError("PDF_UPLOAD_LIMIT: 잠시 후 업로드 안내를 다시 요청하세요.") from None
 
     def consume(self, token: str, paper_id: str, version_id: str) -> PdfUploadPreview:
-        pending = self.pending.get(token)
-        if (pending is None or pending[1] <= self.clock()
-                or (pending[0].paper_id, pending[0].version_id) != (paper_id, version_id)):
+        accepted, payload = self.store.take(self.kind, token, [paper_id, version_id],
+                                            keep_confirmed=True)
+        if not accepted:
             raise ToolError("PDF_UPLOAD_CONFIRMATION_REQUIRED: PDF 업로드 안내 카드를 다시 확인하세요.")
-        del self.pending[token]
-        self.confirmed[token] = pending
-        return pending[0]
+        return _preview_from(payload)
 
     def lookup_confirmed(self, token: str, paper_id: str, version_id: str) -> PdfUploadPreview:
-        confirmed = self.confirmed.get(token)
-        if (confirmed is None or confirmed[1] <= self.clock()
-                or (confirmed[0].paper_id, confirmed[0].version_id) != (paper_id, version_id)):
+        accepted, payload = self.store.lookup_confirmed(self.kind, token, [paper_id, version_id])
+        if not accepted:
             raise ToolError("PDF_UPLOAD_CONFIRMATION_REQUIRED: PDF 업로드 안내 카드를 다시 확인하세요.")
-        return confirmed[0]
+        return _preview_from(payload)
 
     def cancel(self, token: str) -> None:
-        self.pending.pop(token, None)
-        self.confirmed.pop(token, None)
+        self.store.cancel(self.kind, token)
 
 
 def _pdf_upload_stage_tool_error(exc: PdfUploadStageError) -> ToolError:
@@ -102,8 +110,9 @@ def _pdf_upload_business_result(error: ToolError) -> CallToolResult:
     )
 
 
-def register_pdf_upload(server, service: PdfUploadService) -> None:
-    gate = PdfUploadGate()
+def register_pdf_upload(server, service: PdfUploadService, *,
+                        confirmations: ConfirmationStore | None = None) -> None:
+    gate = PdfUploadGate(store=confirmations)
 
     @server.resource(
         PDF_UPLOAD_APP_URI, name="pdf-upload", title="PDF 서버 업로드 확인",

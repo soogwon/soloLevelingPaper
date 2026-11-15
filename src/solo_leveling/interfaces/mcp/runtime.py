@@ -32,6 +32,7 @@ from solo_leveling.application.reading_state import ReadingStateService
 from solo_leveling.application.quiz.service import QuizService
 from solo_leveling.application.server_sync import PaperMetadataSyncService
 from solo_leveling.infrastructure.storage.server_client import AuthenticatedServerClient
+from .confirmations import ConfirmationStore
 from .question_card import QuestionKeys
 from .server import MCPServices, create_server
 from .quiz_tools import QuizContractAdapter, StoredQuizService
@@ -243,6 +244,8 @@ def build_runtime_server(values: Mapping[str, str]):
             pdf_upload=gate.wrap(pdf_upload) if pdf_upload is not None else None,
             resume=gate.wrap(resume) if resume is not None else None,
             learning_path=gate.wrap(learning_path) if learning_path is not None else None,
+            # Desktop이 같은 서버를 여러 프로세스로 띄워도 카드 확인 토큰을 공유한다.
+            confirmations=ConfirmationStore(paths.data_root.resolve() / 'card-confirmations.sqlite3'),
         ), lifespan=lifespan)
         track_lifetime(lifetime)
         return server

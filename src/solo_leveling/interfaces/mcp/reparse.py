@@ -125,8 +125,8 @@ def _public_errors(function):
     return wrapped
 
 
-def register_reparse(server, manager):
-    gate = RegistrationGate()
+def register_reparse(server, manager, *, confirmations=None):
+    gate = RegistrationGate(store=confirmations, kind='paper_reparse')
     app_only = {'ui': {'visibility': ['app']}}
 
     @server.resource(URI, mime_type='text/html;profile=mcp-app',

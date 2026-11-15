@@ -112,8 +112,8 @@ class RecoveryManager:
             return self.condition.wait_for(lambda: not self.pending, timeout)
 
 
-def register_recovery(server, manager):
-    gate = RegistrationGate()
+def register_recovery(server, manager, *, confirmations=None):
+    gate = RegistrationGate(store=confirmations, kind='translation_recovery')
 
     @server.resource(RECOVERY_URI, name='translation-recovery', title='번역 복구 전 확인',
         mime_type='text/html;profile=mcp-app',
