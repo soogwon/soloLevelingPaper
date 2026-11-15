@@ -21,6 +21,12 @@ class RemoteUploadIntent:
     status: str
 
 
+@dataclass(frozen=True)
+class ExpiredRemoteUpload:
+    intent_id: str
+    object_key: str
+
+
 def _payload_hash(file_name, file_size, content_type, sha256_hex):
     value = json.dumps([file_name, file_size, content_type, sha256_hex], ensure_ascii=False, separators=(",", ":"))
     return sha256(value.encode()).hexdigest()
@@ -164,6 +170,39 @@ class PostgresRemoteUploadIntentStore:
         with self._pool.connection() as conn:
             return self._completed(conn, owner_user_id, intent_id)
 
+    def claim_expired_objects(self, *, limit: int = 100) -> tuple[ExpiredRemoteUpload, ...]:
+        """만료 의도를 고정하고 삭제 가능한 임시 객체만 반환한다.
+
+        객체 삭제가 실패해도 다음 실행에서 같은 key를 다시 반환한다. verified/ready 객체는
+        쿼리에서 제외하므로 수명주기 정리가 게시된 PDF를 지우지 않는다.
+        """
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("remote_upload_cleanup_limit_invalid")
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                """WITH candidates AS (
+                       SELECT i.intent_id,i.owner_user_id
+                       FROM server_remote_upload_intents i
+                       WHERE i.status IN ('created','uploading','expired')
+                         AND i.expires_at<=CURRENT_TIMESTAMP
+                       ORDER BY i.expires_at,i.intent_id
+                       LIMIT %s FOR UPDATE SKIP LOCKED
+                   ), expired AS (
+                       UPDATE server_remote_upload_intents i
+                       SET status='expired',updated_at=CURRENT_TIMESTAMP
+                       FROM candidates c
+                       WHERE i.intent_id=c.intent_id AND i.owner_user_id=c.owner_user_id
+                       RETURNING i.intent_id,i.owner_user_id,i.upload_id
+                   )
+                   SELECT e.intent_id,u.object_key
+                   FROM expired e JOIN server_pdf_uploads u
+                     ON u.owner_user_id=e.owner_user_id AND u.upload_id=e.upload_id
+                   WHERE u.status='pending' AND u.source_kind='remote'
+                     AND u.object_key LIKE 'private/tmp/%'""",
+                (limit,),
+            ).fetchall()
+        return tuple(ExpiredRemoteUpload(str(row["intent_id"]), row["object_key"]) for row in rows)
+
     @staticmethod
     def _completed(conn, owner_user_id, intent_id):
         row = conn.execute(
@@ -229,6 +268,18 @@ class RemoteUploadVerificationService:
             self._delete_best_effort(final.object_key)
         self._delete_best_effort(pending.object_key)
         return completed
+
+    def cleanup_expired(self, *, limit: int = 100) -> dict[str, object]:
+        """만료 임시 객체를 멱등 삭제하고 실패 key 자체는 노출하지 않는다."""
+        expired = self.store.claim_expired_objects(limit=limit)
+        deleted, failed = 0, 0
+        for upload in expired:
+            try:
+                self.object_storage.delete_upload(upload.object_key)
+                deleted += 1
+            except Exception:
+                failed += 1
+        return {"claimed": len(expired), "deleted": deleted, "failed": failed}
 
 
 def _object_mismatch(expected, actual):
