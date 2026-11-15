@@ -34,6 +34,7 @@ def test_real_search_source_and_atomic_save(pool,db,stores,expire):
         generator.generate_claims=generate
     service=create_persisted_remote_answer_service(pool,lambda ctx:resolver.resolve('alice',ctx),
         NS(embed=lambda q,b:QueryEmbedding((1.,0.),b.model_fingerprint)),generator,CONFIG)
+    service._preparation.prepare('합성 질문',prepared.binding.context_id,filters=FILTERS,top_k=1)
     if expire:
         with pytest.raises(RemoteAnswerExecutionError,match='REMOTE_ANSWER_SAVE_FAILED'):
             service.execute(intent,'합성 질문',prepared.binding.context_id,filters=FILTERS,top_k=1)
