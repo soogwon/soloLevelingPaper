@@ -143,6 +143,8 @@ class PaperListItem:
     last_studied_at: datetime | None = None
     reading_status: str = "unknown"
     collection_id: str | None = None
+    reading_basis_version_id: str | None = None
+    reading_state_revision: int = 0
 
 
 @dataclass(frozen=True)
@@ -189,6 +191,10 @@ class PaperStoreUnavailable(Exception):
 
 
 class PaperStore(Protocol):
+    def get_reading_state(self, owner_user_id: str, paper_id: str, source_instance_id: str): ...
+
+    def put_reading_state(self, owner_user_id: str, paper_id: str, request: dict): ...
+
     def register(self, owner_user_id: str, key: str, metadata: PaperMetadata) -> PaperRegistration: ...
 
     def list_papers(self, owner_user_id: str, *, query: str | None,
@@ -216,6 +222,12 @@ class PaperStore(Protocol):
 
 
 class UnavailablePaperStore:
+    def get_reading_state(self, owner_user_id: str, paper_id: str, source_instance_id: str):
+        raise PaperStoreUnavailable
+
+    def put_reading_state(self, owner_user_id: str, paper_id: str, request: dict):
+        raise PaperStoreUnavailable
+
     def register(self, owner_user_id: str, key: str, metadata: PaperMetadata) -> PaperRegistration:
         raise PaperStoreUnavailable
 
@@ -313,6 +325,14 @@ class PostgresPaperStore:
             )
             return result
 
+    def get_reading_state(self, owner_user_id, paper_id, source_instance_id):
+        from .reading_states import get_state
+        return get_state(self._pool, owner_user_id, paper_id, source_instance_id)
+
+    def put_reading_state(self, owner_user_id, paper_id, request):
+        from .reading_states import put_state
+        return put_state(self._pool, owner_user_id, paper_id, request)
+
     def list_papers(self, owner_user_id: str, *, query: str | None,
                     reading_status: str | None, page: int, limit: int,
                     collection_id: str | None = None, unassigned: bool = False) -> PaperPage:
@@ -323,7 +343,7 @@ class PostgresPaperStore:
             filters.append("p.title ILIKE %s ESCAPE '\\'")
             params.append(f"%{_escape_like(query)}%")
         if reading_status is not None:
-            filters.append("COALESCE(r.reading_status, 'unknown') = %s")
+            filters.append("COALESCE(rs.status, 'unknown') = %s")
             params.append(reading_status)
         if collection_id is not None:
             filters.append("cp.collection_id = %s")
@@ -337,7 +357,8 @@ class PostgresPaperStore:
             FROM server_learning_records
             WHERE owner_user_id=p.owner_user_id AND paper_id=p.paper_id
             ORDER BY last_studied_at DESC NULLS LAST, learning_record_id ASC LIMIT 1
-        ) r ON TRUE LEFT JOIN server_collection_papers cp
+        ) r ON TRUE LEFT JOIN server_paper_reading_states rs ON rs.paper_id=p.paper_id
+          LEFT JOIN server_collection_papers cp
           ON cp.owner_user_id=p.owner_user_id AND cp.paper_id=p.paper_id"""
         with _connection(self._pool) as conn:
             # 등록과 목록 조회가 겹쳐도 전체 건수와 항목을 같은 시점에서 읽는다.
@@ -351,7 +372,8 @@ class PostgresPaperStore:
             rows = conn.execute(
                 f"""SELECT p.paper_id, p.title, p.authors, p.publication_year,
                            r.learning_record_id, r.selected_version_id, r.file_name,
-                           r.last_position, r.last_studied_at, r.reading_status, cp.collection_id
+                           r.last_position, r.last_studied_at, rs.status AS reading_status,
+                           rs.basis_version_id AS reading_basis_version_id, rs.revision AS reading_state_revision, cp.collection_id
                     FROM server_papers p {latest} WHERE {where}
                     ORDER BY r.last_studied_at DESC NULLS LAST, p.paper_id ASC LIMIT %s OFFSET %s""",
                 (*params, limit, (page - 1) * limit),
@@ -366,6 +388,8 @@ class PostgresPaperStore:
             selected_version_id=row.get("selected_version_id"), last_position=row.get("last_position"),
             last_studied_at=row.get("last_studied_at"), reading_status=row.get("reading_status") or "unknown",
             collection_id=(str(row.get("collection_id")) if row.get("collection_id") else None),
+            reading_basis_version_id=row.get("reading_basis_version_id"),
+            reading_state_revision=row.get("reading_state_revision") or 0,
         ) for row in rows)
         return PaperPage(items, page, limit, total, total_pages)
 
@@ -630,8 +654,11 @@ class PostgresPaperStore:
         with _connection(self._pool) as conn:
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             paper = conn.execute(
-                """SELECT paper_id, title, authors, publication_year FROM server_papers
-                   WHERE paper_id=%s AND owner_user_id=%s""", (paper_id, owner_user_id),
+                """SELECT p.paper_id, p.title, p.authors, p.publication_year,
+                          s.status AS reading_status, s.basis_version_id AS reading_basis_version_id,
+                          s.revision AS reading_state_revision
+                   FROM server_papers p LEFT JOIN server_paper_reading_states s ON s.paper_id=p.paper_id
+                   WHERE p.paper_id=%s AND p.owner_user_id=%s""", (paper_id, owner_user_id),
             ).fetchone()
             if paper is None:
                 raise PaperNotFound
@@ -677,7 +704,9 @@ class PostgresPaperStore:
             selected_version_id=record["selected_version_id"] if record else None,
             last_position=record["last_position"] if record else None,
             last_studied_at=record["last_studied_at"] if record else None,
-            reading_status=record["reading_status"] if record else "unknown",
+            reading_status=paper.get("reading_status") or "unknown",
+            reading_basis_version_id=paper.get("reading_basis_version_id"),
+            reading_state_revision=paper.get("reading_state_revision") or 0,
         )
         stored_summary = (StoredSummary(
             str(summary["summary_id"]), summary["original_created_at"], summary["author_type"],

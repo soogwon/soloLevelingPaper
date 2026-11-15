@@ -149,7 +149,17 @@ def test_retry_with_real_outbox_preserves_consent_and_idempotency(tmp_path, chan
     db = str(tmp_path / 'sync.sqlite')
     init_db(db)
     insert_paper(db, Paper('paper-1', 'Paper', created_at='2026-11-01T10:00:00+09:00'))
-    client = Client([ConnectionError('offline'), Response()])
+    class StateClient(Client):
+        def request(self, method, path, **kwargs):
+            if path.endswith('/reading-state'):
+                self.calls.append((method, path, kwargs))
+                data = kwargs['json']
+                return Response(200, dict(paper_id='10000000-0000-0000-0000-000000000001',
+                    status=data['status'], basis_version_id=data['basis_version_id'],
+                    source_revision=data['source_revision'], revision=data['expected_revision']+1,
+                    updated_at='2026-11-15T00:00:00Z'))
+            return super().request(method, path, **kwargs)
+    client = StateClient([ConnectionError('offline'), Response()])
     service = PaperMetadataSyncService(db, client)
     operation = service.grant_and_queue('paper-1', SERVER_SYNC_NOTICE_VERSION).operation_id
     assert service.sync(operation).status == 'retryable_failure'
@@ -161,11 +171,11 @@ def test_retry_with_real_outbox_preserves_consent_and_idempotency(tmp_path, chan
     restarted = make_server(PaperMetadataSyncService(db, client))
     result = asyncio.run(restarted.call_tool('retry_paper_server_sync', {'operation_id': operation}))
     assert result[1]['status'] == expected
-    assert len(client.calls) == (2 if change == 'none' else 1)
-    assert all(call[2]['headers']['Idempotency-Key'] == operation for call in client.calls)
+    assert len(client.calls) == (3 if change == 'none' else 1)
+    assert all(call[2]['headers']['Idempotency-Key'] == operation for call in client.calls if call[0] == 'POST')
     with get_connection(db) as conn:
         assert conn.execute('SELECT count(*) FROM server_sync_consents').fetchone()[0] == 1
-        assert conn.execute('SELECT count(*) FROM sync_outbox').fetchone()[0] == 1
+        assert conn.execute('SELECT count(*) FROM sync_outbox').fetchone()[0] == 2
 
 
 def test_concurrent_retry_runs_once_and_can_retry_after_error():

@@ -79,7 +79,8 @@ def test_stdio_server_lists_tools(tmp_path):
                     reading = await session.call_tool('get_reading_state', {'paper_id':'p'})
                     assert not reading.isError and reading.structuredContent['status'] == 'not_started'
                     completed = await session.call_tool('set_reading_completed',
-                        {'paper_id':'p','completed':True,'expected_revision':reading.structuredContent['revision']})
+                        {'paper_id':'p','completed':True,'expected_revision':reading.structuredContent['revision'],
+                         'basis_version_id':found['version_id']})
                     assert not completed.isError and completed.structuredContent['status'] == 'completed'
                     failure = await session.call_tool('get_evidence',
                         {'context_id': '00000000-0000-4000-8000-000000000000', 'evidence_ids': ['missing']})
