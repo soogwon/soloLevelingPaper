@@ -39,6 +39,7 @@ def test_backend_removes_children_and_objects_but_preserves_tombstone(db, stores
                    'ready',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)""",
         (upload, owner, paper, "a" * 64, object_key),
     )
+    db("UPDATE server_papers SET title='합성 제목',authors='[\"합성 저자\"]',publication_year=2026 WHERE paper_id=%s", (paper,))
     request = PostgresRemoteDeletionStore(pool).request(owner, paper, new_id())
     objects = Objects()
     backend = PostgresObjectDeletionBackend(pool, objects)
@@ -51,6 +52,8 @@ def test_backend_removes_children_and_objects_but_preserves_tombstone(db, stores
     backend.delete_derived(owner, paper)
     backend.delete_source(owner, paper)
     assert objects.deleted == [object_key]
+    assert db('SELECT title,authors,publication_year FROM server_papers WHERE paper_id=%s', (paper,))[0] == {
+        'title': None, 'authors': None, 'publication_year': None}
     assert db("SELECT count(*) AS n FROM server_pdf_uploads WHERE paper_id=%s", (paper,))[0]["n"] == 0
     assert db("SELECT count(*) AS n FROM server_processing_versions WHERE paper_id=%s", (paper,))[0]["n"] == 0
     assert db("SELECT deleted_at IS NOT NULL AS deleted FROM server_papers WHERE paper_id=%s", (paper,))[0]["deleted"]

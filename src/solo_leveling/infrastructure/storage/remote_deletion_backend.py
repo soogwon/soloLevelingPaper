@@ -85,6 +85,12 @@ class PostgresObjectDeletionBackend:
                 "DELETE FROM server_processing_versions WHERE owner_user_id=%s AND paper_id=%s",
                 (owner_user_id, paper_id),
             )
+            # 재생성 방지 식별자는 남기되 논문 표시 정보는 물리 정리한다.
+            conn.execute(
+                """UPDATE server_papers SET title=NULL,authors=NULL,publication_year=NULL,
+                          updated_at=CURRENT_TIMESTAMP WHERE owner_user_id=%s AND paper_id=%s""",
+                (owner_user_id, paper_id),
+            )
         return DeletionBackendResult(len(keys))
 
     @staticmethod
