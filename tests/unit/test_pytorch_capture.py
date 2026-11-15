@@ -118,7 +118,7 @@ def test_timeout_kills_only_this_worker_tree(monkeypatch):
     child = SimpleNamespace(kill=lambda: killed.append('child'))
     process = SimpleNamespace(children=lambda **_: [child])
     monkeypatch.setitem(sys.modules, 'psutil', SimpleNamespace(Process=lambda _: process,
-                                                             NoSuchProcess=ProcessLookupError))
+                                                             NoSuchProcess=ProcessLookupError, Error=ProcessLookupError))
     ticks = iter([0, 2])
     monkeypatch.setattr(runner.time, 'monotonic', lambda: next(ticks))
     class Process:
@@ -131,3 +131,24 @@ def test_timeout_kills_only_this_worker_tree(monkeypatch):
     with pytest.raises(EvaluationError, match='CAPTURE_TIMEOUT'):
         runner.sample_worker([], {}, timeout=1, popen=lambda *a, **k: Process())
     assert killed == ['child', 'worker', 'wait']
+
+
+@pytest.mark.parametrize('failure', [PermissionError, ProcessLookupError])
+def test_timeout_reaps_worker_even_when_child_lookup_fails(monkeypatch, failure):
+    import sys
+    reaped = []
+    def lookup(_):
+        raise failure('민감한 프로세스 정보')
+    monkeypatch.setitem(sys.modules, 'psutil', SimpleNamespace(Process=lookup, Error=OSError))
+    ticks = iter([0, 2])
+    monkeypatch.setattr(runner.time, 'monotonic', lambda: next(ticks))
+    class Process:
+        pid = 99
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def poll(self): return None
+        def kill(self): reaped.append('kill')
+        def wait(self, **kwargs): reaped.append('wait')
+    with pytest.raises(EvaluationError, match='CAPTURE_TIMEOUT'):
+        runner.sample_worker([], {}, timeout=1, popen=lambda *a, **k: Process())
+    assert reaped == ['kill', 'wait']

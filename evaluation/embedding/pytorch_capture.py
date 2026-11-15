@@ -112,14 +112,19 @@ def sample_worker(command, env, *, timeout, popen=subprocess.Popen, rss_reader=N
         finally:
             if proc.poll() is None:
                 # 이 명령이 만든 실행만 종료한다. 다른 모델·MCP 프로세스에는 손대지 않는다.
-                process = psutil.Process(proc.pid)
-                for child in process.children(recursive=True):
-                    try:
-                        child.kill()
-                    except psutil.NoSuchProcess:
-                        pass
-                proc.kill()
-                proc.wait(timeout=10)
+                try:
+                    process = psutil.Process(proc.pid)
+                    for child in process.children(recursive=True):
+                        try:
+                            child.kill()
+                        except psutil.Error:
+                            pass
+                except psutil.Error:
+                    # 자식 조회 권한 오류나 종료 경합에도 직접 만든 worker는 반드시 회수한다.
+                    pass
+                finally:
+                    proc.kill()
+                    proc.wait(timeout=10)
 
 
 def capture(dataset, model_dir, output_dir, *, repeats=3, warm_repeats=3, max_length=128,
