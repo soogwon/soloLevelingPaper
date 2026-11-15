@@ -43,6 +43,9 @@ migration이나 publication의 불변 revision 연결을 다시 바꾸지 않는
 
 실패·취소된 revision이나 개수가 맞지 않는 집합은 게시되지 않는다. 기존 context와 evidence는
 생성 당시 publication을 계속 참조하므로 재처리 뒤에도 자동으로 새 revision으로 이동하지 않는다.
+게시 작업은 현재 유효한 job lease token을 함께 제출해야 한다. 저장소는 job을 같은 transaction에서
+잠그고 `running` 상태, token 일치, 만료 전임을 확인한다. 임대가 끝난 worker는 새 revision을
+적재했더라도 active publication을 바꿀 수 없다.
 
 ## 운영 적용 범위
 

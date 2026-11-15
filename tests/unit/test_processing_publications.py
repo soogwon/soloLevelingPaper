@@ -25,7 +25,7 @@ class Connection:
 
     def execute(self, sql, params=()):
         self.calls.append((sql, params))
-        if "FOR UPDATE OF v, pr, tr, es" in sql:
+        if "FOR UPDATE OF v, pr, tr, es, j" in sql:
             return Result(self.revision_row)
         if sql.startswith("UPDATE server_processing_versions"):
             return Result({"server_version_id": params[3]})
@@ -62,6 +62,7 @@ def test_publishes_complete_revision_set_and_scopes_every_statement_to_owner():
     store = PostgresProcessingPublicationStore(Pool(conn))
 
     result = store.publish("user-a", "paper", "v1", "parse", "translation", "embedding",
+                           "job", "lease",
                            policy="complete")
 
     assert result.manifest == {
@@ -72,7 +73,9 @@ def test_publishes_complete_revision_set_and_scopes_every_statement_to_owner():
         "policy": "complete",
     }
     select_params = conn.calls[0][1]
-    assert select_params == ("user-a", "paper", "v1", "parse", "translation", "embedding")
+    assert select_params == (
+        "user-a", "paper", "v1", "parse", "translation", "embedding", "job", "lease"
+    )
     insert = next(call for call in conn.calls if call[0].startswith("INSERT INTO server_processing_publications"))
     update = next(call for call in conn.calls if call[0].startswith("UPDATE server_processing_versions"))
     assert insert[1][1:4] == ("user-a", "paper", "v1")
@@ -86,6 +89,7 @@ def test_partial_publication_requires_explicit_unique_omissions():
     )))
 
     result = store.publish("user-a", "paper", "v1", "parse", "translation", "embedding",
+                           "job", "lease",
                            policy="partial")
 
     assert result.manifest["omissions"] == [omission]
@@ -95,6 +99,7 @@ def test_partial_publication_requires_explicit_unique_omissions():
         PostgresProcessingPublicationStore(Pool(Connection(
             ready_row(omissions=duplicate, translated=0, indexed=0)
         ))).publish("user-a", "paper", "v1", "parse", "translation", "embedding",
+                    "job", "lease",
                     policy="partial")
 
 
@@ -116,6 +121,7 @@ def test_rejects_incomplete_or_failed_revision_sets(changes, reason):
 
     with pytest.raises(ProcessingPublicationNotReady, match=reason):
         store.publish("user-a", "paper", "v1", "parse", "translation", "embedding",
+                      "job", "lease",
                       policy="complete")
 
 
@@ -124,6 +130,7 @@ def test_unknown_or_other_owner_revision_set_is_not_found_without_detail():
 
     with pytest.raises(ProcessingPublicationNotFound, match="not_found"):
         store.publish("user-b", "paper", "v1", "parse", "translation", "embedding",
+                      "job", "lease",
                       policy="complete")
 
 
