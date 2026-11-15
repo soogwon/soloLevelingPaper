@@ -6,6 +6,7 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import secrets
 import threading
 import time
@@ -31,6 +32,8 @@ def _b64url(value: bytes) -> str:
 
 def _expiry_wait_seconds(token: str, *, now: float, max_wait: int) -> float:
     """JWT payload를 검증 근거로 신뢰하지 않고 대기 시간 계산에만 사용한다."""
+    if type(max_wait) is not int or max_wait < 1 or not math.isfinite(now):
+        raise ValueError("token_expiry_wait_invalid")
     try:
         payload_part = token.split(".")[1]
         padding = "=" * (-len(payload_part) % 4)
@@ -38,7 +41,7 @@ def _expiry_wait_seconds(token: str, *, now: float, max_wait: int) -> float:
         expires_at = payload["exp"]
     except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         raise ValueError("token_expiry_unavailable") from None
-    if type(expires_at) not in (int, float):
+    if type(expires_at) not in (int, float) or not math.isfinite(expires_at):
         raise ValueError("token_expiry_unavailable")
     wait = max(0.0, float(expires_at) - now + 2.0)
     if wait > max_wait:
@@ -131,6 +134,9 @@ def _main() -> int:
     parser.add_argument("--verify-expiry", action="store_true")
     parser.add_argument("--expiry-wait-max-seconds", type=int, default=300)
     args = parser.parse_args()
+    if args.verify_expiry and (args.expect != "allowed" or args.token_kind != "access"
+                               or args.expiry_wait_max_seconds < 1):
+        raise ValueError("expiry_requires_allowed_access_token")
 
     redirect_uri = f"http://127.0.0.1:{args.port}/callback"
     verifier = _b64url(secrets.token_bytes(48))
@@ -240,6 +246,10 @@ def _main() -> int:
         "token_persisted": False,
     }
     if args.verify_expiry:
+        if not allowed_checks_passed:
+            statuses["expiry_verification"] = "pre_expiry_checks_failed"
+            print(json.dumps(statuses))
+            return 4
         try:
             wait_seconds = _expiry_wait_seconds(
                 token, now=time.time(), max_wait=args.expiry_wait_max_seconds)
