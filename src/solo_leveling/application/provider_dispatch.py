@@ -10,6 +10,12 @@ class DispatchError(RuntimeError):
     """본문·토큰·식별자를 포함하지 않는 고정 내부 코드."""
 
 
+class DispatchBudgetExceeded(DispatchError):
+    """제한 상태를 근거 부족이나 원장 장애와 구분한다."""
+    def __init__(self, reason):
+        super().__init__('DISPATCH_TIME_BUDGET_EXCEEDED' if reason == 'time' else 'DISPATCH_CALL_TOKEN_BUDGET_EXCEEDED')
+
+
 @dataclass(frozen=True, repr=False)
 class DispatchIntent:
     owner_user_id: str
@@ -88,6 +94,9 @@ class ProviderDispatch:
         request = AttemptRequest(self.intent, dispatch_key, stage, input_token_upper_bound, max_output_tokens)
         try:
             permit = self.ledger.authorize(request)
+        except DispatchBudgetExceeded:
+            self._blocked = True
+            raise
         except Exception:
             self._blocked = True
             raise DispatchError('DISPATCH_AUTHORIZATION_UNAVAILABLE') from None
