@@ -188,7 +188,7 @@ class PostgresRemoteUploadIntentStore:
                          AND EXISTS (SELECT 1 FROM server_pdf_uploads u
                              WHERE u.owner_user_id=i.owner_user_id AND u.upload_id=i.upload_id
                                AND u.status='pending' AND u.source_kind='remote'
-                               AND u.object_key LIKE 'private/tmp/%')
+                               AND u.object_key LIKE 'private/tmp/%%')
                        ORDER BY i.updated_at,i.intent_id
                        LIMIT %s FOR UPDATE SKIP LOCKED
                    ), expired AS (
@@ -202,7 +202,7 @@ class PostgresRemoteUploadIntentStore:
                    FROM expired e JOIN server_pdf_uploads u
                      ON u.owner_user_id=e.owner_user_id AND u.upload_id=e.upload_id
                    WHERE u.status='pending' AND u.source_kind='remote'
-                     AND u.object_key LIKE 'private/tmp/%'""",
+                     AND u.object_key LIKE 'private/tmp/%%'""",
                 (limit,),
             ).fetchall()
         return tuple(ExpiredRemoteUpload(str(row["intent_id"]), row["object_key"]) for row in rows)
