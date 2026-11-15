@@ -26,9 +26,9 @@ def fixture(db,stores,pool):
             (scope_type,scope_id,policy_version,window_key,max_input_tokens,max_output_tokens)
             VALUES (%s,%s,%s,'window',1000,1000)''',(scope,scope_id,policy))
     post=Mock(return_value=NS(status_code=200,json=lambda:{'output':[], 'usage':{'input_tokens':8,'output_tokens':4}},close=Mock()))
-    def build(key):
+    def build(key, budget=None):
         return create_persisted_responses_transport(pool,intent,policy,'window',
-            lambda stage,payload,digest:PreparedProviderAttempt(key,digest,100),post=post)
+            lambda stage,payload,digest:PreparedProviderAttempt(key,digest,100),post=post,execution_budget=budget)
     return intent,post,build
 
 
