@@ -8,7 +8,8 @@ import pytest
 from solo_leveling.application.evidence_qa.errors import ResourceNotFoundError
 from solo_leveling.domain.annotation import (
     CHUNK_NOT_IN_CONTEXT, CONTEXT_NOT_FOUND, MAX_BODY_LENGTH, MAX_QUOTE_LENGTH, MAX_SEGMENTS,
-    OFFSET_OUT_OF_RANGE, QUOTE_MISMATCH, TRANSLATION_REVISION_MISMATCH, AnnotationOutcome,
+    OFFSET_OUT_OF_RANGE, QUOTE_LENGTH_MISMATCH, QUOTE_MISMATCH,
+    TRANSLATION_REVISION_MISMATCH, AnnotationOutcome,
     AnnotationValidationError, SegmentInput)
 from solo_leveling.domain.models import Chunk, LearningContext, ParseRevision
 from solo_leveling.infrastructure.database import annotations as ann
@@ -94,6 +95,12 @@ def test_invalid_segment_input_raises(kw):
     args.update(kw)
     with pytest.raises(AnnotationValidationError):
         SegmentInput('c1', args.pop('start'), args.pop('end'), args.pop('quote'), **args)
+
+
+def test_quote_length_mismatch_has_public_error_code():
+    with pytest.raises(AnnotationValidationError) as caught:
+        SegmentInput('c1', 0, 5, 'Bad')
+    assert caught.value.code == QUOTE_LENGTH_MISMATCH
 
 
 # ── 위치·참조 검증(INVALID_REFERENCE) ───────────────────────
