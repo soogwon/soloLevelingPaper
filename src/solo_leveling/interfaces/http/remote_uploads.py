@@ -185,7 +185,11 @@ class PostgresRemoteUploadIntentStore:
                        FROM server_remote_upload_intents i
                        WHERE i.status IN ('created','uploading','expired')
                          AND i.expires_at<=CURRENT_TIMESTAMP
-                       ORDER BY i.expires_at,i.intent_id
+                         AND EXISTS (SELECT 1 FROM server_pdf_uploads u
+                             WHERE u.owner_user_id=i.owner_user_id AND u.upload_id=i.upload_id
+                               AND u.status='pending' AND u.source_kind='remote'
+                               AND u.object_key LIKE 'private/tmp/%')
+                       ORDER BY i.updated_at,i.intent_id
                        LIMIT %s FOR UPDATE SKIP LOCKED
                    ), expired AS (
                        UPDATE server_remote_upload_intents i
