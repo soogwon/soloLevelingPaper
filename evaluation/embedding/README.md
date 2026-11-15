@@ -140,3 +140,29 @@ python scripts/compare_embedding_captures.py --baseline runtime/embedding-evalua
 
 #398은 작업 티켓이 아니라 이미 병합된 문서 PR이다. #401도 #399·#400을 문서에 연결한 PR이다.
 이 준비 작업은 원격 전환·배포 승인이나 #391의 완료를 뜻하지 않는다.
+
+## B의 로컬 PyTorch 기준선 캡처
+
+`scripts/capture_pytorch_embeddings.py`는 이미 설치된 sentence-transformers/PyTorch와
+추가 측정 의존성 `psutil==7.2.2`를 사용한다. 제품 의존성에는 추가하지 않는다.
+모델은 `paraphrase-multilingual-MiniLM-L12-v2`의 로컬 Hugging Face snapshot(40자리 커밋)
+경로만 받으며 HF/Transformers 오프라인 모드를 강제한다. 모델 파일을 다운로드하지 않는다.
+
+```powershell
+python scripts/capture_pytorch_embeddings.py --model-dir <로컬 snapshot 경로> --output runtime/pytorch-baseline --repeats 3 --warm-repeats 3
+```
+
+- 새 프로세스 3회, 각 준비 실행 뒤 warm 3회. CPU·float32·L2·batch 8·스레드 1·최대 길이 128을
+  기본으로 고정한다. 실제 pooling·런타임 버전·모델/토크나이저 파일 지문은 캡처에서 읽는다.
+- cold는 프로세스 시작부터 라이브러리 import·모델 로딩·전체 임베딩·토큰 수 관측까지다.
+  warm에도 전체 임베딩·토큰 수 관측을 포함한다. 순수 encode 시간만 잰 수치와 혼합하지 않는다.
+- peak RSS는 cold/warm 전체에서 worker 및 자식 RSS 합을 10ms마다 관찰한 최대값이다.
+  샘플 사이의 순간 최대값이나 GPU 메모리 측정이 아니다. 재부팅/OS 캐시 비움은 수행하지 않는다.
+- 해시 계산은 cold 측정 밖에서 모델 로딩 전에 수행하므로 파일 캐시는 데워질 수 있다.
+  이 결과를 디스크 콜드 시작·Desktop end-to-end·서버 처리 성능으로 일반화하지 않는다.
+- 캡처 전후 모델 파일 지문을 확인하고, 토큰 수·잘림 여부와 반복 간 벡터 오차를 기록한다.
+- 새 전용 디렉터리만 만들며 기존 결과를 덮어쓰지 않는다. 실패 시 부분 worker 결과는 그곳에만
+  남는다. timeout 시 이 명령이 만든 worker 트리만 종료하며 MCP/다른 실행에는 손대지 않는다.
+- 원시 벡터·캡처는 runtime에만 둔다. 결과 문서에는 본문·개인 경로·벡터를 복사하지 않는다.
+- 필수 근거 라벨은 계속 draft이다. B의 점검을 사람 승인으로 대체하지 않으며 ONNX 실측·공동 허용값
+  확정·원격 set 연결은 이번 캡처 실행에 포함하지 않는다.
