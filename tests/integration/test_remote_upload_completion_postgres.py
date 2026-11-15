@@ -44,3 +44,21 @@ def test_expired_reservation_commits_expired_status_without_upload(pool, db):
             store.reserve_upload('expired-owner', intent.intent_id)
     assert db('SELECT status FROM server_remote_upload_intents WHERE intent_id=%s', (intent.intent_id,))[0]['status'] == 'expired'
     assert db('SELECT count(*) AS n FROM server_pdf_uploads WHERE paper_id=%s', (intent.paper_id,))[0]['n'] == 0
+
+
+def test_expired_cleanup_rotates_beyond_batch_and_skips_empty_intents(pool, db):
+    from uuid import uuid4
+    owner='cleanup-'+str(uuid4())
+    db('INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,\'합성\')',(owner,))
+    store=PostgresRemoteUploadIntentStore(pool)
+    empty=store.create(owner,'empty','paper.pdf',10,'application/pdf','a'*64)
+    ids=[]
+    for index in range(3):
+        intent=store.create(owner,str(index),'paper.pdf',10,'application/pdf','a'*64)
+        store.reserve_upload(owner,intent.intent_id)
+        ids.append(intent.intent_id)
+    db("UPDATE server_remote_upload_intents SET expires_at=clock_timestamp()-interval '1 hour',updated_at=clock_timestamp()-interval '1 day' WHERE owner_user_id=%s",(owner,))
+    seen=[store.claim_expired_objects(limit=1)[0].intent_id for _ in range(3)]
+    assert set(seen)==set(ids) and empty.intent_id not in seen
+    # 성공/실패 또는 지연 PUT 뒤에도 반복 정리하되 다른 객체를 굶기지 않는다.
+    assert store.claim_expired_objects(limit=1)[0].intent_id in ids

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import pytest
 
 from solo_leveling.interfaces.http.remote_uploads import (
+    ExpiredRemoteUpload,
     PostgresRemoteUploadIntentStore,
     RemoteUploadConflict,
     RemoteUploadVerificationService,
@@ -139,3 +140,57 @@ def test_completed_retry_reuses_result_without_copy_or_reservation(cleanup_fails
     assert service.complete('owner', 'intent') == completed
     assert service.complete('owner', 'intent') == completed
     assert store.reservations == objects.copies == 1
+
+
+def test_expired_cleanup_retries_failures_without_exposing_object_keys():
+    class Store:
+        def claim_expired_objects(self, *, limit):
+            assert limit == 2
+            return (
+                ExpiredRemoteUpload("intent-1", "private/tmp/owner/one.pdf"),
+                ExpiredRemoteUpload("intent-2", "private/tmp/owner/two.pdf"),
+            )
+
+    class Objects:
+        def __init__(self):
+            self.calls = []
+
+        def delete_upload(self, key):
+            self.calls.append(key)
+            if key.endswith("two.pdf"):
+                raise RuntimeError("synthetic cleanup failure")
+
+    objects = Objects()
+    result = RemoteUploadVerificationService(Store(), objects).cleanup_expired(limit=2)
+    assert result == {"claimed": 2, "deleted": 1, "failed": 1}
+    assert objects.calls == ["private/tmp/owner/one.pdf", "private/tmp/owner/two.pdf"]
+
+
+def test_expired_cleanup_query_excludes_ready_and_non_temporary_objects():
+    class RowsResult(Result):
+        def fetchall(self):
+            return [{"intent_id": "intent-1", "object_key": "private/tmp/owner/one.pdf"}]
+
+    class CleanupConn(Conn):
+        def execute(self, sql, params=()):
+            self.calls.append((sql, params))
+            return RowsResult()
+
+    pool = Pool()
+    pool.conn = CleanupConn([])
+    rows = PostgresRemoteUploadIntentStore(pool, now=lambda: NOW).claim_expired_objects(limit=7)
+    assert rows == (ExpiredRemoteUpload("intent-1", "private/tmp/owner/one.pdf"),)
+    sql, params = pool.conn.calls[0]
+    assert "u.status='pending'" in sql
+    assert "u.source_kind='remote'" in sql
+    assert "private/tmp/%" in sql
+    assert "FOR UPDATE SKIP LOCKED" in sql
+    assert params == (7,)
+
+
+@pytest.mark.parametrize("limit", [0, 1001, True])
+def test_expired_cleanup_rejects_unbounded_limit(limit):
+    pool = Pool()
+    with pytest.raises(ValueError, match="remote_upload_cleanup_limit_invalid"):
+        PostgresRemoteUploadIntentStore(pool, now=lambda: NOW).claim_expired_objects(limit=limit)
+    assert pool.conn.calls == []
