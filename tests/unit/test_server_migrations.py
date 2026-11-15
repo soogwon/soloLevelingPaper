@@ -41,8 +41,8 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 30)]
-    assert items[-1].name == "0029_remote_deletion_cleanup.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 31)]
+    assert items[-1].name == "0030_remote_deletion_leases.sql"
 
 
 def test_remote_operation_controls_separate_intake_and_dispatch():
