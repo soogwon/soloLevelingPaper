@@ -276,7 +276,7 @@ def test_status_filter_uses_synced_record_and_excludes_unknown_papers():
         "user-1", query=None, reading_status="reading", page=3, limit=10)
 
     assert result == PaperPage((), 3, 10, 0, 0)
-    assert "COALESCE(r.reading_status, 'unknown') = %s" in pool.conn.calls[1][0]
+    assert "COALESCE(rs.status, 'unknown') = %s" in pool.conn.calls[1][0]
     assert pool.conn.calls[1][1] == ("user-1", "reading")
 
 
@@ -338,10 +338,11 @@ def test_postgres_learning_record_upsert_is_owner_and_source_scoped():
     sql, params = pool.conn.calls[0]
     assert "p.owner_user_id=%s AND p.source_instance_id=%s" in sql
     assert "excluded.source_updated_at>server_learning_records.source_updated_at" in sql
-    assert params[-3:] == (PAPER_ID, "user-1", SOURCE_ID)
+    assert params[-4:] == (PAPER_ID, "user-1", SOURCE_ID, True)
 
 
-def test_learning_record_route_derives_status_and_uses_device_owner():
+@pytest.mark.parametrize('explicit', [None, 'reading', 'completed', 'unknown'])
+def test_learning_record_route_does_not_derive_status_and_uses_device_owner(explicit):
     store = MemoryStore()
     route = next(route.endpoint for route in create_app(paper_store=store).routes
                  if route.path == "/v1/mcp/papers/{paper_id}/learning-records/{local_record_id}")
@@ -349,7 +350,7 @@ def test_learning_record_route_derives_status_and_uses_device_owner():
         source_instance_id=UUID(SOURCE_ID), selected_version_id="version-1", file_name="paper.pdf",
         last_position=SimpleNamespace(model_dump=lambda **_: {"pdf_page": 3}),
         last_studied_at=NOW, completed_steps=list(("preview", "structure", "deep_read", "review")),
-        source_updated_at=NOW,
+        source_updated_at=NOW, reading_status=explicit,
     )
     principal = AuthenticatedPrincipal("user-1", "device", SOURCE_ID)
 
@@ -357,7 +358,7 @@ def test_learning_record_route_derives_status_and_uses_device_owner():
 
     assert str(result.learning_record_id) == "00000000-0000-0000-0000-000000000301"
     assert store.calls[0][0:2] == ("user-1", PAPER_ID)
-    assert store.calls[0][2].reading_status == "completed"
+    assert store.calls[0][2].reading_status == explicit
 
 
 def test_summary_route_uses_device_owner_and_preserves_evidence_links():
@@ -598,7 +599,7 @@ def test_web_list_shape_matches_external_site_without_inventing_learning_data():
         "published": {"year": 2024, "month": None, "day": None, "precision": "year"},
         "selected_learning_record_id": None, "selected_version_id": None,
         "last_position": None, "last_studied_at": None, "reading_status": "unknown",
-        "collection_id": None,
+        "collection_id": None, "reading_basis_version_id": None, "reading_state_revision": 0,
     }]
 
 

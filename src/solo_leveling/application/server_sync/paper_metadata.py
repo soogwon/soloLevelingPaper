@@ -17,7 +17,8 @@ from solo_leveling.infrastructure.database.schema import get_connection
 from solo_leveling.infrastructure.storage.server_client import ServerConnectionRequired
 
 
-SERVER_SYNC_NOTICE_VERSION = "paper-learning-summary-annotation-sync-v4"
+SERVER_SYNC_NOTICE_VERSION = "paper-reading-state-sync-v5"
+_RECORD_NOTICES = {SERVER_SYNC_NOTICE_VERSION, "paper-learning-summary-annotation-sync-v4"}
 
 
 class SyncPreviewChanged(ValueError):
@@ -37,6 +38,7 @@ class PaperSyncPreview:
     summary_hash: str | None = None
     annotation_count: int = 0
     annotation_hash: str | None = None
+    reading_state_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -77,9 +79,10 @@ class PaperMetadataSyncService:
             payload = _paper_payload(conn, paper_id, source_id)
             learning_payloads = _learning_payloads(conn, paper_id, source_id)
             summary_payloads = (_summary_payloads(conn, paper_id, source_id)
-                                if notice_version.strip() == SERVER_SYNC_NOTICE_VERSION else [])
+                                if notice_version.strip() in _RECORD_NOTICES else [])
             annotation_payloads = (_annotation_payloads(conn, paper_id, source_id)
-                                   if notice_version.strip() == SERVER_SYNC_NOTICE_VERSION else [])
+                                   if notice_version.strip() in _RECORD_NOTICES else [])
+            from . import reading_state
             if preview is not None and preview != PaperSyncPreview(
                 account_id, payload["local_paper_id"], payload["title"], payload["original_created_at"],
                 len(learning_payloads), _latest_timestamp(
@@ -87,6 +90,7 @@ class PaperMetadataSyncService:
                 _learning_hash(learning_payloads),
                 len(summary_payloads), _summary_hash(summary_payloads),
                 len(annotation_payloads), _annotation_hash(annotation_payloads),
+                _payload_hash(reading_state.payload(conn, paper_id, "")),
             ):
                 raise SyncPreviewChanged
             digest = _payload_hash(payload)
@@ -105,6 +109,8 @@ class PaperMetadataSyncService:
                    VALUES (?, ?, ?, 'paper', ?, 'create', ?, 'pending', 0, NULL, NULL, ?, ?)""",
                 (operation_id, account_id, consent_id, paper_id, digest, now, now),
             )
+            if notice_version.strip() == SERVER_SYNC_NOTICE_VERSION:
+                reading_state.queue(conn, account_id, consent_id, paper_id, source_id, now)
             for learning in learning_payloads:
                 conn.execute(
                     """INSERT INTO sync_outbox
@@ -158,12 +164,14 @@ class PaperMetadataSyncService:
             records = _learning_payloads(conn, paper_id, "")
             summaries = _summary_payloads(conn, paper_id, "")
             annotations = _annotation_payloads(conn, paper_id, "")
+            from . import reading_state
             return PaperSyncPreview(
                 account_id, row["paper_id"], _effective_title(row), row["created_at"],
                 len(records), _latest_timestamp(item["last_studied_at"] for item in records),
                 _learning_hash(records),
                 len(summaries), _summary_hash(summaries),
                 len(annotations), _annotation_hash(annotations),
+                _payload_hash(reading_state.payload(conn, paper_id, "")),
             )
         finally:
             conn.close()
@@ -186,7 +194,7 @@ class PaperMetadataSyncService:
             if result.status == "synced":
                 child = conn.execute(
                     """SELECT status, last_error_code FROM sync_outbox WHERE consent_scope_id=?
-                       AND object_type IN ('learning_record', 'summary', 'annotation') AND status!='synced'
+                       AND object_type IN ('learning_record', 'summary', 'annotation', 'reading_state') AND status!='synced'
                        ORDER BY CASE status WHEN 'conflict' THEN 0 WHEN 'action_required' THEN 1
                            WHEN 'retryable_failure' THEN 2 ELSE 3 END, operation_id LIMIT 1""",
                     (row["consent_scope_id"],),
@@ -256,7 +264,7 @@ class PaperMetadataSyncService:
                 """SELECT o.operation_id, o.attempt_count, o.updated_at
                    FROM sync_outbox o JOIN server_sync_consents c USING(consent_scope_id)
                    WHERE o.account_id=? AND o.status='syncing' AND c.revoked_at IS NULL
-                     AND o.object_type IN ('paper', 'learning_record', 'summary', 'annotation')""",
+                     AND o.object_type IN ('paper', 'learning_record', 'summary', 'annotation', 'reading_state')""",
                 (account_id,),
             ).fetchall()
             now = _iso(self._now())
@@ -309,6 +317,8 @@ class PaperMetadataSyncService:
             source_id = _source_instance_id(conn)
         finally:
             conn.close()
+        from . import reading_state
+        reading_state.sync(self, account_id, parent["consent_scope_id"], source_id, result.server_object_id)
         self._sync_learning_records(account_id, parent["consent_scope_id"], source_id, result.server_object_id)
         self._sync_summaries(account_id, parent["consent_scope_id"], source_id, result.server_object_id)
         self._sync_annotations(account_id, parent["consent_scope_id"], source_id, result.server_object_id)

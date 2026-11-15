@@ -129,6 +129,7 @@ def create_paper_router(require_principal: Any, store: PaperStore):
             default_factory=list, max_length=len(LEARNING_STEPS)
         )
         source_updated_at: datetime
+        reading_status: Literal['not_started', 'reading', 'completed', 'unknown'] | None = None
 
         @field_validator("last_studied_at", "source_updated_at")
         @classmethod
@@ -304,6 +305,54 @@ def create_paper_router(require_principal: Any, store: PaperStore):
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                                 detail={"code": "paper_store_unavailable"}) from None
 
+    from .reading_states import PaperReadingState, ReadingStateConflict
+
+    class ReadingStatePut(BaseModel):
+        model_config = ConfigDict(extra='forbid')
+        source_instance_id: UUID
+        operation_id: UUID
+        expected_revision: int = Field(ge=0, strict=True)
+        source_revision: int = Field(ge=1, strict=True)
+        status: Literal['unknown', 'not_started', 'reading', 'completed']
+        action: Literal['initial', 'start', 'complete', 'reopen']
+        basis_version_id: str | None = Field(default=None, max_length=128)
+
+        _basis = field_validator('basis_version_id')(_normalize_file_or_version)
+
+        @model_validator(mode='after')
+        def valid_transition(self):
+            allowed = {'initial': {'unknown', 'not_started'}, 'start': {'reading'},
+                       'complete': {'completed'}, 'reopen': {'reading'}}
+            if self.status not in allowed[self.action]:
+                raise ValueError('상태와 명시적 전이가 일치하지 않습니다.')
+            if self.action in ('start', 'complete', 'reopen') and self.basis_version_id is None:
+                raise ValueError('상태 기준 원문 버전이 필요합니다.')
+            return self
+
+    @router.get('/{paper_id}/reading-state', response_model=PaperReadingState)
+    def get_reading_state(paper_id: UUID, source_instance_id: UUID, principal: Principal):
+        if principal.credential_type != 'device':
+            raise HTTPException(status_code=403, detail={'code': 'device_credential_required'})
+        try:
+            return store.get_reading_state(principal.user_id, str(paper_id), str(source_instance_id))
+        except PaperNotFound:
+            raise HTTPException(status_code=404, detail={'code': 'paper_not_found'}) from None
+        except PaperStoreUnavailable:
+            raise HTTPException(status_code=503, detail={'code': 'paper_store_unavailable'}) from None
+
+    @router.put('/{paper_id}/reading-state', response_model=PaperReadingState)
+    def put_reading_state(paper_id: UUID, payload: ReadingStatePut, principal: Principal):
+        if principal.credential_type != 'device':
+            raise HTTPException(status_code=403, detail={'code': 'device_credential_required'})
+        try:
+            return store.put_reading_state(principal.user_id, str(paper_id), payload.model_dump(mode='json'))
+        except ReadingStateConflict:
+            raise HTTPException(status_code=409, detail={'code': 'reading_state_conflict'}) from None
+        except PaperNotFound:
+            raise HTTPException(status_code=404, detail={'code': 'paper_not_found'}) from None
+        except PaperStoreUnavailable:
+            raise HTTPException(status_code=503, detail={'code': 'paper_store_unavailable'}) from None
+
     @router.put("/{paper_id}/learning-records/{local_record_id}", response_model=LearningRecordView)
     def upsert_learning_record(
         paper_id: UUID,
@@ -323,8 +372,7 @@ def create_paper_router(require_principal: Any, store: PaperStore):
         if len(completed) != len(payload.completed_steps):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                                 detail={"code": "invalid_completed_steps"})
-        reading_status = ("not_started" if payload.last_studied_at is None else
-                          "completed" if completed == set(LEARNING_STEPS) else "reading")
+        reading_status = payload.reading_status
         metadata = LearningRecordMetadata(
             str(payload.source_instance_id), local_record_id, payload.selected_version_id,
             payload.file_name, payload.last_position.model_dump(exclude_none=True) if payload.last_position else None,
@@ -434,6 +482,8 @@ def create_web_paper_router(require_principal: Any, store: PaperStore, file_stor
         last_position: dict[str, Any] | None
         last_studied_at: datetime | None
         reading_status: Literal["not_started", "reading", "completed", "unknown"]
+        reading_basis_version_id: str | None = None
+        reading_state_revision: int = 0
         collection_id: str | None
 
     class PaperPageView(BaseModel):
@@ -506,6 +556,8 @@ def create_web_paper_router(require_principal: Any, store: PaperStore, file_stor
                 selected_learning_record_id=item.selected_learning_record_id,
                 selected_version_id=item.selected_version_id, last_position=item.last_position,
                 last_studied_at=item.last_studied_at, reading_status=item.reading_status,
+                reading_basis_version_id=item.reading_basis_version_id,
+                reading_state_revision=item.reading_state_revision,
                 collection_id=item.collection_id,
             ) for item in result.items],
             page=result.page, page_size=result.page_size,
@@ -591,6 +643,8 @@ def create_web_paper_router(require_principal: Any, store: PaperStore, file_stor
             published=published, selected_learning_record_id=item.selected_learning_record_id,
             selected_version_id=item.selected_version_id, last_position=item.last_position,
             last_studied_at=item.last_studied_at, reading_status=item.reading_status,
+                reading_basis_version_id=item.reading_basis_version_id,
+                reading_state_revision=item.reading_state_revision,
             collection_id=item.collection_id,
             version=(VersionView(version_id=item.selected_version_id, file_name=item.file_name)
                      if item.selected_version_id else None),
