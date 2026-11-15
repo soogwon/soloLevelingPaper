@@ -57,7 +57,8 @@ python -m pytest tests/integration/test_mcp_stdio.py -q
 - [ ] 실제 서버 전송 동의 후 같은 계정 웹 목록·상세의 내용·시각·작성 주체·상태 대조.
 - [ ] 실제 다른 계정에서 동일 ID 조회 차단.
 - [ ] macOS Desktop에서도 동일 흐름 확인.
-- [ ] #372의 context 없는 신규 논문 not_started 최초 전송 연결 완료 후 확인.
+- [x] 자동 계약: #372의 context 없는 신규 논문 `not_started`가 별도 reading-state API로 전송되고
+  가짜 learning record를 만들지 않음을 확인한다. 실제 배포 환경 확인은 아래 수동 표에 남긴다.
 
 실제 검증은 개인 DB와 분리한 테스트 DATA_ROOT 및 공개 가능한 합성 논문으로 진행한다.
 새 키는 새 저장 의도에만 발급하며 재시도에서는 바꾸지 않는다. 원문/번역문의 위치는 get_evidence

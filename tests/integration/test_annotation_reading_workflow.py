@@ -23,6 +23,7 @@ from solo_leveling.interfaces.http.papers import (
     PaperRegistration, LearningRecordRegistration, AnnotationRegistration, StoredAnnotation,
     PaperNotFound, PaperDetail, PaperListItem,
 )
+from solo_leveling.interfaces.http.reading_states import PaperReadingState, ReadingStateConflict
 from solo_leveling.interfaces.mcp.server import MCPServices, create_server
 from tests.unit.test_learning_persistence import setup_db, publish
 
@@ -36,6 +37,8 @@ class MemoryServerStore:
         self.owner = None
         self.source = None
         self.learning = None
+        self.reading = PaperReadingState(self.paper_id, 'unknown', None, 0, 0, None)
+        self.reading_operations = {}
         self.annotations = {}
 
     def register(self, owner, key, metadata):
@@ -61,6 +64,28 @@ class MemoryServerStore:
             metadata.original_created_at, metadata.source_updated_at, metadata.creation_origin or 'unknown')
         return AnnotationRegistration(key, 1, 'stored', datetime.now(timezone.utc))
 
+    def get_reading_state(self, owner, paper_id, source_instance_id):
+        self.owned(owner, paper_id, source_instance_id)
+        return self.reading
+
+    def put_reading_state(self, owner, paper_id, request):
+        self.owned(owner, paper_id, request['source_instance_id'])
+        previous = self.reading_operations.get(request['operation_id'])
+        if previous is not None:
+            if previous != request:
+                raise ReadingStateConflict()
+            return self.reading
+        if request['expected_revision'] != self.reading.revision:
+            raise ReadingStateConflict()
+        if (self.reading.status == 'completed' and request['status'] != 'completed'
+                and request['action'] != 'reopen'):
+            raise ReadingStateConflict()
+        self.reading_operations[request['operation_id']] = dict(request)
+        self.reading = PaperReadingState(
+            paper_id, request['status'], request['basis_version_id'], self.reading.revision + 1,
+            request['source_revision'], datetime.now(timezone.utc))
+        return self.reading
+
     def get_annotation(self, owner, key):
         self.owned(owner, self.paper_id)
         if key not in self.annotations:
@@ -71,7 +96,9 @@ class MemoryServerStore:
         self.owned(owner, paper_id)
         return PaperDetail(PaperListItem(paper_id, '합성 논문', None, None,
             selected_learning_record_id=self.record_id, selected_version_id=self.learning.selected_version_id,
-            reading_status=self.learning.reading_status or 'unknown'))
+            reading_status=self.reading.status,
+            reading_basis_version_id=self.reading.basis_version_id,
+            reading_state_revision=self.reading.revision))
 
 
 class HttpTransport:
@@ -129,7 +156,8 @@ def test_mcp_to_web_preserves_annotation_and_explicit_state(setup_db, target):
             assert retry.structuredContent['annotation'] == first.structuredContent['annotation']
             state = reading.get('paper')
             done = await client.call_tool('set_reading_completed',
-                {'paper_id':'paper','completed':True,'expected_revision':state.revision})
+                {'paper_id':'paper','completed':True,'expected_revision':state.revision,
+                 'basis_version_id':'v1'})
             assert not done.isError
             await client.call_tool('start_learning', {'version_id':'v1'})
             assert reading.get('paper').status == 'completed'
@@ -156,6 +184,7 @@ def test_mcp_to_web_preserves_annotation_and_explicit_state(setup_db, target):
         assert datetime.fromisoformat(public['created_at'].replace('Z','+00:00')) == datetime.fromisoformat(record['created_at'])
         page = http.get('/v1/papers/' + store.paper_id, headers={'Authorization':'Bearer web'})
         assert page.status_code == 200 and page.json()['reading_status'] == 'completed'
+        assert page.json()['reading_basis_version_id'] == 'v1'
         denied = http.get('/v1/annotations/' + key, headers={'Authorization':'Bearer other'})
         assert denied.status_code == 404
         state = reading.get('paper')
@@ -163,6 +192,23 @@ def test_mcp_to_web_preserves_annotation_and_explicit_state(setup_db, target):
         again = sync.grant_and_queue('paper', SERVER_SYNC_NOTICE_VERSION, preview=sync.preview('paper'))
         assert sync.sync(again.operation_id).status == 'synced'
         assert http.get('/v1/papers/' + store.paper_id, headers={'Authorization':'Bearer web'}).json()['reading_status'] == 'reading'
+
+
+def test_context_free_not_started_uses_separate_state_api(setup_db):
+    db, _ = setup_db
+    store = MemoryServerStore()
+    principal = AuthenticatedPrincipal('owner', 'device', str(uuid5(NAMESPACE_URL, 'device')))
+    app = create_app(token_verifier=SimpleNamespace(verify=lambda _: principal),
+        device_registry=SimpleNamespace(is_active=lambda *_: True), paper_store=store)
+    with TestClient(app) as http:
+        transport = HttpTransport(http)
+        sync = PaperMetadataSyncService(db, transport)
+        operation = sync.grant_and_queue('paper', SERVER_SYNC_NOTICE_VERSION, preview=sync.preview('paper'))
+        assert sync.sync(operation.operation_id).status == 'synced'
+    paths = [path for _, path in transport.calls]
+    assert any(path.endswith('/reading-state') for path in paths)
+    assert not any('/learning-records/' in path for path in paths)
+    assert store.reading.status == 'not_started'
 
 
 def test_transport_failure_keeps_local_annotation(setup_db):
