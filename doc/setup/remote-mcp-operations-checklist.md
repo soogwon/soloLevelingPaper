@@ -54,6 +54,21 @@ API와 worker 상태를 각각 측정한다. 임베딩 준비 지연을 API heal
 로그 점검은 합성 식별 표식을 사용하고 원본 로그를 PR/티켓에 붙이지 않는다. 검출 건수와 고정 사유만 보고한다.
 전송량/비용/사용량 불명은 원장 수치로 확인하며 UI 상태만으로 중복 과금 0을 판정하지 않는다.
 
+### 만료 원격 업로드 임시 객체 정리
+
+DB 마이그레이션이 최신이고 `DATABASE_URL`, `OBJECT_STORAGE_*`가 설정된 worker/관리 환경에서만
+다음 명령을 실행한다. `--apply` 없이는 DB나 객체 저장소에 접근하지 않는다.
+
+```powershell
+solo-leveling-remote-upload-cleanup --apply --limit 100
+```
+
+출력에는 처리 건수만 포함되며 object key, 사용자 ID, presigned URL은 포함하지 않는다. 삭제 성공 뒤
+정확한 intent와 임시 key가 일치할 때만 DB의 pending 행을 `failed/upload_expired`로 확정한다. 객체 삭제나
+DB 확정 중 하나라도 실패하면 `failed`가 증가하고 종료 코드 1을 반환하므로 다음 실행에서 재시도한다.
+`ready` 객체와 `private/files/` 최종 객체는 대상이 아니다. 운영 스케줄 등록과 실제 R2 실행은 별도 승인 후
+진행하며, 최초 실행은 작은 limit와 공개 테스트 PDF로 결과를 확인한다.
+
 ## 중단과 복구
 
 교차 사용자 노출, 동의 없는 유료 전송, 중복 예약, 삭제 자료 재생성, 비밀 로그 유출 발견 시 단계 공개를

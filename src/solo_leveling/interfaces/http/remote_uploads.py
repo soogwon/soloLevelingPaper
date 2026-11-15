@@ -207,6 +207,23 @@ class PostgresRemoteUploadIntentStore:
             ).fetchall()
         return tuple(ExpiredRemoteUpload(str(row["intent_id"]), row["object_key"]) for row in rows)
 
+    def mark_expired_object_deleted(self, intent_id: str, object_key: str) -> None:
+        if not intent_id or not object_key.startswith("private/tmp/"):
+            raise ValueError("remote_upload_cleanup_input_invalid")
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                """UPDATE server_pdf_uploads u
+                   SET status='failed',failure_reason='upload_expired',updated_at=CURRENT_TIMESTAMP
+                   FROM server_remote_upload_intents i
+                   WHERE i.intent_id=%s AND i.status='expired'
+                     AND u.owner_user_id=i.owner_user_id AND u.upload_id=i.upload_id
+                     AND u.status='pending' AND u.source_kind='remote' AND u.object_key=%s
+                   RETURNING u.upload_id""",
+                (intent_id, object_key),
+            ).fetchone()
+        if row is None:
+            raise ValueError("remote_upload_cleanup_stale")
+
     @staticmethod
     def _completed(conn, owner_user_id, intent_id):
         row = conn.execute(
@@ -280,6 +297,7 @@ class RemoteUploadVerificationService:
         for upload in expired:
             try:
                 self.object_storage.delete_upload(upload.object_key)
+                self.store.mark_expired_object_deleted(upload.intent_id, upload.object_key)
                 deleted += 1
             except Exception:
                 failed += 1
