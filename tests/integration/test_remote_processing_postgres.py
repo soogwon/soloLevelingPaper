@@ -194,6 +194,64 @@ def count_publications(db, job):
     )[0]["n"]
 
 
+def test_remote_execution_locks_live_paper_and_recovers_unknown_usage(pool, db, stores):
+    """접수 중 삭제 경쟁과 재시작 뒤 미확정 사용량 조회를 실제 DB에서 검증한다."""
+    from contextlib import contextmanager
+    import psycopg
+    from solo_leveling.application.provider_dispatch import AttemptRequest
+    from solo_leveling.application.remote_replay import ExecutionLookup
+    from solo_leveling.interfaces.http.dispatch_ledger import PostgresDispatchLedger
+    from solo_leveling.interfaces.http.remote_executions import PostgresRemoteExecutionStore, validate_execution_scope
+
+    owner = new_id()
+    db("INSERT INTO server_users (owner_user_id,display_name) VALUES (%s,'synthetic')", (owner,))
+    jobs, publications = stores
+    paper_id = make_paper(db, owner)
+    job = claimed_job(jobs, owner, paper_id)
+    revisions = make_revision_set(db, owner, paper_id, job)
+    published = publish(publications, owner, paper_id, revisions, job)
+    context_id = new_id()
+    db("""INSERT INTO server_execution_contexts
+        (context_id,owner_user_id,paper_id,server_version_id,publication_id,parse_revision_id)
+        VALUES (%s,%s,%s,'v1',%s,%s)""", (context_id, owner, paper_id, published.publication_id, revisions[0]))
+    for consent, purpose in [("storage", "storage"), ("ai", "ai_provider")]:
+        db("""INSERT INTO server_remote_consents
+            (consent_id,owner_user_id,purpose,input_hash,notice_version) VALUES (%s,%s,%s,'hash','notice')""",
+           (consent, owner, purpose))
+    lookup = ExecutionLookup(owner, "ask_paper", "request", "hash", context_id)
+    with pool.connection() as conn:
+        class TransactionPool:
+            @contextmanager
+            def connection(self):
+                yield conn
+
+        created = PostgresRemoteExecutionStore(TransactionPool()).create(lookup, "storage", "ai", "notice")
+        # 접수가 커밋될 때까지 다른 연결의 삭제가 대기해야 한다.
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            with pool.connection() as deleting:
+                deleting.execute("SET LOCAL lock_timeout='100ms'")
+                deleting.execute("UPDATE server_papers SET deleted_at=CURRENT_TIMESTAMP WHERE paper_id=%s", (paper_id,))
+
+    store = PostgresRemoteExecutionStore(pool)
+    intent = store.claim(owner, created.execution_id)
+    db("""INSERT INTO server_dispatch_controls (control_id,generation,dispatch_enabled)
+        VALUES ('provider_dispatch',1,true) ON CONFLICT DO NOTHING""")
+    policy = new_id()
+    for scope, scope_id in [("service", "service"), ("owner", owner)]:
+        db("""INSERT INTO server_dispatch_budget_limits
+            (scope_type,scope_id,policy_version,window_key,max_input_tokens,max_output_tokens)
+            VALUES (%s,%s,%s,'window',1000,1000)""", (scope, scope_id, policy))
+    ledger = PostgresDispatchLedger(pool, policy, "window", validate_execution_scope)
+    permit = ledger.authorize(AttemptRequest(intent, "first", "generation", 100, 50))
+    assert permit is not None
+    ledger.unknown(permit.attempt_id)
+    assert PostgresRemoteExecutionStore(pool).lookup(owner, "ask_paper", "request").budget_state == "usage_unknown"
+    assert ledger.authorize(AttemptRequest(intent, "second", "repair", 100, 50)) is None
+    ledger.observe(permit.attempt_id, 80, 40)
+    assert store.lookup(owner, "ask_paper", "request").budget_state == "available"
+    assert ledger.authorize(AttemptRequest(intent, "second", "repair", 100, 50)) is not None
+
+
 def job_status(db, job):
     return db("SELECT status FROM server_processing_jobs WHERE job_id=%s", (job.job_id,))[0]["status"]
 
