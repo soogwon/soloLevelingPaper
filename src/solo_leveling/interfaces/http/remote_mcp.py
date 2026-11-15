@@ -58,6 +58,35 @@ class RemoteMcpDispatchMiddleware:
         await self.app(scope, receive, send)
 
 
+class PublicBoundaryMiddleware:
+    """인증 전에 헤더 경계를 검사하고 원본 Host·Origin을 로그에 남기지 않는다."""
+
+    def __init__(self, app, settings):
+        self.app = app
+        self.hosts = {value.encode() for value in settings.allowed_hosts}
+        self.origins = {value.encode() for value in settings.allowed_origins}
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] == 'http':
+            headers = scope.get('headers', [])
+            def values(name):
+                return [v for k, v in headers if k.lower() == name]
+            hosts = values(b'host')
+            invalid = len(hosts) != 1 or hosts[0] not in self.hosts
+            forwarded = values(b'x-forwarded-host')
+            invalid |= bool(forwarded) and forwarded != hosts
+            proto = values(b'x-forwarded-proto')
+            invalid |= bool(proto) and proto != [b'https']
+            invalid |= bool(values(b'forwarded'))
+            origins = values(b'origin')
+            bad_origin = bool(origins) and (len(origins) != 1 or origins[0] not in self.origins)
+            if invalid or bad_origin:
+                await JSONResponse({'error': 'invalid_public_boundary'},
+                    status_code=421 if invalid else 403)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 def create_remote_mcp(
     settings: RemoteMcpSettings,
     verifier: TokenVerifier | None = None,
@@ -109,4 +138,5 @@ def create_remote_mcp(
 
     app = server.streamable_http_app()
     app.add_middleware(NoSessionMiddleware)
+    app.add_middleware(PublicBoundaryMiddleware, settings=settings)
     return RemoteMcpBundle(server, app)

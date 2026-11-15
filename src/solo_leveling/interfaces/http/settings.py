@@ -78,10 +78,15 @@ class RemoteMcpSettings:
         if not self.allowed_hosts or public_host not in self.allowed_hosts:
             raise ValueError("REMOTE_MCP_ALLOWED_HOSTS에는 공개 resource hostname이 필요합니다.")
         for host in self.allowed_hosts:
-            if not host or "://" in host or "/" in host:
+            if (not host or "://" in host or "/" in host or "*" in host or "@" in host
+                    or any(char.isspace() for char in host) or "?" in host or "#" in host
+                    or urlsplit('https://' + host).hostname is None
+                    or urlsplit('https://' + host).port not in (None, 443)):
                 raise ValueError("REMOTE_MCP_ALLOWED_HOSTS에는 hostname 또는 hostname:port만 지정합니다.")
         for origin in self.allowed_origins:
             _validate_origin("REMOTE_MCP_ALLOWED_ORIGINS", origin)
+            if '*' in origin or any(c.isspace() for c in origin):
+                raise ValueError("REMOTE_MCP_ALLOWED_ORIGINS에 와일드카드·공백을 허용하지 않습니다.")
 
 
 @dataclass(frozen=True)
