@@ -51,12 +51,6 @@ class PostgresRemoteProcessingIntake:
             if existing is not None:
                 _validate_existing(existing, upload_intent_id, storage_consent_id, ai_consent_id, notice_version)
                 return _view(existing)
-            control = conn.execute(
-                """SELECT generation,intake_enabled FROM server_dispatch_controls
-                   WHERE control_id='provider_dispatch' FOR UPDATE"""
-            ).fetchone()
-            if control is None or not control["intake_enabled"]:
-                return None
             source = conn.execute(
                 """SELECT i.intent_id,i.paper_id,i.server_version_id,i.payload_hash
                    FROM server_remote_upload_intents i
@@ -71,6 +65,18 @@ class PostgresRemoteProcessingIntake:
                 (owner_user_id, upload_intent_id),
             ).fetchone()
             if source is None:
+                return None
+            # 같은 업로드의 다른 요청 키도 원본 의도 잠금 이후 기존 작업을 재사용한다.
+            existing = _existing(conn, owner_user_id, upload_intent_id, by_intent=True)
+            if existing is not None:
+                _validate_existing(existing, upload_intent_id, storage_consent_id, ai_consent_id, notice_version)
+                return _view(existing)
+            # 전송 원장과 동일하게 논문을 잠근 뒤 운영 제어를 잠근다.
+            control = conn.execute(
+                """SELECT generation,intake_enabled FROM server_dispatch_controls
+                   WHERE control_id='provider_dispatch' FOR UPDATE"""
+            ).fetchone()
+            if control is None or not control["intake_enabled"]:
                 return None
             consent_rows = conn.execute(
                 """SELECT consent_id,purpose,input_hash FROM server_remote_consents
@@ -119,15 +125,16 @@ class PostgresRemoteProcessingIntake:
         return _view(row)
 
 
-def _existing(conn, owner_user_id, request_key):
+def _existing(conn, owner_user_id, key, *, by_intent=False):
+    column = "a.upload_intent_id" if by_intent else "j.request_key"
     return conn.execute(
-        """SELECT j.job_id,j.paper_id,j.server_version_id,j.status,j.payload_hash,
+        f"""SELECT j.job_id,j.paper_id,j.server_version_id,j.status,j.payload_hash,
                   a.upload_intent_id,a.storage_consent_id,a.ai_consent_id,a.notice_version
            FROM server_processing_jobs j
            JOIN server_processing_job_authorizations a
              ON a.owner_user_id=j.owner_user_id AND a.job_id=j.job_id
-           WHERE j.owner_user_id=%s AND j.request_key=%s FOR UPDATE OF j,a""",
-        (owner_user_id, request_key),
+           WHERE j.owner_user_id=%s AND {column}=%s FOR UPDATE OF j,a""",
+        (owner_user_id, key),
     ).fetchone()
 
 

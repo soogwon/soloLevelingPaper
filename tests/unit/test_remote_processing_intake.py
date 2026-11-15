@@ -21,7 +21,7 @@ class Result:
 
 class Conn:
     def __init__(self, routes):
-        self.routes = routes
+        self.routes = {"FROM server_dispatch_controls": [{"generation": 1, "intake_enabled": True}], **routes}
         self.calls = []
 
     def execute(self, sql, params=()):
@@ -57,8 +57,7 @@ def args():
 def test_verified_upload_and_current_consents_create_one_authorized_job():
     pool = Pool(
         {
-            "SELECT j.job_id": [None],
-            "FROM server_dispatch_controls": [{"generation": 1, "intake_enabled": True}],
+            "SELECT j.job_id": [None, None],
             "SELECT i.intent_id": [SOURCE],
             "SELECT consent_id": [CONSENTS],
             "INSERT INTO server_processing_jobs": [JOB],
@@ -70,9 +69,8 @@ def test_verified_upload_and_current_consents_create_one_authorized_job():
     assert result.job_id == "job" and result.status == "queued"
     statements = [sql for sql, _ in pool.conn.calls]
     assert "pg_advisory_xact_lock" in statements[0]
-    assert "intake_enabled" in statements[2]
-    assert "i.status='verified'" in statements[3] and "u.status='ready'" in statements[3]
-    assert "p.deleted_at IS NULL" in statements[3]
+    assert "i.status='verified'" in statements[2] and "u.status='ready'" in statements[2]
+    assert "p.deleted_at IS NULL" in statements[2]
     assert statements[-2].startswith("INSERT INTO server_processing_jobs")
     assert statements[-1].startswith("INSERT INTO server_processing_job_authorizations")
 
@@ -111,30 +109,11 @@ def test_same_request_with_different_authorization_conflicts():
 
 @pytest.mark.parametrize("source,consents", [(None, CONSENTS), (SOURCE, CONSENTS[:1])])
 def test_unverified_missing_or_incomplete_consent_never_queues(source, consents):
-    pool = Pool(
-        {
-            "SELECT j.job_id": [None],
-            "FROM server_dispatch_controls": [{"generation": 1, "intake_enabled": True}],
-            "SELECT i.intent_id": [source],
-            "SELECT consent_id": [consents],
-        }
-    )
+    pool = Pool({"SELECT j.job_id": [None, None], "SELECT i.intent_id": [source], "SELECT consent_id": [consents]})
 
     assert PostgresRemoteProcessingIntake(pool).admit(*args()) is None
 
     assert not any("INSERT INTO server_processing_jobs" in sql for sql, _ in pool.conn.calls)
-
-
-def test_intake_stop_blocks_new_job_before_upload_or_consent_reads():
-    pool = Pool(
-        {
-            "SELECT j.job_id": [None],
-            "FROM server_dispatch_controls": [{"generation": 2, "intake_enabled": False}],
-        }
-    )
-
-    assert PostgresRemoteProcessingIntake(pool).admit(*args()) is None
-    assert not any("SELECT i.intent_id" in sql for sql, _ in pool.conn.calls)
 
 
 def test_invalid_input_fails_before_database():
@@ -144,3 +123,21 @@ def test_invalid_input_fails_before_database():
         PostgresRemoteProcessingIntake(pool).admit("", *args()[1:])
 
     assert pool.conn.calls == []
+
+
+def test_new_request_key_for_existing_intent_replays_without_new_job():
+    existing = {**JOB, "upload_intent_id": "intent", "storage_consent_id": "storage",
+                "ai_consent_id": "ai", "notice_version": "notice"}
+    pool = Pool({"SELECT j.job_id": [None, existing], "SELECT i.intent_id": [SOURCE]})
+    assert PostgresRemoteProcessingIntake(pool).admit(*args()).job_id == "job"
+    assert not any(sql.startswith("INSERT") for sql, _ in pool.conn.calls)
+
+
+def test_intake_stop_blocks_new_job_before_consent_and_insert():
+    pool = Pool({"SELECT j.job_id": [None, None], "SELECT i.intent_id": [SOURCE],
+                 "FROM server_dispatch_controls": [{"generation": 2, "intake_enabled": False}]})
+    assert PostgresRemoteProcessingIntake(pool).admit(*args()) is None
+    assert not any("SELECT consent_id" in sql or sql.startswith("INSERT") for sql, _ in pool.conn.calls)
+    statements = [sql for sql, _ in pool.conn.calls]
+    assert next(i for i,s in enumerate(statements) if "SELECT i.intent_id" in s) < next(
+        i for i,s in enumerate(statements) if "FROM server_dispatch_controls" in s)
