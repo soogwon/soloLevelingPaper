@@ -1,0 +1,427 @@
+{
+  "schema_version": 1,
+  "version": "synthetic-embedding-v1-draft",
+  "provenance": "All texts and identities are synthetic, authored for issue #391. Relevance labels await human review.",
+  "chunks": [
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "attention",
+      "pdf_page": 6,
+      "section_id": "s4",
+      "text": "Self-attention has lower per-layer complexity than recurrence when sequence length n is smaller than representation dimension d."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "path",
+      "pdf_page": 6,
+      "section_id": "s4",
+      "text": "Shorter paths between positions make long-range dependencies easier to learn."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "parallel",
+      "pdf_page": 6,
+      "section_id": "s4",
+      "text": "Self-attention needs constant sequential operations; recurrence needs n sequential operations. Sequential count is distinct from total computational complexity."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "continuation-head",
+      "pdf_page": 6,
+      "section_id": "s4",
+      "text": "The synthetic method is faster than recurrence when the sequence"
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "continuation-tail",
+      "pdf_page": 7,
+      "section_id": "s4",
+      "text": "length n is smaller than representation dimension d. This condition concerns per-layer computation."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "near-a",
+      "pdf_page": 8,
+      "section_id": "s5",
+      "text": "Model A scored 81.01 on the synthetic evaluation."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "near-b",
+      "pdf_page": 8,
+      "section_id": "s5",
+      "text": "Model B scored 81.02 on the synthetic evaluation."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "korean",
+      "pdf_page": 3,
+      "section_id": "s2",
+      "text": "가상 논문의 검색기는 한국어 질문과 영어 원문 근거를 연결한다."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "multilingual",
+      "pdf_page": 3,
+      "section_id": "s2",
+      "text": "The synthetic search system connects Korean questions to English evidence. Le système accepte aussi le français."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "long",
+      "pdf_page": 9,
+      "section_id": "s6",
+      "text": "이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 이 문장은 긴 입력 평가를 위한 의미 없는 반복 문장입니다. 마지막 표식: 실험 종료 조건은 파란 스위치이다."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "outside-page",
+      "pdf_page": 99,
+      "section_id": "s4",
+      "text": "Self-attention has lower complexity when n is smaller than d."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "outside-section",
+      "pdf_page": 6,
+      "section_id": "appendix",
+      "text": "Self-attention has lower complexity when n is smaller than d."
+    },
+    {
+      "owner_id": "user-b",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "other-user",
+      "pdf_page": 6,
+      "section_id": "s4",
+      "text": "Self-attention has lower complexity when n is smaller than d."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-0",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "old-revision",
+      "pdf_page": 6,
+      "section_id": "s4",
+      "text": "Self-attention has lower complexity when n is smaller than d."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "staging-2",
+      "id": "unpublished",
+      "pdf_page": 6,
+      "section_id": "s4",
+      "text": "Self-attention has lower complexity when n is smaller than d."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v0",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "other-version",
+      "pdf_page": 6,
+      "section_id": "s4",
+      "text": "Self-attention has lower complexity when n is smaller than d."
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-0",
+      "embedding_scope": "published-1",
+      "id": "old-translation",
+      "pdf_page": 6,
+      "section_id": "s4",
+      "text": "Self-attention has lower complexity when n is smaller than d."
+    }
+  ],
+  "queries": [
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "ko-condition",
+      "text": "Self-attention이 recurrence보다 계산량이 적은 조건은?",
+      "pdf_pages": [
+        6,
+        7
+      ],
+      "section_ids": [
+        "s4"
+      ],
+      "required_chunk_ids": [
+        "attention"
+      ],
+      "top_k": 3
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "en-condition",
+      "text": "When is self-attention cheaper per layer than recurrence?",
+      "pdf_pages": [
+        6,
+        7
+      ],
+      "section_ids": [
+        "s4"
+      ],
+      "required_chunk_ids": [
+        "attention"
+      ],
+      "top_k": 3
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "ko-path",
+      "text": "경로 길이가 장거리 의존성 학습에 미치는 영향은?",
+      "pdf_pages": [
+        6
+      ],
+      "section_ids": [
+        "s4"
+      ],
+      "required_chunk_ids": [
+        "path"
+      ],
+      "top_k": 2
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "parallel-vs-cost",
+      "text": "순차 연산 수와 총 계산 복잡도는 같은가?",
+      "pdf_pages": [
+        6
+      ],
+      "section_ids": [
+        "s4"
+      ],
+      "required_chunk_ids": [
+        "parallel"
+      ],
+      "top_k": 2
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "cross-page",
+      "text": "Complete the condition split across pages six and seven.",
+      "pdf_pages": [
+        6,
+        7
+      ],
+      "section_ids": [
+        "s4"
+      ],
+      "required_chunk_ids": [
+        "continuation-head",
+        "continuation-tail"
+      ],
+      "top_k": 5
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "strict-page",
+      "text": "Find only the condition fragment on page six; do not add page seven.",
+      "pdf_pages": [
+        6
+      ],
+      "section_ids": [
+        "s4"
+      ],
+      "required_chunk_ids": [
+        "continuation-head"
+      ],
+      "top_k": 3
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "near-scores",
+      "text": "Which model scored 81.02?",
+      "pdf_pages": [
+        8
+      ],
+      "section_ids": [
+        "s5"
+      ],
+      "required_chunk_ids": [
+        "near-b"
+      ],
+      "top_k": 1
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "korean-source",
+      "text": "가상 검색기는 어떤 언어의 질문을 연결하나요?",
+      "pdf_pages": [
+        3
+      ],
+      "section_ids": [
+        "s2"
+      ],
+      "required_chunk_ids": [
+        "korean"
+      ],
+      "top_k": 1
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "french-query",
+      "text": "Quel système relie les questions coréennes aux preuves anglaises?",
+      "pdf_pages": [
+        3
+      ],
+      "section_ids": [
+        "s2"
+      ],
+      "required_chunk_ids": [
+        "multilingual"
+      ],
+      "top_k": 1
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "long-tail",
+      "text": "긴 입력의 마지막 실험 종료 조건은?",
+      "pdf_pages": [
+        9
+      ],
+      "section_ids": [
+        "s6"
+      ],
+      "required_chunk_ids": [
+        "long"
+      ],
+      "top_k": 1
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "owner-and-revision",
+      "text": "Find the active attention condition without other users or revisions.",
+      "pdf_pages": [],
+      "section_ids": [
+        "s4"
+      ],
+      "required_chunk_ids": [
+        "attention"
+      ],
+      "top_k": 4
+    },
+    {
+      "owner_id": "user-a",
+      "version_id": "paper-v1",
+      "parse_revision_id": "parse-1",
+      "translation_revision_id": "ko-1",
+      "embedding_scope": "published-1",
+      "id": "section-filter",
+      "text": "Find the section four attention condition on page six.",
+      "pdf_pages": [
+        6
+      ],
+      "section_ids": [
+        "s4"
+      ],
+      "required_chunk_ids": [
+        "attention"
+      ],
+      "top_k": 2
+    }
+  ],
+  "review_status": "draft"
+}
