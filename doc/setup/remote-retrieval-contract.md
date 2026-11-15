@@ -1,5 +1,23 @@
 # #390 B의 원격 검색·근거 경계 준비
 
+## 검색 composition 구현 (후속)
+
+`application/evidence_qa/remote_search.py`와 `infrastructure/retrieval/remote_factory.py`가 기존 C/A
+포트를 조립한다. factory는 SDK 현재 요청→검증 identity→A owner→고정 context→pgvector→결과 검증을
+사용하며 owner/identity를 사용자 입력에서 받지 않고 매 요청 매핑을 다시 조회한다.
+
+실제 embedding runtime은 `embed(question, binding) -> QueryEmbedding` 포트를 구현해야 한다.
+QueryEmbedding은 실제 설정 지문과 벡터를 보고한다. 전체 모델/토크나이저·pooling·정규화·길이·차원·
+거리·runtime/precision/artifact가 일치해야 하며 같은 차원의 다른 모델, 0벡터·비유한 값·L2 불일치는
+거부한다. JSON 키 순서는 정규화하되 필드를 제거하거나 runtime 차이를 임의 허용하지 않는다.
+기본 모델 선택·지문 추측·자동 모델 다운로드는 없다. 이 보고 자체는 실제 모델 실행의 증명이 아니므로
+신뢰하는 runtime adapter가 구현해야 한다.
+
+제품 도구에 등록하지 않았으며 실제 embedding runtime·계정 연결·DB composition의 종단 검증은
+아직 남았다. factory 조립 테스트는 저장소/SDK resolver를 대체한 대역이다. 현재 검색 입력 top_k는
+기존 질문 경계의 1~20을 유지한다. 고정 원문/번역·인접 구절·근거 저장은 별도 포트 연결이 필요하다.
+이전 아래의 '미연결 포트' 설명은 이 새 factory를 실제 제품에 등록하기 전이라는 범위로 읽는다.
+
 기준 main: `2b5ca30` (#403·#405·#406·#408·#410 병합 후).
 이 문서는 B의 내부 타입·검증·테스트와 **어댑터 연결 전 확인할 제안**을 분리한다.
 pgvector·서버 context resolver·MCP 연결을 구현하거나 A의 저장 계약을 변경하지 않는다.
