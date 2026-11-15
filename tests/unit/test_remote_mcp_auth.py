@@ -151,3 +151,10 @@ def test_web_audience_cannot_be_configured_as_remote_resource():
     from dataclasses import replace
     with pytest.raises(ValueError, match='audience'):
         replace(SETTINGS, audience='https://web.example/api')
+
+
+@pytest.mark.parametrize('host', ['*.example', 'example:*', 'user@example', 'example:444', 'example evil'])
+def test_host_allowlist_never_accepts_wildcards_or_ambiguous_authority(host):
+    from dataclasses import replace
+    with pytest.raises(ValueError):
+        replace(SETTINGS, allowed_hosts=SETTINGS.allowed_hosts + (host,))

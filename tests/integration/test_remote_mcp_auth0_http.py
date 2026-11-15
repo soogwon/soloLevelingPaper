@@ -2,6 +2,8 @@
 
 import time
 
+import pytest
+
 from fastapi.testclient import TestClient
 from mcp.server.auth.provider import AccessToken
 
@@ -87,7 +89,7 @@ def test_public_host_allowlist_prevents_421_and_rejects_unknown_hosts():
         assert rpc(value, "tools/list").status_code == 200
         rejected = rpc(value, "tools/list", Host="attacker.example")
         assert rejected.status_code == 421
-        assert rejected.text == "Invalid Host header"
+        assert rejected.json() == {"error": "invalid_public_boundary"}
 
 
 def test_origin_and_stateless_session_boundaries():
@@ -103,3 +105,26 @@ def test_existing_health_and_api_routes_remain_ahead_of_static_fallback():
     with client() as value:
         assert value.get("/health").json()["status"] == "ok"
         assert value.get("/v1/session").status_code == 401
+
+
+@pytest.mark.parametrize('headers', [
+    {'Host':'attacker.example'}, {'Host':'user@solo-leveling-staging.soogyung.com'},
+    {'Host':'solo-leveling-staging.soogyung.com:444'},
+    {'X-Forwarded-Host':'attacker.example'}, {'X-Forwarded-Proto':'http'},
+    {'Forwarded':'host=solo-leveling-staging.soogyung.com'},
+])
+@pytest.mark.parametrize('token', ['valid','invalid'])
+def test_header_rejection_precedes_auth(headers, token, caplog):
+    with client() as value:
+        assert rpc(value, 'tools/list', token=token, **headers).status_code == 421
+    assert 'attacker.example' not in caplog.text
+
+
+def test_duplicate_headers_and_metadata_boundary():
+    with client() as value:
+        response = value.get('/.well-known/oauth-protected-resource/mcp',
+            headers=[('Host','solo-leveling-staging.soogyung.com')]*2)
+        assert response.status_code == 421
+        response = rpc(value, 'tools/list', **{
+            'X-Forwarded-Host':'solo-leveling-staging.soogyung.com', 'X-Forwarded-Proto':'https'})
+        assert response.status_code == 200
