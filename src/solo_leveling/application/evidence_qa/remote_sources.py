@@ -10,6 +10,7 @@ from .remote_contract import (
     RemoteSearchBinding, RemoteSearchFilters, RemoteRetrievalContractError, validate_remote_hits,
 )
 from .validators import validate_search_result
+from .page_completion import completion_excerpt
 
 
 @dataclass(frozen=True, repr=False)
@@ -123,7 +124,12 @@ class RemoteContinuationReader:
             if len({r.chunk_id for r in rows}) != len(rows) or any(
                     r.chunk_id in {c.chunk_id for c in current.candidate_chunks} for r in rows):
                 raise RemoteRetrievalContractError('REMOTE_SOURCE_IDS_MISMATCH')
-            return tuple(r.to_chunk() for r in rows)
+            chunks = tuple(r.to_chunk() for r in rows)
+            # 실제 reader는 인접 행을 반환한다. 선택 범위 밖 정상 후보는 제외하고 허용된 문장 완성만 남긴다.
+            return tuple(chunk for chunk in chunks
+                         if (not self.filters.section_ids or chunk.section_id in self.filters.section_ids)
+                         and (not self.filters.pdf_pages or chunk.pdf_page in self.filters.pdf_pages
+                              or completion_excerpt(current, chunk)))
         except RemoteRetrievalContractError:
             raise
         except Exception:

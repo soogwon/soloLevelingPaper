@@ -55,9 +55,8 @@ def test_legacy_completion_rules_keep_only_first_sentence_and_strict_scope(setup
     reader = NS(read_chunks=lambda *_: (source,), following_chunks=lambda *_: (tail,))
     pinned = assemble_remote_sources('q', b, f, hits, reader)
     if strict:
-        # 실제 #108는 strict 범위 밖 후보를 거부한다. 허용 발췌로 재분류하지 않는다.
-        with pytest.raises(RemoteRetrievalContractError):
-            supplement_remote_sources(pinned, f, reader)
+        # 정상 인접 행 중 strict 범위 밖은 제외하고 원래 검색 결과는 유지한다.
+        assert supplement_remote_sources(pinned, f, reader).search.supplemental_chunks == ()
     else:
         result = supplement_remote_sources(pinned, f, reader)
         excerpt = completion_excerpt(result.search, result.search.supplemental_chunks[0])
@@ -82,3 +81,12 @@ def test_source_failure_is_fixed_error_without_private_text(setup):
     def failed(*_): raise RuntimeError('private-original-and-path')
     with pytest.raises(RemoteRetrievalContractError, match='^REMOTE_SOURCE_UNAVAILABLE$'):
         assemble_remote_sources('q', b, f, hits, NS(read_chunks=failed))
+
+
+def test_neighbor_from_other_section_is_omitted_without_losing_hit(setup):
+    b,f,hits,source=setup
+    tail=RemoteSourceChunk(b,'b',1,6,'outside','A different section.',None)
+    reader=NS(read_chunks=lambda *_:(source,),following_chunks=lambda *_:(tail,))
+    result=supplement_remote_sources(assemble_remote_sources('q',b,f,hits,reader),f,reader)
+    assert result.search.supplemental_chunks == ()
+    assert result.search.items[0].chunk.chunk_id == 'a'
