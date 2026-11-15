@@ -46,14 +46,18 @@ CREATE INDEX server_remote_executions_context_idx
     ON server_remote_executions(owner_user_id, context_id, created_at);
 
 CREATE FUNCTION server_reject_tombstoned_execution() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    paper_deleted_at timestamptz;
 BEGIN
-    IF NEW.state NOT IN ('cancel_requested', 'cancelled', 'failed') AND EXISTS (
-        SELECT 1 FROM server_execution_contexts c
+    IF NEW.state IN ('cancel_requested', 'cancelled', 'failed') THEN
+        RETURN NEW;
+    END IF;
+    -- 정상 행도 잠가 삭제와 실행 갱신이 동시에 통과하지 못하게 한다.
+    SELECT p.deleted_at INTO paper_deleted_at FROM server_execution_contexts c
         JOIN server_papers p ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
         WHERE c.owner_user_id=NEW.owner_user_id AND c.context_id=NEW.context_id
-          AND p.deleted_at IS NOT NULL
-        FOR SHARE OF p
-    ) THEN
+        FOR SHARE OF p;
+    IF paper_deleted_at IS NOT NULL THEN
         RAISE EXCEPTION 'paper_tombstoned' USING ERRCODE='check_violation';
     END IF;
     RETURN NEW;

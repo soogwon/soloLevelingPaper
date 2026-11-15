@@ -54,7 +54,7 @@ def test_remote_execution_schema_binds_replay_and_dispatch_scope():
     assert "CHECK ((payload_json IS NULL) = (payload_sha256 IS NULL))" in sql
     assert "'cancel_requested'" in sql
     assert "CREATE TRIGGER trg_remote_executions_reject_tombstone" in sql
-    assert "NEW.state NOT IN ('cancel_requested', 'cancelled', 'failed')" in sql
+    assert "NEW.state IN ('cancel_requested', 'cancelled', 'failed')" in sql
 
 
 def test_remote_dispatch_ledger_has_explicit_limits_and_unknown_state():

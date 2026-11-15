@@ -8,6 +8,16 @@ from solo_leveling.application.provider_dispatch import DispatchIntent
 from solo_leveling.application.remote_replay import ExecutionLookup, StoredExecution
 
 
+# 실행 상태와 별개로 원장의 미확정 사용량을 같은 조회 snapshot에 포함한다.
+_USAGE_UNKNOWN = """EXISTS (
+    SELECT 1 FROM server_provider_attempts a
+    WHERE a.owner_user_id=e.owner_user_id AND a.execution_id=e.execution_id
+      AND (a.status='unknown' OR (a.status='reserved' AND (
+          e.lease_token IS DISTINCT FROM a.lease_token OR
+          e.lease_expires_at<=CURRENT_TIMESTAMP)))
+) AS usage_unknown"""
+
+
 class RemoteExecutionConflict(ValueError):
     pass
 
@@ -37,7 +47,7 @@ class PostgresRemoteExecutionStore:
                 (f"{lookup.owner_user_id}\x1f{lookup.operation}\x1f{lookup.request_key}",),
             )
             old = conn.execute(
-                """SELECT e.*,p.deleted_at FROM server_remote_executions e
+                f"""SELECT e.*,p.deleted_at,{_USAGE_UNKNOWN} FROM server_remote_executions e
                    JOIN server_execution_contexts c
                      ON c.owner_user_id=e.owner_user_id AND c.context_id=e.context_id
                    JOIN server_papers p
@@ -79,7 +89,7 @@ class PostgresRemoteExecutionStore:
             if row is None:
                 # 동시 접수와 미존재/삭제 context를 구분하되 외부에는 둘 다 None을 허용한다.
                 old = conn.execute(
-                    """SELECT e.*,p.deleted_at FROM server_remote_executions e
+                    f"""SELECT e.*,p.deleted_at,{_USAGE_UNKNOWN} FROM server_remote_executions e
                        JOIN server_execution_contexts c
                          ON c.owner_user_id=e.owner_user_id AND c.context_id=e.context_id
                        JOIN server_papers p
@@ -121,7 +131,7 @@ class PostgresRemoteExecutionStore:
             raise ValueError("remote_execution_input_invalid")
         with self._pool.connection() as conn:
             row = conn.execute(
-                """SELECT e.*,p.deleted_at FROM server_remote_executions e
+                f"""SELECT e.*,p.deleted_at,{_USAGE_UNKNOWN} FROM server_remote_executions e
                    JOIN server_execution_contexts c
                      ON c.owner_user_id=e.owner_user_id AND c.context_id=e.context_id
                    JOIN server_papers p
@@ -237,7 +247,7 @@ def _stored(row):
         lookup,
         row["execution_id"],
         row["state"],
-        row["budget_state"],
+        "usage_unknown" if row.get("usage_unknown") else row["budget_state"],
         row.get("deleted_at") is None,
         available,
         row.get("payload_json"),

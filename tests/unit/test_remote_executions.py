@@ -156,6 +156,16 @@ def test_dispatch_scope_locks_exact_execution_generation_and_paper():
     assert params == ("owner", "execution", "lease", "hash", "storage", "ai", "notice")
 
 
+def test_lookup_reports_ledger_unknown_without_changing_saved_result():
+    pool = Pool({"SELECT e.*,p.deleted_at": [row(
+        state="completed", usage_unknown=True, payload_json="saved", payload_sha256="hash"
+    )]})
+    stored = PostgresRemoteExecutionStore(pool).lookup("owner", "ask_paper", "key")
+    assert stored.state == "completed"
+    assert stored.budget_state == "usage_unknown"
+    assert stored.result_available and stored.payload_json == "saved"
+
+
 def test_cancel_request_revokes_lease_before_final_confirmation():
     pool = Pool({"UPDATE server_remote_executions": [{"state": "cancel_requested"}, {"execution_id": "execution"}]})
     store = PostgresRemoteExecutionStore(pool)
