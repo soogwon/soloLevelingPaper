@@ -71,6 +71,13 @@ class PostgresRemoteProcessingIntake:
             if existing is not None:
                 _validate_existing(existing, upload_intent_id, storage_consent_id, ai_consent_id, notice_version)
                 return _view(existing)
+            # 전송 원장과 동일하게 논문을 잠근 뒤 운영 제어를 잠근다.
+            control = conn.execute(
+                """SELECT generation,intake_enabled FROM server_dispatch_controls
+                   WHERE control_id='provider_dispatch' FOR UPDATE"""
+            ).fetchone()
+            if control is None or not control["intake_enabled"]:
+                return None
             consent_rows = conn.execute(
                 """SELECT consent_id,purpose,input_hash FROM server_remote_consents
                    WHERE owner_user_id=%s AND consent_id IN (%s,%s)

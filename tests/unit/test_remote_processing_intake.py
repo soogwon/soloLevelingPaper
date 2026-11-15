@@ -21,7 +21,7 @@ class Result:
 
 class Conn:
     def __init__(self, routes):
-        self.routes = routes
+        self.routes = {"FROM server_dispatch_controls": [{"generation": 1, "intake_enabled": True}], **routes}
         self.calls = []
 
     def execute(self, sql, params=()):
@@ -131,3 +131,13 @@ def test_new_request_key_for_existing_intent_replays_without_new_job():
     pool = Pool({"SELECT j.job_id": [None, existing], "SELECT i.intent_id": [SOURCE]})
     assert PostgresRemoteProcessingIntake(pool).admit(*args()).job_id == "job"
     assert not any(sql.startswith("INSERT") for sql, _ in pool.conn.calls)
+
+
+def test_intake_stop_blocks_new_job_before_consent_and_insert():
+    pool = Pool({"SELECT j.job_id": [None, None], "SELECT i.intent_id": [SOURCE],
+                 "FROM server_dispatch_controls": [{"generation": 2, "intake_enabled": False}]})
+    assert PostgresRemoteProcessingIntake(pool).admit(*args()) is None
+    assert not any("SELECT consent_id" in sql or sql.startswith("INSERT") for sql, _ in pool.conn.calls)
+    statements = [sql for sql, _ in pool.conn.calls]
+    assert next(i for i,s in enumerate(statements) if "SELECT i.intent_id" in s) < next(
+        i for i,s in enumerate(statements) if "FROM server_dispatch_controls" in s)

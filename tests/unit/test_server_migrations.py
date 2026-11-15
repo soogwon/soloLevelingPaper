@@ -41,8 +41,14 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 28)]
-    assert items[-1].name == "0027_remote_processing_admission.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 29)]
+    assert items[-1].name == "0028_remote_operation_controls.sql"
+
+
+def test_remote_operation_controls_separate_intake_and_dispatch():
+    sql = (__import__("pathlib").Path("migrations/server") / "0028_remote_operation_controls.sql").read_text(encoding="utf-8")
+    assert "ADD COLUMN intake_enabled" in sql
+    assert "ALTER COLUMN intake_enabled SET NOT NULL" in sql
 
 
 def test_remote_processing_job_keeps_upload_and_consent_authorization():

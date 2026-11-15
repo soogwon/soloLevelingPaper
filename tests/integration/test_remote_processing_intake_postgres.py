@@ -14,6 +14,9 @@ pytestmark = pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'), re
 
 
 def admitted_source(pool, db):
+    db("""INSERT INTO server_dispatch_controls(control_id,generation,dispatch_enabled,intake_enabled)
+          VALUES ('provider_dispatch',1,true,true)
+          ON CONFLICT (control_id) DO UPDATE SET intake_enabled=true,dispatch_enabled=true""")
     owner = new_id()
     db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'합성 사용자')", (owner,))
     store = PostgresRemoteUploadIntentStore(pool)
@@ -60,3 +63,29 @@ def test_revoked_consent_blocks_new_work_but_replay_remains_read_only(pool, db):
     assert intake.admit(owner, intent, 'key', storage, ai, 'notice') == first
     with pytest.raises(RemoteProcessingConflict):
         intake.admit(owner, intent, 'key', storage, ai, 'other-notice')
+
+
+def test_stop_preserves_replay_and_controls_change_atomically(pool, db):
+    from solo_leveling.interfaces.http.remote_operation_controls import PostgresRemoteOperationControls
+    owner, intent, storage, ai = admitted_source(pool, db)
+    intake = PostgresRemoteProcessingIntake(pool)
+    first = intake.admit(owner, intent, "key", storage, ai, "notice")
+    controls = PostgresRemoteOperationControls(pool)
+    before = controls.get()
+    stopped = controls.update(before.generation, intake_enabled=False, dispatch_enabled=True)
+    assert not stopped.intake_enabled and stopped.dispatch_enabled
+    assert controls.update(before.generation, intake_enabled=True, dispatch_enabled=False) is None
+    assert intake.admit(owner, intent, "key", storage, ai, "notice") == first
+    other_owner, other_intent, other_storage, other_ai = admitted_source(pool, db)
+    current = controls.get()
+    controls.update(current.generation, intake_enabled=False, dispatch_enabled=True)
+    assert intake.admit(other_owner, other_intent, "key", other_storage, other_ai, "notice") is None
+    assert db('SELECT count(*) AS n FROM server_processing_jobs WHERE owner_user_id=%s', (other_owner,))[0]['n'] == 0
+
+
+def test_legacy_control_insert_defaults_to_intake_blocked(pool, db):
+    db('DELETE FROM server_dispatch_controls')
+    db("""INSERT INTO server_dispatch_controls(control_id,generation,dispatch_enabled)
+          VALUES ('provider_dispatch',1,true)""")
+    row = db('SELECT intake_enabled,dispatch_enabled FROM server_dispatch_controls')[0]
+    assert row == {'intake_enabled': False, 'dispatch_enabled': True}
