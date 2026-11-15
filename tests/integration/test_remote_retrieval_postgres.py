@@ -20,7 +20,7 @@ pytestmark = pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'),
                                 reason='실제 PostgreSQL+pgvector 테스트 DSN 필요')
 
 
-def seed(db, stores, pool, owner, *, paper=None, size=4):
+def seed(db, stores, pool, owner, *, paper=None, size=4, fingerprint=None, texts=None):
     jobs, publications = stores
     paper = paper or make_paper(db, owner)
     job = claimed_job(jobs, owner, paper)
@@ -28,13 +28,17 @@ def seed(db, stores, pool, owner, *, paper=None, size=4):
     revision = make_revision_set(db, owner, paper, job, chunks=size, ready=False)
     parse, translation, embedding, ids = revision
     db('UPDATE server_embedding_sets SET model_fingerprint=%s::jsonb WHERE embedding_set_id=%s',
-       (json.dumps({'dimension': 2, 'distance': 'cosine', 'normalization': 'l2', 'model_id': 'synthetic'}), embedding))
+       (json.dumps(fingerprint or {'dimension': 2, 'distance': 'cosine', 'normalization': 'l2',
+                                  'model_id': 'synthetic'}), embedding))
     vectors = [(0.8, 0.6), (1., 0.), (1., 0.), (0.6, 0.8)]
     writer = PostgresEmbeddingVectorWriter(pool)
     scope = EmbeddingWriteScope(owner, paper, 'v1', parse, translation, embedding, 2)
     for i, chunk_id in enumerate(ids):
         db('UPDATE server_processing_chunks SET pdf_page=%s, section_id=%s WHERE chunk_id=%s',
            (7 if i == 2 else 6, 'outside' if i == 1 else 's4', chunk_id))
+        if texts is not None:
+            db('UPDATE server_processing_chunks SET original_text=%s WHERE chunk_id=%s', (texts[0], chunk_id))
+            db('UPDATE server_translation_chunks SET translated_text=%s WHERE chunk_id=%s', (texts[1], chunk_id))
         writer.put(scope, chunk_id, vectors[i])
     mark_ready(db, parse, translation, embedding)
     publication = publish(publications, owner, paper, revision, job)
