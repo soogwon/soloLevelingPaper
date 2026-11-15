@@ -41,8 +41,8 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 29)]
-    assert items[-1].name == "0028_remote_operation_controls.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 30)]
+    assert items[-1].name == "0029_remote_deletion_cleanup.sql"
 
 
 def test_remote_operation_controls_separate_intake_and_dispatch():
@@ -115,6 +115,14 @@ def test_remote_deletion_tombstone_blocks_every_processing_write_path():
         "server_remote_upload_intents",
     ):
         assert f"BEFORE INSERT OR UPDATE ON {table}" in sql
+
+
+def test_remote_deletion_cleanup_has_retry_and_completion_state():
+    sql = (__import__("pathlib").Path("migrations/server") / "0029_remote_deletion_cleanup.sql").read_text(encoding="utf-8")
+    assert "attempt_count" in sql
+    assert "last_error_code" in sql
+    assert "completed_at" in sql
+    assert "status IN ('blocking', 'failed')" in sql
 
 
 def test_remote_identity_mapping_uses_exact_issuer_subject_and_owner_fk():

@@ -2,7 +2,12 @@ from contextlib import contextmanager
 
 import pytest
 
-from solo_leveling.interfaces.http.remote_deletions import PostgresRemoteDeletionStore
+from solo_leveling.domain.deletion_policy import DeletionPolicy
+from solo_leveling.interfaces.http.remote_deletions import (
+    DeletionCleanup,
+    PostgresRemoteDeletionStore,
+    RemoteDeletionCleanupService,
+)
 
 
 class Result:
@@ -104,3 +109,63 @@ def test_rejects_invalid_input_before_database(values):
         PostgresRemoteDeletionStore(pool).request(*values)
 
     assert pool.conn.calls == []
+
+
+def test_cleanup_runs_derived_before_source_and_marks_complete():
+    calls = []
+
+    class Store:
+        def claim_cleanup(self):
+            return DeletionCleanup("r", "owner", "paper", 2)
+
+        def mark_cleanup_complete(self, request_id):
+            calls.append(("complete", request_id))
+
+    class Backend:
+        def delete_derived(self, owner, paper):
+            calls.append(("derived", owner, paper))
+
+        def delete_source(self, owner, paper):
+            calls.append(("source", owner, paper))
+
+    result = RemoteDeletionCleanupService(
+        Store(), Backend(), DeletionPolicy(31, 30, 30)).run_once()
+    assert result == {"status": "complete", "attempt_count": 2}
+    assert calls == [
+        ("derived", "owner", "paper"),
+        ("source", "owner", "paper"),
+        ("complete", "r"),
+    ]
+
+
+def test_cleanup_failure_is_retryable_and_never_deletes_source_early():
+    calls = []
+
+    class Store:
+        def claim_cleanup(self):
+            return DeletionCleanup("r", "owner", "paper", 1)
+
+        def mark_cleanup_failed(self, request_id, error_code):
+            calls.append(("failed", request_id, error_code))
+
+    class Backend:
+        def delete_derived(self, *_):
+            raise RuntimeError("synthetic")
+
+        def delete_source(self, *_):
+            pytest.fail("파생 데이터 실패 뒤 원문을 지우면 안 됨")
+
+    result = RemoteDeletionCleanupService(
+        Store(), Backend(), DeletionPolicy(31, 30, 30)).run_once()
+    assert result == {"status": "failed", "attempt_count": 1,
+                      "error_code": "physical_cleanup_failed"}
+    assert calls == [("failed", "r", "physical_cleanup_failed")]
+
+
+def test_unapproved_retention_blocks_claiming_cleanup():
+    class Store:
+        def claim_cleanup(self):
+            pytest.fail("정책 승인 전에 삭제 작업을 claim하면 안 됨")
+
+    with pytest.raises(ValueError, match="deletion_retention_policy_unapproved"):
+        RemoteDeletionCleanupService(Store(), object(), DeletionPolicy()).run_once()
