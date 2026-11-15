@@ -114,6 +114,17 @@ def test_remote_processing_rows_cannot_change_revision_or_identity():
     assert item.sql.count("FOR SHARE") == 2
 
 
+def test_remote_upload_intent_links_upload_in_same_owner_version_scope():
+    item = discover_migrations(__import__("pathlib").Path("migrations/server"))[20]
+
+    assert "uq_server_pdf_uploads_owner_version_upload" in item.sql
+    assert "FOREIGN KEY (owner_user_id, paper_id, server_version_id, upload_id)" in item.sql
+    assert (
+        "REFERENCES server_pdf_uploads(owner_user_id, paper_id, "
+        "server_version_id, upload_id)" in item.sql
+    )
+
+
 def test_rejects_gaps_and_invalid_sql_files(tmp_path):
     (tmp_path / "0001_first.sql").write_text("SELECT 1", encoding="utf-8")
     (tmp_path / "0003_third.sql").write_text("SELECT 3", encoding="utf-8")

@@ -31,10 +31,21 @@ class PostgresRemoteUploadIntentStore:
     def create(self, owner_user_id, request_key, file_name, file_size, content_type, sha256_hex):
         if not all(isinstance(v, str) and v.strip() for v in (owner_user_id, request_key, file_name, sha256_hex)):
             raise ValueError("remote_upload_input_invalid")
+        if (
+            request_key != request_key.strip()
+            or not 1 <= len(request_key) <= 128
+            or file_name != file_name.strip()
+            or not 1 <= len(file_name) <= 255
+            or any(ord(char) < 32 for char in file_name)
+        ):
+            raise ValueError("remote_upload_input_invalid")
         if content_type != "application/pdf" or type(file_size) is not int or not 1 <= file_size <= 50 * 1024 * 1024:
             raise ValueError("remote_upload_input_invalid")
         if len(sha256_hex) != 64 or any(c not in "0123456789abcdef" for c in sha256_hex):
             raise ValueError("remote_upload_input_invalid")
+        now = self._now()
+        if not isinstance(now, datetime) or now.utcoffset() is None:
+            raise ValueError("remote_upload_clock_invalid")
         digest = _payload_hash(file_name, file_size, content_type, sha256_hex)
         with self._pool.connection() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (owner_user_id,))
@@ -48,11 +59,11 @@ class PostgresRemoteUploadIntentStore:
                     raise RemoteUploadConflict("remote_upload_request_conflict")
                 return _view(old)
             intent_id, paper_id, version_id = str(uuid4()), str(uuid4()), str(uuid4())
-            expires_at = self._now() + timedelta(minutes=15)
+            expires_at = now + timedelta(minutes=15)
             conn.execute(
                 """INSERT INTO server_papers(paper_id,owner_user_id,source_instance_id,local_paper_id,
                                                original_created_at,origin)
-                   VALUES (%s,%s,NULL,NULL,%s,'remote')""", (paper_id, owner_user_id, self._now()))
+                   VALUES (%s,%s,NULL,NULL,%s,'remote')""", (paper_id, owner_user_id, now))
             conn.execute(
                 """INSERT INTO server_processing_versions(owner_user_id,paper_id,server_version_id)
                    VALUES (%s,%s,%s)""", (owner_user_id, paper_id, version_id))

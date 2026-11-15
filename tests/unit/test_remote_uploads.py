@@ -45,3 +45,28 @@ def test_same_key_same_payload_replays_and_different_payload_conflicts():
     assert store.create("owner","key","paper.pdf",10,"application/pdf",SHA).intent_id=="i"
     with pytest.raises(RemoteUploadConflict):
         PostgresRemoteUploadIntentStore(Pool(old),now=lambda:NOW).create("owner","key","other.pdf",10,"application/pdf",SHA)
+
+
+@pytest.mark.parametrize("request_key,file_name", [
+    (" key", "paper.pdf"),
+    ("k" * 129, "paper.pdf"),
+    ("key", " paper.pdf"),
+    ("key", "paper\n.pdf"),
+    ("key", "p" * 256),
+])
+def test_rejects_ambiguous_or_unbounded_names_before_database(request_key, file_name):
+    pool = Pool()
+    with pytest.raises(ValueError, match="remote_upload_input_invalid"):
+        PostgresRemoteUploadIntentStore(pool, now=lambda: NOW).create(
+            "owner", request_key, file_name, 10, "application/pdf", SHA
+        )
+    assert pool.conn.calls == []
+
+
+def test_rejects_naive_server_clock_before_database():
+    pool = Pool()
+    with pytest.raises(ValueError, match="remote_upload_clock_invalid"):
+        PostgresRemoteUploadIntentStore(pool, now=lambda: NOW.replace(tzinfo=None)).create(
+            "owner", "key", "paper.pdf", 10, "application/pdf", SHA
+        )
+    assert pool.conn.calls == []
