@@ -41,8 +41,8 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 21)]
-    assert items[-1].name == "0020_remote_pgvector.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 22)]
+    assert items[-1].name == "0021_remote_upload_intents.sql"
 
 
 def test_remote_identity_mapping_uses_exact_issuer_subject_and_owner_fk():
@@ -117,6 +117,17 @@ def test_remote_processing_rows_cannot_change_revision_or_identity():
     assert item.sql.count("server_processing_require_lease(") == 2
     assert item.sql.count("processing_revision_finalized") == 2
     assert item.sql.count("FOR SHARE") == 2
+
+
+def test_remote_upload_intent_links_upload_in_same_owner_version_scope():
+    item = discover_migrations(__import__("pathlib").Path("migrations/server"))[20]
+
+    assert "uq_server_pdf_uploads_owner_version_upload" in item.sql
+    assert "FOREIGN KEY (owner_user_id, paper_id, server_version_id, upload_id)" in item.sql
+    assert (
+        "REFERENCES server_pdf_uploads(owner_user_id, paper_id, "
+        "server_version_id, upload_id)" in item.sql
+    )
 
 
 def test_rejects_gaps_and_invalid_sql_files(tmp_path):
