@@ -12,6 +12,7 @@ COPY src/solo_leveling/__init__.py ./src/solo_leveling/
 COPY src/solo_leveling/domain/__init__.py src/solo_leveling/domain/annotation.py src/solo_leveling/domain/learning_progress.py src/solo_leveling/domain/knowledge_graph.py ./src/solo_leveling/domain/
 COPY src/solo_leveling/knowledge/ ./src/solo_leveling/knowledge/
 COPY src/solo_leveling/application/__init__.py ./src/solo_leveling/application/
+COPY src/solo_leveling/application/evidence_qa/__init__.py src/solo_leveling/application/evidence_qa/remote_contract.py ./src/solo_leveling/application/evidence_qa/
 COPY src/solo_leveling/application/learning_path/__init__.py src/solo_leveling/application/learning_path/views.py ./src/solo_leveling/application/learning_path/
 COPY src/solo_leveling/interfaces/__init__.py ./src/solo_leveling/interfaces/
 COPY src/solo_leveling/interfaces/http/*.py ./src/solo_leveling/interfaces/http/
