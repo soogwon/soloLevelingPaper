@@ -41,8 +41,8 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 20)]
-    assert items[-1].name == "0019_remote_identity_links.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 21)]
+    assert items[-1].name == "0020_remote_pgvector.sql"
 
 
 def test_remote_identity_mapping_uses_exact_issuer_subject_and_owner_fk():
@@ -51,6 +51,16 @@ def test_remote_identity_mapping_uses_exact_issuer_subject_and_owner_fk():
     assert "PRIMARY KEY (issuer, subject)" in item.sql
     assert "REFERENCES server_users(owner_user_id)" in item.sql
     assert "WHERE revoked_at IS NULL" in item.sql
+
+
+def test_remote_pgvector_rows_keep_owner_revision_and_chunk_scope():
+    item = discover_migrations(__import__("pathlib").Path("migrations/server"))[19]
+
+    assert "CREATE EXTENSION IF NOT EXISTS vector" in item.sql
+    assert "ADD COLUMN section_id" in item.sql
+    assert "PRIMARY KEY (owner_user_id, embedding_set_id, chunk_id)" in item.sql
+    assert item.sql.count("FOREIGN KEY (owner_user_id, paper_id, server_version_id") == 2
+    assert "CHECK (vector_dims(embedding) = dimension)" in item.sql
 
 
 def test_remote_processing_schema_uses_owner_scoped_composite_references():
