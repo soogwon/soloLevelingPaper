@@ -32,3 +32,15 @@ def test_verified_result_replays_after_cleanup_failure_and_expiry(pool, db):
     assert store.get_completed('other-owner', intent.intent_id) is None
     assert objects.copies == 1
     assert db('SELECT count(*) AS n FROM server_pdf_uploads WHERE paper_id=%s', (intent.paper_id,))[0]['n'] == 1
+
+
+def test_expired_reservation_commits_expired_status_without_upload(pool, db):
+    db("INSERT INTO server_users(owner_user_id,display_name) VALUES ('expired-owner','합성 사용자')")
+    store = PostgresRemoteUploadIntentStore(pool)
+    intent = store.create('expired-owner', 'expired-key', 'paper.pdf', 10, 'application/pdf', 'b' * 64)
+    db("UPDATE server_remote_upload_intents SET expires_at=CURRENT_TIMESTAMP - interval '1 second' WHERE intent_id=%s", (intent.intent_id,))
+    for _ in range(2):
+        with pytest.raises(ValueError, match='remote_upload_expired'):
+            store.reserve_upload('expired-owner', intent.intent_id)
+    assert db('SELECT status FROM server_remote_upload_intents WHERE intent_id=%s', (intent.intent_id,))[0]['status'] == 'expired'
+    assert db('SELECT count(*) AS n FROM server_pdf_uploads WHERE paper_id=%s', (intent.paper_id,))[0]['n'] == 0
