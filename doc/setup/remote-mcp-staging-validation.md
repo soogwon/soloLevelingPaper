@@ -70,6 +70,49 @@ allowlist에 추가하지 않았다.
 최종 정리는 관리 화면에서 승인받은 임시 client 삭제와 새로고침 후 목록 부재로
 확인했다. API Offline Access=false 및 기존 수명도 다시 확인했다.
 
+## 두 계정·실발급 거부 재검증
+
+2026-11-16 최신 staging 배포에서 별도 Native PKCE client 두 개와 전용 DB 계정
+두 개를 사용했다. client ID, 토큰, 비밀번호, subject는 기록하지 않았다. S256과 정확한
+loopback callback을 사용했고 토큰은 검증 프로세스 메모리에만 보관했다.
+
+| 사례 | 실제 결과 |
+|---|---|
+| 허용 client + 계정 A | initialize/tools/list/whoami 모두 200 |
+| 허용 client + 계정 B | initialize/tools/list/whoami 모두 200 |
+| 비허용 client + 정상 issuer/audience/scope | 토큰 발급 성공, initialize 401 |
+| 허용 client + `spike:read` 미요청 | 토큰 발급 성공, initialize 401 |
+| 허용 client + Staging API audience | 토큰 발급 성공, MCP initialize 401 |
+| 허용 client의 ID token | 발급 성공, MCP initialize 401 |
+| 유효 access token + 합성 session ID | 400 |
+| 유효 access token + 존재하지 않는 합성 도구명 | MCP 결과 `isError=true`, 부작용 없음 |
+| metadata/무토큰/무효 bearer | 200/401/401 |
+
+Staging API audience 시험에는 정의된 scope가 없는 사용자 위임 grant를 임시로 만들었다.
+시험 직후 해당 grant 삭제와 `No per-app authorization grant`를 확인했다. MCP API의
+`spike:read` grant는 1/1로 유지했다. Management API audience는 광범위한 동의 화면이
+나와 승인하지 않고 중단했으며, 결과에 포함하지 않는다.
+
+이는 두 계정이 각각 로그인하고 동일 최소 도구를 호출할 수 있다는 증거다. whoami가
+subject를 반환하지 않으므로 계정별 저장 데이터 격리나 서로 다른 subject의 직접 비교를
+통과 처리하지 않는다. stateless session 거부 역시 제품 상태 세션 격리의 증거가 아니다.
+
+### 로컬 검증기 판정 기준
+
+`scripts/verify_remote_mcp_auth0.py`는 현재 staging의 JSON 응답을 검증한다.
+`--expect allowed`는 initialize 성공뿐 아니라 whoami 도구 목록·호출 성공,
+합성 session ID의 400, 비허용 도구의 `isError=true`가 모두 확인돼야 종료 코드 0을 반환한다.
+HTTP 200 안의 JSON-RPC 오류나 잘못된 응답 형식도 실패로 처리한다.
+`--expect denied`는 실제 발급받은 토큰으로 initialize가 401인지 확인한다.
+
+콜백은 `/callback` 경로와 단일 state/code를 검사하며, favicon이나 잘못된 state 요청은
+인증 대기를 종료하지 않는다. 최대 300초 대기 후 서버를 닫고 첫 유효 콜백만 사용한다.
+OAuth 오류와 네트워크 오류는 고정 코드만 출력하며 응답 본문과 토큰을 출력하지 않는다.
+후속 HTTP 호출이 실패한 경우에도 관측한 상태 코드는 그대로 기록한다.
+
+PR #462 리뷰 보완은 합성 응답 및 로컬 loopback 회귀 테스트로 검증했다.
+보완된 검증기로 Auth0 로그인과 staging 실발급 시험을 다시 실행한 것은 아니다.
+
 ## 지원 대상 표: 검증 범위이며 제품 지원 확정이 아님
 
 | 호스트·요금제 | 상태 | 남은 것 |
@@ -84,13 +127,12 @@ allowlist에 추가하지 않았다.
 
 계정·발급 환경과 사례별 정상 대조군은
 [A 협의용 준비사항](remote-mcp-auth0-test-preparation.md)에 정리했다.
-기록일 기준으로 사용자가 테스트 계정 2개와 별도 발급 환경이 아직 준비되지 않았다고 확인했다.
+테스트 계정 2개와 허용/비허용 발급 client는 준비됐고 위 최소 실측을 마쳤다.
 
-1. 실발급 만료·잘못된 audience/scope/client·ID token·웹/기기 토큰의 제품 거부.
-   각 거부 원인을 구분할 기준 정상 요청이 필요하다. 허용하지 않은 client 토큰의 401을
-   audience 또는 scope 검증 증거로 재사용하지 않는다. 다른 issuer 시험은 별도 발급자 필요.
-2. 두 승인된 테스트 계정과 허용되지 않은 도구 호출. 현재 모든 session ID를 거부하는
-   stateless 계약을 제품 상태 세션의 사용자 격리 완료로 보지 않는다.
+1. 실제 만료 전후, 다른 issuer, 웹/기기/M2M 토큰의 제품 거부. 다른 issuer 시험은
+   별도 발급자가 필요하고, 만료 시험은 승인된 짧은 TTL과 설정 복원이 필요하다.
+2. 두 계정의 서로 다른 verified identity boolean 대조와 실제 소유 데이터 교차 접근 검증.
+   현재 모든 session ID를 거부하는 stateless 계약을 제품 상태 세션 격리 완료로 보지 않는다.
 3. published identity의 Auth0 호환성 실측 및 직접 등록/DCR 대안 선택 근거.
    관리 화면에 metadata URL import 선택지가 보였다는 사실만으로 호환을 판정하지 않는다.
 4. A·C와 최소 지원 조합을 확정하고 미검증 조합의 제외·재검토 조건을 합의한다.
