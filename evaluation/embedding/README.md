@@ -1,5 +1,25 @@
 # #391 임베딩 비교 준비
 
+## 캡처 v2 보완
+
+- ONNX graph의 producer/version·opset, graph 및 모든 external tensor 파일, 토크나이저/공통 설정
+  파일을 지문에 결합한다. graph metadata를 읽기 위해 평가 환경에 `onnx` 패키지가 필요하다.
+  export·파일 다운로드는 하지 않으며 metadata가 없으면 추정하지 않고 거부한다.
+- ORT SessionOptions에 intra/inter-op 스레드와 sequential 실행을 명시하고, 실제 생성된 session의
+  provider·옵션을 관측해 일치하는지 검사한다. 환경 변수만으로 단일 스레드를 보증하지 않는다.
+- ONNX graph의 tensor type·quantization operator 관측을 기록하며 정밀도를 무조건 float32로 쓰지 않는다.
+  이 관측이 exporter의 정확도·양자화 방법을 인증하는 것은 아니므로 A의 산출물 검토는 별도다.
+- PyTorch/ONNX는 공통 procedure v2를 사용한다. input artifact hash·스레드·환경·반복 수 등이
+  일치해야 performance_comparable이 true다. 기존 v1 기준선과 새 v2 후보는 그대로 비교 가능 처리하지 않는다.
+  기준선도 v2로 다시 캡처해야 한다. 기존 원시 결과나 보고서를 덮어쓰지 않는다.
+- ORT session의 접근 경로는 현재 adapter의 `model[0].auto_model.model`이다. 실제 설치한
+  sentence-transformers/Optimum 버전에서 이 경로와 session_options 전달을 확인해야 한다.
+  지원되지 않으면 실패하며 다른 provider/기본 스레드로 조용히 대체하지 않는다.
+
+이번 보완은 오프라인 파일·대역 테스트만 수행했다. 후보 실측·export·모델 다운로드는 하지 않았다.
+라벨은 draft이고 수치 허용값은 확정하지 않았다. 사람이 라벨·허용값을 검토한 뒤 후보 결과를
+보기 전에 데이터/기준 버전과 해시를 고정해야 한다. #391은 계속 열어둔다.
+
 이 PR은 B가 독립적으로 준비할 **합성 자료·캡처 형식·오프라인 비교기**이다.
 모델·ONNX exporter·DB·검색 어댑터·런타임 의존성은 추가하지 않는다.
 PyTorch 기준선과 ONNX 실측, 허용값 확정은 아직 남아 있으므로 #391을 닫지 않는다.

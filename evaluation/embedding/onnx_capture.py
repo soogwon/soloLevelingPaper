@@ -1,6 +1,5 @@
 """고정 로컬 ONNX 산출물만 사용하는 #391 후보 캡처."""
 
-import hashlib
 from importlib.metadata import version
 import json
 import os
@@ -11,16 +10,11 @@ import time
 
 from evaluation.embedding.comparison import compare, digest, load_json, require, validate_capture, validate_dataset
 from evaluation.embedding.pytorch_capture import encode_vectors, sample_worker
+from evaluation.embedding.artifacts import PROCEDURE, onnx_manifest, ort_session_options, observe_ort_session
 
 
 def onnx_artifact_digest(model_dir: Path, file_name: str) -> str:
-    target = (model_dir / file_name).resolve()
-    require(target.is_file() and target.is_relative_to(model_dir.resolve()), "ONNX_ARTIFACT_INVALID")
-    h = hashlib.sha256()
-    with target.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            h.update(block)
-    return h.hexdigest()
+    return digest(onnx_manifest(model_dir, file_name))
 
 
 def worker(dataset, model_dir, file_name, output, started_ns, *, max_length, batch_size, threads, warm_repeats):
@@ -31,10 +25,12 @@ def worker(dataset, model_dir, file_name, output, started_ns, *, max_length, bat
     data = validate_dataset(load_json(dataset))
     model = SentenceTransformer(
         str(model_dir), backend="onnx",
-        model_kwargs={"provider": "CPUExecutionProvider", "file_name": file_name, "export": False},
+        model_kwargs={"provider": "CPUExecutionProvider", "file_name": file_name, "export": False,
+                      "session_options": ort_session_options(ort, threads)},
         local_files_only=True,
     )
     model.max_seq_length = max_length
+    observation = observe_ort_session(model[0].auto_model.model, threads)
     vectors = encode_vectors(model, data, batch_size)
     cold_ms = (time.perf_counter_ns() - started_ns) / 1e6
     warm_ms = []
@@ -50,11 +46,13 @@ def worker(dataset, model_dir, file_name, output, started_ns, *, max_length, bat
         pooling=json.dumps(model[1].get_config_dict(), sort_keys=True), normalization="l2",
         max_length=max_length, dimension=len(next(iter(vectors["chunks"].values()))), distance="cosine",
         runtime="onnx",
-        runtime_version=f"onnxruntime={version('onnxruntime')};sentence-transformers={version('sentence-transformers')}",
-        precision="float32", artifact_sha256="0" * 64,
+        runtime_version=f"onnxruntime={version('onnxruntime')};sentence-transformers={version('sentence-transformers')};"
+                        f"transformers={version('transformers')};provider=CPUExecutionProvider",
+        precision="graph-manifest", artifact_sha256="0" * 64,
     )
     with output.open("x", encoding="utf-8") as handle:
-        json.dump(dict(settings=settings, cold_ms=cold_ms, warm_ms=warm_ms, **vectors), handle, allow_nan=False)
+        json.dump(dict(settings=settings, cold_ms=cold_ms, warm_ms=warm_ms,
+                       runtime_observation=observation, **vectors), handle, allow_nan=False)
 
 
 def capture(dataset, model_dir, file_name, output_dir, *, repeats=3, warm_repeats=3, max_length=128,
@@ -69,7 +67,8 @@ def capture(dataset, model_dir, file_name, output_dir, *, repeats=3, warm_repeat
             "models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2", "MODEL_SNAPSHOT_INVALID")
     require(isinstance(file_name, str) and file_name.startswith("onnx/")
             and not Path(file_name).is_absolute() and ".." not in Path(file_name).parts, "ONNX_ARTIFACT_INVALID")
-    fingerprint = onnx_artifact_digest(model_dir, file_name)
+    manifest = onnx_manifest(model_dir, file_name)
+    fingerprint = digest(manifest)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1",
@@ -85,14 +84,21 @@ def capture(dataset, model_dir, file_name, output_dir, *, repeats=3, warm_repeat
                    "--max-length", str(max_length), "--batch-size", str(batch_size), "--threads", str(threads)]
         peak = sample_worker(command, env, timeout=timeout)
         row = load_json(result_path)
+        require(row.get('runtime_observation') == dict(provider='CPUExecutionProvider',
+                    intra_op_num_threads=threads, inter_op_num_threads=threads, execution_mode='ORT_SEQUENTIAL'),
+                'ORT_SESSION_MISMATCH')
         row["settings"]["artifact_sha256"] = fingerprint
+        row["settings"]["precision"] = json.dumps(dict(initializer_types=manifest['initializer_types'],
+                        quantization_ops=manifest['quantization_ops']), sort_keys=True)
         result = dict(schema_version=1, dataset_sha256=digest(data), synthetic=False,
                       settings=row["settings"], embedding_fingerprint=digest(row["settings"]),
                       chunks=row["chunks"], queries=row["queries"], token_observations=row["token_observations"],
+                      provenance=manifest, runtime_observation=row['runtime_observation'],
                       measurements=dict(cold_ms=[row["cold_ms"]], warm_ms=row["warm_ms"], peak_rss_bytes=peak,
                                         environment=f"{platform.system()} {platform.release()};Python {platform.python_version()};"
                                                     f"{platform.machine()};{platform.processor()}",
-                                        procedure="onnx-local-artifact-v1;imports+load+encode+token-count",
+                                        procedure=PROCEDURE, protocol_version=2,
+                                        input_artifacts_sha256=manifest['input_artifacts_sha256'],
                                         rss_method=f"psutil {version('psutil')};10ms sampled sum RSS process tree",
                                         batch_policy=f"chunks-then-queries;batch={batch_size}",
                                         threads=str(threads), device="cpu"))

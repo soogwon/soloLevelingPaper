@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import socket
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,12 +14,17 @@ DATA = Path(__file__).resolve().parents[2] / "evaluation/embedding/cases.json"
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", lambda *a, **k: pytest.fail("실제 네트워크 금지"))
+    from evaluation.embedding import artifacts
+    monkeypatch.setattr(artifacts, '_load_graph', lambda _: SimpleNamespace(
+        producer_name='synthetic-exporter', producer_version='1',
+        opset_import=[SimpleNamespace(domain='', version=17)], ListFields=lambda: []))
 
 
 def snapshot(tmp_path):
     folder = tmp_path / "models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2/snapshots" / ("a" * 40)
     (folder / "onnx").mkdir(parents=True)
     (folder / "onnx/model.onnx").write_bytes(b"fixed-onnx")
+    (folder / 'tokenizer.json').write_text('{}')
     return folder
 
 
@@ -44,6 +50,8 @@ def test_capture_uses_offline_fresh_workers_and_aggregates(tmp_path, monkeypatch
         row = synthetic_capture(load_json(DATA))
         row["settings"]["runtime"] = "onnx"
         row.update(cold_ms=50 + len(calls), warm_ms=[5, 6], token_observations={})
+        row['runtime_observation'] = dict(provider='CPUExecutionProvider', intra_op_num_threads=1,
+                                        inter_op_num_threads=1, execution_mode='ORT_SEQUENTIAL')
         Path(command[command.index("--output") + 1]).write_text(json.dumps(row), encoding="utf-8")
         calls.append(command)
         return 512 + len(calls)

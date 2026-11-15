@@ -13,6 +13,7 @@ import time
 from evaluation.embedding.comparison import (
     EvaluationError, compare, digest, load_json, require, validate_capture, validate_dataset,
 )
+from evaluation.embedding.artifacts import PROCEDURE, input_artifact_digest
 
 
 def artifact_digest(folder):
@@ -139,6 +140,7 @@ def capture(dataset, model_dir, output_dir, *, repeats=3, warm_repeats=3, max_le
             and model_dir.parent.parent.name ==
             'models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2', 'MODEL_SNAPSHOT_INVALID')
     fingerprint = artifact_digest(model_dir)
+    input_fingerprint = input_artifact_digest(model_dir)
     # 기존 결과를 덮어쓰지 않는다. 중단 시 부분 결과는 이 전용 디렉터리에만 남는다.
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
@@ -163,7 +165,8 @@ def capture(dataset, model_dir, output_dir, *, repeats=3, warm_repeats=3, max_le
                       measurements=dict(cold_ms=[row['cold_ms']], warm_ms=row['warm_ms'], peak_rss_bytes=peak,
                                         environment=f'{platform.system()} {platform.release()};Python {platform.python_version()};'
                                                     f'{platform.machine()};{platform.processor()}',
-                                        procedure='pytorch-local-snapshot-v1;imports+load+encode+token-count;cold-and-warm-rss',
+                                        procedure=PROCEDURE, protocol_version=2,
+                                        input_artifacts_sha256=input_fingerprint,
                                         rss_method=f'psutil {version("psutil")};10ms sampled sum RSS process tree',
                                         batch_policy=f'chunks-then-queries;batch={batch_size}',
                                         threads=str(threads), device='cpu'))
