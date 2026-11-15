@@ -92,7 +92,7 @@ class PostgresRemoteAnswerStore:
                        WHERE c.owner_user_id=%s AND c.paper_id=%s AND c.server_version_id=%s
                          AND c.parse_revision_id=%s AND c.chunk_id=%s
                          AND position(%s in c.original_text)>0
-                         AND (%s IS NULL OR position(%s in tc.translated_text)>0)
+                         AND (%s::text IS NULL OR position(%s in tc.translated_text)>0)
                        ON CONFLICT DO NOTHING RETURNING evidence_id""",
                     (
                         evidence_id,
