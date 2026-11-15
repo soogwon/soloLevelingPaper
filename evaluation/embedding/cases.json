@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "version": "synthetic-embedding-v1-draft",
-  "provenance": "All texts and identities are synthetic, authored for issue #391. Relevance labels await human review.",
+  "version": "synthetic-embedding-v2-draft",
+  "provenance": "All texts and identities are synthetic, authored for issue #391. The subject matter (lantern relay, bucket chaining, depots, convoys) is fictional and does not restate any published paper. Relevance labels await human review.",
   "chunks": [
     {
       "owner_id": "user-a",
@@ -9,10 +9,10 @@
       "parse_revision_id": "parse-1",
       "translation_revision_id": "ko-1",
       "embedding_scope": "published-1",
-      "id": "attention",
+      "id": "condition",
       "pdf_page": 6,
       "section_id": "s4",
-      "text": "Self-attention has lower per-layer complexity than recurrence when sequence length n is smaller than representation dimension d."
+      "text": "Lantern relay needs fewer handoffs per round than bucket chaining when convoy length m is smaller than depot count k."
     },
     {
       "owner_id": "user-a",
@@ -20,10 +20,10 @@
       "parse_revision_id": "parse-1",
       "translation_revision_id": "ko-1",
       "embedding_scope": "published-1",
-      "id": "path",
+      "id": "hops",
       "pdf_page": 6,
       "section_id": "s4",
-      "text": "Shorter paths between positions make long-range dependencies easier to learn."
+      "text": "Fewer relay hops between depots make distant deliveries easier to coordinate."
     },
     {
       "owner_id": "user-a",
@@ -31,10 +31,10 @@
       "parse_revision_id": "parse-1",
       "translation_revision_id": "ko-1",
       "embedding_scope": "published-1",
-      "id": "parallel",
+      "id": "rounds",
       "pdf_page": 6,
       "section_id": "s4",
-      "text": "Self-attention needs constant sequential operations; recurrence needs n sequential operations. Sequential count is distinct from total computational complexity."
+      "text": "Lantern relay needs a fixed number of sequential rounds; bucket chaining needs m sequential rounds. Round count is distinct from total handoff cost."
     },
     {
       "owner_id": "user-a",
@@ -45,7 +45,7 @@
       "id": "continuation-head",
       "pdf_page": 6,
       "section_id": "s4",
-      "text": "The synthetic method is faster than recurrence when the sequence"
+      "text": "The synthetic method is faster than bucket chaining when the convoy"
     },
     {
       "owner_id": "user-a",
@@ -56,7 +56,7 @@
       "id": "continuation-tail",
       "pdf_page": 7,
       "section_id": "s4",
-      "text": "length n is smaller than representation dimension d. This condition concerns per-layer computation."
+      "text": "length m is smaller than depot count k. This condition concerns per-round handoffs."
     },
     {
       "owner_id": "user-a",
@@ -122,7 +122,7 @@
       "id": "outside-page",
       "pdf_page": 99,
       "section_id": "s4",
-      "text": "Self-attention has lower complexity when n is smaller than d."
+      "text": "Lantern relay needs fewer handoffs when m is smaller than k."
     },
     {
       "owner_id": "user-a",
@@ -133,7 +133,7 @@
       "id": "outside-section",
       "pdf_page": 6,
       "section_id": "appendix",
-      "text": "Self-attention has lower complexity when n is smaller than d."
+      "text": "Lantern relay needs fewer handoffs when m is smaller than k."
     },
     {
       "owner_id": "user-b",
@@ -144,7 +144,7 @@
       "id": "other-user",
       "pdf_page": 6,
       "section_id": "s4",
-      "text": "Self-attention has lower complexity when n is smaller than d."
+      "text": "Lantern relay needs fewer handoffs when m is smaller than k."
     },
     {
       "owner_id": "user-a",
@@ -155,7 +155,7 @@
       "id": "old-revision",
       "pdf_page": 6,
       "section_id": "s4",
-      "text": "Self-attention has lower complexity when n is smaller than d."
+      "text": "Lantern relay needs fewer handoffs when m is smaller than k."
     },
     {
       "owner_id": "user-a",
@@ -166,7 +166,7 @@
       "id": "unpublished",
       "pdf_page": 6,
       "section_id": "s4",
-      "text": "Self-attention has lower complexity when n is smaller than d."
+      "text": "Lantern relay needs fewer handoffs when m is smaller than k."
     },
     {
       "owner_id": "user-a",
@@ -177,7 +177,7 @@
       "id": "other-version",
       "pdf_page": 6,
       "section_id": "s4",
-      "text": "Self-attention has lower complexity when n is smaller than d."
+      "text": "Lantern relay needs fewer handoffs when m is smaller than k."
     },
     {
       "owner_id": "user-a",
@@ -188,7 +188,7 @@
       "id": "old-translation",
       "pdf_page": 6,
       "section_id": "s4",
-      "text": "Self-attention has lower complexity when n is smaller than d."
+      "text": "Lantern relay needs fewer handoffs when m is smaller than k."
     }
   ],
   "queries": [
@@ -199,7 +199,7 @@
       "translation_revision_id": "ko-1",
       "embedding_scope": "published-1",
       "id": "ko-condition",
-      "text": "Self-attention이 recurrence보다 계산량이 적은 조건은?",
+      "text": "Lantern relay가 bucket chaining보다 라운드당 전달 횟수가 적은 조건은?",
       "pdf_pages": [
         6,
         7
@@ -208,7 +208,7 @@
         "s4"
       ],
       "required_chunk_ids": [
-        "attention"
+        "condition"
       ],
       "top_k": 3
     },
@@ -219,7 +219,7 @@
       "translation_revision_id": "ko-1",
       "embedding_scope": "published-1",
       "id": "en-condition",
-      "text": "When is self-attention cheaper per layer than recurrence?",
+      "text": "When does lantern relay need fewer handoffs per round than bucket chaining?",
       "pdf_pages": [
         6,
         7
@@ -228,7 +228,7 @@
         "s4"
       ],
       "required_chunk_ids": [
-        "attention"
+        "condition"
       ],
       "top_k": 3
     },
@@ -239,7 +239,7 @@
       "translation_revision_id": "ko-1",
       "embedding_scope": "published-1",
       "id": "ko-path",
-      "text": "경로 길이가 장거리 의존성 학습에 미치는 영향은?",
+      "text": "중계 구간 수가 먼 거리 배송 조율에 미치는 영향은?",
       "pdf_pages": [
         6
       ],
@@ -247,7 +247,7 @@
         "s4"
       ],
       "required_chunk_ids": [
-        "path"
+        "hops"
       ],
       "top_k": 2
     },
@@ -258,7 +258,7 @@
       "translation_revision_id": "ko-1",
       "embedding_scope": "published-1",
       "id": "parallel-vs-cost",
-      "text": "순차 연산 수와 총 계산 복잡도는 같은가?",
+      "text": "순차 라운드 수와 총 전달 비용은 같은가?",
       "pdf_pages": [
         6
       ],
@@ -266,7 +266,7 @@
         "s4"
       ],
       "required_chunk_ids": [
-        "parallel"
+        "rounds"
       ],
       "top_k": 2
     },
@@ -393,13 +393,13 @@
       "translation_revision_id": "ko-1",
       "embedding_scope": "published-1",
       "id": "owner-and-revision",
-      "text": "Find the active attention condition without other users or revisions.",
+      "text": "Find the active lantern relay condition without other users or revisions.",
       "pdf_pages": [],
       "section_ids": [
         "s4"
       ],
       "required_chunk_ids": [
-        "attention"
+        "condition"
       ],
       "top_k": 4
     },
@@ -410,7 +410,7 @@
       "translation_revision_id": "ko-1",
       "embedding_scope": "published-1",
       "id": "section-filter",
-      "text": "Find the section four attention condition on page six.",
+      "text": "Find the section four lantern relay condition on page six.",
       "pdf_pages": [
         6
       ],
@@ -418,7 +418,7 @@
         "s4"
       ],
       "required_chunk_ids": [
-        "attention"
+        "condition"
       ],
       "top_k": 2
     }
