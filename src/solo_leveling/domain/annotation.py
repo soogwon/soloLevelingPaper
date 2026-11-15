@@ -123,6 +123,7 @@ class Annotation:
     created_at: str
     updated_at: str
     segments: Tuple[AnnotationSegment, ...] = field(default_factory=tuple)
+    creation_origin: str = 'unknown'  # 최초 작성 주체에 대한 호출자 신고이며 소유권·인증 정보가 아니다.
 
 
 @dataclass(frozen=True)
