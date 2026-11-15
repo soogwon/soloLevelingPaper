@@ -62,4 +62,3 @@ def test_expired_cleanup_rotates_beyond_batch_and_skips_empty_intents(pool, db):
     assert set(seen)==set(ids) and empty.intent_id not in seen
     # 성공/실패 또는 지연 PUT 뒤에도 반복 정리하되 다른 객체를 굶기지 않는다.
     assert store.claim_expired_objects(limit=1)[0].intent_id in ids
-
