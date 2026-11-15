@@ -50,6 +50,8 @@ services:
         sync: false
       - key: REMOTE_MCP_OIDC_JWKS_URL
         sync: false
+      - key: REMOTE_MCP_ALLOWED_CLIENT_IDS
+        sync: false
       - key: REMOTE_MCP_REQUIRED_SCOPE
         value: spike:read
       - key: REMOTE_MCP_ALLOWED_HOSTS
