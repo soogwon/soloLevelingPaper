@@ -18,9 +18,11 @@ class Result:
 
 
 class Connection:
-    def __init__(self, revision_row=None, active_row=None):
+    def __init__(self, revision_row=None, active_row=None, replay_row=None, job_finished=True):
         self.revision_row = revision_row
         self.active_row = active_row
+        self.replay_row = replay_row
+        self.job_finished = job_finished
         self.calls = []
 
     def execute(self, sql, params=()):
@@ -31,6 +33,10 @@ class Connection:
             return Result({"server_version_id": params[3]})
         if "JOIN server_processing_publications p" in sql:
             return Result(self.active_row)
+        if sql.startswith("UPDATE server_processing_jobs"):
+            return Result({"job_id": params[1]} if self.job_finished else None)
+        if "FROM server_processing_publications" in sql and "source_lease_token=%s" in sql:
+            return Result(self.replay_row)
         return Result()
 
 
@@ -200,3 +206,52 @@ def test_omission_match_is_counted_inside_the_owner_scoped_revision():
     sql = conn.calls[0][0]
     assert "matched_omission_count" in sql
     assert "jsonb_array_elements(tr.omissions)" in sql
+
+
+def test_publication_finishes_the_job_in_the_same_transaction():
+    conn = Connection(ready_row())
+
+    PostgresProcessingPublicationStore(Pool(conn)).publish(
+        "user-a", "paper", "v1", "parse", "translation", "embedding", "job", "lease",
+        policy="complete",
+    )
+
+    statements = [sql.split()[0:3] for sql, _ in conn.calls]
+    assert statements[-1] == ["UPDATE", "server_processing_jobs", "SET"]
+    sql, params = conn.calls[-1]
+    assert "status='succeeded'" in sql and "lease_expires_at>CURRENT_TIMESTAMP" in sql
+    assert params == ("user-a", "job", "lease")
+
+
+def test_publication_is_rejected_when_the_job_cannot_be_finished():
+    conn = Connection(ready_row(), job_finished=False)
+
+    with pytest.raises(ProcessingPublicationNotFound, match="not_found"):
+        PostgresProcessingPublicationStore(Pool(conn)).publish(
+            "user-a", "paper", "v1", "parse", "translation", "embedding", "job", "lease",
+            policy="complete",
+        )
+
+
+def test_lost_response_replays_the_publication_of_the_same_generation():
+    conn = Connection(
+        revision_row=None,
+        replay_row={
+            "publication_id": "publication",
+            "publication_policy": "complete",
+            "manifest": {"policy": "complete"},
+        },
+    )
+
+    result = PostgresProcessingPublicationStore(Pool(conn)).publish(
+        "user-a", "paper", "v1", "parse", "translation", "embedding", "job", "lease",
+        policy="complete",
+    )
+
+    assert result.publication_id == "publication"
+    replay_sql, replay_params = conn.calls[-1]
+    assert not any(sql.startswith("INSERT") for sql, _ in conn.calls)
+    # 사용자·revision 집합·job·실행 세대·정책이 모두 같을 때만 재생한다.
+    assert replay_params == (
+        "user-a", "paper", "v1", "parse", "translation", "embedding", "job", "lease", "complete"
+    )

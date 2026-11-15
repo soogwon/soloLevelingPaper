@@ -20,6 +20,11 @@ worker는 생성 순서대로 한 건을 `FOR UPDATE SKIP LOCKED`로 claim한다
 lease가 만료된 실행은 다음 worker가 새 token으로 회수할 수 있다. 이전 worker의 heartbeat,
 완료, 실패와 publication 게시 요청은 모두 거부된다. `SKIP LOCKED`만으로 실행권을 보장하지 않는다.
 
+실행권은 게시뿐 아니라 저장에도 적용된다. revision과 그 chunk·번역 행은 자신을 만든 job의
+lease token에 묶여 있어, 회수된 뒤에는 이전 worker가 `building` 중인 결과에도 쓰지 못한다.
+게시가 성공하면 같은 transaction에서 작업이 `succeeded`가 되므로 게시한 worker는 `succeed`를
+따로 부르지 않는다. 자세한 계약은 [게시 계약](remote-processing-publication.md)을 따른다.
+
 lease 만료 판정과 시각 기록은 모두 DB 시계(`CURRENT_TIMESTAMP`)로 한다. API와 worker 서버의
 시계가 어긋나도 claim·heartbeat·완료·게시의 판정이 서로 달라지지 않는다.
 
