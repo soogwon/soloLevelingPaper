@@ -41,8 +41,31 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 23)]
-    assert items[-1].name == "0022_remote_upload_verification.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 24)]
+    assert items[-1].name == "0023_remote_deletion_tombstones.sql"
+
+
+def test_remote_deletion_tombstone_blocks_every_processing_write_path():
+    sql = (__import__("pathlib").Path("migrations/server") / "0023_remote_deletion_tombstones.sql").read_text()
+
+    assert "deleted_at timestamptz" in sql
+    assert "server_deletion_requests" in sql
+    for table in (
+        "server_processing_jobs",
+        "server_processing_versions",
+        "server_parse_revisions",
+        "server_processing_chunks",
+        "server_translation_revisions",
+        "server_translation_chunks",
+        "server_embedding_sets",
+        "server_embedding_vectors",
+        "server_processing_publications",
+        "server_execution_contexts",
+        "server_processing_evidences",
+        "server_pdf_uploads",
+        "server_remote_upload_intents",
+    ):
+        assert f"BEFORE INSERT OR UPDATE ON {table}" in sql
 
 
 def test_remote_identity_mapping_uses_exact_issuer_subject_and_owner_fk():
