@@ -1,6 +1,6 @@
 """중앙 HTTP API 애플리케이션 팩터리."""
 
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING
 
 from .settings import HttpSettings, load_http_settings
@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from .papers import PaperStore
     from .collections import CollectionStore
     from .resume_requests import ResumeRequestStore
+    from .settings import RemoteMcpSettings
+    from mcp.server.auth.provider import TokenVerifier
 
 
 def create_app(
@@ -28,6 +30,8 @@ def create_app(
     web_auth_flow=None,
     web_session_store=None,
     knowledge_graph=None,
+    remote_mcp_settings: "RemoteMcpSettings | None" = None,
+    remote_mcp_verifier: "TokenVerifier | None" = None,
 ) -> "FastAPI":
     """명시적 설정 또는 환경 설정으로 독립적인 API 앱을 만든다."""
 
@@ -49,11 +53,13 @@ def create_app(
     from .papers import PostgresPaperStore, UnavailablePaperStore
     from .resume_requests import PostgresResumeRequestStore, UnavailableResumeRequestStore
     from .resume_routes import create_resume_router
+    from .remote_mcp import RemoteMcpDispatchMiddleware, create_remote_mcp
     from .knowledge_graph_routes import create_knowledge_graph_router, load_server_graph
     from .settings import (
         load_database_settings,
         load_oidc_settings,
         load_object_storage_settings,
+        load_remote_mcp_settings,
         load_web_auth_settings,
         load_web_static_root,
     )
@@ -86,16 +92,20 @@ def create_app(
         storage_settings = load_object_storage_settings()
         object_storage = (S3ObjectStorage.create(storage_settings) if storage_settings is not None
                           else UnavailableObjectStorage())
+    selected_remote_mcp = (remote_mcp_settings if remote_mcp_settings is not None
+                           else load_remote_mcp_settings())
+    remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier)
+                     if selected_remote_mcp.enabled else None)
 
     @asynccontextmanager
     async def lifespan(_app):
-        if managed_store is not None:
-            managed_store.open()
-        try:
-            yield
-        finally:
+        async with AsyncExitStack() as stack:
             if managed_store is not None:
-                managed_store.close()
+                managed_store.open()
+                stack.callback(managed_store.close)
+            if remote_bundle is not None:
+                await stack.enter_async_context(remote_bundle.server.session_manager.run())
+            yield
 
     app = FastAPI(
         title="Solo Leveling Paper API",
@@ -103,6 +113,9 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.settings = selected
+    if remote_bundle is not None:
+        # SDK의 인증·DNS rebinding middleware를 잃지 않고 두 공개 경로만 먼저 분기한다.
+        app.add_middleware(RemoteMcpDispatchMiddleware, remote_app=remote_bundle.app)
     if token_verifier is None:
         oidc_settings = load_oidc_settings()
         token_verifier = OidcAccessTokenVerifier(oidc_settings) if oidc_settings else RejectAllTokenVerifier()
@@ -163,7 +176,6 @@ def create_app(
     app.include_router(create_knowledge_graph_router(require_principal, selected_graph))
     if web_auth_flow is not None and web_session_store is not None:
         app.include_router(create_web_auth_router(web_auth_flow, web_session_store))
-
     web_static_root = load_web_static_root()
     if web_static_root is not None:
         # 루트 mount는 반드시 API route 등록 뒤에 둬야 /v1과 /health를 가리지 않는다.
