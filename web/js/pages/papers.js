@@ -30,6 +30,7 @@ export function paperRow(p) {
       <span class="row-line">${line}</span>
     </span>
     ${statusBadge(p.reading_status)}
+    ${p.reading_basis_version_id ? html`<span>상태 기준 버전: ${p.reading_basis_version_id}</span>` : ''}
   </a>`;
 }
 

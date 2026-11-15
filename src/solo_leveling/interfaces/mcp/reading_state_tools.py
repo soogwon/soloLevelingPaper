@@ -22,9 +22,10 @@ def register_reading_state(server, service):
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
-    async def set_reading_completed(paper_id: str, completed: bool, expected_revision: int) -> ReadingState:
+    async def set_reading_completed(paper_id: str, completed: bool, expected_revision: int,
+                                    basis_version_id: str | None = None) -> ReadingState:
         """사용자가 명시적으로 요청했을 때만 완료(true) 또는 완료 취소(false→reading)를 저장합니다.
-        조회한 revision을 전달하세요. 단계 완료나 퀴즈 결과로 자동 호출하지 마세요.
+        조회한 revision과 완료 기준 원문 버전을 전달하세요. 버전 생략 시 마지막 명시적 학습 기준을 유지합니다. 단계 완료나 퀴즈 결과로 자동 호출하지 마세요.
         응답 유실·충돌 시 get_reading_state로 확인하고 자동으로 revision을 바꿔 재시도하지 마세요.
         """
-        return await invoke(service.set_completed, paper_id, completed, expected_revision)
+        return await invoke(service.set_completed, paper_id, completed, expected_revision, basis_version_id)

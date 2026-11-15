@@ -60,3 +60,11 @@ for (const [status, badge, position, expected] of [
     assert.doesNotMatch(output, /마지막 학습|저장된 학습 위치가 없어요/);
   });
 }
+
+
+test('완료 기준 원문 버전을 선택 버전과 별도로 표시하고 이스케이프한다', () => {
+  const output = String(paperRow({...paper, reading_status: 'completed',
+    reading_basis_version_id: '<old-version>'}));
+  assert.match(output, /&lt;old-version&gt;/);
+  assert.doesNotMatch(output, /<old-version>/);
+});
