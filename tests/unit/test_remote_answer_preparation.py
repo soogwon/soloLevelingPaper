@@ -86,15 +86,17 @@ def test_source_or_access_failure_precedes_generation(parts, mode):
     gen.generate_claims.assert_not_called()
 
 
-def test_strict_pages_still_rejects_outside_reader_candidate(parts):
+def test_strict_pages_omits_outside_candidate_before_generation(parts):
     b, source, reader, _, _, search = parts
     reader.read_chunks = lambda *_: (replace(source, original_text='Faster when the sequence'),)
     reader.following_chunks = lambda *_: (RemoteSourceChunk(b, 'c2', 1, 7, 's4', 'length is small.', '번역'),)
-    gen = NS(generate_claims=Mock())
-    with pytest.raises(ValueError):
-        RemoteAnswerPreparationService(search, reader, gen).prepare('q', 'ctx',
-            filters=RemoteSearchFilters((6,), ('s4',), True))
-    gen.generate_claims.assert_not_called()
+    gen = NS(generate_claims=Mock(wraps=FakeClaimGenerator().generate_claims))
+    result = RemoteAnswerPreparationService(search, reader, gen).prepare('q', 'ctx',
+        filters=RemoteSearchFilters((6,), ('s4',), True))
+    assert gen.generate_claims.call_count >= 1
+    for call in gen.generate_claims.call_args_list:
+        assert all('length is small.' not in item.original_text for item in call.args[1])
+    assert all(c.pdf_page == 6 for c in result.response.result.citations)
 
 
 def test_search_expansion_cannot_switch_publication(parts):
