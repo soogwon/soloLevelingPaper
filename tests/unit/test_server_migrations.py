@@ -41,8 +41,18 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 31)]
-    assert items[-1].name == "0030_remote_deletion_leases.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 32)]
+    assert items[-1].name == "0031_remote_deletion_active_pointer.sql"
+
+
+def test_tombstone_cleanup_only_allows_clearing_active_publication_pointer():
+    sql = (__import__("pathlib").Path("migrations/server") /
+           "0031_remote_deletion_active_pointer.sql").read_text(encoding="utf-8")
+    assert "CREATE OR REPLACE FUNCTION server_reject_tombstoned_paper" in sql
+    assert "TG_TABLE_NAME = 'server_processing_versions'" in sql
+    assert "OLD.active_publication_id IS NOT NULL AND NEW.active_publication_id IS NULL" in sql
+    assert "NEW.owner_user_id = OLD.owner_user_id" in sql
+    assert "RAISE EXCEPTION 'paper_tombstoned'" in sql
 
 
 def test_remote_operation_controls_separate_intake_and_dispatch():
