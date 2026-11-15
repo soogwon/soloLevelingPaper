@@ -33,3 +33,19 @@ RecoveryKeyStore는 **저장 포트 초안**이다. 테스트의 메모리 대�
 영속 복구 증거가 아니다. 실제 adapter는 owner+operation+request_key별 원자 저장·입력 충돌 거부,
 보관/삭제 정책을 구현해야 한다. 계정 선택 메서드는 인증 수단이 아니며 실제 요청 전 현재 인증과
 서버의 접근 권한 재검사는 필요하다. 이 모델을 제품 도구에 등록하거나 공개 wire 코드로 확정하지 않는다.
+
+## C와 실제 PostgreSQL 조회의 연결 회귀
+
+`tests/integration/test_remote_recovery_postgres.py`는 main의 `PostgresRemoteAnswerStore`로 저장한
+답변을 `PostgresRemoteExecutionStore` → `read_existing_execution` → `AccountRecovery`로 재조회한다.
+새 화면/조회 객체와 동시 조회 8회에서 같은 실행 ID·답변·주장·인용·검증 수준을 복원하고,
+계정 전환/타인 키, hash/context 충돌, 손상된 결과, tombstone, 미존재 실행을 확인한다.
+조회 전후 실행·근거·provider attempt·예산·동의 행 전체가 같은지 대조한다.
+
+인증된 owner 전달, 키 저장, 생성/의미 판정은 대역이다. 특히 키는 메모리에만 있으므로
+프로세스/Claude Desktop 재시작 후 키 영속 복구나 실제 OAuth 계정 전환을 검증한 것이 아니다.
+공개 MCP 등록·새 유료 접수·외부 API 호출은 하지 않는다. PostgreSQL DSN이 없으면 해당 검증은 skip한다.
+
+```sh
+PYTHONPATH=src python -m pytest tests/unit/mcp/test_remote_recovery.py tests/unit/test_remote_replay.py tests/integration/test_remote_recovery_postgres.py -q
+```
