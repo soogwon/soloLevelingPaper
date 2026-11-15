@@ -1,7 +1,6 @@
 """원격 처리 작업의 멱등 접수와 lease 기반 실행권을 관리한다."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import uuid4
 
@@ -95,24 +94,28 @@ class PostgresProcessingJobStore:
         if lease_seconds < 1:
             raise ValueError("lease_seconds_invalid")
         lease_token = str(uuid4())
-        now = datetime.now(timezone.utc)
-        expires = now + timedelta(seconds=lease_seconds)
+        # lease 판정은 모두 DB 시계로 한다. API·worker 서버의 시계가 어긋나도 판정이 갈리지 않는다.
         with self._pool.connection() as conn:
             row = conn.execute(
-                """WITH exhausted AS (
+                """WITH abandoned AS (
                        UPDATE server_processing_jobs
-                       SET status='failed', retryable=false, error_code='max_attempts_exhausted',
+                       SET status='failed', retryable=false,
+                           error_code=CASE WHEN attempt >= max_attempts
+                                           THEN 'max_attempts_exhausted'
+                                           ELSE 'lease_expired_not_retryable' END,
                            lease_owner=NULL, lease_token=NULL, lease_expires_at=NULL,
-                           heartbeat_at=NULL, finished_at=%s, updated_at=%s
-                       WHERE status='running' AND lease_expires_at <= %s
-                         AND attempt >= max_attempts
+                           heartbeat_at=NULL, finished_at=CURRENT_TIMESTAMP,
+                           updated_at=CURRENT_TIMESTAMP
+                       WHERE status='running' AND lease_expires_at <= CURRENT_TIMESTAMP
+                         AND (attempt >= max_attempts OR retryable=false)
                        RETURNING job_id
                    ), candidate AS (
                        SELECT owner_user_id, job_id
                        FROM server_processing_jobs
                        WHERE (
                            status='queued'
-                           OR (status='running' AND lease_expires_at <= %s AND retryable=true)
+                           OR (status='running' AND lease_expires_at <= CURRENT_TIMESTAMP
+                               AND retryable=true)
                        )
                          AND attempt < max_attempts
                        ORDER BY created_at, job_id
@@ -120,12 +123,14 @@ class PostgresProcessingJobStore:
                    )
                    UPDATE server_processing_jobs j
                    SET status='running', attempt=j.attempt+1, lease_owner=%s,
-                       lease_token=%s, lease_expires_at=%s, heartbeat_at=%s,
-                       error_code=NULL, updated_at=%s, finished_at=NULL
+                       lease_token=%s,
+                       lease_expires_at=CURRENT_TIMESTAMP + make_interval(secs => %s),
+                       heartbeat_at=CURRENT_TIMESTAMP,
+                       error_code=NULL, updated_at=CURRENT_TIMESTAMP, finished_at=NULL
                    FROM candidate c
                    WHERE j.owner_user_id=c.owner_user_id AND j.job_id=c.job_id
                    RETURNING j.*""",
-                (now, now, now, now, worker_id, lease_token, expires, now, now),
+                (worker_id, lease_token, lease_seconds),
             ).fetchone()
         return None if row is None else _job(row)
 
@@ -137,16 +142,18 @@ class PostgresProcessingJobStore:
         *,
         lease_seconds: int = 60,
     ) -> None:
-        now = datetime.now(timezone.utc)
-        expires = now + timedelta(seconds=lease_seconds)
+        if lease_seconds < 1:
+            raise ValueError("lease_seconds_invalid")
         with self._pool.connection() as conn:
             row = conn.execute(
                 """UPDATE server_processing_jobs
-                   SET heartbeat_at=%s, lease_expires_at=%s, updated_at=%s
+                   SET heartbeat_at=CURRENT_TIMESTAMP,
+                       lease_expires_at=CURRENT_TIMESTAMP + make_interval(secs => %s),
+                       updated_at=CURRENT_TIMESTAMP
                    WHERE owner_user_id=%s AND job_id=%s AND status='running'
-                     AND lease_token=%s AND lease_expires_at>%s
+                     AND lease_token=%s AND lease_expires_at>CURRENT_TIMESTAMP
                    RETURNING job_id""",
-                (now, expires, now, owner_user_id, job_id, lease_token, now),
+                (lease_seconds, owner_user_id, job_id, lease_token),
             ).fetchone()
         if row is None:
             raise ProcessingJobLeaseLost("processing_job_lease_lost")
@@ -164,43 +171,40 @@ class PostgresProcessingJobStore:
         retryable: bool,
     ) -> None:
         with self._pool.connection() as conn:
-            now = datetime.now(timezone.utc)
             row = conn.execute(
                 """UPDATE server_processing_jobs
                    SET status=CASE WHEN %s AND attempt < max_attempts THEN 'queued' ELSE 'failed' END,
                        retryable=%s, error_code=%s,
                        lease_owner=NULL, lease_token=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
-                       finished_at=CASE WHEN %s AND attempt < max_attempts THEN NULL ELSE %s END,
-                       updated_at=%s
+                       finished_at=CASE WHEN %s AND attempt < max_attempts THEN NULL
+                                        ELSE CURRENT_TIMESTAMP END,
+                       updated_at=CURRENT_TIMESTAMP
                    WHERE owner_user_id=%s AND job_id=%s AND status='running'
-                     AND lease_token=%s AND lease_expires_at>%s
+                     AND lease_token=%s AND lease_expires_at>CURRENT_TIMESTAMP
                    RETURNING job_id""",
                 (
                     retryable,
                     retryable,
                     error_code,
                     retryable,
-                    now,
-                    now,
                     owner_user_id,
                     job_id,
                     lease_token,
-                    now,
                 ),
             ).fetchone()
         if row is None:
             raise ProcessingJobLeaseLost("processing_job_lease_lost")
 
     def cancel(self, owner_user_id: str, job_id: str) -> None:
-        now = datetime.now(timezone.utc)
         with self._pool.connection() as conn:
             row = conn.execute(
                 """UPDATE server_processing_jobs
                    SET status='cancelled', retryable=false, lease_owner=NULL, lease_token=NULL,
-                       lease_expires_at=NULL, heartbeat_at=NULL, finished_at=%s, updated_at=%s
+                       lease_expires_at=NULL, heartbeat_at=NULL,
+                       finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
                    WHERE owner_user_id=%s AND job_id=%s AND status IN ('queued', 'running')
                    RETURNING job_id""",
-                (now, now, owner_user_id, job_id),
+                (owner_user_id, job_id),
             ).fetchone()
         if row is None:
             raise ProcessingJobNotFound("processing_job_not_found")
@@ -214,16 +218,16 @@ class PostgresProcessingJobStore:
         status: Literal["succeeded"],
         error_code: str | None,
     ) -> None:
-        now = datetime.now(timezone.utc)
         with self._pool.connection() as conn:
             row = conn.execute(
                 """UPDATE server_processing_jobs
                    SET status=%s, error_code=%s, lease_owner=NULL, lease_token=NULL,
-                       lease_expires_at=NULL, heartbeat_at=NULL, finished_at=%s, updated_at=%s
+                       lease_expires_at=NULL, heartbeat_at=NULL,
+                       finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
                    WHERE owner_user_id=%s AND job_id=%s AND status='running'
-                     AND lease_token=%s AND lease_expires_at>%s
+                     AND lease_token=%s AND lease_expires_at>CURRENT_TIMESTAMP
                    RETURNING job_id""",
-                (status, error_code, now, now, owner_user_id, job_id, lease_token, now),
+                (status, error_code, owner_user_id, job_id, lease_token),
             ).fetchone()
         if row is None:
             raise ProcessingJobLeaseLost("processing_job_lease_lost")

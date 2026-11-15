@@ -20,6 +20,13 @@ worker는 생성 순서대로 한 건을 `FOR UPDATE SKIP LOCKED`로 claim한다
 lease가 만료된 실행은 다음 worker가 새 token으로 회수할 수 있다. 이전 worker의 heartbeat,
 완료, 실패와 publication 게시 요청은 모두 거부된다. `SKIP LOCKED`만으로 실행권을 보장하지 않는다.
 
+lease 만료 판정과 시각 기록은 모두 DB 시계(`CURRENT_TIMESTAMP`)로 한다. API와 worker 서버의
+시계가 어긋나도 claim·heartbeat·완료·게시의 판정이 서로 달라지지 않는다.
+
+lease가 만료됐는데 다시 claim할 수 없는 작업은 다음 claim 때 `failed`로 닫는다. 최대 시도에
+도달한 작업은 `max_attempts_exhausted`, 재시도 불가로 접수한 작업은 `lease_expired_not_retryable`을
+기록한다. worker가 죽어도 작업이 `running`으로 남지 않는다.
+
 ## 상태 전이
 
 ```text
@@ -28,6 +35,7 @@ queued -> running -> succeeded
                   -> failed      # 영구 실패 또는 최대 시도 도달
 queued/running -> cancelled
 expired running -> running       # 새 worker와 새 lease token
+expired running -> failed        # 재시도 불가이거나 최대 시도 도달
 ```
 
 성공·실패·취소 상태는 종료 시각을 기록하고 lease 필드를 비운다. 오류는 본문이나 외부 제공자

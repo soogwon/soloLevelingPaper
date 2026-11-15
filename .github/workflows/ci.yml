@@ -36,6 +36,20 @@ jobs:
       HF_HUB_OFFLINE: '1'
       TRANSFORMERS_OFFLINE: '1'
       ANONYMIZED_TELEMETRY: 'false'
+      # 이 job 안에서만 쓰는 일회용 DB다. 실제 PostgreSQL에서 FK·트리거·SQL을 확인한다.
+      SOLO_TEST_POSTGRES_DSN: postgresql://postgres:ci-only@localhost:5432/postgres
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

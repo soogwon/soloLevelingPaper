@@ -99,7 +99,9 @@ def test_claim_uses_skip_locked_and_rotates_execution_token():
     assert "FOR UPDATE SKIP LOCKED" in sql
     assert "attempt < max_attempts" in sql
     assert "max_attempts_exhausted" in sql
-    assert params[4] == "worker-1"
+    assert "lease_expired_not_retryable" in sql
+    assert params[0] == "worker-1"
+    assert params[2] == 60
 
 
 @pytest.mark.parametrize("method", ["heartbeat", "succeed"])
@@ -119,7 +121,7 @@ def test_retryable_failure_requeues_without_finished_timestamp():
 
     sql, params = conn.calls[0]
     assert "attempt < max_attempts THEN 'queued'" in sql
-    assert params[-4:-1] == ("user-a", "job", "lease")
+    assert params[-3:] == ("user-a", "job", "lease")
 
 
 def test_cancel_clears_lease_and_is_owner_scoped():
@@ -130,3 +132,39 @@ def test_cancel_clears_lease_and_is_owner_scoped():
     sql, params = conn.calls[0]
     assert "lease_token=NULL" in sql
     assert params[-2:] == ("user-a", "job")
+
+
+def test_claim_fails_expired_non_retryable_jobs_instead_of_leaving_them_running():
+    conn = Connection((None,))
+
+    assert PostgresProcessingJobStore(Pool(conn)).claim("worker-1") is None
+
+    sql = conn.calls[0][0]
+    assert "attempt >= max_attempts OR retryable=false" in sql
+
+
+@pytest.mark.parametrize("method", ["claim", "heartbeat", "succeed", "fail", "cancel"])
+def test_lease_decisions_use_the_database_clock_only(method):
+    conn = Connection(({"job_id": "job", **job_row(status="running", lease_token="t")},))
+    store = PostgresProcessingJobStore(Pool(conn))
+
+    if method == "claim":
+        store.claim("worker-1")
+    elif method == "fail":
+        store.fail("user-a", "job", "t", error_code="provider_timeout", retryable=False)
+    elif method == "cancel":
+        store.cancel("user-a", "job")
+    else:
+        getattr(store, method)("user-a", "job", "t")
+
+    sql, params = conn.calls[0]
+    assert "CURRENT_TIMESTAMP" in sql
+    # 앱 서버 시각을 인자로 넘기지 않는다. 서버 사이의 시계 차이로 lease 판정이 갈리면 안 된다.
+    assert not any(hasattr(value, "tzinfo") for value in params)
+
+
+def test_heartbeat_rejects_non_positive_lease():
+    with pytest.raises(ValueError, match="lease_seconds_invalid"):
+        PostgresProcessingJobStore(Pool(Connection())).heartbeat(
+            "user-a", "job", "t", lease_seconds=0
+        )
