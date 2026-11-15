@@ -79,7 +79,7 @@ def test_saves_evidence_and_payload_before_completing_execution():
     assert "position(%s in tc.translated_text)>0" in statements[1]
     assert statements[1].startswith("INSERT INTO server_processing_evidences")
     assert statements[2].startswith("UPDATE server_remote_executions")
-    assert "lease_expires_at>CURRENT_TIMESTAMP" in statements[2]
+    assert "lease_expires_at>clock_timestamp()" in statements[2]
 
 
 def test_scope_or_lease_loss_rejects_before_evidence_write():
@@ -125,3 +125,13 @@ def test_insufficient_answer_without_evidence_can_complete_atomically():
 
     assert payload["status"] == "insufficient_evidence"
     assert len(pool.conn.calls) == 2
+
+
+def test_foreign_binding_owner_fails_before_database():
+    from dataclasses import replace
+
+    value = prepared()
+    pool = Pool()
+    with pytest.raises(ValueError, match="remote_answer_scope_invalid"):
+        PostgresRemoteAnswerStore(pool).save(INTENT, replace(value, binding=replace(BINDING, owner_user_id="other")))
+    assert pool.conn.calls == []
