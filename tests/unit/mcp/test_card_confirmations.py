@@ -163,3 +163,63 @@ def test_runtime_store_lives_in_data_root(tmp_path):
     with sqlite3.connect(tmp_path / "nested" / "card-confirmations.sqlite3") as conn:
         (count,) = conn.execute("SELECT COUNT(*) FROM card_confirmations").fetchone()
     assert count == 1
+
+
+@pytest.mark.parametrize('operation', ['take', 'lookup_confirmed', 'has_pending', 'pending_count'])
+def test_expiry_is_checked_after_acquiring_transaction(tmp_path, operation):
+    from contextlib import contextmanager
+    now = [1000.0]
+    store = ConfirmationStore(tmp_path / 'confirm.sqlite', clock=lambda: now[0])
+    token = store.issue('pdf_upload', ['p', 'v'], ttl=1)
+    if operation == 'lookup_confirmed':
+        assert store.take('pdf_upload', token, ['p', 'v'], keep_confirmed=True)[0]
+    transaction = store._transaction
+    @contextmanager
+    def delayed_transaction():
+        with transaction() as conn:
+            # 잠금 획득까지 대기하는 동안 만료 경계를 넘은 상황이다.
+            now[0] = 1002.0
+            yield conn
+    store._transaction = delayed_transaction
+    if operation in ('take', 'lookup_confirmed'):
+        assert getattr(store, operation)('pdf_upload', token, ['p', 'v']) == (False, None)
+    elif operation == 'has_pending':
+        assert not store.has_pending('pdf_upload', ['p', 'v'])
+    else:
+        assert store.pending_count('pdf_upload') == 0
+
+
+def test_storage_failure_is_safe_and_does_not_start_sync(tmp_path):
+    path = tmp_path / 'private-storage-marker.sqlite'
+    store = ConfirmationStore(path)
+    service = Mock()
+    service.preview.return_value = PaperSyncPreview('account', 'paper-1', 'Paper', 'created')
+    server = create_server(MCPServices(Mock(), Mock(), server_sync=service, confirmations=store))
+    async def scenario():
+        prepared = await server.call_tool('prepare_paper_server_sync', {'paper_id':'paper-1'})
+        path.unlink()
+        path.mkdir()
+        with pytest.raises(ToolError) as error:
+            await server.call_tool('sync_paper_to_server', {
+                'paper_id':'paper-1', 'operation_id':prepared.structuredContent['operation_id'],
+                'confirmation_token':prepared.meta['confirmation_token']})
+        assert 'CARD_CONFIRMATION_STORE_UNAVAILABLE' in str(error.value)
+        assert 'private-storage-marker' not in str(error.value)
+        service.grant_and_queue.assert_not_called()
+        service.sync.assert_not_called()
+    asyncio.run(scenario())
+
+
+def test_two_real_processes_cannot_consume_same_token_twice(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    import json
+    path = tmp_path / 'confirm.sqlite'
+    token = ConfirmationStore(path).issue('registration', ['p', 'r'])
+    code = ("import json,sys; from solo_leveling.interfaces.mcp.confirmations import ConfirmationStore;"
+            "print(json.dumps(ConfirmationStore(sys.argv[1]).take('registration',sys.argv[2],['p','r'])[0]))")
+    def consume(_):
+        result = subprocess.run([sys.executable, '-c', code, str(path), token],
+                                check=True, capture_output=True, text=True)
+        return json.loads(result.stdout)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(consume, range(2))) == [False, True]
