@@ -81,6 +81,13 @@ class PostgresRemoteUploadIntentStore:
         return _view(row)
 
     def reserve_upload(self, owner_user_id: str, intent_id: str) -> tuple[UploadReservation, PendingUpload]:
+        result = self._reserve_upload(owner_user_id, intent_id)
+        # 만료 상태를 커밋한 뒤 오류를 반환해야 연결 context가 변경을 롤백하지 않는다.
+        if result is None:
+            raise ValueError("remote_upload_expired")
+        return result
+
+    def _reserve_upload(self, owner_user_id, intent_id):
         with self._pool.connection() as conn:
             row = conn.execute(
                 """SELECT intent_id,paper_id,server_version_id,file_name,file_size,content_type,
@@ -91,13 +98,15 @@ class PostgresRemoteUploadIntentStore:
             ).fetchone()
             if row is None:
                 raise ValueError("remote_upload_not_found")
+            if row["status"] == "expired":
+                return None
+            if row["status"] not in ("created", "uploading"):
+                raise ValueError("remote_upload_state_invalid")
             now = self._now()
             if row["expires_at"] <= now:
                 conn.execute("UPDATE server_remote_upload_intents SET status='expired' WHERE owner_user_id=%s AND intent_id=%s",
                              (owner_user_id, intent_id))
-                raise ValueError("remote_upload_expired")
-            if row["status"] not in ("created", "uploading"):
-                raise ValueError("remote_upload_state_invalid")
+                return None
             upload_id = str(row["upload_id"] or uuid4())
             owner_hash = sha256(owner_user_id.encode()).hexdigest()[:24]
             object_key = f"private/tmp/{owner_hash}/{row['paper_id']}/{row['server_version_id']}/{upload_id}.pdf"
