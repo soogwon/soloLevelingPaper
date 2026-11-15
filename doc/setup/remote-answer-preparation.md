@@ -36,3 +36,12 @@ MCP 도구·공개 API·실제 저장소를 등록하지 않는다. 실제 생�
 
 A의 동일 snapshot source reader·실제 vector 집합 게시 검증·lease 결합 원자 답변/근거 저장,
 실제 runtime 지문, C의 인증 요청/응답/호스트 연결은 남아 있다. #390은 열어둔다.
+
+## B 내부 원자 저장 조립
+
+`create_persisted_remote_answer_service`는 현재 인증 context resolver를 필수 주입하고 실제 pgvector,
+PostgreSQL source reader와 원자 답변 저장소를 연결한다. 실행 owner·canonical input hash·lease를
+생성 전에 대조하고 준비 중 binding 변화 및 저장 시 lease/tombstone 소실은 고정 오류로 거부한다.
+반환은 저장 commit 성공 뒤에만 한다. 준비/저장 실패를 근거 부족 답변으로 변환하지 않는다.
+실제 생성기에는 #396 전송 gate가 필요하며 이 조립 자체가 동의/예산 승인이나 공개 API가 아니다.
+DB 회귀는 합성 인증·임베딩·생성으로 실행하며 실제 유료 API·호스트 검증은 남는다.
