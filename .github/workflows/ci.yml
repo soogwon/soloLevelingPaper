@@ -78,6 +78,8 @@ jobs:
       - name: 웹 테스트
         working-directory: web
         run: npm test
+      - name: 원격 업로드 대역 테스트
+        run: node --test ui/remote-upload-preview/upload.test.mjs
 
   mcp-ui:
     runs-on: ubuntu-24.04

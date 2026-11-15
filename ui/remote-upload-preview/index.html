@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>원격 PDF 등록 대역 미리보기</title>
+<style>body{font-family:system-ui;max-width:720px;margin:32px auto;padding:0 20px;color:#183047}section{border:1px solid #bccbd7;border-radius:12px;padding:20px;margin-top:20px}button,select,input{margin:8px 4px;padding:8px}dd{overflow-wrap:anywhere}p{line-height:1.6}</style>
+<body><main>
+<label for="file">로컬 PDF 선택 (이름·크기만 확인)</label><input id="file" type="file" accept="application/pdf,.pdf">
+<button id="cancel" type="button">선택 취소</button>
+<p><label for="fixture">검토용 서버 상태 대역</label>
+<select id="fixture"><option>created</option><option>uploading</option><option>verified</option><option>failed</option><option>expired</option></select>
+<button id="apply" type="button">대역 상태 표시</button></p>
+<div id="preview"></div>
+</main><script type="module">
+import {createPreview, renderPreview} from './upload.mjs';
+const model = createPreview();
+const file = document.querySelector('#file');
+const paint = () => {document.querySelector('#preview').innerHTML = renderPreview(model.snapshot());};
+file.addEventListener('change', () => {model.select(file.files[0] ?? null); paint();});
+document.querySelector('#cancel').addEventListener('click', () => {file.value='';model.select(null);paint();});
+document.querySelector('#apply').addEventListener('click', () => {
+  const state = model.snapshot();
+  model.receive(state.generation, {intentId:`fixture-${state.generation}`,status:document.querySelector('#fixture').value,
+    expiresAt:Date.now()+60000});paint();
+});
+paint();
+</script></body></html>
