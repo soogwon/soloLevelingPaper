@@ -96,6 +96,7 @@ class ProviderDispatch:
         if (not isinstance(permit, AttemptPermit) or permit.request != request
                 or not isinstance(permit.attempt_id, str) or not permit.attempt_id.strip()
                 or permit.attempt_id in self._used):
+            self._blocked = True
             raise DispatchError('DISPATCH_PERMIT_INVALID')
         self._used.add(permit.attempt_id)
         try:

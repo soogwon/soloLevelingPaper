@@ -114,6 +114,20 @@ def test_authorization_failure_blocks_without_provider_or_automatic_retry(dispat
     assert calls == []
 
 
+def test_invalid_permit_blocks_later_authorization(dispatch):
+    gate, ledger = dispatch
+    calls = []
+    ledger.authorize = lambda request: AttemptPermit('', request)
+    with pytest.raises(DispatchError, match='DISPATCH_PERMIT_INVALID'):
+        send(gate, 'one', lambda _: calls.append(1))
+    def forbidden(_):
+        pytest.fail('불명확한 허가 뒤에는 원장과 전송을 다시 호출하면 안 됩니다')
+    ledger.authorize = forbidden
+    with pytest.raises(DispatchError, match='DISPATCH_BLOCKED'):
+        send(gate, 'two', forbidden)
+    assert calls == []
+
+
 def test_restarting_controller_does_not_reuse_consumed_dispatch_key(dispatch):
     gate, ledger = dispatch
     send(gate, 'stable-key')
