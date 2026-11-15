@@ -82,3 +82,14 @@ def test_completed_without_result_returns_status_only(stored):
     row = replace(stored, result_available=False, payload_json=None, payload_sha256=None)
     result = read_existing_execution(NS(lookup=lambda *_: row), stored.lookup)
     assert result.state == 'completed' and result.payload is None
+
+
+def test_queued_execution_is_restored_without_resubmission(stored):
+    row = replace(stored, state='queued', result_available=False, payload_json=None, payload_sha256=None)
+    calls = []
+    def lookup(*key):
+        calls.append(key)
+        return row
+    result = read_existing_execution(NS(lookup=lookup), stored.lookup)
+    assert result.execution_id == 'exec' and result.state == 'queued' and result.payload is None
+    assert calls == [('alice', 'ask_paper', 'same-key')]

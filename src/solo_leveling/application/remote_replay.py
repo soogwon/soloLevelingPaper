@@ -115,7 +115,7 @@ def read_existing_execution(reader: ExecutionReader, lookup: ExecutionLookup) ->
     if (actual.input_hash, actual.context_id) != (lookup.input_hash, lookup.context_id):
         raise ReplayError('REMOTE_EXECUTION_CONFLICT')
     if (not isinstance(row.execution_id, str) or not row.execution_id.strip()
-            or row.state not in ('running', 'completed', 'failed', 'unknown', 'cancel_requested', 'cancelled')
+            or row.state not in ('queued', 'running', 'completed', 'failed', 'unknown', 'cancel_requested', 'cancelled')
             or row.budget_state not in ('available', 'limited', 'usage_unknown')
             or type(row.result_available) is not bool):
         raise ReplayError('REMOTE_EXECUTION_INVALID')
