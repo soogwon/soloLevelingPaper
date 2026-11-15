@@ -41,7 +41,9 @@ binding을 모델·사용자 입력에서 만들거나 그 자체를 인증·게
 
 `VerifiedRemoteIdentity`는 신뢰하는 인증 adapter가 제공한 issuer와 **불투명 subject**를 보존한다.
 타입을 만들었다는 사실은 인증 증명이 아니며 MCP/모델/사용자 payload에서 생성해 신뢰하면 안 된다.
-`RemoteOwnerResolver`는 A·C가 확정한 명시적 매핑을 제공해야 한다. 지금은 구현하지 않았다.
+`PostgresRemoteOwnerResolver`는 `(issuer, raw subject)`를 유일 키로 저장한 명시적 매핑만 제공한다.
+표시용 `issuer#sub`를 다시 분해하거나 raw subject의 암묵적 별칭으로 쓰지 않는다. 폐기된 연결은 자동으로
+재활성화하지 않으며, 계정 연결 흐름에서 같은 owner로 재생한 요청만 멱등하게 처리한다.
 
 - owner 해석에 성공한 뒤에만 `RemoteContextResolver.resolve(owner, context_id)`를 호출한다.
 - 매핑 없음과 해당 owner의 context 없음은 모두 None. 매핑 조회 장애는 고정 내부 오류로 중단한다.
@@ -84,7 +86,7 @@ partial 색인이라는 이유만으로 답변을 무조건 partial/insufficient
 
 | 현 경로 | 필요한 경계 | 담당·다음 단계 |
 |---|---|---|
-| #413 remote_mcp_auth.py → 기존 서버 user_id | 검증 identity → canonical owner의 명시적 매핑 | A·C 인증/매핑 adapter 확정, B는 실패 시 조회 중단 |
+| #413 remote_mcp_auth.py → 기존 서버 user_id | 검증 identity → canonical owner의 명시적 매핑 | A 저장소 구현 완료, C가 raw issuer/subject 전달과 인증된 연결 흐름을 연결; B는 실패 시 조회 중단 |
 | evidence_qa/ports.py의 LearningContextReader·DefaultContextStore | 인증 owner + 서버 실행 context resolver | A 조회/생성 구현, B binding 검증; 로컬 포트 변경 없음 |
 | evidence_qa/search.py·infrastructure/retrieval/sqlite_chroma.py | 고정 scope의 pgvector candidate search | A SQL·벡터 저장, B 거리·범위 공통 테스트 |
 | evidence_qa/ports.py의 ContinuationReader·page_completion.py | 같은 게시 집합의 인접 청크·허용 구절 | B #108 회귀 재사용, 섹션·순서 데이터는 A 확인 |
