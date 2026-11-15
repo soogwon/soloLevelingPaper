@@ -130,7 +130,16 @@ PR #462 리뷰 보완은 합성 응답 및 로컬 loopback 회귀 테스트로 �
 테스트 계정 2개와 허용/비허용 발급 client는 준비됐고 위 최소 실측을 마쳤다.
 
 1. 실제 만료 전후, 다른 issuer, 웹/기기/M2M 토큰의 제품 거부. 다른 issuer 시험은
-   별도 발급자가 필요하고, 만료 시험은 승인된 짧은 TTL과 설정 복원이 필요하다.
+   별도 발급자가 필요하다. 만료 시험은 승인된 짧은 TTL과 설정 복원이 필요하며, 설정 뒤에는
+   다음처럼 같은 실발급 토큰으로 만료 전 성공과 만료 후 401을 한 실행에서 확인한다.
+
+   ```powershell
+   python scripts/verify_remote_mcp_auth0.py --client-id <검증-client-id> --expect allowed `
+     --verify-expiry --expiry-wait-max-seconds 300
+   ```
+
+   토큰의 `exp`는 대기 시간 계산에만 쓰며 토큰 자체는 저장·출력하지 않는다. 남은 수명이
+   상한보다 길면 기다리지 않고 `token_expiry_wait_too_long`으로 안전하게 중단한다.
 2. 두 계정의 서로 다른 verified identity boolean 대조와 실제 소유 데이터 교차 접근 검증.
    현재 모든 session ID를 거부하는 stateless 계약을 제품 상태 세션 격리 완료로 보지 않는다.
 3. published identity의 Auth0 호환성 실측 및 직접 등록/DCR 대안 선택 근거.

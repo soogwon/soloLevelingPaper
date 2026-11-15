@@ -1,5 +1,6 @@
 """네트워크 발급 없이 #388 PKCE 검증기의 로컬 경계를 확인한다."""
 
+import base64
 import importlib.util
 import json
 from pathlib import Path
@@ -159,3 +160,19 @@ def test_network_error_detail_is_not_printed(monkeypatch, capsys):
     monkeypatch.setattr(verifier, "_main", failed)
     assert verifier.main() == 5
     assert "private-token-and-body" not in capsys.readouterr().out
+
+
+def _jwt(payload):
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+    return f"header.{encoded}.signature"
+
+
+def test_expiry_wait_uses_exp_without_exposing_token():
+    assert verifier._expiry_wait_seconds(_jwt({"exp": 110}), now=100, max_wait=20) == 12
+
+
+def test_expiry_wait_rejects_missing_or_unbounded_expiry():
+    with pytest.raises(ValueError, match="token_expiry_unavailable"):
+        verifier._expiry_wait_seconds(_jwt({}), now=100, max_wait=20)
+    with pytest.raises(ValueError, match="token_expiry_wait_too_long"):
+        verifier._expiry_wait_seconds(_jwt({"exp": 500}), now=100, max_wait=20)

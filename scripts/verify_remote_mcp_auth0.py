@@ -8,6 +8,7 @@ import hashlib
 import json
 import secrets
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -26,6 +27,23 @@ SCOPES = {
 
 def _b64url(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _expiry_wait_seconds(token: str, *, now: float, max_wait: int) -> float:
+    """JWT payload를 검증 근거로 신뢰하지 않고 대기 시간 계산에만 사용한다."""
+    try:
+        payload_part = token.split(".")[1]
+        padding = "=" * (-len(payload_part) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_part + padding))
+        expires_at = payload["exp"]
+    except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        raise ValueError("token_expiry_unavailable") from None
+    if type(expires_at) not in (int, float):
+        raise ValueError("token_expiry_unavailable")
+    wait = max(0.0, float(expires_at) - now + 2.0)
+    if wait > max_wait:
+        raise ValueError("token_expiry_wait_too_long")
+    return wait
 
 
 def _parse_callback(path: str, expected_state: str) -> tuple[int, str, dict[str, str]]:
@@ -110,6 +128,8 @@ def _main() -> int:
     parser.add_argument("--requested-scope", choices=SCOPES, default="full")
     parser.add_argument("--audience", choices=("mcp", "staging-api", "management-api"), default="mcp")
     parser.add_argument("--token-kind", choices=("access", "id"), default="access")
+    parser.add_argument("--verify-expiry", action="store_true")
+    parser.add_argument("--expiry-wait-max-seconds", type=int, default=300)
     args = parser.parse_args()
 
     redirect_uri = f"http://127.0.0.1:{args.port}/callback"
@@ -219,8 +239,29 @@ def _main() -> int:
         "allowed_checks_passed": allowed_checks_passed,
         "token_persisted": False,
     }
+    if args.verify_expiry:
+        try:
+            wait_seconds = _expiry_wait_seconds(
+                token, now=time.time(), max_wait=args.expiry_wait_max_seconds)
+        except ValueError as exc:
+            statuses["expiry_verification"] = str(exc)
+            print(json.dumps(statuses))
+            return 5
+        statuses["expiry_wait_seconds"] = round(wait_seconds, 3)
+        time.sleep(wait_seconds)
+        statuses["expired_initialize_status"] = _rpc(
+            token,
+            "initialize",
+            {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "issue-388-expiry-verifier", "version": "1"},
+            },
+        ).status_code
     print(json.dumps(statuses))
     passed = allowed_checks_passed if args.expect == "allowed" else initialized.status_code == 401
+    passed = passed and (
+        not args.verify_expiry or statuses.get("expired_initialize_status") == 401)
     return 0 if passed else 4
 
 
