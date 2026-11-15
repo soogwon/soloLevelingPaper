@@ -7,6 +7,8 @@ PyTorch 기준선과 ONNX 실측, 허용값 확정은 아직 남아 있으므로
 ## 고정 자료
 
 `cases.json`: 직접 작성한 합성 청크 17개와 질의 12개. 논문 PDF나 사용자 데이터가 아니다.
+소재(lantern relay, bucket chaining, depot, convoy)는 지어낸 것이며 실제 논문의 주장을 재서술하지 않는다.
+자료를 고칠 때도 공개 논문의 문장이나 주장을 옮기지 않는다.
 필수 근거 ID는 **사람 검토 전 초안**이다. 검토 때 `review_status`와 자료 버전을 함께 갱신하고,
 자료 해시가 달라지면 두 런타임 모두 다시 캡처한다. 모델 결과를 본 뒤 정답을 맞추지 않는다.
 
@@ -14,7 +16,7 @@ PyTorch 기준선과 ONNX 실측, 허용값 확정은 아직 남아 있으므로
 |---|---|
 | ko-condition / en-condition | 한국어·영어 질문과 조건 구절 |
 | ko-path | 한국어 질문과 영어 근거 |
-| parallel-vs-cost | 순차 연산과 총 계산량 구별 |
+| parallel-vs-cost | 순차 라운드 수와 총 전달 비용 구별 |
 | cross-page | 앞·뒤 페이지의 두 근거 회수 |
 | strict-page | 6페이지 내 후보만 검색 |
 | near-scores | 수치가 근접한 두 문서의 순위 변화 |
