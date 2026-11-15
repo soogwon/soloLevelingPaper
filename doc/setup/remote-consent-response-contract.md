@@ -91,3 +91,19 @@ python -m pytest tests/unit/mcp/test_remote_consent_contract.py -q
 - Soo: 대상 사용자·초기 한도·월 비용·보관/삭제 정책
 
 #396/#395는 열어둔다. 이 초안을 근거로 유료 도구를 allowlist에 추가하지 않는다.
+
+## C 카드·텍스트 대역 미리보기
+
+`remote_consent_preview.render_consent_preview`는 기존 Guidance를 동일한 문구의 HTML/텍스트로
+변환한다. HTML에는 미리보기 표시와 비활성화한 type=button만 있고 스크립트·링크·폼은 없다.
+현재 인증 웹 URL, consent 제출, 상태 조회 이벤트를 만들지 않는다. 페이지 출력 자체가 승인/접수가 아니다.
+미지원 상태, 조회 가능 여부와 행동 불일치, 자동 유료 재시도 응답은 고정 재조회 안내로 바꾼다.
+HTML 문구는 escape하며 owner/의도/실행 ID는 표시 모델에 추가하지 않는다.
+
+대역 조회→Guidance→HTML 파싱 테스트로 문구·버튼·HTML 삽입 방어를 확인한다.
+브라우저 레이아웃·클릭·실제 카드 렌더링·공개 wire 응답 검증은 아니다.
+제품 연결은 A/B 포트 및 공개 응답 매핑 확정 뒤 진행한다.
+
+```sh
+python -m pytest tests/unit/mcp/test_remote_consent_preview.py tests/unit/mcp/test_remote_consent_contract.py -q
+```
