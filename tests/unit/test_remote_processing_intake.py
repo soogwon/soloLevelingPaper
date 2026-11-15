@@ -57,7 +57,7 @@ def args():
 def test_verified_upload_and_current_consents_create_one_authorized_job():
     pool = Pool(
         {
-            "SELECT j.job_id": [None],
+            "SELECT j.job_id": [None, None],
             "SELECT i.intent_id": [SOURCE],
             "SELECT consent_id": [CONSENTS],
             "INSERT INTO server_processing_jobs": [JOB],
@@ -109,7 +109,7 @@ def test_same_request_with_different_authorization_conflicts():
 
 @pytest.mark.parametrize("source,consents", [(None, CONSENTS), (SOURCE, CONSENTS[:1])])
 def test_unverified_missing_or_incomplete_consent_never_queues(source, consents):
-    pool = Pool({"SELECT j.job_id": [None], "SELECT i.intent_id": [source], "SELECT consent_id": [consents]})
+    pool = Pool({"SELECT j.job_id": [None, None], "SELECT i.intent_id": [source], "SELECT consent_id": [consents]})
 
     assert PostgresRemoteProcessingIntake(pool).admit(*args()) is None
 
@@ -123,3 +123,11 @@ def test_invalid_input_fails_before_database():
         PostgresRemoteProcessingIntake(pool).admit("", *args()[1:])
 
     assert pool.conn.calls == []
+
+
+def test_new_request_key_for_existing_intent_replays_without_new_job():
+    existing = {**JOB, "upload_intent_id": "intent", "storage_consent_id": "storage",
+                "ai_consent_id": "ai", "notice_version": "notice"}
+    pool = Pool({"SELECT j.job_id": [None, existing], "SELECT i.intent_id": [SOURCE]})
+    assert PostgresRemoteProcessingIntake(pool).admit(*args()).job_id == "job"
+    assert not any(sql.startswith("INSERT") for sql, _ in pool.conn.calls)
