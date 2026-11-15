@@ -90,7 +90,7 @@ ANNOTATION_INPUTS = {
     'delete_annotation': DeleteInput,
 }
 _SAFE_REASONS = frozenset({
-    'TRANSLATION_NOT_SUPPORTED', 'INVALID_LIMIT', 'INVALID_CURSOR', 'DUPLICATE_SEGMENT',
+    'TRANSLATION_NOT_AVAILABLE', 'INVALID_LIMIT', 'INVALID_CURSOR', 'DUPLICATE_SEGMENT',
     'QUOTE_TOTAL_TOO_LONG', 'CHUNK_NOT_IN_CONTEXT', 'TRANSLATION_REVISION_MISMATCH',
     'OFFSET_OUT_OF_RANGE', 'QUOTE_MISMATCH', 'INVALID_REQUEST_KEY',
 })
@@ -101,9 +101,7 @@ def invalid(code):
     return ToolError(f'INVALID_ARGUMENT: {reason}: 입력값을 확인해주세요.')
 
 
-def original_segments(segments):
-    if any(item.target != 'original' for item in segments):
-        raise invalid('TRANSLATION_NOT_SUPPORTED')
+def validated_segments(segments):
     try:
         return tuple(SegmentInput(**item.model_dump()) for item in segments)
     except AnnotationValidationError as error:
@@ -144,13 +142,14 @@ def register_annotations(server, service):
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
     async def create_annotation(request: CreateInput) -> MutationOutput:
-        """메모·하이라이트를 저장합니다. 원문 위치는 문자 단위 [시작, 끝)이며 인용문과 일치해야 합니다.
+        """메모·하이라이트를 저장합니다. 위치는 문자 단위 [시작, 끝)이며 인용문과 일치해야 합니다.
+        target=translation은 해당 맥락의 translation_revision_id와 저장된 번역문 위치를 지정하세요.
         새 생성 요청에는 request_key(영문·숫자·밑줄·하이픈, 1~128자)를 발급하세요.
         응답 유실 시 같은 키와 입력으로 재시도하면 기존 기록의 현재 상태를 반환합니다.
         다른 입력은 REQUEST_KEY_CONFLICT, 삭제된 기록은 ANNOTATION_DELETED입니다.
         키를 생략한 기존 호출은 중복 방지가 없으므로 응답 유실 시 목록을 먼저 조회하세요.
         """
-        segments = original_segments(request.segments)
+        segments = validated_segments(request.segments)
         return await invoke(service.create, request.context_id, request.kind, request.body,
                             segments=segments, step=request.step, request_key=request.request_key)
 
@@ -184,7 +183,7 @@ def register_annotations(server, service):
         if 'segments' in changes:
             if request.segments is None:
                 raise invalid(None)
-            changes['segments'] = original_segments(request.segments)
+            changes['segments'] = validated_segments(request.segments)
         return await invoke(service.update, request.context_id, request.annotation_id,
                             request.expected_revision, **changes)
 
