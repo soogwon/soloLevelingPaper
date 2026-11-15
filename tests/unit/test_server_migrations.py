@@ -41,8 +41,20 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 25)]
-    assert items[-1].name == "0024_remote_dispatch_ledger.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 26)]
+    assert items[-1].name == "0025_remote_executions.sql"
+
+
+def test_remote_execution_schema_binds_replay_and_dispatch_scope():
+    sql = (__import__("pathlib").Path("migrations/server") / "0025_remote_executions.sql").read_text(encoding="utf-8")
+
+    assert "UNIQUE (owner_user_id, operation, request_key)" in sql
+    assert "FOREIGN KEY (owner_user_id, context_id)" in sql
+    assert "FOREIGN KEY (owner_user_id, execution_id)" in sql
+    assert "CHECK ((payload_json IS NULL) = (payload_sha256 IS NULL))" in sql
+    assert "'cancel_requested'" in sql
+    assert "CREATE TRIGGER trg_remote_executions_reject_tombstone" in sql
+    assert "NEW.state NOT IN ('cancel_requested', 'cancelled', 'failed')" in sql
 
 
 def test_remote_dispatch_ledger_has_explicit_limits_and_unknown_state():
