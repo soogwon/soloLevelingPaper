@@ -87,7 +87,7 @@ partial 색인이라는 이유만으로 답변을 무조건 partial/insufficient
 | 현 경로 | 필요한 경계 | 담당·다음 단계 |
 |---|---|---|
 | #413 remote_mcp_auth.py → 기존 서버 user_id | 검증 identity → canonical owner의 명시적 매핑 | A 저장소 구현 완료, C가 raw issuer/subject 전달과 인증된 연결 흐름을 연결; B는 실패 시 조회 중단 |
-| evidence_qa/ports.py의 LearningContextReader·DefaultContextStore | 인증 owner + 서버 실행 context resolver | A 조회/생성 구현, B binding 검증; 로컬 포트 변경 없음 |
+| evidence_qa/ports.py의 LearningContextReader·DefaultContextStore | 인증 owner + 서버 실행 context resolver | A의 고정 context 조회 구현 완료, 생성·제품 연결은 후속; B binding 검증 |
 | evidence_qa/search.py·infrastructure/retrieval/sqlite_chroma.py | 고정 scope의 pgvector candidate search | A SQL·벡터 저장, B 거리·범위 공통 테스트 |
 | evidence_qa/ports.py의 ContinuationReader·page_completion.py | 같은 게시 집합의 인접 청크·허용 구절 | B #108 회귀 재사용, 섹션·순서 데이터는 A 확인 |
 | evidence_qa/evidence.py·generation/evidence_store.py | 고정 context의 원문/번역 조회·원자 근거 저장 | A 저장소, B 기존 인용/소속 검사 유지 |
@@ -97,6 +97,10 @@ partial 색인이라는 이유만으로 답변을 무조건 partial/insufficient
 특히 원격 chunk 스키마에는 현재 section_id·chunk 순서/문장 보충에 필요한 metadata의 전체 매핑이
 준비됐다고 가정하지 않는다. 지원할 수 없는 섹션 제한을 조용히 무시하지 말고 연결 전 계약을 확정한다.
 vector 컬럼·embedding set 차원/거리·게시된 벡터 불변성 및 허용 집합 확인은 A의 #390 구현에서 필요하다.
+
+`PostgresRemoteContextResolver`는 owner와 context ID를 함께 조건으로 고정 publication·revision·embedding
+set을 조회한다. active pointer는 따라가지 않으며, embedding set의 JSON 지문은 키 정렬된 canonical JSON으로
+직렬화해 binding에 전달한다. 다른 owner의 context와 존재하지 않는 context는 모두 `None`이다.
 
 ## 테스트의 의미와 남은 범위
 
