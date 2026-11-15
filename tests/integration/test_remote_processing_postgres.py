@@ -478,3 +478,88 @@ def test_deleting_a_paper_removes_published_processing_data(db, stores):
         "server_processing_evidences", "server_processing_jobs",
     ):
         assert db(f"SELECT count(*) AS n FROM {table} WHERE paper_id=%s", (paper_id,))[0]["n"] == 0, table
+
+
+def published_rows(db, translation_id):
+    return db(
+        "SELECT chunk_id, translated_text FROM server_translation_chunks "
+        "WHERE translation_revision_id=%s ORDER BY chunk_id",
+        (translation_id,),
+    )
+
+
+def test_rows_cannot_move_between_revisions(db, stores):
+    """확정된 revision의 행을 building revision으로 옮겨 게시된 집합을 줄일 수 없다."""
+    import psycopg
+
+    jobs, publications = stores
+    paper_id = make_paper(db, "alice")
+    job = claimed_job(jobs, "alice", paper_id)
+    ready_set = make_revision_set(db, "alice", paper_id, job)
+    ready_parse, ready_translation, _, chunk_ids = ready_set
+    published = publish(publications, "alice", paper_id, ready_set, job)
+    before = published_rows(db, ready_translation)
+
+    worker = claimed_job(jobs, "alice", paper_id)
+    # 같은 parse 아래의 building 번역 revision (T2). 아직 행이 없다.
+    building_translation = new_id()
+    db(
+        """INSERT INTO server_translation_revisions
+               (translation_revision_id, owner_user_id, paper_id, server_version_id,
+                parse_revision_id, status, source_chunk_count, translated_chunk_count,
+                source_job_id, source_lease_token)
+           VALUES (%s, 'alice', %s, 'v1', %s, 'building', 3, 0, %s, %s)""",
+        (building_translation, paper_id, ready_parse, worker.job_id, worker.lease_token),
+    )
+    # 번역·근거가 참조하지 않는 확정 chunk를 가진 parse revision과, 옮겨 갈 building parse revision.
+    lone_parse, lone_translation, lone_embedding = insert_revisions(
+        db, "alice", paper_id, worker, chunks=1, translated=0
+    )
+    lone_chunk = insert_chunk(db, "alice", paper_id, lone_parse, 0)
+    mark_ready(db, lone_parse, lone_translation, lone_embedding)
+    building_parse, building_parse_translation, _ = insert_revisions(db, "alice", paper_id, worker)
+    building_chunk = insert_chunk(db, "alice", paper_id, building_parse, 0)
+    insert_translation(
+        db, "alice", paper_id, building_parse, building_parse_translation, building_chunk
+    )
+
+    moves = [
+        # ready T1 -> building T2
+        lambda: db(
+            "UPDATE server_translation_chunks SET translation_revision_id=%s "
+            "WHERE translation_revision_id=%s AND chunk_id=%s",
+            (building_translation, ready_translation, chunk_ids[0]),
+        ),
+        # ready parse -> building parse (FK가 막아 주지 않는 chunk)
+        lambda: db(
+            "UPDATE server_processing_chunks SET parse_revision_id=%s, ordinal=9 WHERE chunk_id=%s",
+            (building_parse, lone_chunk),
+        ),
+        # building -> ready
+        lambda: db(
+            "UPDATE server_processing_chunks SET parse_revision_id=%s, ordinal=9 WHERE chunk_id=%s",
+            (lone_parse, building_chunk),
+        ),
+        # building -> building 이동과 식별자 교체도 허용하지 않는다.
+        lambda: db(
+            "UPDATE server_processing_chunks SET chunk_id=%s WHERE chunk_id=%s",
+            (new_id(), building_chunk),
+        ),
+    ]
+    for move in moves:
+        with pytest.raises(psycopg.errors.CheckViolation, match="processing_row_identity_fixed"):
+            move()
+
+    assert published_rows(db, ready_translation) == before
+    assert len(before) == published.manifest["translated_chunk_count"] == 3
+    assert publications.get_active("alice", paper_id, "v1").manifest == published.manifest
+    assert db(
+        "SELECT parse_revision_id FROM server_processing_chunks WHERE chunk_id=%s", (lone_chunk,)
+    )[0]["parse_revision_id"] == __import__("uuid").UUID(lone_parse)
+    # building 안의 본문 수정은 계속 허용한다.
+    db("UPDATE server_processing_chunks SET original_text='edited' WHERE chunk_id=%s", (building_chunk,))
+    db(
+        "UPDATE server_translation_chunks SET translated_text='edited' "
+        "WHERE translation_revision_id=%s AND chunk_id=%s",
+        (building_parse_translation, building_chunk),
+    )

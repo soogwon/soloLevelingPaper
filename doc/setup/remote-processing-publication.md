@@ -83,6 +83,10 @@ commit 시점에 검사한다. 논문 삭제의 연쇄 삭제에서 지워지는
 끝난 worker가 게시된 내용을 뒤늦게 바꾸지 못한다. 트리거는 부모 revision을 `FOR SHARE`로 읽어
 `ready` 전환과 늦은 쓰기가 엇갈리지 않게 한다. 재처리 결과는 항상 새 revision으로 적재한다.
 
+chunk와 번역 행의 소속(owner, paper, version, parse·translation revision)과 `chunk_id`는 만든 뒤
+바꿀 수 없다(`processing_row_identity_fixed`). 확정된 revision의 행을 `building` revision으로 옮겨
+게시된 집합에서 빼내는 것을 막는다. 본문 수정은 `building`인 동안만 된다.
+
 ## 삭제 경로
 
 논문(`server_papers`) 또는 처리 버전을 지우면 그 버전의 revision, chunk, 번역, embedding set,
@@ -99,6 +103,6 @@ publication, context, 근거, 작업이 함께 지워진다. 참조 중인 revis
 
 `0014_remote_processing_schema.sql`은 새 테이블만 추가하고, `0016_remote_processing_integrity.sql`은
 그 테이블에 삭제 경로 FK와 불변성 트리거를, `0017_remote_processing_generation.sql`은 실행 세대
-컬럼과 lease 확인 트리거를 더한다. 기존 동기화·메모·PDF 테이블을
+컬럼과 lease 확인 트리거를, `0018_remote_processing_row_identity.sql`은 행의 소속 변경 금지를 더한다. 기존 동기화·메모·PDF 테이블을
 변경하지 않는다. 운영 DB 적용은 백업·승인 뒤 서버 migration 절차를 따른다. 이번 변경은
 운영 DB에 자동 적용하거나 원격 처리를 공개하지 않는다.

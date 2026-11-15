@@ -41,8 +41,8 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 18)]
-    assert items[-1].name == "0017_remote_processing_generation.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 19)]
+    assert items[-1].name == "0018_remote_processing_row_identity.sql"
 
 
 def test_remote_processing_schema_uses_owner_scoped_composite_references():
@@ -83,6 +83,17 @@ def test_remote_processing_generation_binds_writes_to_the_job_lease():
     assert "processing_revision_generation_fixed" in item.sql
     assert "uq_server_processing_publications_source_job" in item.sql
     assert "BEFORE INSERT OR UPDATE ON server_embedding_sets" in item.sql
+
+
+def test_remote_processing_rows_cannot_change_revision_or_identity():
+    item = discover_migrations(__import__("pathlib").Path("migrations/server"))[17]
+
+    assert item.sql.count("processing_row_identity_fixed") == 2
+    assert "NEW.translation_revision_id" in item.sql and "OLD.translation_revision_id" in item.sql
+    # 0017의 lease 확인과 확정 뒤 쓰기 거부를 그대로 유지한 채 함수를 교체한다.
+    assert item.sql.count("server_processing_require_lease(") == 2
+    assert item.sql.count("processing_revision_finalized") == 2
+    assert item.sql.count("FOR SHARE") == 2
 
 
 def test_rejects_gaps_and_invalid_sql_files(tmp_path):
