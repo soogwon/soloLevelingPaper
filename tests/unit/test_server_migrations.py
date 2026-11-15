@@ -41,12 +41,12 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 16)]
-    assert items[-1].name == "0015_remote_processing_jobs.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 17)]
+    assert items[-1].name == "0016_remote_processing_integrity.sql"
 
 
 def test_remote_processing_schema_uses_owner_scoped_composite_references():
-    item = discover_migrations(__import__("pathlib").Path("migrations/server"))[-2]
+    item = discover_migrations(__import__("pathlib").Path("migrations/server"))[13]
 
     assert "PRIMARY KEY (owner_user_id, paper_id, server_version_id)" in item.sql
     assert "FOREIGN KEY (owner_user_id, paper_id, server_version_id, parse_revision_id)" in item.sql
@@ -56,12 +56,22 @@ def test_remote_processing_schema_uses_owner_scoped_composite_references():
 
 
 def test_remote_job_schema_guards_lease_generation_and_idempotency():
-    item = discover_migrations(__import__("pathlib").Path("migrations/server"))[-1]
+    item = discover_migrations(__import__("pathlib").Path("migrations/server"))[14]
 
     assert "UNIQUE (owner_user_id, request_key)" in item.sql
     assert "lease_token uuid NULL" in item.sql
     assert "attempt integer NOT NULL DEFAULT 0" in item.sql
     assert "source_lease_token" in item.sql
+
+
+def test_remote_processing_integrity_adds_delete_path_and_finalized_guards():
+    item = discover_migrations(__import__("pathlib").Path("migrations/server"))[15]
+
+    assert item.sql.count("ON DELETE CASCADE") == 3
+    assert "processing_revision_finalized" in item.sql
+    assert "BEFORE INSERT OR UPDATE OR DELETE ON server_processing_chunks" in item.sql
+    assert "BEFORE INSERT OR UPDATE OR DELETE ON server_translation_chunks" in item.sql
+    assert "FOR SHARE" in item.sql
 
 
 def test_rejects_gaps_and_invalid_sql_files(tmp_path):

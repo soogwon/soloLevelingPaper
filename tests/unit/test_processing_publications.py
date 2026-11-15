@@ -54,6 +54,7 @@ def ready_row(*, omissions=(), translated=2, indexed=2):
         "indexed_chunk_count": indexed,
         "actual_chunk_count": 2,
         "actual_translation_count": translated,
+        "matched_omission_count": len(omissions),
     }
 
 
@@ -151,3 +152,51 @@ def test_get_active_requires_owner_and_returns_immutable_revision_ids():
 
     assert result.publication_id == "publication"
     assert conn.calls[0][1] == ("user-a", "paper", "v1")
+
+
+@pytest.mark.parametrize(
+    ("changes", "reason"),
+    [
+        # 없는 chunk나 이미 번역된 chunk를 누락으로 적으면 개수는 맞아도 거부한다.
+        ({"matched_omission_count": 0}, "translation_omission_mismatch"),
+        ({"omissions": ["chunk-2"]}, "translation_omission_invalid"),
+    ],
+)
+def test_partial_publication_requires_omissions_to_match_untranslated_chunks(changes, reason):
+    row = ready_row(
+        omissions=({"chunk_id": "chunk-2", "reason": "translation_failed"},),
+        translated=1,
+        indexed=1,
+    )
+    row.update(changes)
+
+    with pytest.raises(ProcessingPublicationNotReady, match=reason):
+        PostgresProcessingPublicationStore(Pool(Connection(row))).publish(
+            "user-a", "paper", "v1", "parse", "translation", "embedding", "job", "lease",
+            policy="partial",
+        )
+
+
+def test_partial_publication_without_any_translation_is_rejected():
+    omissions = tuple({"chunk_id": f"chunk-{n}", "reason": "translation_failed"} for n in (1, 2))
+
+    with pytest.raises(ProcessingPublicationNotReady, match="has_no_translation"):
+        PostgresProcessingPublicationStore(Pool(Connection(
+            ready_row(omissions=omissions, translated=0, indexed=0)
+        ))).publish(
+            "user-a", "paper", "v1", "parse", "translation", "embedding", "job", "lease",
+            policy="partial",
+        )
+
+
+def test_omission_match_is_counted_inside_the_owner_scoped_revision():
+    conn = Connection(ready_row())
+
+    PostgresProcessingPublicationStore(Pool(conn)).publish(
+        "user-a", "paper", "v1", "parse", "translation", "embedding", "job", "lease",
+        policy="complete",
+    )
+
+    sql = conn.calls[0][0]
+    assert "matched_omission_count" in sql
+    assert "jsonb_array_elements(tr.omissions)" in sql

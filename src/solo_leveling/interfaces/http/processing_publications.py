@@ -87,7 +87,22 @@ class PostgresProcessingPublicationStore:
                               AND tc.server_version_id=tr.server_version_id
                               AND tc.parse_revision_id=tr.parse_revision_id
                               AND tc.translation_revision_id=tr.translation_revision_id)
-                              AS actual_translation_count
+                              AS actual_translation_count,
+                          (SELECT count(*) FROM server_processing_chunks c
+                            WHERE c.owner_user_id=pr.owner_user_id
+                              AND c.paper_id=pr.paper_id
+                              AND c.server_version_id=pr.server_version_id
+                              AND c.parse_revision_id=pr.parse_revision_id
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM server_translation_chunks tc
+                                   WHERE tc.owner_user_id=tr.owner_user_id
+                                     AND tc.translation_revision_id=tr.translation_revision_id
+                                     AND tc.chunk_id=c.chunk_id)
+                              AND c.chunk_id::text IN (
+                                  SELECT item->>'chunk_id'
+                                    FROM jsonb_array_elements(tr.omissions) AS item
+                                   WHERE jsonb_typeof(item)='object'))
+                              AS matched_omission_count
                    FROM server_processing_versions v
                    JOIN server_parse_revisions pr
                      ON pr.owner_user_id=v.owner_user_id
@@ -235,6 +250,13 @@ def _validated_manifest(row, policy: PublicationPolicy) -> dict[str, Any]:
         omission_ids.append(str(omission["chunk_id"]))
     if len(omission_ids) != len(set(omission_ids)):
         raise ProcessingPublicationNotReady("translation_omission_duplicate")
+    # 개수만 맞추면 없는 chunk나 이미 번역된 chunk를 누락으로 적어도 통과한다.
+    # 누락 항목은 이 파싱 revision의 chunk이면서 번역 행이 없는 것과 정확히 일치해야 한다.
+    if int(row["matched_omission_count"]) != len(omission_ids):
+        raise ProcessingPublicationNotReady("translation_omission_mismatch")
+    # 번역이 하나도 없는 집합은 partial로도 게시하지 않는다.
+    if policy == "partial" and translated_count == 0:
+        raise ProcessingPublicationNotReady("partial_publication_has_no_translation")
     return {
         "chunk_count": chunk_count,
         "translated_chunk_count": translated_count,
