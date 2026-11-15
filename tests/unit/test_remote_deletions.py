@@ -190,3 +190,11 @@ def test_backend_error_code_cannot_enter_response_or_store(raw):
     assert result['error_code']=='physical_cleanup_failed'
     store.mark_cleanup_failed.assert_called_once_with(store.claim_cleanup.return_value,'physical_cleanup_failed')
     backend.delete_source.assert_not_called()
+
+
+@pytest.mark.parametrize('seconds',[0,-1,True,1.5,None])
+def test_invalid_cleanup_lease_cannot_claim(seconds):
+    store=PostgresRemoteDeletionStore(Pool())
+    with pytest.raises(ValueError,match='remote_deletion_lease_invalid'):
+        store.claim_cleanup('worker',lease_seconds=seconds)
+    assert store._pool.conn.calls==[]

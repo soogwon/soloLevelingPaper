@@ -119,3 +119,36 @@ def test_legacy_cleaning_without_lease_is_reclaimed(case,db):
     store,request=case
     db("UPDATE server_deletion_requests SET status='cleaning' WHERE request_id=%s",(request.request_id,))
     assert store.claim_cleanup('worker',lease_seconds=60).request_id==request.request_id
+
+
+@pytest.mark.parametrize('finish_derived',[False,True])
+def test_abrupt_worker_process_exit_then_restart(case,db,pool,finish_derived):
+    import subprocess
+    import sys
+    store,request=case
+    schema=db('SELECT current_schema() AS name')[0]['name']
+    program='''
+import os
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+from solo_leveling.interfaces.http.remote_deletions import PostgresRemoteDeletionStore
+pool=ConnectionPool(os.environ['SOLO_TEST_POSTGRES_DSN'],kwargs={'row_factory':dict_row,'options':'-c search_path='+os.environ['CLEANUP_SCHEMA']},min_size=1,max_size=1)
+store=PostgresRemoteDeletionStore(pool)
+cleanup=store.claim_cleanup('crashing-process',lease_seconds=60)
+assert cleanup is not None
+if os.environ['FINISH_DERIVED']=='1':
+    store.run_cleanup_phase(cleanup,'derived',lambda:None)
+os._exit(17)
+'''
+    result=subprocess.run([sys.executable,'-c',program],env={**os.environ,'CLEANUP_SCHEMA':schema,
+        'FINISH_DERIVED':'1' if finish_derived else '0'},capture_output=True,timeout=20)
+    assert result.returncode==17
+    row=db('SELECT status,attempt_count FROM server_deletion_requests WHERE request_id=%s',(request.request_id,))[0]
+    assert row=={'status':'cleaning','attempt_count':1}
+    db("UPDATE server_deletion_requests SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE request_id=%s",(request.request_id,))
+    backend=Mock()
+    resumed=RemoteDeletionCleanupService(PostgresRemoteDeletionStore(pool),backend,DeletionPolicy(31,30,30),
+        worker_id='replacement',lease_seconds=60).run_once()
+    assert resumed=={'status':'complete','attempt_count':2}
+    assert backend.delete_derived.call_count==int(not finish_derived)
+    backend.delete_source.assert_called_once()
