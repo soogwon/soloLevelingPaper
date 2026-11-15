@@ -144,12 +144,17 @@ def test_completed_retry_reuses_result_without_copy_or_reservation(cleanup_fails
 
 def test_expired_cleanup_retries_failures_without_exposing_object_keys():
     class Store:
+        marked = []
+
         def claim_expired_objects(self, *, limit):
             assert limit == 2
             return (
                 ExpiredRemoteUpload("intent-1", "private/tmp/owner/one.pdf"),
                 ExpiredRemoteUpload("intent-2", "private/tmp/owner/two.pdf"),
             )
+
+        def mark_expired_object_deleted(self, intent_id, object_key):
+            self.marked.append((intent_id, object_key))
 
     class Objects:
         def __init__(self):
@@ -164,6 +169,7 @@ def test_expired_cleanup_retries_failures_without_exposing_object_keys():
     result = RemoteUploadVerificationService(Store(), objects).cleanup_expired(limit=2)
     assert result == {"claimed": 2, "deleted": 1, "failed": 1}
     assert objects.calls == ["private/tmp/owner/one.pdf", "private/tmp/owner/two.pdf"]
+    assert Store.marked == [("intent-1", "private/tmp/owner/one.pdf")]
 
 
 def test_expired_cleanup_query_excludes_ready_and_non_temporary_objects():
@@ -194,3 +200,20 @@ def test_expired_cleanup_rejects_unbounded_limit(limit):
     with pytest.raises(ValueError, match="remote_upload_cleanup_limit_invalid"):
         PostgresRemoteUploadIntentStore(pool, now=lambda: NOW).claim_expired_objects(limit=limit)
     assert pool.conn.calls == []
+
+
+def test_deleted_expired_object_is_acknowledged_in_exact_intent_scope():
+    class MarkConn(Conn):
+        def execute(self, sql, params=()):
+            self.calls.append((sql, params))
+            return Result({"upload_id": "upload"})
+
+    pool = Pool()
+    pool.conn = MarkConn([])
+    PostgresRemoteUploadIntentStore(pool, now=lambda: NOW).mark_expired_object_deleted(
+        "intent", "private/tmp/owner/object.pdf")
+    sql, params = pool.conn.calls[0]
+    assert "i.status='expired'" in sql
+    assert "u.status='pending'" in sql
+    assert "failure_reason='upload_expired'" in sql
+    assert params == ("intent", "private/tmp/owner/object.pdf")
