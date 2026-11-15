@@ -84,3 +84,33 @@ def test_blocked_provider_cannot_issue_consent(data):
         assert not provider.calls and count(data, 'reparse_requests') == 0
     finally:
         manager.begin_shutdown()
+
+
+def test_pre_submit_status_reads_preserve_original_confirmation_without_work(data):
+    worker, provider, _ = service(data)
+    manager = ReparseManager(worker)
+    server = create_server(MCPServices(Mock(), Mock(), reparse=manager))
+    args = dict(context_id=data.old.context_id, request_key='status-before-consent')
+
+    async def check():
+        async with create_connected_server_and_client_session(server) as client:
+            preview = await client.call_tool('prepare_paper_reparse', args)
+            token = preview.meta['confirmation_token']
+            for _ in range(2):
+                status = await client.call_tool('get_paper_reparse', args)
+                assert not status.isError and status.structuredContent['status'] == 'PREPARED'
+                assert token not in str(status.content)
+                assert not provider.calls and count(data, 'reparse_requests') == 0
+            submit = dict(args, confirmation_token=token)
+            accepted = await client.call_tool('submit_paper_reparse', submit)
+            assert not accepted.isError and accepted.structuredContent['status'] == 'ACCEPTED'
+            assert (await client.call_tool('submit_paper_reparse', submit)).isError
+            manager.begin_shutdown()
+            assert await asyncio.to_thread(manager.wait_for_idle, 10)
+            assert count(data, 'reparse_requests') == 1
+            assert len(provider.calls) == 2
+    try:
+        asyncio.run(check())
+    finally:
+        manager.begin_shutdown()
+        assert manager.wait_for_idle(10)

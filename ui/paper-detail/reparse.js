@@ -25,7 +25,7 @@ export function mountReparse(app, doc, storage) {
     job = null;
     const names = {ACCEPTED:'접수됨', IN_PROGRESS:'진행 중', COMPLETED:'게시 완료', NOT_FOUND:'미접수',
       FAILED:'실패', INTERRUPTED:'중단됨', BASE_CHANGED:'기준 색인 변경', REQUEST_CONFLICT:'요청 키 충돌',
-      BLOCKED:'외부 번역 차단', AVAILABLE:'접수 전'};
+      BLOCKED:'외부 번역 차단', AVAILABLE:'접수 전', PREPARED:'미접수 · 재파싱 안내를 다시 확인하세요'};
     if (!Object.hasOwn(names, data.status)) throw Error();
     if (data.status === 'COMPLETED' && data.result_available && id(data.new_embedding_set_id)) job = data.job_id;
     const unaccepted = data.status === 'IN_PROGRESS' && !data.job_id;
@@ -60,6 +60,7 @@ export function mountReparse(app, doc, storage) {
     const control = el(kind);
     if (control.disabled || !target) return;
     const current = generation;
+    const preparedToken = kind === 'refresh' ? token : null;
     let name, args = {...target};
     busy = true; controls();
     try {
@@ -74,6 +75,7 @@ export function mountReparse(app, doc, storage) {
         name = 'select_reparsed_context'; args.job_id = job;
       } else name = 'get_paper_reparse';
       token = null;
+      el('agree').checked = false;
       const response = await app.callServerTool({name, arguments:args});
       if (current !== generation) return;
       if (response.isError) throw Error();
@@ -81,7 +83,15 @@ export function mountReparse(app, doc, storage) {
       if (kind === 'cancel') el('status').textContent = '접수 전 동의를 취소했습니다.';
       else if (kind === 'select' && data.job_id === job && id(data.context_id)) {
         el('status').textContent = '새 학습 맥락 ID: ' + data.context_id;
-      } else result(data);
+      } else {
+        result(data);
+        // 미제출 카드의 확인 토큰만 유지한다. 조회가 새 동의나 재접수를 만들지는 않는다.
+        if (kind === 'refresh' && data.status === 'PREPARED' && preparedToken
+            && !storage?.getItem(slot())) {
+          token = preparedToken;
+          el('status').textContent = '접수 전입니다. 위 안내를 확인하고 다시 동의해 주세요.';
+        }
+      }
     } catch {
       if (current === generation) {
         token = null;
