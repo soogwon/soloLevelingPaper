@@ -54,7 +54,8 @@ class GatedResponsesTransport:
             raise DispatchError('DISPATCH_PAYLOAD_INVALID')
 
         def transmit(_):
-            response = (self.post or requests.post)('https://api.openai.com/v1/responses', json=frozen,
+            post = requests.post if self.post is None else self.post
+            response = post('https://api.openai.com/v1/responses', json=frozen,
                 headers={'Authorization': f'Bearer {settings.api_key}'},
                 timeout=(5.0, settings.timeout_seconds), allow_redirects=False)
             try:

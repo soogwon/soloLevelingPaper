@@ -152,3 +152,19 @@ def test_disabled_external_guard_precedes_preparation(setup):
     with pytest.raises(DispatchError, match='DISPATCH_DISABLED'):
         transport.send(OpenAIGenerationSettings('secret'), {}, 'generation')
     post.assert_not_called()
+
+
+def test_falsey_injected_transport_never_falls_back_to_network(setup):
+    ledger, transport, post, _ = setup
+    class InjectedPost:
+        def __bool__(self):
+            return False
+        def __call__(self, *args, **kwargs):
+            return post(*args, **kwargs)
+    transport.post = InjectedPost()
+    settings = OpenAIGenerationSettings('secret', allow_external_api=True)
+    transport.send(settings, {'model': settings.model, 'store': False,
+                             'max_output_tokens': settings.max_output_tokens}, 'generation')
+    assert post.call_count == 1
+    assert ledger.observed == [('1', 5, 2)]
+    assert ledger.unknowns == []
