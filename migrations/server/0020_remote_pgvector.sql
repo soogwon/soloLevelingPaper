@@ -22,11 +22,8 @@ CREATE TABLE server_embedding_vectors (
                                           parse_revision_id, translation_revision_id,
                                           embedding_set_id)
         ON DELETE CASCADE,
-    FOREIGN KEY (owner_user_id, paper_id, server_version_id, parse_revision_id,
-                 translation_revision_id, chunk_id)
-        REFERENCES server_translation_chunks(owner_user_id, paper_id, server_version_id,
-                                              parse_revision_id, translation_revision_id,
-                                              chunk_id)
+    FOREIGN KEY (owner_user_id, translation_revision_id, chunk_id)
+        REFERENCES server_translation_chunks(owner_user_id, translation_revision_id, chunk_id)
         ON DELETE CASCADE,
     CHECK (vector_dims(embedding) = dimension)
 );
