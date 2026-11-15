@@ -9,6 +9,9 @@
 <p><label for="fixture">검토용 서버 상태 대역</label>
 <select id="fixture"><option>created</option><option>uploading</option><option>verified</option><option>failed</option><option>expired</option></select>
 <button id="apply" type="button">대역 상태 표시</button></p>
+<p><label for="job-state">검토용 처리 상태 대역</label>
+<select id="job-state"><option>queued</option><option>running</option><option>succeeded</option><option>failed</option><option>cancelled</option><option>응답 유실</option></select>
+<button id="job-apply" type="button">기존 작업 조회 대역 표시</button></p>
 <div id="preview"></div>
 </main><script type="module">
 import {createPreview, renderPreview} from './upload.mjs';
@@ -21,6 +24,15 @@ document.querySelector('#apply').addEventListener('click', () => {
   const state = model.snapshot();
   model.receive(state.generation, {intentId:`fixture-${state.generation}`,status:document.querySelector('#fixture').value,
     expiresAt:Date.now()+60000});paint();
+});
+document.querySelector('#job-apply').addEventListener('click', () => {
+  const ticket = model.beginAdmissionLookup();
+  if (ticket) {
+    const status = document.querySelector('#job-state').value;
+    model.receiveAdmission(ticket, status === '응답 유실' ? null : {intentId:ticket.intentId,
+      job:{job_id:`fixture-job-${ticket.generation}`,paper_id:'fixture-paper',server_version_id:'v1',status}});
+  }
+  paint();
 });
 paint();
 </script></body></html>

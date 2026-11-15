@@ -82,3 +82,30 @@ unknown/예산 거부 뒤 청크 재시도·다음 청크로 유료 전송이 �
 대역으로 생성·보완·의미 검증·번역의 gate 통과, unknown 후 전송 1회/추가 0회,
 전송 전 거부 0회, payload 변이 차단 및 기존 parser 사용을 검증한다.
 이는 영속 원장의 재시작/동시성 또는 유료 서비스 공개 증명이 아니다.
+
+## B 영속 Responses transport 조립
+
+`create_persisted_responses_transport`는 A의 `PostgresDispatchLedger`와
+`validate_execution_scope`, B의 `ProviderDispatch`/`GatedResponsesTransport`를 연결한다.
+반환값을 생성기·보완·coverage·의미 검증의 기존 transport 주입점에 전달한다.
+정책/window, 안전한 토큰 상한과 영속 dispatch key는 필수 외부 입력이며 기본값으로 우회하지 않는다.
+공개 도구나 제품 기본 transport는 변경하지 않는다.
+
+`test_persisted_dispatch_postgres.py`는 실제 DB의 실행/동의/예산/attempt와 합성 HTTP 응답을 사용한다.
+단계별 예약·정산, 같은 키의 재전송 금지, timeout/정산 실패 후 새 객체·새 키에도 unknown 차단,
+단계 사이 동의 철회를 검사한다. 실제 네트워크나 과금 테스트가 아니다.
+동의 발급 API, 모델별 보장 가능한 토큰 상한과 정책 수치, 실제 호스트 공개는 별도 과제다.
+
+### B 실행 단위 제한 (#395)
+`ExecutionBudget`를 `create_persisted_responses_transport(execution_budget=...)`에 주입하면
+실행 행 잠금과 같은 transaction에서 누적 호출 수·입출력 예약 상한·생성 시각 기준 경과 시간을 검사합니다.
+생성/보완/coverage/의미 검증/번역을 합산하며 lease·transport 재생성으로 초기화하지 않습니다.
+사용량이 적더라도 보수적으로 예약 상한을 소비합니다. unknown은 기존 원장이 별도로 차단합니다.
+제한 거부는 `DispatchBudgetExceeded`의 고정 코드이며 근거 부족이나 제공자 장애로 변환하지 않습니다.
+
+운영 조립 시에는 동일 실행에 고정된 신뢰 정책을 반드시 주입해야 합니다. 정책 버전과 실행별
+제한값의 영속 연결은 A와 확정할 범위이며 요청자가 값을 바꾸거나 재시작 시 상향하면 안 됩니다.
+이번 내부 factory는 기존 호환용 미주입 경로도 유지하므로 공개 worker로 연결하지 않습니다.
+시간 제한은 다음 전송 전 검사입니다. 이미 진행 중인 HTTP를 강제 중단하거나 호스트 연결 종료를
+서버 취소로 간주하지 않습니다. 저장 시 deadline·완료 정책, 단계별 timeout·진행 알림과 동기/비동기
+전환 수치는 #388 실측 및 A/C 계약 후 결정합니다. 이번 합성 제한값은 운영 기본값이 아닙니다.

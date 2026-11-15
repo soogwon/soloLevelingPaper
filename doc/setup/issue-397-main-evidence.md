@@ -1,6 +1,6 @@
 # #397 최신 main 저장·검색·삭제 검증 대조표
 
-## 기준과 실행 근거
+## 이전 검증 기준과 실행 근거
 
 - 검토일: 2026-11-15, main `ce52f3d02776b07b25df6f625cf250ab5ece7254`.
 - [main CI 실행](https://github.com/soogwon/soloLevelingPaper/actions/runs/43721484441) 및 [Python job](https://github.com/soogwon/soloLevelingPaper/actions/runs/43721484441/job/132834255921): 성공.
@@ -51,3 +51,32 @@ CI의 DB 실행과 로컬의 skip을 서로 대체하거나 합산하지 않는�
 4. 위 근거를 종단 검증표 각 행에 연결한 후 공동으로 완료 여부를 판정한다.
 
 현재는 DB/단위 수준의 부분 증거를 정리한 단계다. 종단 표는 미실행 상태를 유지하며 #397을 종료하지 않는다.
+
+
+## 2026-11-16 최신 main 대조
+
+기준 main `1f40a19b2b95d5bcf7c9359b7f2debb178a95908`. #450~#456의 원장·실행·고정 출처·원자 저장·접수·제어가 반영됐다.
+아래는 해당 코드와 **병합 전 PR head CI**의 근거이며 main 자체의 CI 실행 결과로 바꿔 표기하지 않는다.
+
+| 종단 행 | 추가된 실제 DB 구간 | 근거와 한계 |
+| --- | --- | --- |
+| E2E-07/10 | `test_dispatch_ledger_postgres.py`: 예약/unknown/초과 상태에서 재시작·새 키의 추가 예약 차단 및 동시 예약 1건 | provider·인증·호스트 실제 호출은 아님 |
+| E2E-07/12 | `test_remote_answer_store_postgres.py`: 답변/근거 원자 저장, 번역/embedding/policy 불일치 거부, 저장 중 lease 만료 롤백 5개 | [#454 CI](https://github.com/soogwon/soloLevelingPaper/actions/runs/43733948250), head `24fc83c`; 전체 통합 371 passed / 29 skipped는 신규 건수가 아님 |
+| E2E-06/07 | `test_remote_processing_intake_postgres.py`: 같은/다른 키 동시 접수 job 1건, 철회 동의 신규 차단·기존 작업 재생 3개 | [#455 CI](https://github.com/soogwon/soloLevelingPaper/actions/runs/43734050971), head `b823cf5`; 실제 업로드/동의 발급 경로 아님 |
+| E2E-17 | 같은 파일의 운영 중지/기존 재생/CAS 및 기존 INSERT 호환 2개 | [#456 CI](https://github.com/soogwon/soloLevelingPaper/actions/runs/43734059304), head `187bfb9`; 전체 통합 376 passed / 29 skipped. 운영 배포나 화면 검증 아님 |
+
+새 `test_remote_saved_evidence_lifecycle_postgres.py`는 위 저장과 조회를 묶어 두 누락 구간을 검사한다.
+1. P1 저장 답변→P2 게시→P1 실행 재조회에서 답변·인용·고정 번역 리비전·근거 행을 보존하고,
+   제품 tombstone 이후 같은 복구가 차단되는지 확인한다. 이때 행이 남는 것을 확인해 물리 삭제와 구분한다.
+2. 삭제 전에 준비한 답변이 tombstone 후 늦게 저장될 때 완료/근거를 만들지 않는지 확인한다.
+
+로컬 PostgreSQL DSN이 없어 신규 2개는 skip하며, 실제 DB 실행은 이 변경의 CI로 확인해야 한다.
+생성/인증은 합성 대역이고 테스트에서 provider attempt가 0인 것은 실제 유료 생성 성공 증거가 아니다.
+
+```sh
+PYTHONPATH=src python -m pytest tests/integration/test_remote_saved_evidence_lifecycle_postgres.py -q
+```
+
+#395의 C 화면 복구 연결, #400 운영 표시, #393 업로드 표시의 별도 PR과 이 DB 증거는 서로 다른 범위다.
+#388 두 계정 인증, 실제 도구 등록, 동의 API·worker composition, R2/백업 복원 및 호스트/로그 검증은 계속 보류한다.
+종단 표를 일괄 통과로 바꾸거나 #397/#77을 종료하지 않는다.
