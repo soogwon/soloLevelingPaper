@@ -2,6 +2,7 @@
 
 from argparse import ArgumentParser
 import json
+import logging
 from os import environ
 from typing import Mapping, Sequence
 
@@ -47,11 +48,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.apply:
         print(json.dumps({"status": "apply_required"}))
         return 2
+    if not 1 <= args.limit <= 1000:
+        print(json.dumps({"status": "invalid_limit"}))
+        return 1
+    # 독립 관리 명령의 연결 재시도 로그에는 접속 정보가 포함될 수 있다.
+    # 풀 종료까지 원시 경고를 차단하고 최종 고정 상태만 출력한다.
+    pool_logger = logging.getLogger("psycopg.pool")
+    suppress_details = lambda record: False  # noqa: E731
+    pool_logger.addFilter(suppress_details)
     try:
         result = _run(environ, args.limit)
-    except (ValueError, OSError, RuntimeError):
+    except Exception:
         print(json.dumps({"status": "cleanup_unavailable"}))
         return 1
+    finally:
+        pool_logger.removeFilter(suppress_details)
     print(json.dumps({"status": "complete", **result}))
     return 1 if result["failed"] else 0
 
