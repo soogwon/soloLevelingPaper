@@ -16,6 +16,7 @@ ISSUER = "https://identity.example.com/"
 RESOURCE = "https://solo-leveling-staging.soogyung.com/mcp"
 SETTINGS = RemoteMcpSettings(
     enabled=True,
+    allowed_client_ids=("published-client",),
     resource_url=RESOURCE,
     issuer=ISSUER,
     audience=RESOURCE,
@@ -57,6 +58,7 @@ def test_remote_mcp_settings_default_off_and_public_host_derived():
     assert load_remote_mcp_settings({}) == RemoteMcpSettings()
     values = {
         "REMOTE_MCP_SPIKE_ENABLED": "true",
+        "REMOTE_MCP_ALLOWED_CLIENT_IDS": "published-client",
         "REMOTE_MCP_RESOURCE_URL": RESOURCE,
         "REMOTE_MCP_OIDC_ISSUER": ISSUER,
         "REMOTE_MCP_OIDC_AUDIENCE": RESOURCE,
@@ -78,6 +80,7 @@ def test_remote_mcp_settings_default_off_and_public_host_derived():
 def test_remote_mcp_settings_reject_incomplete_or_unsafe_values(change, match):
     values = {
         "REMOTE_MCP_SPIKE_ENABLED": "true",
+        "REMOTE_MCP_ALLOWED_CLIENT_IDS": "published-client",
         "REMOTE_MCP_RESOURCE_URL": RESOURCE,
         "REMOTE_MCP_OIDC_ISSUER": ISSUER,
         "REMOTE_MCP_OIDC_AUDIENCE": RESOURCE,
@@ -158,3 +161,36 @@ def test_host_allowlist_never_accepts_wildcards_or_ambiguous_authority(host):
     from dataclasses import replace
     with pytest.raises(ValueError):
         replace(SETTINGS, allowed_hosts=SETTINGS.allowed_hosts + (host,))
+
+
+@pytest.mark.parametrize('changes', [{'azp':'unapproved-client'}, {'nbf':4102444800},
+    {'iat':4102444800}, {'iat':True}])
+def test_unapproved_client_and_time_claims_are_rejected(changes):
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    assert verify(Auth0McpTokenVerifier(SETTINGS, KeyClient(private.public_key())), make_token(private, **changes)) is None
+
+
+def test_missing_client_allowlist_blocks_activation():
+    from dataclasses import replace
+    with pytest.raises(ValueError, match='CLIENT_IDS'):
+        replace(SETTINGS, allowed_client_ids=())
+
+
+def test_real_jwks_failure_and_rotation_are_safe(caplog):
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    rotated = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    class RotatingKeys:
+        def get_signing_key_from_jwt(self, token):
+            key = rotated if jwt.get_unverified_header(token)['kid'] == 'rotated' else private
+            return SimpleNamespace(key=key.public_key())
+    verifier = Auth0McpTokenVerifier(SETTINGS, RotatingKeys())
+    claims = jwt.decode(make_token(private), options={'verify_signature':False})
+    newer = jwt.encode(claims, rotated, algorithm='RS256', headers={'kid':'rotated'})
+    assert verify(verifier, make_token(private)) is not None
+    assert verify(verifier, newer) is not None
+    class Broken:
+        def get_signing_key_from_jwt(self, token):
+            raise jwt.PyJWKClientConnectionError('private-jwks-error')
+    credential = make_token(private)
+    assert verify(Auth0McpTokenVerifier(SETTINGS, Broken()), credential) is None
+    assert credential not in caplog.text and 'private-jwks-error' not in caplog.text

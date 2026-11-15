@@ -37,6 +37,8 @@ class Auth0McpTokenVerifier(TokenVerifier):
             # 이 스파이크의 Auth0 JWT profile은 typ=JWT를 사용한다. 다른 profile은 별도 검토한다.
             if header.get("alg") != "RS256" or header.get("typ") != "JWT":
                 return None
+            if not isinstance(header.get('kid'), str) or not header['kid'] or header.get('crit'):
+                return None
             signing_key = self._jwks_client.get_signing_key_from_jwt(token)
             claims = jwt.decode(
                 token,
@@ -56,8 +58,10 @@ class Auth0McpTokenVerifier(TokenVerifier):
                     or claims.get('gty') not in (None, 'authorization_code', 'refresh_token')
                     or 'credential_type' in claims or 'device_id' in claims
                     or not isinstance(raw_scopes, str)
-                    or not isinstance(client_id, str) or not client_id.strip()
+                    or not isinstance(client_id, str) or client_id not in self._settings.allowed_client_ids
                     or not isinstance(expires_at, int) or isinstance(expires_at, bool)):
+                return None
+            if any(field in claims and type(claims[field]) is not int for field in ('exp', 'iat', 'nbf')):
                 return None
             scopes = raw_scopes.split()
             if self._settings.required_scope not in scopes:

@@ -16,6 +16,7 @@ RESOURCE = "https://solo-leveling-staging.soogyung.com/mcp"
 ISSUER = "https://identity.example.com/"
 SETTINGS = RemoteMcpSettings(
     enabled=True,
+    allowed_client_ids=("published-client",),
     resource_url=RESOURCE,
     issuer=ISSUER,
     audience=RESOURCE,
@@ -128,3 +129,27 @@ def test_duplicate_headers_and_metadata_boundary():
         response = rpc(value, 'tools/list', **{
             'X-Forwarded-Host':'solo-leveling-staging.soogyung.com', 'X-Forwarded-Proto':'https'})
         assert response.status_code == 200
+
+
+
+def test_signed_token_through_product_http_boundary():
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from solo_leveling.interfaces.http.remote_mcp_auth import Auth0McpTokenVerifier
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    keys = SimpleNamespace(get_signing_key_from_jwt=lambda _:SimpleNamespace(key=private.public_key()))
+    verifier = Auth0McpTokenVerifier(SETTINGS, keys)
+    now = datetime.now(timezone.utc)
+    claims = dict(iss=ISSUER,aud=RESOURCE,sub='private-user',azp='published-client',
+                  scope='spike:read',iat=now,exp=now+timedelta(minutes=5))
+    with TestClient(create_app(remote_mcp_settings=SETTINGS, remote_mcp_verifier=verifier),
+                    base_url='https://solo-leveling-staging.soogyung.com') as value:
+        credential = jwt.encode(claims,private,algorithm='RS256',headers={'kid':'key'})
+        result = rpc(value,'tools/call',{'name':'whoami'},token=credential)
+        assert result.status_code == 200
+        assert 'private-user' not in result.text and credential not in result.text
+        for change in [{'aud':'published-client'}, {'azp':'unapproved'}, {'gty':'client-credentials'}]:
+            rejected = jwt.encode(claims | change,private,algorithm='RS256',headers={'kid':'key'})
+            assert rpc(value,'tools/list',token=rejected).status_code == 401
