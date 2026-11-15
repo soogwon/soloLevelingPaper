@@ -21,7 +21,7 @@ class PostgresRemoteAnswerStore:
             raise ValueError("remote_answer_input_invalid")
         binding = prepared.binding
         response = prepared.response
-        if response.context_id != binding.context_id:
+        if response.context_id != binding.context_id or binding.owner_user_id != intent.owner_user_id:
             raise ValueError("remote_answer_scope_invalid")
         citations = {citation.evidence_id: citation for citation in response.result.citations}
         evidence = {item.evidence_id: item for item in prepared.evidence}
@@ -48,14 +48,17 @@ class PostgresRemoteAnswerStore:
                 """SELECT 1 FROM server_remote_executions e
                    JOIN server_execution_contexts c
                      ON c.owner_user_id=e.owner_user_id AND c.context_id=e.context_id
+                   JOIN server_processing_publications pub
+                     ON pub.owner_user_id=c.owner_user_id AND pub.publication_id=c.publication_id
                    JOIN server_papers p
                      ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
                    WHERE e.owner_user_id=%s AND e.execution_id=%s AND e.state='running'
-                     AND e.lease_token=%s AND e.lease_expires_at>CURRENT_TIMESTAMP
+                     AND e.lease_token=%s AND e.lease_expires_at>clock_timestamp()
                      AND e.input_hash=%s AND e.context_id=%s
                      AND c.paper_id=%s AND c.server_version_id=%s
                      AND c.publication_id=%s AND c.parse_revision_id=%s
-                     AND p.deleted_at IS NULL
+                     AND pub.translation_revision_id=%s AND pub.embedding_set_id=%s
+                     AND pub.publication_policy=%s AND p.deleted_at IS NULL
                    FOR UPDATE OF e,p""",
                 (
                     intent.owner_user_id,
@@ -67,6 +70,9 @@ class PostgresRemoteAnswerStore:
                     binding.server_version_id,
                     binding.publication_id,
                     binding.parse_revision_id,
+                    binding.translation_revision_id,
+                    binding.embedding_set_id,
+                    binding.publication_policy,
                 ),
             ).fetchone()
             if locked is None:
@@ -86,7 +92,7 @@ class PostgresRemoteAnswerStore:
                        WHERE c.owner_user_id=%s AND c.paper_id=%s AND c.server_version_id=%s
                          AND c.parse_revision_id=%s AND c.chunk_id=%s
                          AND position(%s in c.original_text)>0
-                         AND (%s IS NULL OR position(%s in tc.translated_text)>0)
+                         AND (%s::text IS NULL OR position(%s in tc.translated_text)>0)
                        ON CONFLICT DO NOTHING RETURNING evidence_id""",
                     (
                         evidence_id,
@@ -114,7 +120,7 @@ class PostgresRemoteAnswerStore:
                        lease_token=NULL,lease_expires_at=NULL,
                        finished_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
                    WHERE owner_user_id=%s AND execution_id=%s AND state='running'
-                     AND lease_token=%s AND lease_expires_at>CURRENT_TIMESTAMP
+                     AND lease_token=%s AND lease_expires_at>clock_timestamp()
                    RETURNING execution_id""",
                 (raw, digest, intent.owner_user_id, intent.execution_id, intent.lease_token),
             ).fetchone()
