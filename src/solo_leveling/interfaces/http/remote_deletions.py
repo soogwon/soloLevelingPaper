@@ -22,8 +22,9 @@ class PostgresRemoteDeletionStore:
             conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (owner_user_id,))
             old = conn.execute(
                 """SELECT request_id,paper_id,status FROM server_deletion_requests
-                   WHERE owner_user_id=%s AND (request_key=%s OR paper_id=%s) FOR UPDATE""",
-                (owner_user_id, request_key, paper_id),
+                   WHERE owner_user_id=%s AND (request_key=%s OR paper_id=%s)
+                   ORDER BY (request_key=%s) DESC LIMIT 1 FOR UPDATE""",
+                (owner_user_id, request_key, paper_id, request_key),
             ).fetchone()
             if old:
                 if str(old["paper_id"]) != paper_id:

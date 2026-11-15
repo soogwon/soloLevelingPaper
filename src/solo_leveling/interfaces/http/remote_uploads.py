@@ -85,8 +85,11 @@ class PostgresRemoteUploadIntentStore:
             row = conn.execute(
                 """SELECT intent_id,paper_id,server_version_id,file_name,file_size,content_type,
                           sha256_hex,expires_at,status,upload_id
-                   FROM server_remote_upload_intents
-                   WHERE owner_user_id=%s AND intent_id=%s FOR UPDATE""",
+                   FROM server_remote_upload_intents i
+                   WHERE owner_user_id=%s AND intent_id=%s
+                     AND EXISTS (SELECT 1 FROM server_papers p WHERE p.owner_user_id=i.owner_user_id
+                                 AND p.paper_id=i.paper_id AND p.deleted_at IS NULL)
+                   FOR UPDATE""",
                 (owner_user_id, intent_id),
             ).fetchone()
             if row is None:
@@ -161,6 +164,8 @@ class PostgresRemoteUploadIntentStore:
                  ON u.owner_user_id=i.owner_user_id AND u.paper_id=i.paper_id
                 AND u.server_version_id=i.server_version_id AND u.upload_id=i.upload_id
                WHERE i.owner_user_id=%s AND i.intent_id=%s
+                 AND EXISTS (SELECT 1 FROM server_papers p WHERE p.owner_user_id=i.owner_user_id
+                             AND p.paper_id=i.paper_id AND p.deleted_at IS NULL)
                  AND i.status='verified' AND u.status='ready' AND u.source_kind='remote'""",
             (owner_user_id, intent_id),
         ).fetchone()

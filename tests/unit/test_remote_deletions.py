@@ -60,7 +60,7 @@ def test_replays_existing_paper_deletion_with_a_new_request_key():
 
     assert result.request_id == "r"
     lookup_params = next(params for sql, params in pool.conn.calls if "SELECT request_id,paper_id,status" in sql)
-    assert lookup_params == ("owner", "another-key", "p")
+    assert lookup_params == ("owner", "another-key", "p", "another-key")
 
 
 def test_rejects_request_key_reuse_for_another_paper():

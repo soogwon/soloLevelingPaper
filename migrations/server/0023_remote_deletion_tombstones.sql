@@ -14,10 +14,13 @@ CREATE TABLE server_deletion_requests (
 );
 
 CREATE FUNCTION server_reject_tombstoned_paper() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    tombstoned_at timestamptz;
 BEGIN
-    IF EXISTS (SELECT 1 FROM server_papers p
-               WHERE p.owner_user_id=NEW.owner_user_id AND p.paper_id=NEW.paper_id
-                 AND p.deleted_at IS NOT NULL) THEN
+    -- 삭제와 후발 쓰기를 같은 논문 행 잠금으로 직렬화한다.
+    SELECT p.deleted_at INTO tombstoned_at FROM server_papers p
+      WHERE p.owner_user_id=NEW.owner_user_id AND p.paper_id=NEW.paper_id FOR SHARE;
+    IF tombstoned_at IS NOT NULL THEN
         RAISE EXCEPTION 'paper_tombstoned' USING ERRCODE='check_violation';
     END IF;
     RETURN NEW;
