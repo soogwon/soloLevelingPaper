@@ -119,6 +119,16 @@ def test_scope_denial_happens_before_policy_or_consent_reads():
     assert pool.conn.calls == []
 
 
+def test_new_ledger_cannot_bypass_unsettled_or_overrun_attempt():
+    pool = Pool(authorization_routes(**{"FROM server_provider_attempts": [{"blocked": 1}]}))
+    ledger = PostgresDispatchLedger(pool, "new-policy", "new-window", lambda *_: True)
+    original = request()
+    retry = AttemptRequest(original.intent, "new-key", "repair", 100, 50)
+
+    assert ledger.authorize(retry) is None
+    assert not any("INSERT INTO server_provider_attempts" in sql for sql, _ in pool.conn.calls)
+
+
 def test_observe_is_idempotent_and_conflicting_replay_is_rejected():
     observed = {
         "status": "observed",

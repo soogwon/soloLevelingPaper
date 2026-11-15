@@ -37,6 +37,18 @@ class PostgresDispatchLedger:
             ).fetchone()
             if control is None or not control["dispatch_enabled"]:
                 return None
+            # 재시작·lease 교체·새 전송 키로 미정산 또는 초과 사용을 우회하지 못하게 한다.
+            blocked = conn.execute(
+                """SELECT 1 FROM server_provider_attempts
+                   WHERE owner_user_id=%s AND execution_id=%s AND (
+                       status IN ('reserved','unknown') OR
+                       actual_input_tokens>reserved_input_tokens OR
+                       actual_output_tokens>reserved_output_tokens)
+                   LIMIT 1""",
+                (intent.owner_user_id, intent.execution_id),
+            ).fetchone()
+            if blocked is not None:
+                return None
             consents = conn.execute(
                 """SELECT consent_id,purpose,input_hash FROM server_remote_consents
                    WHERE owner_user_id=%s AND consent_id IN (%s,%s)
