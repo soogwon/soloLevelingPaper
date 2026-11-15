@@ -39,7 +39,7 @@ def seeded(db, stores, pool, owner='alice', *, paper=None):
 class FixtureSourceReader:
     """선택한 DB 행의 본문만 읽는 테스트 대역. A의 snapshot/권한/게시 집합 adapter가 아니다."""
     def __init__(self, db):
-        self.db, self.reads = db, 0
+        self.db, self.reads, self.following_reads = db, 0, []
 
     def read_chunks(self, binding, ids):
         self.reads += 1
@@ -52,8 +52,10 @@ class FixtureSourceReader:
         return tuple(RemoteSourceChunk(binding, str(r['chunk_id']), r['ordinal'], r['pdf_page'], r['section_id'],
                                       r['original_text'], r['translated_text']) for r in rows)
 
-    def following_chunks(self, *_):
-        pytest.fail('완결 문장 fixture는 인접 조회를 하지 않아야 함')
+    def following_chunks(self, binding, indices):
+        # AnswerService는 완결 문장도 겹침 문맥을 조회한다. 이 fixture는 겹침 후보를 제공하지 않는다.
+        self.following_reads.append((binding, indices))
+        return ()
 
 
 def evaluator(db, pool, owner='alice', *, runtime=None, generator=None, semantic=None):
@@ -83,6 +85,7 @@ def test_db_prefilter_through_answer_preserves_source_and_does_not_persist(db, s
     assert prepared.evidence[0].quote_ko == '합성 원문이다.'
     assert {c.chunk_id for c in prepared.response.result.citations} == {revision[3][0]}
     assert reader.reads == 1 and evidence_count(db) == before
+    assert reader.following_reads == [(binding, (1,))]
 
 
 def test_new_publication_does_not_change_prepared_old_context(db, stores, pool):
@@ -110,7 +113,7 @@ def test_actual_tombstone_blocks_preparation_before_embedding_source_and_generat
         service.prepare('합성 설명은?', binding.context_id, filters=FILTERS)
     runtime.embed.assert_not_called()
     gen.generate_claims.assert_not_called()
-    assert reader.reads == 0
+    assert reader.reads == 0 and reader.following_reads == []
 
 
 def test_foreign_and_missing_context_have_same_failure_without_generation(db, stores, pool):
@@ -120,7 +123,7 @@ def test_foreign_and_missing_context_have_same_failure_without_generation(db, st
     for context in (binding.context_id, new_id()):
         with pytest.raises(RemoteRetrievalContractError, match='^REMOTE_CONTEXT_NOT_FOUND$'):
             service.prepare('합성 설명은?', context)
-    assert reader.reads == 0
+    assert reader.reads == 0 and reader.following_reads == []
     runtime.embed.assert_not_called()
     gen.generate_claims.assert_not_called()
 
