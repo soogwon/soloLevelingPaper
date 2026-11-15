@@ -142,7 +142,7 @@ class PostgresFileUploadStore:
             expires_at = now + UPLOAD_TTL
             target = conn.execute(
                 """SELECT 1 FROM server_papers p
-                   WHERE p.paper_id=%s AND p.owner_user_id=%s
+                   WHERE p.paper_id=%s AND p.owner_user_id=%s AND p.deleted_at IS NULL
                      AND EXISTS (
                        SELECT 1 FROM server_learning_records r
                        WHERE r.paper_id=p.paper_id AND r.owner_user_id=p.owner_user_id
@@ -212,7 +212,11 @@ class PostgresFileUploadStore:
                 """SELECT upload_id, paper_id, server_version_id, file_name, file_size,
                           content_type, sha256_hex, object_key, expires_at, status, completed_at, failure_reason
                    FROM server_pdf_uploads
-                   WHERE owner_user_id=%s AND upload_id=%s FOR UPDATE""",
+                   WHERE owner_user_id=%s AND upload_id=%s
+                     AND EXISTS (SELECT 1 FROM server_papers p
+                                 WHERE p.owner_user_id=server_pdf_uploads.owner_user_id
+                                   AND p.paper_id=server_pdf_uploads.paper_id AND p.deleted_at IS NULL)
+                   FOR UPDATE""",
                 (owner_user_id, upload_id),
             ).fetchone()
             if row and row["status"] == "failed" and row["failure_reason"] == "upload_expired":
@@ -280,7 +284,7 @@ class PostgresFileUploadStore:
         with _connection(self._pool) as conn:
             target = conn.execute(
                 """SELECT 1 FROM server_papers p
-                   WHERE p.paper_id=%s AND p.owner_user_id=%s
+                   WHERE p.paper_id=%s AND p.owner_user_id=%s AND p.deleted_at IS NULL
                      AND EXISTS (
                        SELECT 1 FROM server_learning_records r
                        WHERE r.paper_id=p.paper_id AND r.owner_user_id=p.owner_user_id

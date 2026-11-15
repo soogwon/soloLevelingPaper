@@ -76,3 +76,26 @@ def test_write_waits_for_uncommitted_tombstone_then_rejects(db, pool):
         with pytest.raises(psycopg.errors.CheckViolation, match='paper_tombstoned'):
             future.result(timeout=5)
     assert db("SELECT count(*) AS n FROM server_processing_versions WHERE paper_id=%s AND server_version_id='late'", (paper,))[0]['n'] == 0
+
+
+def test_tombstone_blocks_existing_pdf_access_and_completion_lookup(db, pool):
+    from solo_leveling.interfaces.http.file_uploads import PostgresFileUploadStore, UploadNotFound, UploadTargetNotFound
+    owner = 'deletion-file'
+    paper, upload = make_paper(db, owner), new_id()
+    db("""INSERT INTO server_learning_records
+          (learning_record_id,owner_user_id,paper_id,source_instance_id,local_learning_record_id,
+           selected_version_id,reading_status,source_updated_at)
+          SELECT %s,owner_user_id,paper_id,source_instance_id,'record','v1','reading',CURRENT_TIMESTAMP
+          FROM server_papers WHERE paper_id=%s""", (new_id(), paper))
+    db("""INSERT INTO server_pdf_uploads(upload_id,owner_user_id,paper_id,server_version_id,local_version_id,
+          file_name,file_size,content_type,sha256_hex,object_key,status,expires_at,completed_at)
+          VALUES (%s,%s,%s,'v1','local','paper.pdf',10,'application/pdf',%s,%s,'ready',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)""",
+       (upload, owner, paper, 'a' * 64, f'private/files/{upload}.pdf'))
+    store = PostgresFileUploadStore(pool)
+    assert store.get_file_access(owner, paper, 'v1').status == 'ready'
+    assert store.get_for_completion(owner, upload).upload_id == upload
+    PostgresRemoteDeletionStore(pool).request(owner, paper, new_id())
+    with pytest.raises(UploadTargetNotFound):
+        store.get_file_access(owner, paper, 'v1')
+    with pytest.raises(UploadNotFound):
+        store.get_for_completion(owner, upload)
