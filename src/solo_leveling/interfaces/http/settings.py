@@ -72,6 +72,8 @@ class RemoteMcpSettings:
             raise ValueError("REMOTE_MCP_REQUIRED_SCOPE는 공백 없는 단일 scope여야 합니다.")
         if not 0 <= self.clock_skew_seconds <= 300:
             raise ValueError("REMOTE_MCP_CLOCK_SKEW_SECONDS는 0에서 300 사이여야 합니다.")
+        if self.audience != self.resource_url:
+            raise ValueError("원격 MCP 전용 audience는 resource URL과 같아야 합니다.")
         public_host = resource.netloc
         if not self.allowed_hosts or public_host not in self.allowed_hosts:
             raise ValueError("REMOTE_MCP_ALLOWED_HOSTS에는 공개 resource hostname이 필요합니다.")

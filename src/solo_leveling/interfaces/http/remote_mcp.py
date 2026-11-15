@@ -69,7 +69,7 @@ def create_remote_mcp(
         stateless_http=True,
         json_response=True,
         streamable_http_path="/mcp",
-        token_verifier=verifier or Auth0McpTokenVerifier(settings),
+        token_verifier=verifier if verifier is not None else Auth0McpTokenVerifier(settings),
         auth=AuthSettings(
             issuer_url=AnyHttpUrl(settings.issuer),
             resource_server_url=AnyHttpUrl(settings.resource_url),

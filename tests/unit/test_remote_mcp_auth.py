@@ -134,3 +134,20 @@ def test_provider_failure_and_token_are_not_logged(caplog):
     assert verify(Auth0McpTokenVerifier(SETTINGS, BrokenKeys()), token) is None
     assert "private-provider-diagnostic" not in caplog.text
     assert token not in caplog.text
+
+
+@pytest.mark.parametrize('changes', [
+    {'gty':'client-credentials'}, {'sub':'client@clients'},
+    {'credential_type':'device'}, {'device_id':'private-device'},
+    {'aud':'published-client'}, {'azp':None,'client_id':'published-client'},
+])
+def test_non_user_or_non_auth0_credentials_rejected(changes):
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    verifier = Auth0McpTokenVerifier(SETTINGS, KeyClient(private.public_key()))
+    assert verify(verifier, make_token(private, **changes)) is None
+
+
+def test_web_audience_cannot_be_configured_as_remote_resource():
+    from dataclasses import replace
+    with pytest.raises(ValueError, match='audience'):
+        replace(SETTINGS, audience='https://web.example/api')

@@ -18,7 +18,7 @@ class Auth0McpTokenVerifier(TokenVerifier):
         if not settings.enabled:
             raise ValueError("원격 MCP 인증 설정이 활성화되어야 합니다.")
         self._settings = settings
-        self._jwks_client = jwks_client or jwt.PyJWKClient(settings.jwks_url)
+        self._jwks_client = jwks_client if jwks_client is not None else jwt.PyJWKClient(settings.jwks_url, timeout=5)
 
     async def verify_token(self, token: str) -> AccessToken | None:
         if not token.strip():
@@ -49,9 +49,12 @@ class Auth0McpTokenVerifier(TokenVerifier):
             )
             subject = claims.get("sub")
             raw_scopes = claims.get("scope")
-            client_id = claims.get("client_id") or claims.get("azp")
+            client_id = claims.get("azp")
             expires_at = claims.get("exp")
             if (not isinstance(subject, str) or not subject.strip()
+                    or subject.endswith('@clients')
+                    or claims.get('gty') not in (None, 'authorization_code', 'refresh_token')
+                    or 'credential_type' in claims or 'device_id' in claims
                     or not isinstance(raw_scopes, str)
                     or not isinstance(client_id, str) or not client_id.strip()
                     or not isinstance(expires_at, int) or isinstance(expires_at, bool)):
