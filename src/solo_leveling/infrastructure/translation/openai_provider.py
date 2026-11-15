@@ -73,8 +73,9 @@ class OpenAITranslationConfig:
 
 
 class OpenAITranslationProvider:
-    def __init__(self, config: OpenAITranslationConfig):
+    def __init__(self, config: OpenAITranslationConfig, *, transport=None):
         self.config = config
+        self.transport = transport
 
     def translate(self, request: TranslationRequest, settings: TranslationSettings) -> str:
         if not isinstance(request, TranslationRequest) or not isinstance(settings, TranslationSettings):
@@ -92,6 +93,14 @@ class OpenAITranslationProvider:
                                 'strict': True, 'schema': _SCHEMA}},
             'max_output_tokens': self.config.max_output_tokens, 'store': False,
         }
+        if self.transport is not None:
+            # 동의/예산·unknown 오류를 재시도 가능한 번역 provider 오류로 바꾸지 않는다.
+            from solo_leveling.infrastructure.generation.openai_generator import OpenAIGenerationSettings
+            transport_settings = OpenAIGenerationSettings(api_key=self.config.api_key, model=settings.model,
+                max_output_tokens=self.config.max_output_tokens, timeout_seconds=self.config.timeout_seconds,
+                allow_external_api=self.config.allow_external_api, local_only=self.config.local_only)
+            envelope = self.transport.send(transport_settings, payload, 'translation')
+            return _translation_text(envelope)
         try:
             # 어댑터는 한 번만 호출한다. 재시도는 번역 서비스 한 곳에서 관리한다.
             response = requests.post('https://api.openai.com/v1/responses', json=payload,

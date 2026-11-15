@@ -183,7 +183,8 @@ def _checked_judgment(item, claims, evidence):
 class OpenAISemanticVerifier:
     prompt_version = 'semantic-v7'
 
-    def __init__(self, generation, settings: SemanticSettings):
+    def __init__(self, generation, settings: SemanticSettings, *, transport=None):
+        self.transport = transport
         self.settings = replace(generation, model=settings.model or generation.model,
                                 timeout_seconds=settings.timeout_seconds,
                                 max_output_tokens=settings.max_output_tokens)
@@ -232,7 +233,8 @@ class OpenAISemanticVerifier:
         }
         try:
             text = _response_text(_post_responses(self.settings, payload,
-                                                 diagnostic_stage='semantic_api_call'))
+                                                 diagnostic_stage='semantic_api_call',
+                                                 transport=self.transport, dispatch_stage='semantic_verification'))
             data = json.loads(text)
             expected = {'judgments', 'answer_audit'} if question is not None else {'judgments'}
             if not isinstance(data, dict) or set(data) != expected or not isinstance(data['judgments'], list):
