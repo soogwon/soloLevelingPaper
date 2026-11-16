@@ -41,8 +41,19 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 33)]
-    assert items[-1].name == "0032_annotation_creation_origin.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 34)]
+    assert items[-1].name == "0033_remote_upload_consents.sql"
+
+
+def test_remote_upload_consents_bind_owner_intent_purpose_and_revision():
+    sql = (__import__("pathlib").Path("migrations/server") /
+           "0033_remote_upload_consents.sql").read_text(encoding="utf-8")
+    assert "server_remote_upload_consent_bindings" in sql
+    assert "server_remote_upload_consent_requests" in sql
+    assert "PRIMARY KEY (owner_user_id, purpose, request_key)" in sql
+    assert "REFERENCES server_remote_upload_intents" in sql
+    assert "REFERENCES server_remote_consents" in sql
+    assert "WHERE revoked_at IS NULL" in sql
 
 
 def test_tombstone_cleanup_only_allows_clearing_active_publication_pointer():

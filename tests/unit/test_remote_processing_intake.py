@@ -141,3 +141,22 @@ def test_intake_stop_blocks_new_job_before_consent_and_insert():
     statements = [sql for sql, _ in pool.conn.calls]
     assert next(i for i,s in enumerate(statements) if "SELECT i.intent_id" in s) < next(
         i for i,s in enumerate(statements) if "FROM server_dispatch_controls" in s)
+
+
+def test_read_only_recovery_finds_existing_job_by_owner_and_intent():
+    existing = {**JOB, "upload_intent_id": "intent", "storage_consent_id": "storage",
+                "ai_consent_id": "ai", "notice_version": "notice"}
+    pool = Pool({"SELECT j.job_id": [existing]})
+
+    result = PostgresRemoteProcessingIntake(pool).get("owner", "intent")
+
+    assert result.job_id == "job" and result.status == "queued"
+    sql = pool.conn.calls[0][0]
+    assert "a.upload_intent_id" in sql and "FOR UPDATE" not in sql
+
+
+def test_read_only_recovery_validates_input_and_returns_none():
+    pool = Pool({"SELECT j.job_id": [None]})
+    assert PostgresRemoteProcessingIntake(pool).get("owner", "intent") is None
+    with pytest.raises(ValueError, match="remote_processing_input_invalid"):
+        PostgresRemoteProcessingIntake(pool).get("", "intent")

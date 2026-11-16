@@ -28,6 +28,8 @@ def create_app(
     file_upload_store=None,
     object_storage=None,
     remote_upload_store=None,
+    remote_consent_store=None,
+    remote_processing_intake=None,
     web_auth_flow=None,
     web_session_store=None,
     knowledge_graph=None,
@@ -59,6 +61,15 @@ def create_app(
     from .resume_routes import create_resume_router
     from .remote_mcp import RemoteMcpDispatchMiddleware, create_remote_mcp
     from .remote_upload_routes import create_remote_upload_router
+    from .remote_upload_consent_routes import create_remote_upload_consent_router
+    from .remote_upload_consents import (
+        PostgresRemoteUploadConsentStore,
+        UnavailableRemoteUploadConsentStore,
+    )
+    from .remote_processing_intake import (
+        PostgresRemoteProcessingIntake,
+        UnavailableRemoteProcessingIntake,
+    )
     from .remote_uploads import (
         PostgresRemoteUploadIntentStore,
         RemoteUploadVerificationService,
@@ -104,6 +115,15 @@ def create_app(
         remote_upload_store = PostgresRemoteUploadIntentStore(managed_store.connection_pool)
     selected_remote_upload_store = (remote_upload_store if remote_upload_store is not None
                                     else UnavailableRemoteUploadIntentStore())
+    if remote_consent_store is None and managed_store is not None:
+        remote_consent_store = PostgresRemoteUploadConsentStore(managed_store.connection_pool)
+    selected_remote_consent_store = (remote_consent_store if remote_consent_store is not None
+                                     else UnavailableRemoteUploadConsentStore())
+    if remote_processing_intake is None and managed_store is not None:
+        remote_processing_intake = PostgresRemoteProcessingIntake(managed_store.connection_pool)
+    selected_remote_processing_intake = (
+        remote_processing_intake if remote_processing_intake is not None
+        else UnavailableRemoteProcessingIntake())
     if object_storage is None:
         storage_settings = load_object_storage_settings()
         object_storage = (S3ObjectStorage.create(storage_settings) if storage_settings is not None
@@ -188,6 +208,8 @@ def create_app(
     app.include_router(create_remote_upload_router(
         require_principal, selected_remote_upload_store,
         RemoteUploadVerificationService(selected_remote_upload_store, object_storage)))
+    app.include_router(create_remote_upload_consent_router(
+        require_principal, selected_remote_consent_store, selected_remote_processing_intake))
     app.include_router(create_annotation_router(require_principal, selected_paper_store))
     app.include_router(create_deletion_router(require_principal, deletion_store))
     app.include_router(create_collection_router(require_principal, selected_collection_store))
