@@ -51,7 +51,7 @@ def _number(value):
 
 def validate_dataset(data):
     require(isinstance(data, dict) and type(data.get('schema_version')) is int
-            and data['schema_version'] == 1, 'DATASET_INVALID')
+            and data['schema_version'] in (1, 2), 'DATASET_INVALID')
     require(isinstance(data.get('version'), str) and bool(data['version']), 'DATASET_INVALID')
     require(data.get('review_status') in ('draft', 'reviewed'), 'DATASET_REVIEW_INVALID')
     chunks, queries = data.get('chunks'), data.get('queries')
@@ -72,11 +72,33 @@ def validate_dataset(data):
         require(isinstance(pages, list) and all(_positive_int(p) for p in pages), 'SCOPE_INVALID')
         require(isinstance(sections, list) and all(isinstance(s, str) and s for s in sections), 'SCOPE_INVALID')
         require(_positive_int(row.get('top_k')), 'TOP_K_INVALID')
-        required = row.get('required_chunk_ids')
         eligible = {c['id'] for c in allowed_chunks(data, row)}
-        require(isinstance(required, list) and bool(required) and all(isinstance(k, str) for k in required)
-                and len(required) == len(set(required))
-                and set(required) <= eligible and len(required) <= row['top_k'], 'REQUIRED_EVIDENCE_INVALID')
+        if data['schema_version'] == 1:
+            required = row.get('required_chunk_ids')
+            require('required_evidence_groups' not in row and 'evaluation_kind' not in row,
+                    'REQUIRED_EVIDENCE_INVALID')
+            require(isinstance(required, list) and bool(required)
+                    and all(isinstance(k, str) for k in required)
+                    and len(required) == len(set(required))
+                    and set(required) <= eligible and len(required) <= row['top_k'],
+                    'REQUIRED_EVIDENCE_INVALID')
+        else:
+            require('required_chunk_ids' not in row, 'REQUIRED_EVIDENCE_INVALID')
+            require(row.get('evaluation_kind') in ('retrieval', 'connection', 'truncation_observation'),
+                    'EVALUATION_KIND_INVALID')
+            groups = row.get('required_evidence_groups')
+            require(isinstance(groups, list) and bool(groups), 'REQUIRED_EVIDENCE_INVALID')
+            seen = set()
+            for group in groups:
+                require(isinstance(group, list) and bool(group)
+                        and all(isinstance(k, str) for k in group), 'REQUIRED_EVIDENCE_INVALID')
+                require(len(group) == len(set(group)) and not seen.intersection(group)
+                        and set(group) <= eligible, 'REQUIRED_EVIDENCE_INVALID')
+                seen.update(group)
+            require(len(groups) <= row['top_k'], 'REQUIRED_EVIDENCE_INVALID')
+            # 연결을 단일 OR 그룹으로 잘못 쓰면 한 조각만으로 완료될 수 있다.
+            if row['evaluation_kind'] == 'connection':
+                require(len(groups) >= 2, 'CONNECTION_EVIDENCE_INVALID')
     return data
 
 
@@ -85,6 +107,18 @@ def allowed_chunks(data, query):
     return [row for row in data['chunks'] if all(row[k] == query[k] for k in SCOPE)
             and (not query['pdf_pages'] or row['pdf_page'] in query['pdf_pages'])
             and (not query['section_ids'] or row['section_id'] in query['section_ids'])]
+
+
+def evidence_groups(data, query):
+    # 바깥 그룹은 AND, 그룹 안은 OR. v1의 모든 ID 필수 의미를 보존한다.
+    if data['schema_version'] == 1:
+        return [[key] for key in query['required_chunk_ids']]
+    return query['required_evidence_groups']
+
+
+def _evidence_metrics(groups, top):
+    hits = [bool(set(group).intersection(top)) for group in groups]
+    return {'group_hits': hits, 'required_recall': sum(hits) / len(hits), 'evidence_complete': all(hits)}
 
 
 def validate_capture(capture, data):
@@ -163,17 +197,32 @@ def compare(data, baseline, candidate):
     for query in data['queries']:
         orders = [ranked(data, c, query) for c in (baseline, candidate)]
         tops = [[key for key, _ in order[:query['top_k']]] for order in orders]
-        needed = set(query['required_chunk_ids'])
+        groups = evidence_groups(data, query)
+        needed = {key for group in groups for key in group}
         ranks = [{key: i + 1 for i, (key, _) in enumerate(order)} for order in orders]
+        metrics = [_evidence_metrics(groups, top) for top in tops]
         rows.append({'query_id': query['id'], 'eligible_chunks': len(orders[0]),
+                     'evaluation_kind': query.get('evaluation_kind', 'retrieval'),
+                     'required_evidence_groups': groups,
+                     'selection_is_exhaustive': len(orders[0]) <= query['top_k'],
                      'baseline_top_k': tops[0], 'candidate_top_k': tops[1],
                      'top_k_overlap': len(set(tops[0]) & set(tops[1])) / len(tops[0]),
-                     'baseline_required_recall': len(needed & set(tops[0])) / len(needed),
-                     'candidate_required_recall': len(needed & set(tops[1])) / len(needed),
+                     **{f'{side}_{key}': value for side, values in zip(('baseline', 'candidate'), metrics)
+                        for key, value in values.items()},
                      'required_rank_changes': {key: ranks[1][key] - ranks[0][key] for key in sorted(needed)},
+                     'required_group_rank_changes': [min(ranks[1][key] for key in group)
+                                                     - min(ranks[0][key] for key in group) for group in groups],
                      'baseline_cutoff_margin': _margin(orders[0], query['top_k']),
                      'candidate_cutoff_margin': _margin(orders[1], query['top_k'])})
-    return {'schema_version': 1, 'dataset_sha256': digest(data),
+    summary = {}
+    for kind in ('retrieval', 'connection', 'truncation_observation'):
+        subset = [row for row in rows if row['evaluation_kind'] == kind]
+        summary[kind] = {'query_count': len(subset), **{
+            side: {'complete_count': sum(row[f'{side}_evidence_complete'] for row in subset),
+                   'mean_group_recall': (math.fsum(row[f'{side}_required_recall'] for row in subset)
+                                         / len(subset) if subset else None)}
+            for side in ('baseline', 'candidate')}}
+    return {'schema_version': 2, 'dataset_sha256': digest(data),
             'dataset_version': data['version'], 'relevance_review_status': data['review_status'],
             'quality_measurement': not baseline['synthetic'], 'decision': 'pending_thresholds',
             'search_method': 'exact_cosine_prefiltered', 'tie_break': 'chunk_id_ascending',
@@ -182,7 +231,7 @@ def compare(data, baseline, candidate):
             'baseline_settings': baseline['settings'], 'candidate_settings': candidate['settings'],
             'baseline_capture_sha256': digest(baseline), 'candidate_capture_sha256': digest(candidate),
             'performance_comparable': _performance_comparable(baseline, candidate),
-            'vector_metrics': vector_metrics, 'queries': rows,
+            'vector_metrics': vector_metrics, 'queries': rows, 'evidence_summary_by_kind': summary,
             'measurements': {'baseline': baseline['measurements'], 'candidate': candidate['measurements']}}
 
 

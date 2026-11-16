@@ -17,8 +17,8 @@
   지원되지 않으면 실패하며 다른 provider/기본 스레드로 조용히 대체하지 않는다.
 
 이번 보완은 오프라인 파일·대역 테스트만 수행했다. 후보 실측·export·모델 다운로드는 하지 않았다.
-라벨은 draft이고 수치 허용값은 확정하지 않았다. 사람이 라벨·허용값을 검토한 뒤 후보 결과를
-보기 전에 데이터/기준 버전과 해시를 고정해야 한다. #391은 계속 열어둔다.
+라벨은 2026-11-16 사용자 권장안 채택을 반영했으며 수치 허용값은 미확정이다.
+후보 결과를 보기 전에 허용값·환경과 데이터/기준 버전·해시를 최종 동결해야 한다. #391은 계속 열어둔다.
 
 이 PR은 B가 독립적으로 준비할 **합성 자료·캡처 형식·오프라인 비교기**이다.
 모델·ONNX exporter·DB·검색 어댑터·런타임 의존성은 추가하지 않는다.
@@ -29,8 +29,32 @@ PyTorch 기준선과 ONNX 실측, 허용값 확정은 아직 남아 있으므로
 `cases.json`: 직접 작성한 합성 청크 17개와 질의 12개. 논문 PDF나 사용자 데이터가 아니다.
 소재(lantern relay, bucket chaining, depot, convoy)는 지어낸 것이며 실제 논문의 주장을 재서술하지 않는다.
 자료를 고칠 때도 공개 논문의 문장이나 주장을 옮기지 않는다.
-필수 근거 ID는 **사람 검토 전 초안**이다. 검토 때 `review_status`와 자료 버전을 함께 갱신하고,
-자료 해시가 달라지면 두 런타임 모두 다시 캡처한다. 모델 결과를 본 뒤 정답을 맞추지 않는다.
+현재 자료는 `synthetic-embedding-v3-reviewed`, dataset schema 2, `review_status=reviewed`다.
+라벨 검토 반영이며 모델 합격 승인은 아니다. 자료 해시가 달라져 두 런타임 모두 다시 캡처해야 한다.
+기존 결과·실패 기록은 보존하며 모델 결과를 본 뒤 정답을 맞추지 않는다.
+
+### 근거 그룹과 집계 계약
+
+- `required_evidence_groups`: 바깥 그룹은 AND, 각 그룹 안은 OR.
+  `[["korean", "multilingual"]]`은 둘 중 하나면 충족한다.
+  `[["continuation-head"], ["continuation-tail"]]`은 두 조각 모두 필요하다.
+- 보고서 schema 2의 `baseline/candidate_required_recall`은 충족 그룹 수 / 전체 그룹 수다.
+  `*_group_hits`로 그룹별 결과, `*_evidence_complete`로 모든 그룹 충족 여부를 표시한다.
+  연결 사례의 recall=0.5는 성공이 아니다. 이 값은 회수 결과이며 생성·연결·의미 검증이나 합격 판정은 아니다.
+- `required_rank_changes`는 모든 그룹에 포함된 개별 ID의 순위 변화다. 대안 ID가 교환돼
+  top_k 교집합이 0이어도 같은 그룹을 충족하면 근거 회수는 성공할 수 있다.
+  `required_group_rank_changes`는 각 그룹의 가장 높은 순위 변화다. 같은 순위의 대안으로
+  교체되면 0이며 개별 ID 변화와 구분한다. 회수 완료 여부는 여전히 top_k 내 그룹 충족으로 판단한다.
+- `evidence_summary_by_kind`는 retrieval 10개 / connection 1개 / truncation_observation 1개를
+  각각 집계한다. 12개 전체를 섞은 품질 합격률은 출력하지 않는다.
+  각 분류의 `mean_group_recall`은 질의별 그룹 recall의 단순 평균이며, `complete_count`는
+  모든 그룹을 회수한 질의 수다. 질의가 없는 분류는 평균을 0 대신 null로 표시한다.
+- `selection_is_exhaustive`는 k가 허용 청크 수 이상인지 표시한다. cross-page와 long-tail은
+  전수 반환이므로 검색 선별력이나 잘린 정보 보존의 증거로 쓰지 않는다.
+- 그룹·ID 중복, 빈 그룹, 잘못된 ID/형식, 범위 밖 대안, k보다 많은 필수 그룹은 거부한다.
+  schema 1은 기존 `required_chunk_ids`의 모든 ID 필수 의미로 읽으며 신·구 형식 혼합을 거부한다.
+  캡처 schema는 1을 유지하지만 자료 digest가 달라 과거 캡처를 새 자료에 재사용할 수 없다.
+  connection은 적어도 두 개의 필수 그룹이 필요하다. 두 조각을 한 OR 그룹으로 합친 라벨은 거부한다.
 
 | 질의 | 비교 목적 |
 |---|---|
@@ -184,8 +208,8 @@ python scripts/capture_pytorch_embeddings.py --model-dir <로컬 snapshot 경로
 - 새 전용 디렉터리만 만들며 기존 결과를 덮어쓰지 않는다. 실패 시 부분 worker 결과는 그곳에만
   남는다. timeout 시 이 명령이 만든 worker 트리만 종료하며 MCP/다른 실행에는 손대지 않는다.
 - 원시 벡터·캡처는 runtime에만 둔다. 결과 문서에는 본문·개인 경로·벡터를 복사하지 않는다.
-- 필수 근거 라벨은 계속 draft이다. B의 점검을 사람 승인으로 대체하지 않으며 ONNX 실측·공동 허용값
-  확정·원격 set 연결은 이번 캡처 실행에 포함하지 않는다.
+- 라벨은 사용자 권장안을 반영했다. ONNX 실측·공동 허용값 확정·원격 set 연결은 별도이며
+  과거 캡처는 해당 시점의 draft 자료에 대한 결과다.
 
 ## ONNX 후보 캡처
 
@@ -203,8 +227,24 @@ PyTorch 기준선과 비교해야 하며, 통과해도 기존 context나 embeddi
 
 ## B 라벨 검토 제안
 
-[12개 질의의 검토표와 사전 기준 제안](label-review.md)을 참고한다. 사람 승인·수치 확정 전이므로 후보 판정과 review_status는 변경하지 않는다.
+[12개 질의의 검토 반영과 사전 기준 제안](label-review.md)을 참고한다.
+라벨은 reviewed로 갱신했고 수치 기준 미확정이므로 후보 판정은 pending_thresholds를 유지한다.
 
 [후보 실측 전 사람 검토·기준 동결 기록](precomparison-review.md)에 실제 질문·근거·범위와
-대안 근거 쟁점, 허용값별 결정란을 모았다. 승인란은 비어 있으며 모델 실행 없이 검토할 수 있다.
+채택한 대안 근거, 허용값별 결정란을 모았다. 수치 승인란은 비어 있으며 모델 실행 없이 검토할 수 있다.
 특히 long-tail은 허용 문서가 하나여서 문서 회수 성공을 끝 구절 보존의 증거로 쓰지 않는다.
+
+## v3 라벨·그룹 판정 오프라인 검증
+
+2026-11-16 Windows에서 비교기·산출물·PyTorch/ONNX 캡처 대역 회귀 **94 passed**.
+대안 교환·대안 미회수·한 그룹 중복 회수·연결 조각 부분 회수·신구 자료 형식·범위 밖 대안
+거부·과거 캡처 digest 불일치·관측 집계 분리를 포함한다. 재검토에서 연결의 단일 OR 라벨 거부,
+모든 출처 차원의 범위 밖 대안 혼합 거부, 그룹별 순위, 집계 분모·빈 분류도 확인했다.
+Ruff와 공백 검사도 통과했다.
+최초 실행은 runtime 부모 디렉터리 누락으로 임시 경로 설정 오류가 있었고 준비 후 전체 재실행이 통과했다.
+실제 모델·export·다운로드·API·DB는 사용하지 않았다. CLI 합성 smoke도 합격 판정을 보류한다.
+
+```powershell
+New-Item -ItemType Directory -Force runtime
+python -m pytest tests/unit/test_embedding_evaluation.py tests/unit/test_embedding_artifacts.py tests/unit/test_onnx_capture.py tests/unit/test_pytorch_capture.py -q --basetemp=runtime/pytest-391
+```
