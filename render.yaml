@@ -68,6 +68,14 @@ services:
         sync: false
       - key: OBJECT_STORAGE_REGION
         value: auto
+      # Free staging에는 Shell/One-Off Job이 없어 프로세스 시작마다 삭제 큐를 제한된 건수만 처리한다.
+      # 운영 scheduler가 생기면 false로 바꾸고 별도 worker에서 실행한다.
+      - key: REMOTE_DELETION_CLEANUP_ON_START
+        value: "true"
+      - key: REMOTE_DELETION_CLEANUP_MAX_JOBS
+        value: "10"
+      - key: REMOTE_DELETION_CLEANUP_LEASE_SECONDS
+        value: "300"
 
 databases:
   - name: solo-leveling-staging-db
