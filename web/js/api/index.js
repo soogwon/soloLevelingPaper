@@ -92,6 +92,10 @@ export const api = {
   /** DELETE /v1/devices/{기기 ID} */
   disconnectDevice: (deviceId) => send('DELETE', `/devices/${id(deviceId)}`),
 
+  // #393: 보관 동의 계약 연결 전에는 파일 전송·처리 접수를 노출하지 않는다.
+  createRemoteUploadIntent: (body, key) => send('POST', '/remote-uploads/intents', { body, idempotencyKey: key }),
+  getRemoteUploadIntent: (intentId) => send('GET', `/remote-uploads/intents/${id(intentId)}`),
+
   // ---------- 2. 논문 목록 ----------
   /**
    * GET /v1/papers
