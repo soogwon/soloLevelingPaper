@@ -117,13 +117,24 @@ def test_preflight_failures_do_not_send(setup, mode):
     post.assert_not_called()
 
 
-@pytest.mark.parametrize('mode', ['timeout', 'http-error', 'json-error', 'bad-usage'])
+@pytest.mark.parametrize('mode', ['timeout', 'http-error', 'http-500', 'json-error', 'bad-usage',
+                                 'envelope-list', 'missing-usage', 'usage-list', 'missing-input',
+                                 'missing-output', 'negative-output', 'float-input', 'response-close'])
 def test_uncertain_attempt_blocks_next_send_and_closes_response(setup, mode):
     ledger, transport, post, response = setup
     if mode == 'timeout': post.side_effect = requests.Timeout('private')
     if mode == 'http-error': response.status_code = 429
+    if mode == 'http-500': response.status_code = 500
     if mode == 'json-error': response.json.side_effect = ValueError('private')
     if mode == 'bad-usage': response.json.return_value['usage']['input_tokens'] = True
+    if mode == 'envelope-list': response.json.return_value = ['private']
+    if mode == 'missing-usage': response.json.return_value = {'private': 'body'}
+    if mode == 'usage-list': response.json.return_value['usage'] = []
+    if mode == 'missing-input': del response.json.return_value['usage']['input_tokens']
+    if mode == 'missing-output': del response.json.return_value['usage']['output_tokens']
+    if mode == 'negative-output': response.json.return_value['usage']['output_tokens'] = -1
+    if mode == 'float-input': response.json.return_value['usage']['input_tokens'] = 8.5
+    if mode == 'response-close': response.close.side_effect = OSError('private')
     settings = OpenAIGenerationSettings('secret', allow_external_api=True)
     payload = {'model': settings.model, 'store': False, 'max_output_tokens': 2048}
     for expected in ['DISPATCH_USAGE_UNKNOWN', 'DISPATCH_BLOCKED']:

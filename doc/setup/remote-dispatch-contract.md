@@ -96,6 +96,44 @@ unknown/예산 거부 뒤 청크 재시도·다음 청크로 유료 전송이 �
 단계 사이 동의 철회를 검사한다. 실제 네트워크나 과금 테스트가 아니다.
 동의 발급 API, 모델별 보장 가능한 토큰 상한과 정책 수치, 실제 호스트 공개는 별도 과제다.
 
+### #396 합성 HTTP 오류와 실제 원장 회귀 보강 (2026-11-16)
+
+기준 main `55ff87c`. `test_persisted_dispatch_postgres.py`에 timeout·정산 실패 외에
+HTTP 429/500, JSON 해석 오류, 비객체 envelope, usage 누락/비객체/입출력 필드 누락,
+bool·음수·소수 사용량, response.close 실패를 연결했다. HTTP는 모두 Mock으로 주입하고
+`requests.post` 기본 경로도 차단한다. PostgreSQL만 테스트 DSN으로 접속한다.
+
+오류 후 실제 저장소에서 다음을 대조한다.
+
+- attempt 1개·unknown, 예약 100/20 유지, 관측 사용량은 null. 값은 합성 테스트 상한이며 운영 기본값이 아니다.
+- service/owner의 예약·소비 및 실행 행을 읽고 같은 transport·재생성 transport의 같은 키/새 키
+  요청에도 HTTP는 최초 1회, 원장/예산/실행 행은 그대로임을 확인한다.
+- 공개 저장소 lookup은 running + usage_unknown을 알리며 결과는 없고 읽기로 추가 예약하지 않는다.
+  unknown 자체를 failed/cancelled 또는 근거 부족으로 바꾸지 않는다.
+- 신뢰하는 늦은 usage를 새 원장 객체로 정산하면 예약을 한 번만 소비로 전환한다. 동일 observe와
+  이후 unknown 호출이 이를 덮어쓰지 않는다. 같은 dispatch key의 재전송은 계속 금지한다.
+  실제 저장 usage 값·attempt ID도 대조하며 서로 다른 usage의 재정산은 충돌로 거부한다.
+  0 사용량도 정산하고 입력/출력 예약 초과 사용량은 사실대로 보존하되 새 키의 전송도 차단한다.
+  정상 정산일 때만 후속 단계가 명시적인 별도 key의 새 허가로 성공한다.
+- service/owner 예산 행이 정확히 2개인지 먼저 확인해 빈 조회·한쪽 scope 누락으로 검사가 통과하지 않는다.
+- Event로 첫 합성 HTTP를 대기시킨 상태에서 같은 키와 새 키를 요청한다. reserved 단계부터
+  두 번째 전송·추가 예약을 거부하며, 응답 후에도 같은 attempt만 unknown으로 전환한다.
+- 실제 observe commit 뒤 응답만 유실시킨 경우 observed를 unknown으로 되돌리지 않고,
+  새 원장 객체의 같은 정산·상태 조회·같은 dispatch key 요청에도 중복 소비/전송이 없다.
+
+제품 코드·DB 스키마·공개 MCP 계약은 변경하지 않았다. transport 재생성은 OS 프로세스/호스트
+재시작 실측이 아니며, 늦은 usage 테스트의 직접 observe는 실제 제공자 정산 조회가 아니다.
+이번 회귀는 #395의 새 정책 snapshot/deadline/종결 포트 구현도 대체하지 않는다.
+
+```powershell
+python -X utf8 -m pytest tests/unit/test_gated_responses.py tests/unit/test_dispatch_ledger.py tests/unit/test_remote_input_dispatch.py tests/unit/test_execution_budget.py tests/integration/test_persisted_dispatch_postgres.py -q
+```
+
+Windows 로컬 결과: **67 passed, 26 skipped**. 실제 PostgreSQL DSN/실행기가 없어
+통합 파일 26개는 미실행이다. 실제 DB 결과는 일회용 PostgreSQL/pgvector 환경에서 위 파일을
+다시 실행해 확인해야 한다. 기존 CI의 통합 테스트 대상에 포함되지만 아직 해당 CI 통과를 주장하지 않는다.
+검증 중 외부 API·원본 DB·PDF·벡터 저장소에는 접근하지 않았다. #396은 열어둔다.
+
 ### B 실행 단위 제한 (#395)
 `ExecutionBudget`를 `create_persisted_responses_transport(execution_budget=...)`에 주입하면
 실행 행 잠금과 같은 transaction에서 누적 호출 수·입출력 예약 상한·생성 시각 기준 경과 시간을 검사합니다.
