@@ -89,7 +89,7 @@ def create_remote_upload_router(require_principal: Any, store: Any, verification
         except ValueError:
             raise HTTPException(
                 status_code=422, detail={"code": "remote_upload_input_invalid"}) from None
-        except RuntimeError:
+        except Exception:
             raise _unavailable(HTTPException) from None
         return _intent_view(IntentView, intent)
 
@@ -99,7 +99,7 @@ def create_remote_upload_router(require_principal: Any, store: Any, verification
         response.headers["Cache-Control"] = "no-store"
         try:
             intent = store.get(principal.user_id, str(intent_id))
-        except (ValueError, RuntimeError):
+        except Exception:
             raise _unavailable(HTTPException) from None
         if intent is None:
             raise HTTPException(status_code=404, detail={"code": "remote_upload_not_found"})
@@ -113,7 +113,7 @@ def create_remote_upload_router(require_principal: Any, store: Any, verification
             reservation, prepared = verification.prepare(principal.user_id, str(intent_id))
         except ValueError as exc:
             raise _known_error(HTTPException, exc) from None
-        except RuntimeError:
+        except Exception:
             raise _unavailable(HTTPException) from None
         return UploadPrepareView(
             intent_id=intent_id, upload_url=prepared.url, method=prepared.method,
@@ -127,7 +127,7 @@ def create_remote_upload_router(require_principal: Any, store: Any, verification
             completed = verification.complete(principal.user_id, str(intent_id))
         except ValueError as exc:
             raise _known_error(HTTPException, exc) from None
-        except RuntimeError:
+        except Exception:
             raise _unavailable(HTTPException) from None
         return UploadCompleteView(
             intent_id=intent_id, paper_id=UUID(completed.paper_id),

@@ -207,3 +207,43 @@ def test_foreign_and_missing_intents_have_the_same_external_response():
             headers={"Authorization": "Bearer test"})
     assert first.status_code == second.status_code == 404
     assert first.json() == second.json() == {"detail": {"code": "remote_upload_not_found"}}
+
+
+@pytest.mark.parametrize("suffix,method", [("", "post"), (f"/{INTENT_ID}", "get"),
+                                          (f"/{INTENT_ID}/prepare", "post"),
+                                          (f"/{INTENT_ID}/complete", "post")])
+def test_database_connection_failure_returns_safe_unavailable(suffix, method):
+    from psycopg import OperationalError
+
+    store = Store()
+    store.error = OperationalError("private database connection detail")
+    app, _, _ = app_for(store=store)
+    options = {"headers": {"Authorization": "Bearer test", "Idempotency-Key": "request-1"}}
+    if not suffix:
+        options["json"] = body()
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = getattr(client, method)("/v1/remote-uploads/intents" + suffix, **options)
+    assert response.status_code == 503
+    assert response.json() == {"detail": {"code": "remote_upload_unavailable"}}
+    assert "private" not in response.text
+
+
+@pytest.mark.parametrize("operation", ["prepare", "complete"])
+def test_object_storage_failure_returns_safe_unavailable(operation):
+    class BrokenStorage(Storage):
+        def prepare_upload(self, *args, **kwargs):
+            raise OSError("private object storage detail")
+
+        def inspect_upload(self, *args, **kwargs):
+            raise OSError("private object storage detail")
+
+    store = Store()
+    store.get_completed = lambda *_: None
+    app, _, _ = app_for(store=store, storage=BrokenStorage())
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            f"/v1/remote-uploads/intents/{INTENT_ID}/{operation}",
+            headers={"Authorization": "Bearer test"})
+    assert response.status_code == 503
+    assert response.json() == {"detail": {"code": "remote_upload_unavailable"}}
+    assert "private" not in response.text
