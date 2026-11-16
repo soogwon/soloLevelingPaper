@@ -2,7 +2,7 @@
 
 2026-11-14에 Windows 합성 데이터 자동 검증을 수행했고, 2026-11-16에 실제 Windows
 Claude Desktop과 staging 웹 검증을 추가했다. PostgreSQL migration 이력 직접 확인과 macOS
-Desktop 검증은 아직 완료하지 않았으므로 #375의 전체 검증이 끝난 것으로 기록하지 않는다.
+Desktop→서버→웹 전체 검증은 아직 완료하지 않았으므로 #375의 전체 검증이 끝난 것으로 기록하지 않는다.
 
 ## 최신 main 반영 상태 (2026-11-16)
 
@@ -53,11 +53,13 @@ python -m pytest tests/integration/test_mcp_stdio.py -q
 
 - [ ] 서버 migration 전체 이력(최초 신고 주체 0032 포함) 적용 및 재실행/버전 이력 확인.
 - [x] Windows Claude Desktop에서 원문/번역문 하이라이트 저장과 조회 카드 표시.
-- [x] Desktop·MCP 재시작 뒤 같은 request_key 재사용과 기존 기록 반환.
+- [x] Windows Desktop·MCP 재시작 뒤 같은 request_key 재전달과 기존 기록 반환.
+- [ ] 카드의 응답 유실 후 재시작·저장소 변경에서도 같은 키가 복원되는지 확인.
 - [x] 실제 Desktop에서 잘못된 인용 거부·수정 revision 충돌 시 원본 보존.
 - [x] 실제 서버 전송 동의 후 같은 계정 웹 목록·상세의 내용·시각·작성 주체·상태 대조.
 - [x] 실제 다른 계정에서 동일 ID 조회 차단.
-- [ ] macOS Desktop에서도 동일 흐름 확인.
+- [x] macOS 로컬 Desktop 메모 저장·읽기 상태 재시작 검증(#485).
+- [ ] macOS Desktop→실제 서버→웹 전체 흐름 확인.
 - [x] 자동 계약: #372의 context 없는 신규 논문 `not_started`가 별도 reading-state API로 전송되고
   가짜 learning record를 만들지 않음을 확인한다. 실제 배포 환경 확인은 아래 수동 표에 남긴다.
 
@@ -73,10 +75,14 @@ Windows Claude Desktop에서 별도 `DATA_ROOT`와 공개 가능한 합성 논�
 `2611.16620v1.pdf`를 사용했다. Claude Desktop 버전 문자열과 서버 migration 버전 이력은
 이번 검증에서 별도로 수집하지 않았으므로 확인 완료로 간주하지 않는다.
 
+아래 표는 PR #484 작성자의 관찰 기록이며 문서 재검토 과정에서 Windows 실험을
+다시 실행한 것은 아니다. Windows 빌드, MCP wheel 커밋·해시, 서버·웹 배포 커밋도
+현재 기록으로 특정할 수 없다. 문서 커밋 `6a7a7b4`를 제품 검증 커밋으로 대신하지 않는다.
+
 | 항목 | 결과 | 관찰 근거 |
 | --- | --- | --- |
 | 원문 하이라이트 생성·즉시 재시도 | 통과 | 같은 request key에서 같은 annotation ID·revision 1, 두 번째 응답 `reused=true` |
-| MCP 프로세스 재시작 후 재시도 | 통과 | Claude Desktop 완전 종료·재실행 뒤에도 같은 ID·revision 1, `reused=true` |
+| MCP 프로세스 재시작 후 같은 키 재전달 | 통과 | Claude Desktop 완전 종료·재실행 뒤 같은 request key로 같은 ID·revision 1, `reused=true`. 카드의 자동 키 복원 검증은 아님 |
 | 번역문 하이라이트 생성·재시도 | 통과 | 번역 revision과 문자 구간 `[0, 42)` 보존, 두 번째 응답 `reused=true` |
 | 잘못된 인용문 | 통과 | `QUOTE_MISMATCH`, 실패한 request key 및 주석 미저장 |
 | 수정 revision 충돌 | 통과 | revision 1 수정은 revision 2로 저장, 오래된 revision 1 재수정은 `CONFLICT`, 첫 수정 본문 보존 |
@@ -92,4 +98,25 @@ staging 웹에서 원문 하이라이트 `[0, 32)`와 번역문 하이라이트 
 아직 남은 실제 환경 검증은 다음과 같다.
 
 - [ ] staging PostgreSQL migration 전체 이력과 0032 적용 여부를 직접 조회하고 재실행 안전성을 확인한다.
-- [ ] macOS Claude Desktop에서 같은 사용자 흐름을 확인한다.
+- [ ] macOS Claude Desktop에서 실제 서버 동기화와 웹 대조까지 확인한다.
+- [ ] Windows OS/Claude 버전, MCP wheel 커밋·해시, 서버·웹 배포 커밋을 회수한다. 회수 불가 시 다음 실험에서 기록한다.
+- [ ] 실제 배포 환경에서 context 없는 초기 not_started 전송, 완료 후 추가 질문, 지연된 상태 전송의 CAS 충돌을 확인한다.
+
+## 재검토와 macOS 검증의 범위 (2026-11-16)
+
+#484의 Windows 실행에서 `test_annotation_reading_workflow.py`는 첫 MCP 메모리 전송
+사례에서 정지해 중단됐다. 그 실행을 통과로 계산하지 않는다. 별도로 최신 main
+`3588fd8`의 macOS 재검증에서 해당 4개 사례를 포함한 관련 Python 테스트 47개가
+통과했다. 이는 Windows 정지 원인을 해결했다는 의미가 아니며 실제 PostgreSQL 검증도 아니다.
+
+[macOS Desktop 검증 기록](../setup/issue-371-372-desktop-validation.md)에 따르면
+메모 저장, 읽기 완료·재시작·학습 재개 후 유지, revision 충돌 및 완료 취소는 확인됐다.
+반면 커밋 직후 응답을 지연하고 앱을 종료한 뒤 새 시크릿 대화에서 같은 내용을
+저장하면 카드 origin이 바뀌어 새 키·중복 기록이 생성됐다. #485는 키가 없으면
+신규 기록 확인 전 전송을 차단하지만 사라진 키를 자동 복원하지 않는다.
+Windows의 같은 키 재전달 성공과 macOS의 카드 키 유실은 검증 조건이 다르며,
+어느 한쪽 결과로 모든 호스트의 재시도 안전성을 보장하지 않는다.
+
+다른 계정의 웹 화면 미노출은 확인된 UI 결과다. API 직접 접근의 상태 코드와
+계정·source 경계, 실제 PostgreSQL CAS/행 잠금·migration 안전성은 별도 증거가 필요하다.
+이 문서는 관찰 결과와 남은 범위를 기록하며 #371·#372·#375·#214를 자동 종료하지 않는다.
