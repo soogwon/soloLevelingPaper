@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from solo_leveling.application.provider_dispatch import AttemptRequest
 from solo_leveling.workers.processing_authorization import PostgresProcessingAuthorization
 from solo_leveling.workers.remote_processing import (
     RemoteProcessingWorker, RemoteProcessingHeartbeatFailed, RemoteProcessingInput,
@@ -27,9 +28,12 @@ def test_ledger_checks_worker_before_borrowing_connection():
                         'ai_consent_id': 'ai', 'notice_version': 'v1'},))
     auth = PostgresProcessingAuthorization(Pool(conn))
     check = Mock(return_value=False)
+    expected = auth.dispatch_intent(source())
+    conn.rows.append({'input_hash': SHA, 'storage_consent_id': 'storage',
+                      'ai_consent_id': 'ai', 'notice_version': 'v1'})
     ledger = auth.ledger(source(), check, policy_version='p', window_key='w')
     count = len(conn.calls)
-    assert ledger.authorize(object()) is None
+    assert ledger.authorize(AttemptRequest(expected, 'key', 'translation', 100, 50)) is None
     assert len(conn.calls) == count
     check.assert_called_once_with(source(), 'translation')
 

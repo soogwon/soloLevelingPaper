@@ -1,6 +1,6 @@
 """원격 worker의 현재 입력·실행 세대와 영속 전송 원장을 연결한다."""
 
-from solo_leveling.application.provider_dispatch import DispatchIntent
+from solo_leveling.application.provider_dispatch import AttemptRequest, DispatchIntent
 from solo_leveling.domain.remote_processing import ProcessingSource
 from solo_leveling.interfaces.http.dispatch_ledger import PostgresDispatchLedger
 from solo_leveling.workers.remote_processing import (
@@ -85,6 +85,9 @@ class PostgresProcessingAuthorization(PostgresRemoteProcessingInputStore):
         class BoundLedger(PostgresDispatchLedger):
             def authorize(self, request):
                 # DB callback은 연결을 빌리기 전에 실행해 중첩 pool 대기를 피한다.
+                if (not isinstance(request, AttemptRequest) or request.stage != 'translation'
+                        or request.intent != expected):
+                    return None
                 if check_allowed(source, 'translation') is not True:
                     return None
                 return super().authorize(request)

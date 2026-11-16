@@ -71,3 +71,11 @@ def test_current_authority_changes_block_existing_ledger(pool, db, change):
 
     if change == 'lease':
         PostgresProcessingJobStore(pool).cancel(source.owner_user_id, source.job_id)
+
+
+@pytest.mark.parametrize('stage', ['generation', 'repair', 'coverage', 'semantic_verification'])
+def test_processing_ledger_rejects_non_translation_stages(pool, db, stage):
+    _, source, ledger, intent = setup_authorization(pool, db)
+    assert ledger.authorize(AttemptRequest(intent, 'other-stage', stage, 100, 50)) is None
+    assert db('SELECT count(*) AS n FROM server_provider_attempts WHERE execution_id=%s',
+              (source.job_id,))[0]['n'] == 0
