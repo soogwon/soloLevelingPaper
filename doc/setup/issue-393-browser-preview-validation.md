@@ -96,3 +96,25 @@ DOM 대역은 네이티브 파일 선택창이나 실제 서버 통신의 검증
 Windows·다른 브라우저·실제 모바일·VoiceOver 음성 읽기와 상태 변경 알림은 미검증이다.
 접근성 트리의 이름·레이블 확인을 화면 낭독기 통과로 간주하지 않는다. 실제 인증 업로드·
 동의·원자 접수 연결도 여전히 남아 있으며 #393 전체 완료 근거가 아니다.
+
+## 인증 원격 업로드 HTTP 경계
+
+최신 원격 업로드 저장 포트를 웹 세션 전용 HTTP 계약에 연결한다. 기존 기기 업로드
+`/v1/papers/{paper_id}/uploads`를 재사용하거나 가짜 기기·로컬 버전 ID를 만들지 않는다.
+
+- `POST /v1/remote-uploads/intents`: `Idempotency-Key`와 PDF 이름·크기·형식·SHA-256으로
+  원격 paper/version 및 업로드 의도를 멱등 생성한다.
+- `GET /v1/remote-uploads/intents/{intent_id}`: 응답 유실 뒤 소유자 범위에서 상태를 조회한다.
+- `POST /v1/remote-uploads/intents/{intent_id}/prepare`: 서버 생성 임시 object key에만 사용할
+  짧은 presigned PUT URL과 반드시 함께 보내야 할 헤더를 발급한다.
+- `POST /v1/remote-uploads/intents/{intent_id}/complete`: 실제 객체의 크기·형식·PDF header·SHA-256을
+  검사하고 검증된 최종 객체로 승격한다. 완료 재요청은 이미 확정된 결과를 반환한다.
+
+네 경로는 인증된 `web_session`만 허용한다. 기기 자격은 기존 로컬 동기화 경로에만 쓰며,
+타인 의도와 존재하지 않는 의도는 같은 `remote_upload_not_found`로 응답한다. 응답에는 owner ID와
+object key를 넣지 않고 `Cache-Control: no-store`를 적용한다. presigned URL은 URL 자체가 권한인
+bearer capability이므로 대화·일반 로그·티켓에 기록하지 않는다.
+
+이 경계는 PDF 업로드와 서버 검증까지만 담당한다. 보관 동의·AI 전송 동의 발급, 검증된 의도의
+처리 접수, 제품 웹 화면, 실제 R2·두 계정 스테이징 종단 검증은 후속 범위다. 링크 GET과 상태
+조회는 업로드·처리 job·유료 provider 호출을 만들지 않는다.
