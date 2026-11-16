@@ -19,8 +19,9 @@ claim 뒤에는 daemon heartbeat supervisor를 시작한다. 기본 간격은 le
 `0 < heartbeat_interval_seconds < lease_seconds`여야 한다. supervisor는 처리 thread와 별도로
 `PostgresProcessingJobStore.heartbeat()`를 호출하므로 R2 읽기·파싱·번역·임베딩이 blocking이어도
 lease를 연장한다. 입력 읽기 전후와 처리 결과 반환 전에 heartbeat 상태를 확인하고, 갱신이 한 번이라도
-실패하면 처리 결과를 폐기해 이전 실행 세대가 게시 단계로 넘어가지 못하게 한다. DB driver 오류 원문은
-상위 오류로 전달하지 않고 `remote_processing_lease_lost`로 고정한다.
+실패하면 처리 결과를 폐기해 이전 실행 세대가 게시 단계로 넘어가지 못하게 한다. 실제 lease 상실은
+`remote_processing_lease_lost`, 저장소 통신·종료 실패는 `remote_processing_heartbeat_failed`로
+구분하며 DB driver 오류 원문은 상위 오류로 전달하지 않는다.
 
 처리 단계의 `check_allowed`에는 `PostgresRemoteProcessingInputStore.allowed`를 주입한다. 이 검사는
 원래 claim token을 그대로 비교하므로 lease가 회수된 뒤 이전 worker가 새 token을 빌려 계속 실행할

@@ -7,7 +7,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from solo_leveling.domain.remote_processing import ProcessingResult, ProcessingSource
-from solo_leveling.interfaces.http.processing_jobs import ProcessingJob
+from solo_leveling.interfaces.http.processing_jobs import ProcessingJob, ProcessingJobLeaseLost
 
 
 PROCESSING_PHASES = (
@@ -21,6 +21,10 @@ class RemoteProcessingInputRejected(RuntimeError):
 
 class RemoteProcessingLeaseLost(RuntimeError):
     """heartbeat 실패로 현재 실행 세대의 결과를 사용할 수 없다."""
+
+
+class RemoteProcessingHeartbeatFailed(RuntimeError):
+    """heartbeat 저장소를 신뢰성 있게 호출하거나 종료할 수 없다."""
 
 
 @dataclass(frozen=True, repr=False)
@@ -94,9 +98,11 @@ class _LeaseHeartbeat:
     def check(self) -> None:
         with self._lock:
             failure = self._failure
+        if isinstance(failure, ProcessingJobLeaseLost):
+            raise RemoteProcessingLeaseLost("remote_processing_lease_lost") from None
         if failure is not None:
             # DB/driver 원문이나 자격 증명이 상위 공개 오류로 유출되지 않게 고정한다.
-            raise RemoteProcessingLeaseLost("remote_processing_lease_lost") from None
+            raise RemoteProcessingHeartbeatFailed("remote_processing_heartbeat_failed") from None
 
 
 class PostgresRemoteProcessingInputStore:
