@@ -21,7 +21,9 @@ class Conn:
     def __init__(self, rows): self.rows=list(rows); self.calls=[]
     def execute(self, sql, params=()):
         self.calls.append((sql,params))
-        return Result(self.rows.pop(0) if ("SELECT intent_id" in sql or "RETURNING intent_id" in sql) else None)
+        return Result(self.rows.pop(0) if (
+            "SELECT intent_id" in sql or "SELECT i.intent_id" in sql or "RETURNING intent_id" in sql
+        ) else None)
 class Pool:
     def __init__(self,*rows): self.conn=Conn(rows)
     @contextmanager
@@ -74,6 +76,20 @@ def test_rejects_naive_server_clock_before_database():
             "owner", "key", "paper.pdf", 10, "application/pdf", SHA
         )
     assert pool.conn.calls == []
+
+
+def test_owner_scoped_status_reports_effective_expiry_without_database_write():
+    row = {"intent_id": "i", "paper_id": "p", "server_version_id": "v",
+           "expires_at": NOW, "status": "uploading"}
+    pool = Pool(row)
+    view = PostgresRemoteUploadIntentStore(pool, now=lambda: NOW).get("owner", "i")
+    assert view is not None and view.status == "expired"
+    assert pool.conn.calls[0][1] == ("owner", "i")
+    assert len(pool.conn.calls) == 1
+
+
+def test_owner_scoped_status_hides_missing_or_foreign_intent():
+    assert PostgresRemoteUploadIntentStore(Pool(None), now=lambda: NOW).get("owner", "missing") is None
 
 
 def test_verification_service_checks_object_before_marking_verified():

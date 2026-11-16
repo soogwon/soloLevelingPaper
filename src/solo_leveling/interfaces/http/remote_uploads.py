@@ -27,6 +27,22 @@ class ExpiredRemoteUpload:
     object_key: str
 
 
+class UnavailableRemoteUploadIntentStore:
+    """원격 업로드 DB가 없을 때 공개 계약을 유지하며 fail-closed 한다."""
+
+    def create(self, *args, **kwargs):
+        raise RuntimeError("remote_upload_unavailable")
+
+    def get(self, *args, **kwargs):
+        raise RuntimeError("remote_upload_unavailable")
+
+    def reserve_upload(self, *args, **kwargs):
+        raise RuntimeError("remote_upload_unavailable")
+
+    def get_completed(self, *args, **kwargs):
+        raise RuntimeError("remote_upload_unavailable")
+
+
 def _payload_hash(file_name, file_size, content_type, sha256_hex):
     value = json.dumps([file_name, file_size, content_type, sha256_hex], ensure_ascii=False, separators=(",", ":"))
     return sha256(value.encode()).hexdigest()
@@ -85,6 +101,31 @@ class PostgresRemoteUploadIntentStore:
                  file_name, file_size, content_type, sha256_hex, expires_at),
             ).fetchone()
         return _view(row)
+
+    def get(self, owner_user_id: str, intent_id: str) -> RemoteUploadIntent | None:
+        """소유자가 접근할 수 있는 의도를 조회하되 만료 여부는 쓰기 없이 계산한다."""
+        if not all(isinstance(value, str) and value.strip() for value in (owner_user_id, intent_id)):
+            raise ValueError("remote_upload_input_invalid")
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                """SELECT i.intent_id,i.paper_id,i.server_version_id,i.expires_at,i.status
+                   FROM server_remote_upload_intents i
+                   WHERE i.owner_user_id=%s AND i.intent_id=%s
+                     AND EXISTS (SELECT 1 FROM server_papers p
+                                 WHERE p.owner_user_id=i.owner_user_id AND p.paper_id=i.paper_id
+                                   AND p.deleted_at IS NULL)""",
+                (owner_user_id, intent_id),
+            ).fetchone()
+        if row is None:
+            return None
+        view = _view(row)
+        now = self._now()
+        if not isinstance(now, datetime) or now.utcoffset() is None:
+            raise ValueError("remote_upload_clock_invalid")
+        if view.status in ("created", "uploading") and view.expires_at <= now:
+            return RemoteUploadIntent(
+                view.intent_id, view.paper_id, view.server_version_id, view.expires_at, "expired")
+        return view
 
     def reserve_upload(self, owner_user_id: str, intent_id: str) -> tuple[UploadReservation, PendingUpload]:
         result = self._reserve_upload(owner_user_id, intent_id)
