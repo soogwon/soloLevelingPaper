@@ -3,6 +3,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import os
+from threading import Barrier
 from uuid import uuid4
 
 import pytest
@@ -53,7 +54,11 @@ def test_concurrent_cas_replay_late_delivery_and_explicit_reopen(pool, db):
 
     competing = [request(source_id), request(source_id)]
 
+    barrier = Barrier(2, timeout=15)
+
     def write(item):
+        # 두 호출이 모두 준비된 후 실행해 우연한 순차 실행을 피한다.
+        barrier.wait()
         try:
             return store.put_reading_state(owner, paper_id, item), None
         except ReadingStateConflict as exc:
@@ -64,11 +69,16 @@ def test_concurrent_cas_replay_late_delivery_and_explicit_reopen(pool, db):
 
     successes = [(item, result) for item, (result, error) in zip(competing, outcomes) if error is None]
     assert len(successes) == 1
+    assert sum(isinstance(error, ReadingStateConflict) for _, error in outcomes) == 1
     winner_request, winner = successes[0]
     assert winner.status == "completed"
     assert winner.revision == 1
     assert winner.source_revision == 1
 
+    # 같은 operation의 동시 재생도 결과와 revision을 증가시키지 않는다.
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        replayed = list(executor.map(write, [winner_request, winner_request]))
+    assert all(error is None and result == winner for result, error in replayed)
     replay = store.put_reading_state(owner, paper_id, winner_request)
     assert replay == winner
     assert store.get_reading_state(owner, paper_id, source_id).revision == 1
@@ -100,6 +110,9 @@ def test_concurrent_cas_replay_late_delivery_and_explicit_reopen(pool, db):
         expected_revision=1,
         source_revision=2,
     )
+    with pytest.raises(ReadingStateConflict):
+        store.put_reading_state(owner, paper_id, reopen | {"basis_version_id": "v2"})
+    assert store.get_reading_state(owner, paper_id, source_id) == preserved
     reopened = store.put_reading_state(owner, paper_id, reopen)
     assert reopened.status == "reading"
     assert reopened.revision == 2
