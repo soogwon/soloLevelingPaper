@@ -78,6 +78,10 @@ def main(argv=None) -> int:
     if not args.pdf.is_file():
         print(f'PDF를 찾을 수 없습니다: {args.pdf}', file=sys.stderr)
         return 1
+    # 이전 논문의 페이지와 새 추출 결과가 섞이지 않게 기존 산출물은 덮어쓰지 않는다.
+    if (args.out / 'paper.json').exists() or any(args.out.glob('page_*.txt')):
+        print('기존 추출 결과가 있습니다. 다른 --out 폴더를 지정하세요.', file=sys.stderr)
+        return 1
     pages, arxiv_id = extract_pages(args.pdf)
     args.out.mkdir(parents=True, exist_ok=True)
     for number, text in enumerate(pages, start=1):

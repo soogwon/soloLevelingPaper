@@ -53,16 +53,40 @@ def text_field(obj: dict, key: str, where: str, problems: list[str], required=Tr
     return value
 
 
+def list_field(obj, key, where, problems):
+    value = obj.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        problems.append(f'{where}: {key}는 배열이어야 합니다.')
+        return []
+    return value
+
+
 def validate(book: dict) -> list[str]:
     problems: list[str] = []
     if not isinstance(book, dict):
         return ['최상위는 객체여야 합니다.']
     text_field(book, 'title', '교재', problems)
+    for key in ('goal', 'level', 'date', 'path_note', 'notes'):
+        text_field(book, key, '교재', problems, required=False)
+    for key in ('objectives', 'key_points', 'next_steps'):
+        for item in list_field(book, key, '교재', problems):
+            if not isinstance(item, str) or not item.strip():
+                problems.append(f'{key}: 항목은 비어 있지 않은 문자열이어야 합니다.')
+    for item in list_field(book, 'path', '교재', problems):
+        if not isinstance(item, dict):
+            problems.append('path: 항목은 객체여야 합니다.')
+            continue
+        text_field(item, 'name', 'path', problems)
+        text_field(item, 'why', 'path', problems, required=False)
     paper = book.get('paper')
     if not isinstance(paper, dict):
         problems.append('paper 객체(title 필수)가 필요합니다.')
     else:
         text_field(paper, 'title', 'paper', problems)
+        for key in ('authors', 'source'):
+            text_field(paper, key, 'paper', problems, required=False)
     chapters = book.get('chapters')
     if not isinstance(chapters, list) or not chapters:
         return problems + ['chapters에 장이 하나 이상 있어야 합니다.']
@@ -72,6 +96,7 @@ def validate(book: dict) -> list[str]:
             problems.append(f'{where}: 객체여야 합니다.')
             continue
         text_field(ch, 'title', where, problems)
+        text_field(ch, 'summary', where, problems, required=False)
         sections = ch.get('sections')
         if not isinstance(sections, list) or not sections:
             problems.append(f'{where}: sections가 하나 이상 필요합니다.')
@@ -84,25 +109,32 @@ def validate(book: dict) -> list[str]:
                 continue
             if kind == 'formula':
                 text_field(sec, 'tex', w, problems)
+                text_field(sec, 'explain', w, problems, required=False)
             elif kind == 'evidence':
                 page = sec.get('page')
                 if not isinstance(page, int) or isinstance(page, bool) or page < 1:
                     problems.append(f'{w}: 근거의 page는 1 이상의 정수(PDF 쪽)입니다.')
                 text_field(sec, 'quote', w, problems)
+                for key in ('section', 'note'):
+                    text_field(sec, key, w, problems, required=False)
             else:
                 text_field(sec, 'body', w, problems)
-        for k, item in enumerate(ch.get('check', []) or [], start=1):
+        for k, item in enumerate(list_field(ch, 'check', where, problems), start=1):
             if not isinstance(item, dict):
                 problems.append(f'{where} 확인 문제 {k}: 객체여야 합니다.')
                 continue
             text_field(item, 'q', f'{where} 확인 문제 {k}', problems)
             text_field(item, 'a', f'{where} 확인 문제 {k}', problems)
-    for k, g in enumerate(book.get('glossary', []) or [], start=1):
+    for k, g in enumerate(list_field(book, 'glossary', '교재', problems), start=1):
         if not isinstance(g, dict):
             problems.append(f'용어 {k}: 객체여야 합니다.')
             continue
         text_field(g, 'term', f'용어 {k}', problems)
         text_field(g, 'definition', f'용어 {k}', problems)
+        text_field(g, 'en', f'용어 {k}', problems, required=False)
+        page = g.get('page')
+        if page is not None and (type(page) is not int or page < 1):
+            problems.append(f'용어 {k}: page는 1 이상의 정수입니다.')
     return problems
 
 

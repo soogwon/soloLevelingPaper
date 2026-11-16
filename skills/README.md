@@ -32,6 +32,9 @@ MCP 없이 Claude에 올려 쓰는 학습용 Skill 3개다. 논문 PDF 하나로
 
 원본을 고치면 복사본도 함께 고친다. `tests/unit/test_skill_copies.py`가 어긋나면 실패한다.
 
+PDF 추출은 기존 `paper.json`이나 `page_*.txt`가 있는 출력 폴더를 덮어쓰지 않는다.
+다른 논문이나 재추출에는 새 `--out` 폴더를 지정하고, 이후 스크립트에도 그 경로를 사용한다.
+
 ## 올려 쓰기
 
 1. Claude 설정에서 코드 실행 기능을 켠다.
