@@ -61,6 +61,14 @@ async function ensureSession() {
   }
 }
 
+/** 화면 종류(로그인처럼 메뉴 없는 화면인지)를 반영하고, 첫 로딩 때 숨겨 둔 화면을 보여준다. */
+function showShell(route) {
+  document.body.classList.toggle('bare', !!route.bare);
+  setActiveNav(route.nav);
+  updateBackButton(route);
+  document.body.classList.remove('booting');
+}
+
 async function renderRoute() {
   const seq = ++renderSeq;
   stampHistory();
@@ -68,11 +76,31 @@ async function renderRoute() {
   const matched = matchRoute(path);
   if (!matched) { navigate('/papers', undefined, { replace: true }); return; }
   const { route, params } = matched;
-  currentRoute = route;
 
-  document.body.classList.toggle('bare', !!route.bare);
-  setActiveNav(route.nav);
-  updateBackButton(route);
+  // 로그인이 필요한 화면은 세션부터 확인한다. 확인 전에 메뉴·로딩 화면을 그리면
+  // 로그인하지 않은 사용자에게 논문 화면이 잠깐 보였다가 로그인 화면으로 넘어간다.
+  if (!route.public) {
+    let signedIn;
+    try {
+      signedIn = await ensureSession();
+    } catch (error) {
+      if (seq !== renderSeq) return;
+      currentRoute = route;
+      showShell(route);
+      console.error(error);
+      document.title = '불러오지 못했어요 · Solo Leveling';
+      const view = document.getElementById('view');
+      setHTML(view, errorBlock(error));
+      return;
+    }
+    if (seq !== renderSeq) return;
+    if (!signedIn) {
+      navigate('/login', undefined, { replace: true });
+      return;
+    }
+  }
+  currentRoute = route;
+  showShell(route);
 
   // 화면마다 새 컨테이너를 써서 이전 화면의 이벤트가 남지 않게 한다.
   const old = document.getElementById('view');
@@ -84,10 +112,6 @@ async function renderRoute() {
   searchInput.value = path === '/search' ? (query.q ?? '') : '';
 
   try {
-    if (!route.public && !(await ensureSession())) {
-      navigate('/login', undefined, { replace: true });
-      return;
-    }
     const module = await route.load();
     if (seq !== renderSeq) return;
     await module.default({ view, params, query });

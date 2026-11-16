@@ -14,9 +14,10 @@ export default async function loginPage({ view, query }) {
       <h1 id="login-h">학습 기록을 어디서든 다시 보세요</h1>
       <p class="meta">Claude에서 공부한 논문, 마지막 위치, 메모를 모아 볼 수 있어요.</p>
       ${query.expired ? html`<p class="alert" role="alert">로그인이 만료됐어요. 다시 로그인해 주세요.</p>` : ''}
-      <button type="button" class="btn btn-block" data-action="login">Google 계정으로 계속하기</button>
+      <button type="button" class="btn btn-block" data-action="login">로그인 / 회원가입</button>
       <p class="inline-error" data-slot="error" role="alert" hidden></p>
-      <p class="hint">Claude 계정과는 별개의 Solo Leveling 계정이에요. 처음 로그인하면 계정이 만들어져요.</p>
+      <p class="hint">다음 화면에서 이메일·비밀번호 또는 Google 계정으로 로그인해요. 계정이 없으면 ‘Sign up’을 눌러 가입해 주세요.</p>
+      <p class="hint">Claude 계정과는 별개의 Solo Leveling 계정이에요.</p>
       ${CONFIG.USE_MOCK ? html`<p class="hint">지금은 예시 데이터로 실행 중이라 버튼을 누르면 바로 로그인돼요.</p>` : ''}
     </section>
   </div>`);
