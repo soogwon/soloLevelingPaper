@@ -2,6 +2,7 @@
 // parent: 앱 안에서 이전 화면 기록이 없을 때 '뒤로'가 이동할 화면 (null이면 버튼 비활성화)
 
 const ROUTES = [
+  { pattern: /^\/uploads$/, nav: 'papers', parent: '/papers', load: () => import('./pages/upload.js') },
   { pattern: /^\/papers$/, nav: 'papers', parent: null, load: () => import('./pages/papers.js') },
   { pattern: /^\/papers\/([^/]+)$/, keys: ['paperId'], nav: 'papers', parent: '/papers', load: () => import('./pages/paper-detail.js') },
   { pattern: /^\/notes$/, nav: 'notes', parent: '/papers', load: () => import('./pages/notes.js') },

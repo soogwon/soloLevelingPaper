@@ -52,6 +52,7 @@ export default async function papersPage({ view, query }) {
     <div class="page-head">
       <div>
         <h1 class="page-title">논문 아카이브</h1>
+        <a class="btn" href="#/uploads">새 PDF 등록 준비</a>
         <p class="page-desc">Claude에서 학습한 논문과 마지막으로 읽던 위치를 다시 확인하세요.</p>
       </div>
     </div>
