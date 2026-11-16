@@ -227,6 +227,9 @@ PyTorch 기준선과 비교해야 하며, 통과해도 기존 context나 embeddi
 
 ## B 라벨 검토 제안
 
+[수치 허용값 제안서](threshold-proposal.md)에 B의 FP32 품질 기준과 A와 협의할
+반복·성능·메모리 기준을 수치·단위·집계법·이유별로 정리했다. 승인 전 초안이며 자동 판정은 연결하지 않았다.
+
 [12개 질의의 검토 반영과 사전 기준 제안](label-review.md)을 참고한다.
 라벨은 reviewed로 갱신했고 수치 기준 미확정이므로 후보 판정은 pending_thresholds를 유지한다.
 
