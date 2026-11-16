@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>어텐션만으로 번역하기: Transformer 핵심 정리</title>
+<!-- 수식: 인터넷이 되면 KaTeX로 그리고, 안 되면 원문 TeX를 그대로 보여 준다. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d232b; --muted: #5d6673; --line: #e3e0d8;
+  --accent: #1f6f78; --accent-soft: #e4f1f1; --evidence: #f6f1e4; --evidence-line: #c9a64a;
+  --tip: #eef3fb; --tip-line: #5b7fbf; --code: #f1efe9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15181c; --surface: #1c2026; --ink: #e8e6e1; --muted: #a2a9b3; --line: #2e343c;
+    --accent: #6cc3cb; --accent-soft: #1e3335; --evidence: #2a2619; --evidence-line: #b8963e;
+    --tip: #1b2433; --tip-line: #7c9ad1; --code: #242a31;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.75 "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+  word-break: keep-all; overflow-wrap: anywhere;
+}
+.layout { display: grid; grid-template-columns: 240px minmax(0, 760px); gap: 48px; max-width: 1080px; margin: 0 auto; padding: 48px 24px 96px; }
+nav.toc { position: sticky; top: 24px; align-self: start; font-size: 14px; line-height: 1.5; }
+nav.toc .label { font-size: 12px; letter-spacing: .08em; color: var(--muted); margin-bottom: 10px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; border-left: 2px solid var(--line); }
+nav.toc li a { display: block; padding: 6px 0 6px 14px; color: var(--muted); text-decoration: none; margin-left: -2px; border-left: 2px solid transparent; }
+nav.toc li a:hover { color: var(--accent); border-left-color: var(--accent); }
+header.cover { border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 36px; }
+.eyebrow { color: var(--accent); font-size: 13px; font-weight: 600; letter-spacing: .06em; }
+h1 { font-size: 34px; line-height: 1.3; margin: 8px 0 14px; letter-spacing: -.01em; }
+.paper { color: var(--muted); margin: 0 0 18px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.meta li { background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 3px 12px; font-size: 13px; }
+section.block { margin: 0 0 44px; }
+h2 { font-size: 24px; line-height: 1.4; margin: 0 0 6px; scroll-margin-top: 24px; }
+h2 .num { color: var(--accent); margin-right: 8px; }
+.lede { color: var(--muted); margin: 0 0 18px; }
+h3 { font-size: 18px; margin: 26px 0 8px; }
+p { margin: 0 0 14px; }
+ul.plain { margin: 0 0 14px; padding-left: 22px; }
+code { background: var(--code); padding: 1px 6px; border-radius: 4px; font-size: .92em; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin: 0 0 16px; }
+.objectives li { margin-bottom: 6px; }
+ol.path { counter-reset: step; list-style: none; padding: 0; margin: 0; }
+ol.path li { position: relative; padding: 0 0 16px 44px; }
+ol.path li::before { counter-increment: step; content: counter(step); position: absolute; left: 0; top: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--surface); font-size: 14px; display: grid; place-items: center; font-weight: 600; }
+ol.path li:not(:last-child)::after { content: ""; position: absolute; left: 13px; top: 30px; bottom: 2px; width: 2px; background: var(--line); }
+ol.path .why { color: var(--muted); font-size: 14px; display: block; }
+.evidence { background: var(--evidence); border-left: 3px solid var(--evidence-line); border-radius: 0 8px 8px 0; padding: 12px 16px; margin: 0 0 16px; }
+.evidence .where { font-size: 13px; font-weight: 600; color: var(--muted); }
+.evidence blockquote { margin: 6px 0; font-family: Georgia, "Times New Roman", serif; font-style: italic; }
+.tip { background: var(--tip); border-left: 3px solid var(--tip-line); border-radius: 0 8px 8px 0; padding: 12px 16px; margin: 0 0 16px; }
+.tip .tag, .example .tag { font-size: 12px; font-weight: 700; letter-spacing: .05em; color: var(--tip-line); display: block; margin-bottom: 4px; }
+.example { border: 1px dashed var(--line); border-radius: 8px; padding: 12px 16px; margin: 0 0 16px; }
+.example .tag { color: var(--accent); }
+.formula { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin: 0 0 16px; overflow-x: auto; }
+.formula .tex { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 15px; text-align: center; }
+.formula .explain { color: var(--muted); font-size: 14px; margin-top: 8px; }
+details.check { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 16px; margin: 0 0 10px; }
+details.check summary { cursor: pointer; font-weight: 600; }
+details.check .answer { margin-top: 8px; color: var(--muted); }
+table.glossary { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.glossary th, table.glossary td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.glossary th { font-size: 13px; color: var(--muted); font-weight: 600; }
+.keypoints li { margin-bottom: 8px; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 18px; }
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; gap: 0; padding: 28px 16px 64px; }
+  nav.toc { position: static; margin-bottom: 28px; }
+  h1 { font-size: 28px; }
+}
+@media print {
+  nav.toc { display: none; }
+  .layout { display: block; max-width: none; padding: 0; }
+  body { background: #fff; color: #000; font-size: 11pt; }
+  details.check { break-inside: avoid; }
+  section.block { break-inside: auto; }
+  h2 { break-after: avoid; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc" aria-label="목차">
+  <div class="label">목차</div>
+  <ol>
+    <li><a href="#objectives">학습 목표</a></li>
+    <li><a href="#path">학습 순서</a></li>
+    <li><a href="#ch1">왜 RNN을 버렸나</a></li>
+    <li><a href="#ch2">스케일드 닷-프로덕트 어텐션</a></li>
+    <li><a href="#ch3">멀티헤드 어텐션과 세 가지 쓰임</a></li>
+    <li><a href="#ch4">위치 인코딩</a></li>
+    <li><a href="#ch5">전체 구조와 결과</a></li>
+    <li><a href="#key-points">핵심 정리</a></li>
+    <li><a href="#glossary">용어 정리</a></li>
+    <li><a href="#next">다음에 할 것</a></li>
+  </ol>
+</nav>
+<main>
+<header class="cover"><div class="eyebrow">SOLO LEVELING PAPER · 학습 교재</div><h1>어텐션만으로 번역하기: Transformer 핵심 정리</h1><p class="paper">Attention Is All You Need · Vaswani et al. · arXiv 1706.03762v7 · NIPS 2017</p><ul class="meta"><li>목적: 이해</li><li>수준: RNN과 행렬 곱을 아는 학부생</li><li>2026-11-16</li></ul></header>
+<section class="block" id="objectives"><h2>학습 목표</h2><div class="card"><ul class="plain objectives"><li>RNN의 순차 계산이 왜 병렬화를 막는지, 트랜스포머가 이를 어떻게 피하는지 설명할 수 있다.</li><li>스케일드 닷-프로덕트 어텐션의 계산 순서와 sqrt(d_k)로 나누는 이유를 설명할 수 있다.</li><li>멀티헤드 어텐션이 트랜스포머 안에서 쓰이는 세 가지 방식을 구분할 수 있다.</li><li>위치 인코딩이 필요한 이유와 논문이 고른 방식을 말할 수 있다.</li></ul></div></section>
+<section class="block" id="path"><h2>학습 순서</h2><p class="lede">팀이 검수한 개념 지도의 학습 순서를 묶어 줄였습니다. 아는 개념(RNN, 행렬 곱)은 뺐습니다.</p><ol class="path"><li><strong>단어 임베딩</strong><span class="why">→ 인코더-디코더 구조에 필요 (p.5)</span></li><li><strong>인코더-디코더 구조</strong><span class="why">→ 어텐션 메커니즘에 필요 (p.2–3)</span></li><li><strong>내적 · 소프트맥스</strong><span class="why">→ 어텐션 점수를 계산하고 가중치로 바꾸는 데 필요 (p.4)</span></li><li><strong>스케일드 닷-프로덕트 어텐션</strong><span class="why">→ 셀프 어텐션에 필요 (p.4)</span></li><li><strong>셀프 어텐션 · 멀티헤드 어텐션</strong><span class="why">→ 트랜스포머 인코더에 필요 (p.4–5)</span></li><li><strong>위치 인코딩</strong><span class="why">→ 순환이 없어 순서 정보를 따로 넣어야 함 (p.6)</span></li><li><strong>트랜스포머</strong><span class="why">논문의 목표 개념 (p.2–3)</span></li></ol></section>
+<section class="block" id="ch1"><h2><span class="num">1.</span>왜 RNN을 버렸나</h2><p class="lede">RNN은 순서대로 계산해야 해서 병렬 처리가 막힌다. 트랜스포머는 순환을 빼고 어텐션만 쓴다.</p><p>RNN은 t번째 은닉 상태를 t−1번째 은닉 상태로 계산한다. 앞 단어가 끝나야 다음 단어를 계산할 수 있어서, <strong>한 문장 안에서는 병렬로 처리할 수 없다.</strong> 문장이 길수록 이 제약이 커진다.</p>
+<div class="evidence"><span class="where">논문 p.2 · 1 Introduction</span><blockquote>This inherently sequential nature precludes parallelization within training examples, which becomes critical at longer sequence lengths</blockquote><div>순차 계산이라는 성질이 학습 예제 안의 병렬화를 막는다고 지적한다.</div></div>
+<p>트랜스포머는 순환과 합성곱을 모두 빼고, 입력과 출력 사이의 관계를 <strong>어텐션만으로</strong> 잡는다. 그래서 훨씬 많이 병렬화할 수 있다.</p>
+<div class="evidence"><span class="where">논문 p.2 · 1 Introduction</span><blockquote>The Transformer allows for significantly more parallelization and can reach a new state of the art in translation quality after being trained for as little as twelve hours on eight P100 GPUs.</blockquote></div><h3>확인 문제</h3><details class="check"><summary>RNN이 긴 문장에서 특히 불리한 이유는 무엇인가요?</summary><div class="answer"><p>순서대로 계산하는 성질 때문에 한 예제 안에서 병렬 처리가 안 되고, 메모리 제약으로 예제끼리 묶는 것도 제한되기 때문이다 (p.2).</p></div></details></section>
+<section class="block" id="ch2"><h2><span class="num">2.</span>스케일드 닷-프로덕트 어텐션</h2><p class="lede">쿼리와 키의 내적으로 관련도를 재고, 소프트맥스로 만든 가중치로 값을 섞는다.</p><p>어텐션은 <strong>쿼리</strong> 하나와 <strong>키-값</strong> 쌍 여러 개를 받아 출력을 만든다. 출력은 값들의 가중합이고, 각 값의 가중치는 쿼리와 해당 키가 얼마나 맞는지로 정한다.</p>
+<ul class="plain"><li>쿼리(query): 지금 찾고 있는 것</li><li>키(key): 각 위치가 가진 &#x27;찾아질 수 있는 특징&#x27;</li><li>값(value): 실제로 가져올 정보</li></ul>
+<div class="formula"><div class="tex" data-tex="\mathrm{Attention}(Q,K,V)=\mathrm{softmax}\left(\frac{QK^{\top}}{\sqrt{d_k}}\right)V">\mathrm{Attention}(Q,K,V)=\mathrm{softmax}\left(\frac{QK^{\top}}{\sqrt{d_k}}\right)V</div><div class="explain">논문 식 (1). 모든 쿼리를 행렬 Q로 묶어 한 번의 행렬 곱으로 계산한다.</div></div>
+<p>왜 sqrt(d_k)로 나눌까? d_k가 크면 내적 값이 커지고, 소프트맥스가 기울기가 거의 0인 구간으로 밀려 학습이 잘 안 된다. 논문은 이를 <strong>추정(suspect)</strong>으로 설명한다.</p>
+<div class="evidence"><span class="where">논문 p.4 · 3.2.1 Scaled Dot-Product Attention</span><blockquote>We suspect that for large values of dk, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients</blockquote><div>각주 4: q와 k의 성분이 평균 0, 분산 1인 독립 확률변수라면 내적의 분산은 d_k가 된다.</div></div>
+<div class="tip"><span class="tag">팁</span><p>수식이 낯설면 &#x27;내적 = 얼마나 비슷한가, 소프트맥스 = 비율로 바꾸기&#x27;라고만 기억하고 넘어가도 된다.</p></div><h3>확인 문제</h3><details class="check"><summary>덧셈 어텐션(additive attention) 대신 내적 어텐션을 쓰면 실무에서 어떤 이점이 있나요?</summary><div class="answer"><p>이론적 복잡도는 비슷하지만, 최적화된 행렬 곱 코드로 구현할 수 있어 훨씬 빠르고 메모리 효율이 좋다 (p.4).</p></div></details></section>
+<section class="block" id="ch3"><h2><span class="num">3.</span>멀티헤드 어텐션과 세 가지 쓰임</h2><p class="lede">어텐션을 8개 헤드로 나눠 병렬로 하고, 트랜스포머 안의 세 곳에서 다르게 쓴다.</p><p>헤드 하나로 어텐션을 하면 여러 위치를 평균 내는 과정에서 정보가 뭉개진다. 멀티헤드는 쿼리·키·값을 h번 서로 다르게 투영해 <strong>서로 다른 표현 부분 공간</strong>을 동시에 보게 한다. 이 논문은 h = 8, 헤드마다 d_k = d_v = 64를 쓰며, 전체 계산 비용은 헤드 하나와 비슷하다.</p>
+<div class="evidence"><span class="where">논문 p.5 · 3.2.2 Multi-Head Attention</span><blockquote>Multi-head attention allows the model to jointly attend to information from different representation subspaces at different positions. With a single attention head, averaging inhibits this.</blockquote></div>
+<p>트랜스포머는 멀티헤드 어텐션을 세 가지 방식으로 쓴다 (p.5, 3.2.3).</p>
+<ul class="plain"><li><strong>인코더-디코더 어텐션:</strong> 쿼리는 디코더에서, 키·값은 인코더 출력에서 온다. 디코더의 모든 위치가 입력 문장 전체를 본다.</li><li><strong>인코더 셀프 어텐션:</strong> 쿼리·키·값이 모두 인코더 이전 층에서 온다.</li><li><strong>디코더 셀프 어텐션(마스킹):</strong> 각 위치는 자기 자신과 그 앞 위치까지만 본다.</li></ul>
+<div class="evidence"><span class="where">논문 p.5 · 3.2.3</span><blockquote>We implement this inside of scaled dot-product attention by masking out (setting to −∞) all values in the input of the softmax which correspond to illegal connections.</blockquote><div>−∞를 넣으면 소프트맥스 뒤 가중치가 0이 되어, 미래 단어를 볼 수 없다.</div></div>
+<div class="example"><span class="tag">예시</span><p>&quot;나는 학교에 간다&quot;를 번역하며 세 번째 단어를 만들 때, 디코더는 이미 만든 앞의 두 단어만 볼 수 있다. 아직 만들지 않은 뒤 단어를 보면 시험 중에 정답을 보는 것과 같다.</p></div><h3>확인 문제</h3><details class="check"><summary>디코더 셀프 어텐션에서 마스킹을 하는 이유는 무엇인가요?</summary><div class="answer"><p>왼쪽으로 정보가 흐르는 것(미래 위치 참고)을 막아 자기회귀(auto-regressive) 성질을 지키기 위해서다 (p.5).</p></div></details></section>
+<section class="block" id="ch4"><h2><span class="num">4.</span>위치 인코딩</h2><p class="lede">순환이 없으니 단어 순서를 알려 줄 정보를 입력에 더한다.</p><p>어텐션은 순서를 따지지 않고 모든 위치를 한꺼번에 본다. 그래서 단어 순서 정보를 <strong>입력 임베딩에 더해</strong> 준다. 위치 인코딩은 임베딩과 같은 차원 d_model이라 그대로 더할 수 있다.</p>
+<div class="formula"><div class="tex" data-tex="PE_{(pos,2i)}=\sin\left(pos/10000^{2i/d_{model}}\right),\quad PE_{(pos,2i+1)}=\cos\left(pos/10000^{2i/d_{model}}\right)">PE_{(pos,2i)}=\sin\left(pos/10000^{2i/d_{model}}\right),\quad PE_{(pos,2i+1)}=\cos\left(pos/10000^{2i/d_{model}}\right)</div><div class="explain">pos는 위치, i는 차원. 차원마다 주파수가 다른 사인파가 된다.</div></div>
+<div class="evidence"><span class="where">논문 p.6 · 3.5 Positional Encoding</span><blockquote>We chose the sinusoidal version because it may allow the model to extrapolate to sequence lengths longer than the ones encountered during training.</blockquote><div>학습형 위치 임베딩도 시험했지만 결과가 거의 같았고(표 3 (E)), 더 긴 문장으로 확장할 가능성 때문에 사인 방식을 골랐다.</div></div><h3>확인 문제</h3><details class="check"><summary>학습형 위치 임베딩과 사인·코사인 방식의 성능은 어땠나요?</summary><div class="answer"><p>거의 같은 결과를 냈다. 사인 방식을 고른 것은 학습 때보다 긴 문장으로 확장할 수 있을 것이라는 기대 때문이다 (p.6).</p></div></details></section>
+<section class="block" id="ch5"><h2><span class="num">5.</span>전체 구조와 결과</h2><p class="lede">같은 층 6개를 쌓은 인코더·디코더. 번역 품질 최고 기록을 더 적은 비용으로 냈다.</p><p>인코더 한 층 = 멀티헤드 셀프 어텐션 → 위치별 피드포워드 네트워크. 각 하위 층을 <strong>잔차 연결</strong>로 감싸고 <strong>층 정규화</strong>를 한다. 디코더는 여기에 인코더 출력을 보는 어텐션 층을 하나 더 둔다. 인코더와 디코더 모두 같은 층 N = 6개를 쌓는다 (p.3, 3.1).</p>
+<div class="formula"><div class="tex" data-tex="\mathrm{LayerNorm}(x+\mathrm{Sublayer}(x))">\mathrm{LayerNorm}(x+\mathrm{Sublayer}(x))</div><div class="explain">각 하위 층의 출력. 잔차 연결 뒤 층 정규화.</div></div>
+<div class="evidence"><span class="where">논문 p.8 · 6.1 Machine Translation</span><blockquote>outperforms the best previously reported models (including ensembles) by more than 2.0 BLEU, establishing a new state-of-the-art BLEU score of 28.4</blockquote><div>WMT 2014 영어→독일어, Transformer (big). 8개 P100 GPU로 3.5일 학습.</div></div>
+<div class="tip"><span class="tag">팁</span><p>영어→프랑스어 BLEU는 초록·표 2(p.1, p.8)에 41.8, 6.1절 본문(p.8)에 41.0으로 서로 다르게 적혀 있다. 인용할 때는 어느 쪽을 쓰는지 밝혀 두자.</p></div><h3>확인 문제</h3><details class="check"><summary>인코더의 각 하위 층 출력은 어떤 식으로 계산되나요?</summary><div class="answer"><p>LayerNorm(x + Sublayer(x)), 즉 잔차 연결 뒤 층 정규화 (p.3).</p></div></details></section>
+<section class="block" id="key-points"><h2>핵심 정리</h2><div class="card"><ul class="plain keypoints"><li>RNN의 순차 계산을 없애고 어텐션만으로 입력·출력 관계를 잡아 병렬화를 크게 늘렸다 (p.2).</li><li>스케일드 닷-프로덕트 어텐션은 내적을 sqrt(d_k)로 나눠 소프트맥스 기울기 소실을 막는다 (p.4).</li><li>멀티헤드(h = 8)는 서로 다른 표현 부분 공간을 동시에 보게 하며, 트랜스포머 안의 세 곳에서 쓰인다 (p.5).</li><li>순서 정보는 사인·코사인 위치 인코딩을 입력 임베딩에 더해 넣는다 (p.6).</li><li>영어→독일어 28.4 BLEU로 앙상블 포함 기존 최고를 2.0 BLEU 넘게 앞섰다 (p.8).</li></ul></div></section>
+<section class="block" id="glossary"><h2>용어 정리</h2><table class="glossary"><thead><tr><th>용어</th><th>뜻</th><th>쪽</th></tr></thead><tbody><tr><td><strong>셀프 어텐션</strong><br><span class="paper">Self-attention</span></td><td>한 시퀀스 안의 서로 다른 위치끼리 관계를 계산해 그 시퀀스의 표현을 만드는 어텐션</td><td>2</td></tr><tr><td><strong>쿼리 · 키 · 값</strong><br><span class="paper">Query · Key · Value</span></td><td>찾는 것 · 찾아질 특징 · 가져올 정보. 쿼리와 키의 일치도로 값의 가중치를 정한다</td><td>3</td></tr><tr><td><strong>멀티헤드 어텐션</strong><br><span class="paper">Multi-head attention</span></td><td>어텐션을 여러 번 다른 투영으로 병렬 수행한 뒤 이어 붙여 다시 투영하는 방식</td><td>4</td></tr><tr><td><strong>위치 인코딩</strong><br><span class="paper">Positional encoding</span></td><td>토큰의 위치 정보를 담아 입력 임베딩에 더하는 벡터</td><td>6</td></tr><tr><td><strong>자기회귀</strong><br><span class="paper">Auto-regressive</span></td><td>앞에서 만든 출력을 다음 출력을 만들 때 입력으로 쓰는 방식</td><td>2</td></tr><tr><td><strong>BLEU</strong><br><span class="paper">BLEU score</span></td><td>기계 번역 결과가 정답 번역과 얼마나 겹치는지 재는 점수</td><td>1</td></tr></tbody></table></section>
+<section class="block" id="next"><h2>다음에 할 것</h2><ul class="plain"><li>4 Why Self-Attention(p.6–7)의 표 1로 층 종류별 계산량·경로 길이를 비교해 본다.</li><li>구현이 목적이라면 5 Training(p.7)의 학습률 식과 정규화 설정을 정리한다.</li><li>solo-leveling-quiz로 이해도 퀴즈를 풀어 본다.</li></ul></section>
+<footer>샘플 교재: 2026-11-16 Attention Is All You Need 학습 대화를 가정하고, 논문 원문(arXiv 1706.03762v7)에서 찾은 인용으로 만들었습니다. 쪽 번호는 PDF 쪽 번호입니다.</footer>
+</main>
+</div>
+<script>
+// 인쇄할 때는 확인 문제의 답을 펼쳐서 함께 찍는다.
+window.addEventListener('beforeprint', function () {
+  document.querySelectorAll('details.check').forEach(function (d) { d.open = true; });
+});
+document.addEventListener('DOMContentLoaded', function () {
+  if (!window.katex) return;  // 오프라인이면 TeX 원문을 그대로 둔다.
+  document.querySelectorAll('.tex[data-tex]').forEach(function (el) {
+    try { window.katex.render(el.getAttribute('data-tex'), el, { displayMode: true, throwOnError: false }); }
+    catch (e) { /* 원문 유지 */ }
+  });
+});
+</script>
+</body>
+</html>
