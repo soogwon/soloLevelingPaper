@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Solo Leveling · Claude와 원문 근거로 읽는 논문</title>
+  <meta name="description" content="논문 PDF를 Claude에게 물어보고, 답변마다 원문 근거를 확인하세요. 공부한 기록은 웹 아카이브에서 다시 볼 수 있어요.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">본문으로 건너뛰기</a>
+
+  <!-- 상단 메뉴 -->
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="#top">
+        <span class="brand-name">Solo Leveling<span>.</span></span>
+        <span class="brand-sub">나의 논문 학습 아카이브</span>
+      </a>
+      <nav class="site-nav" aria-label="랜딩 메뉴">
+        <a class="nav-link" href="#features">서비스 소개</a>
+        <a class="nav-link" href="#how">사용 방법</a>
+        <a class="nav-link" href="#start">시작하기</a>
+        <a class="btn btn-outline" href="../#/papers">
+          내 기록 보기
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- 히어로 -->
+    <section id="top" class="band band-white">
+      <div class="wrap hero">
+        <div class="hero-copy">
+          <span class="pill">Claude에서 쓰는 논문 학습 도구</span>
+          <h1 class="hero-title">논문은 <span class="hl">원문 근거</span>와 함께,<br>기록은 한곳에 남게</h1>
+          <p class="hero-desc">PDF를 올리고 Claude에게 물어보세요. 답변마다 원문 몇 페이지의 어떤 문장이 근거인지 함께 보여줘요. 공부한 논문과 메모는 웹 아카이브에서 언제든 다시 볼 수 있어요.</p>
+          <div class="actions">
+            <a class="btn btn-primary btn-lg" href="#mcp">MCP로 시작하기</a>
+            <a class="btn btn-outline btn-lg" href="#skill">설치 없이 Skill로 체험</a>
+          </div>
+          <p class="hint">설치가 어렵다면 Skill로 먼저 써 보고, 기록을 남기고 싶을 때 MCP로 옮겨 오세요.</p>
+        </div>
+
+        <figure class="chat" aria-label="Claude 대화 예시">
+          <figcaption class="chat-head">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7"/><path d="M9 16h4"/></svg>
+            Attention Is All You Need · 학습 목적: 이해
+          </figcaption>
+          <p class="bubble bubble-user">Scaled Dot-Product Attention에서 왜 √d<sub>k</sub>로 나눠요?</p>
+          <div class="bubble bubble-claude">
+            <p>d<sub>k</sub>가 커지면 내적 값도 커져서 softmax가 기울기가 아주 작은 구간으로 밀려나요. 그래서 √d<sub>k</sub>로 나눠 값의 크기를 줄여요.</p>
+            <blockquote class="evidence">
+              <span class="evidence-quote">“for large values of d<sub>k</sub>, the dot products grow large in magnitude”</span>
+              <span class="evidence-meta"><span class="mono">PDF 기준 4페이지</span><span aria-hidden="true">·</span><span>3.2.1 Scaled Dot-Product Attention</span></span>
+            </blockquote>
+            <span class="badge badge-ok">근거 확인됨</span>
+          </div>
+        </figure>
+      </div>
+    </section>
+
+    <!-- 서비스 소개 -->
+    <section id="features" class="band" aria-labelledby="features-h">
+      <div class="wrap section">
+        <div class="section-head">
+          <span class="eyebrow">서비스 소개</span>
+          <h2 id="features-h" class="section-title">읽고, 묻고, 확인하고, 다시 보기</h2>
+          <p class="section-desc">Solo Leveling은 Claude 안에서 논문을 공부하는 흐름 전체를 돕는 도구예요.</p>
+        </div>
+        <div class="feature-grid">
+          <article class="card feature">
+            <span class="icon-box"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8h10"/><path d="M7 12h6"/><path d="M4 4h16v13H9l-5 4z"/></svg></span>
+            <h3>근거 있는 한국어 답변</h3>
+            <p>답변마다 원문 문장과 페이지를 함께 보여줘요. 근거에 없는 내용은 근거처럼 말하지 않아요.</p>
+          </article>
+          <article class="card feature">
+            <span class="icon-box"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8.3 7.2 15.6 7.6"/><path d="m7 8.4 1.4 7.2"/></svg></span>
+            <h3>목적에 맞춘 학습 순서</h3>
+            <p>이해, 구현, 훑어보기 중 목적을 고르면 먼저 알아야 할 개념과 순서를 개념 지도로 알려줘요.</p>
+          </article>
+          <article class="card feature">
+            <span class="icon-box"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/></svg></span>
+            <h3>읽기 전 질문과 퀴즈</h3>
+            <p>읽기 전에 생각해 볼 질문을 받고, 다 읽은 뒤에는 퀴즈로 얼마나 이해했는지 확인해요.</p>
+          </article>
+          <article class="card feature">
+            <span class="icon-box"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+            <h3>웹 아카이브에 기록 보관</h3>
+            <p>공부한 논문, 메모와 하이라이트, 읽던 위치를 웹에서 다시 보고 컬렉션으로 정리해요.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- 사용 방법 -->
+    <section id="how" class="band band-white band-lined" aria-labelledby="how-h">
+      <div class="wrap section">
+        <div class="section-head">
+          <span class="eyebrow">사용 방법</span>
+          <h2 id="how-h" class="section-title">Claude에게 말하듯이 4단계</h2>
+        </div>
+        <ol class="steps">
+          <li class="step">
+            <span class="step-no">STEP 1</span>
+            <h3>논문 PDF 올리기</h3>
+            <p>Claude에 PDF를 올리고 “이 논문 공부하고 싶어”라고 말해요.</p>
+            <code class="tag tag-gray">attention.pdf · 15쪽</code>
+          </li>
+          <li class="step">
+            <span class="step-no">STEP 2</span>
+            <h3>학습 목적 고르기</h3>
+            <p>이해, 구현, 훑어보기 중에서 고르고 이미 아는 개념을 알려줘요.</p>
+            <span class="chips" aria-label="학습 목적 예시">
+              <span class="chip chip-on">이해</span>
+              <span class="chip">구현</span>
+              <span class="chip">훑어보기</span>
+            </span>
+          </li>
+          <li class="step">
+            <span class="step-no">STEP 3</span>
+            <h3>질문하고 근거 확인하기</h3>
+            <p>궁금한 걸 물어보면 답변과 함께 원문 문장, 페이지가 나와요. 메모도 남겨요.</p>
+            <span class="tag tag-quote">PDF 기준 4페이지 · 근거 2개</span>
+          </li>
+          <li class="step">
+            <span class="step-no">STEP 4</span>
+            <h3>웹에서 다시 보기</h3>
+            <p>기록을 서버에 저장하면 웹 아카이브에서 읽던 위치와 메모를 다시 보고, 이어하기 코드로 Claude에서 이어서 공부해요.</p>
+            <span class="tag tag-accent">MCP 버전에서 지원</span>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- 시작하기: Skill vs MCP -->
+    <section id="start" class="band" aria-labelledby="start-h">
+      <div class="wrap section">
+        <div class="section-head">
+          <span class="eyebrow">시작하기</span>
+          <h2 id="start-h" class="section-title">나에게 맞는 방법으로 시작하세요</h2>
+          <p class="section-desc">MCP 설치가 어렵다면 Skill로 바로 체험할 수 있어요. 기록을 남기고 웹에서 다시 보려면 MCP가 필요해요.</p>
+        </div>
+
+        <div class="plans">
+          <!-- Skill -->
+          <article id="skill" class="plan plan-light" aria-labelledby="skill-h">
+            <div class="plan-head">
+              <span class="badge badge-ok">설치 없이 · 가볍게 체험</span>
+              <h3 id="skill-h">Skill</h3>
+              <p>Claude에 Skill을 올려 두면 그 대화 안에서 논문을 공부할 수 있어요. 학습 안내, 퀴즈, HTML 교재 Skill 3개가 있어요.</p>
+            </div>
+            <ul class="skill-list">
+              <li><b>solo-leveling-guide</b> 목적별 읽는 순서, 요약, 원문 근거가 붙은 질의응답</li>
+              <li><b>solo-leveling-quiz</b> 퀴즈 문제지·정답지를 PDF로 만들기</li>
+              <li><b>solo-leveling-textbook</b> 대화 내용을 HTML 교재로 정리</li>
+            </ul>
+            <ol class="plan-steps">
+              <li>Claude 설정에서 코드 실행 기능을 켜요.</li>
+              <li>Skill 폴더를 zip으로 묶어 Claude의 Skills 메뉴에 업로드해요.</li>
+              <li>새 대화에서 PDF를 올리고 “이 논문 공부하고 싶어”라고 말해요.</li>
+            </ol>
+            <ul class="checks">
+              <li><span class="mark mark-ok" aria-hidden="true">✓</span>질문·답변, 요약, 읽기 전 질문, 퀴즈</li>
+              <li><span class="mark mark-ok" aria-hidden="true">✓</span>검수한 논문의 학습 순서(개념 지도)</li>
+              <li><span class="mark mark-part" aria-hidden="true">△</span><span><span class="sr-only">일부 지원: </span>원문 근거는 기본 수준(검증 단계 없음)</span></li>
+              <li><span class="mark mark-no" aria-hidden="true">✕</span><span><span class="sr-only">지원 안 함: </span>기록 저장, 웹 아카이브, 이어하기</span></li>
+            </ul>
+            <div class="actions plan-actions">
+              <a class="btn btn-primary" href="https://github.com/soogwon/soloLevelingPaper/tree/main/skills" target="_blank" rel="noopener">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>
+                Skill 받기
+              </a>
+              <a class="btn btn-outline" href="https://github.com/soogwon/soloLevelingPaper/blob/main/skills/README.md" target="_blank" rel="noopener">사용 가이드</a>
+            </div>
+          </article>
+
+          <!-- MCP -->
+          <article id="mcp" class="plan plan-dark" aria-labelledby="mcp-h">
+            <div class="plan-head">
+              <span class="badge badge-dark">전체 기능 · 기록까지 남기기</span>
+              <h3 id="mcp-h">MCP</h3>
+              <p>내 PC에 MCP 서버를 설치해 Claude Desktop과 연결해요. 근거를 검증한 답변을 받고, 기록을 서버에 저장해 웹에서 다시 봐요.</p>
+            </div>
+            <ol class="plan-steps">
+              <li>설치 가이드를 따라 MCP 서버를 설치해요.</li>
+              <li>Claude Desktop 설정에 MCP를 등록하고 다시 시작해요.</li>
+              <li>계정을 연결하면 공부한 기록이 웹 아카이브에 쌓여요.</li>
+            </ol>
+            <ul class="checks">
+              <li><span class="mark mark-ok" aria-hidden="true">✓</span>Skill의 모든 기능</li>
+              <li><span class="mark mark-ok" aria-hidden="true">✓</span>검증된 원문 근거와 긴 논문 검색</li>
+              <li><span class="mark mark-ok" aria-hidden="true">✓</span>웹 아카이브, 메모·하이라이트, 컬렉션</li>
+              <li><span class="mark mark-ok" aria-hidden="true">✓</span>이어하기 코드로 다른 대화에서 이어서 공부</li>
+            </ul>
+            <div class="actions plan-actions">
+              <a class="btn btn-light" href="https://github.com/soogwon/soloLevelingPaper/blob/main/doc/setup/desktop-installation.md" target="_blank" rel="noopener">MCP 설치 가이드</a>
+              <a class="btn btn-dark-outline" href="https://github.com/soogwon/soloLevelingPaper" target="_blank" rel="noopener">GitHub</a>
+            </div>
+          </article>
+        </div>
+
+        <div class="table-box">
+          <table class="compare">
+            <caption>한눈에 비교</caption>
+            <thead>
+              <tr><th scope="col">기능</th><th scope="col">Skill</th><th scope="col">MCP</th></tr>
+            </thead>
+            <tbody>
+              <tr><th scope="row">설치</th><td>Skill 업로드만</td><td>MCP 서버 설치</td></tr>
+              <tr><th scope="row">질문·요약·퀴즈</th><td class="ok">가능</td><td class="ok">가능</td></tr>
+              <tr><th scope="row">원문 근거</th><td class="part">기본</td><td class="ok">검증된 근거</td></tr>
+              <tr><th scope="row">기록 저장·웹 아카이브</th><td class="no">불가</td><td class="ok">가능</td></tr>
+              <tr><th scope="row">이어하기·컬렉션</th><td class="no">불가</td><td class="ok">가능</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 웹 아카이브 -->
+    <section class="band band-white band-lined" aria-labelledby="archive-h">
+      <div class="wrap archive">
+        <div class="archive-copy">
+          <span class="eyebrow">웹 아카이브</span>
+          <h2 id="archive-h" class="section-title">Claude에서 공부한 기록,<br>웹에서 다시 보기</h2>
+          <p class="section-desc">읽던 위치, 메모와 하이라이트, 컬렉션을 한 화면에서 확인해요. 이어하기 코드를 복사하면 Claude에서 바로 이어서 공부할 수 있어요.</p>
+          <p class="hint">MCP에서 계정을 연결하고 서버 저장에 동의한 기록만 보여요.</p>
+          <a class="btn btn-primary btn-lg" href="../#/papers">
+            내 기록 보러 가기
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+          </a>
+        </div>
+        <div class="preview" aria-label="웹 아카이브 화면 예시">
+          <div class="preview-head">
+            <span class="preview-title">논문 아카이브</span>
+            <span class="preview-note">예시 화면</span>
+          </div>
+          <div class="preview-row">
+            <div class="preview-top">
+              <span class="preview-paper">Attention Is All You Need</span>
+              <span class="badge badge-accent">읽는 중</span>
+            </div>
+            <span class="preview-meta">마지막 위치 PDF 기준 4페이지 · 메모 3개</span>
+            <span class="tag tag-hl">“the dot products grow large in magnitude”</span>
+          </div>
+          <div class="preview-row">
+            <div class="preview-top">
+              <span class="preview-paper">BERT: Pre-training of Deep Bidirectional Transformers</span>
+              <span class="badge badge-ok">읽기 완료</span>
+            </div>
+            <span class="preview-meta">컬렉션 · Transformer 계열</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 자주 묻는 질문 -->
+    <section class="band" aria-labelledby="faq-h">
+      <div class="wrap wrap-narrow section">
+        <h2 id="faq-h" class="section-title">자주 묻는 질문</h2>
+        <div class="faq">
+          <details>
+            <summary>Skill로 시작했다가 나중에 MCP로 옮길 수 있나요?</summary>
+            <p>네. 다만 Skill은 기록을 저장하지 않아서, Skill로 공부한 내용은 웹 아카이브로 옮겨지지 않아요. MCP를 설치한 뒤 공부한 기록부터 저장돼요.</p>
+          </details>
+          <details>
+            <summary>서버에는 어떤 기록이 올라가나요?</summary>
+            <p>동의한 논문의 정보, 학습 위치와 읽기 상태, 저장된 요약, 메모와 하이라이트가 올라가요. PDF 원본은 논문마다 따로 동의해야 올라가요. 추출한 원문 전체, 검색용 데이터, 내 PC의 파일 경로, API 키는 올라가지 않아요.</p>
+          </details>
+          <details>
+            <summary>사용하려면 무엇이 필요한가요?</summary>
+            <p>Skill은 Claude 설정에서 코드 실행 기능을 켜고 Skill을 업로드할 수 있어야 해요. MCP는 Claude Desktop과 설치 가이드의 준비물(Python 등)이 필요해요.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <div class="footer-brand">
+        <span class="brand-name">Solo Leveling<span>.</span></span>
+        <span>학습은 Claude에서, 기록은 여기서 다시 봐요.</span>
+      </div>
+      <nav class="footer-nav" aria-label="푸터 링크">
+        <a href="../#/papers">웹 아카이브</a>
+        <a href="#skill">Skill</a>
+        <a href="#mcp">MCP</a>
+        <a href="https://github.com/soogwon/soloLevelingPaper" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>
