@@ -45,3 +45,45 @@
 3. A/C: 두 계정 격리, 만료 임시 객체 정리, presigned URL 로그 비노출을 운영 환경에서 확인한다.
 
 이번에는 외부 전송 없이 주소 만료(조회 중 만료 포함), 원본 버퍼 변경, prepare 응답 유실 복구 회귀까지 추가했다. 서버 계약과 운영 설정은 임의 변경하지 않았다.
+
+## staging 보관 동의 철회 경합 검증 모듈
+
+일반 업로드 화면은 prepare부터 complete까지 실행 중 동의 버튼을 비활성화하므로 타이밍
+클릭으로 경합을 재현하지 않는다. `web/js/validation/remote-upload-consent-race.js`는 로그인된
+staging 페이지의 기존 API 객체와 사용자가 선택한 공개·합성 PDF를 주입받아 아래 순서를
+명시적으로 분리한다.
+
+1. intent와 현재 보관 동의를 조회한다.
+2. prepare 뒤 동의 ID·revision이 그대로인지 다시 확인한다.
+3. 호출자가 안전한 메타데이터만 받은 `confirmPrepared`에서 명시 승인한다.
+4. 보관 동의를 철회한 뒤 이미 발급된 URL로 PUT한다.
+5. complete가 `409 remote_upload_storage_consent_required`인지 확인한다.
+6. 철회 상태와 intent 상태를 다시 읽고 URL·쿠키·CSRF·owner/object key가 없는 판정만 반환한다.
+
+모듈은 공개 화면과 라우터에 연결하지 않으며 지정된 staging origin 이외에서는 실행을 거부한다.
+실제 실행은 로그인된 staging 업로드 화면의
+개발자 도구에서 기존 `api` 모듈과 현재 파일 입력을 직접 주입한다. 코드나 문서에 세션 쿠키,
+CSRF, presigned URL을 복사하지 않는다. 실행 전에는 새 합성 intent와 현재 보관 동의가 필요하다.
+
+```js
+const [{ api }, { validateRemoteUploadConsentRace }] = await Promise.all([
+  import('/js/api/index.js'),
+  import('/js/validation/remote-upload-consent-race.js'),
+]);
+const intentId = document.querySelector('[data-intent]').textContent.match(
+  /[0-9a-f]{8}-[0-9a-f-]{27,}/i,
+)[0];
+const file = document.querySelector('[data-file]').files[0];
+await validateRemoteUploadConsentRace({
+  api,
+  file,
+  intentId,
+  confirmPrepared: safe => Promise.resolve(window.confirm(
+    `보관 동의를 철회한 뒤 ${safe.file_name} PUT과 complete 409 검증을 진행할까요?`,
+  )),
+});
+```
+
+실행 결과의 `final_object_published=false`는 complete 거부로 확정 게시가 성립하지 않았다는
+판정이다. R2 객체 부재를 직접 읽은 결과가 아니므로, 서버 로그에서 안전한 정리 결과를 확인하거나
+R2에서 해당 intent와 DB 참조를 대조하기 전까지 물리 객체 삭제 완료로 확대 해석하지 않는다.
