@@ -278,7 +278,15 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
             start_offset: start, end_offset: start + Array.from(quote).length,
             quote_snapshot: quote,
             ...(target === 'translation' ? {target,translation_revision_id:e.translation_revision_id} : {})}],
-        }, doc.defaultView.localStorage, doc.defaultView.crypto);
+        }, doc.defaultView.localStorage, doc.defaultView.crypto, el('new-annotation').checked);
+        if (!prepared) {
+          pending.delete(e);
+          if (selected === e && viewGeneration === generation) {
+            showRecords(e);
+            el('record-status').textContent = '이전 요청 키가 없습니다. 전체 기록을 확인하세요. 새 기록을 만들려면 확인란을 선택한 뒤 저장하세요.';
+          }
+          return;
+        }
       } catch {
         pending.delete(e);
         if (selected === e) {
@@ -310,6 +318,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
         } else e.annotations[index] = record;
         if (viewGeneration === generation) updateContextRecords?.(record);
         prepared.confirm();
+        if (viewGeneration === generation && selected === e) el('new-annotation').checked = false;
         if (selected === e && kind === 'note') el('note-body').value = '';
       } catch {
         uncertain.add(e);
@@ -325,6 +334,8 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
       selected = e;
       if (annotationPanel) {
         el('note-body').value = '';
+        el('new-annotation').checked = false;
+        el('note-body').oninput = () => { el('new-annotation').checked = false; };
         annotationPanel.hidden = !(detailed && Array.isArray(e.annotations));
       }
       if (annotationPanel && !annotationPanel.hidden) {

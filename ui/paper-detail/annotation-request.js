@@ -1,5 +1,5 @@
-// 미확정 요청은 재시작 뒤에도 같은 키를 사용한다. 본문·인용문 대신 SHA-256만 보관한다.
-export async function prepareAnnotationRequest(request, storage, crypto) {
+// 같은 저장 공간의 미확정 요청은 재시작 뒤에도 같은 키를 사용한다. 본문·인용문 대신 SHA-256만 보관한다.
+export async function prepareAnnotationRequest(request, storage, crypto, allowNew = true) {
   async function slotFor(value) {
     const bytes = new TextEncoder().encode(JSON.stringify(value));
     const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -19,6 +19,7 @@ export async function prepareAnnotationRequest(request, storage, crypto) {
   }
   let key = storage.getItem(slot);
   if (key !== null && !/^[A-Za-z0-9_-]{1,128}$/.test(key)) throw new Error();
+  if (key === null && !allowNew) return null;
   if (key === null) {
     key = crypto.randomUUID();
     storage.setItem(slot, key);
