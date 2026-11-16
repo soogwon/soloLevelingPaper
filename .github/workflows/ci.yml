@@ -104,10 +104,10 @@ jobs:
           python - <<'PYTEST'
           import xml.etree.ElementTree as ET
           cases = ET.parse('reading-state-postgres.xml').findall('.//testcase')
-          assert len(cases) == 2, f'읽기 상태 사례 수 불일치: {len(cases)}'
+          assert len(cases) == 3, f'읽기 상태 사례 수 불일치: {len(cases)}'
           assert not any(case.find(tag) is not None for case in cases
                          for tag in ('skipped', 'failure', 'error')), '읽기 상태 검증 미통과'
-          print('PostgreSQL 읽기 상태: 2 passed, 0 skipped')
+          print('PostgreSQL 읽기 상태: 3 passed, 0 skipped')
           PYTEST
       - name: PostgreSQL 읽기 상태 결과 보관
         if: ${{ always() }}

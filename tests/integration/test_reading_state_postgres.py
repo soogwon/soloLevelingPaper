@@ -3,11 +3,15 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import os
+from types import SimpleNamespace
 from threading import Barrier
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 
+from solo_leveling.interfaces.http import create_app
+from solo_leveling.interfaces.http.auth import AccessTokenRejected, AuthenticatedPrincipal
 from solo_leveling.interfaces.http.papers import PaperNotFound, PostgresPaperStore
 from solo_leveling.interfaces.http.reading_states import ReadingStateConflict
 from tests.integration.test_remote_processing_postgres import db, make_paper, pool  # noqa: F401
@@ -173,3 +177,110 @@ def test_owner_and_source_boundaries_hide_existing_reading_state(pool, db):
             )
 
     assert store.get_reading_state(owner, paper_id, source_id) == saved
+
+
+def test_authenticated_http_boundaries_and_conflict_preserve_state(pool, db):
+    owner = "reading-state-api-owner"
+    paper_id = make_paper(db, owner)
+    source_id = str(
+        db(
+            "SELECT source_instance_id FROM server_papers WHERE paper_id=%s",
+            (paper_id,),
+        )[0]["source_instance_id"]
+    )
+    store = PostgresPaperStore(pool)
+
+    class TokenVerifier:
+        def verify(self, token):
+            principals = {
+                "owner-device": AuthenticatedPrincipal(owner, "device", "owner-device"),
+                "foreign-device": AuthenticatedPrincipal(
+                    "reading-state-api-foreign",
+                    "device",
+                    "foreign-device",
+                ),
+                "owner-web": AuthenticatedPrincipal(owner, "web_session"),
+            }
+            try:
+                return principals[token]
+            except KeyError:
+                raise AccessTokenRejected from None
+
+    app = create_app(
+        token_verifier=TokenVerifier(),
+        device_registry=SimpleNamespace(is_active=lambda *_: True),
+        paper_store=store,
+    )
+    path = f"/v1/mcp/papers/{paper_id}/reading-state"
+    owner_headers = {"Authorization": "Bearer owner-device"}
+    foreign_headers = {"Authorization": "Bearer foreign-device"}
+    web_headers = {"Authorization": "Bearer owner-web"}
+    complete = request(source_id)
+
+    with TestClient(app) as client:
+        # 보호할 완료 상태를 먼저 만들고 모든 거부 뒤 전체 응답이 같은지 확인한다.
+        response = client.put(path, json=complete, headers=owner_headers)
+        assert response.status_code == 200
+        saved = response.json()
+        assert saved["status"] == "completed"
+        assert saved["revision"] == 1
+
+        def assert_preserved():
+            current = client.get(
+                path, params={"source_instance_id": source_id}, headers=owner_headers,
+            )
+            assert current.status_code == 200
+            assert current.json() == saved
+
+        for headers, expected_status, code in (
+            ({}, 401, "authentication_required"),
+            ({"Authorization": "Bearer invalid"}, 401, "authentication_required"),
+            (web_headers, 403, "device_credential_required"),
+        ):
+            for method in ("get", "put"):
+                response = (
+                    client.get(path, params={"source_instance_id": source_id}, headers=headers)
+                    if method == "get"
+                    else client.put(path, json=complete, headers=headers)
+                )
+                assert response.status_code == expected_status
+                assert response.json() == {"detail": {"code": code}}
+                assert_preserved()
+
+        # 타인·다른 source와 미존재 대상이 같은 공개 오류를 반환한다.
+        missing_path = f"/v1/mcp/papers/{uuid4()}/reading-state"
+        for attempted_path, headers, attempted_source in (
+            (path, foreign_headers, source_id),
+            (path, owner_headers, str(uuid4())),
+            (missing_path, owner_headers, source_id),
+        ):
+            for method in ("get", "put"):
+                response = (
+                    client.get(attempted_path, params={"source_instance_id": attempted_source}, headers=headers)
+                    if method == "get"
+                    else client.put(attempted_path, json=request(attempted_source), headers=headers)
+                )
+                assert response.status_code == 404
+                assert response.json() == {"detail": {"code": "paper_not_found"}}
+                assert_preserved()
+
+        response = client.put(
+            path,
+            json=request(
+                source_id,
+                status="reading",
+                action="start",
+                expected_revision=1,
+                source_revision=2,
+            ),
+            headers=owner_headers,
+        )
+        assert response.status_code == 409
+        assert response.json() == {"detail": {"code": "reading_state_conflict"}}
+        assert_preserved()
+
+        # 인증 HTTP 경계에서도 같은 operation의 재생은 변경을 만들지 않는다.
+        response = client.put(path, json=complete, headers=owner_headers)
+        assert response.status_code == 200
+        assert response.json() == saved
+        assert_preserved()
