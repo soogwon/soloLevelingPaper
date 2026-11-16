@@ -261,7 +261,7 @@ OpenAI 요청은 승인 최대 4회 중 **1회**였다. 답변은 `ok`, `structu
 staging에 전송한 결과로 간주하지 않는다. 임시 MCP 설정은 백업과 바이트 단위로 일치하게
 복원하고 Desktop을 재실행했다. API 키·토큰·개인 DB·모델 파일은 저장소에 포함하지 않는다.
 
-### 현재 남은 범위와 종료 판단
+### PR #505 작성 시 남은 범위와 종료 판단
 
 - 실제 두 번째 계정으로 **메모 API** 조회/갱신 거부, 미존재 대상과 오류 동등성 및 소유 기록 보존 확인(A 협조 필요).
 - 실제 staging completed 상태에서 늦은 reading 전송 거부·동일 완료 operation 재생 확인.
@@ -271,3 +271,54 @@ staging에 전송한 결과로 간주하지 않는다. 임시 MCP 설정은 백�
 
 이번 후속 검증에서 제품 코드 결함은 새로 확인하지 않았다. #375와 상위 #214는 열어두며,
 위 남은 검증과 플랫폼 지원 범위를 합의한 뒤 종료 여부를 판단한다.
+
+
+## 최신 main wheel·완료 상태 종단 후속 검증 (2026-11-16)
+
+제품 및 Render 성공 배포는 `6ed9924a502a08bec42c7ce27c2691fa991d0504`다.
+macOS 26.7.1 arm64 / Claude Desktop 5.11492.5 일반 대화에서 새 wheel을 별도 경로에
+설치해 기존 합성 DB와 연결했다. 런타임 import가 wheel 설치 경로임을 확인했으며
+기본 설치본·개인 DB는 변경하지 않았다. wheel SHA-256:
+`4b3a95faeda39e4363032490f3c708fc04d4a05beb92315cdeb0a823b207caf0`.
+
+| 검증 순서 | 실제 결과 |
+| --- | --- |
+| 명시적 완료 | 로컬 reading/revision 5 → completed/revision 6, basis v1 |
+| Desktop 동의 카드 확인 후 동기화 | synced, 서버 completed/revision 4/source revision 6 |
+| 웹 재조회 | 읽기 완료, 기준 v1 및 다른 판본까지 완료를 뜻하지 않는 안내, 메모·하이라이트 4건 |
+| 같은 완료 operation 재전송 | 200, 완료 응답 전체 불변 |
+| 이전 reading/reopen operation 지연 전송 | 409, 완료 상태·revision 전체 불변 |
+| 새 operation ID와 현재 서버 CAS revision으로 오래된 source revision 전송 | 409, 완료 상태·revision 전체 불변 |
+| start_learning 후 승인된 합성 질문 1회 | ready, 답변 ok 및 First./첫째. 근거 표시, structural_only/not_used |
+| 질문 후 읽기 상태 | completed/revision 6 및 원래 수정 시각 유지 |
+| 명시적 완료 취소 | reading/revision 7, action reopen, basis v1 |
+| 새 동의 카드 확인 후 동기화 | synced, 서버 reading/revision 5/source revision 7 |
+| 웹 재조회 | 읽는 중, 기준 v1, 메모·하이라이트 4건 유지 |
+| Desktop 완전 종료·재실행 후 조회 | reading/revision 7 및 같은 기존 동기화 operation의 synced 유지 |
+
+서버 직접 요청에는 기존 합성 논문과 키체인 기기 자격만 사용했다. 원격 상태 수정은
+Desktop에서 확인한 동의 내용을 전송한 것이며, 검증용 직접 재전송은 동일 완료 요청과
+거부되어야 하는 이전 reading 요청에 한정했다. 응답 비교는 공개 코드뿐 아니라 현재
+상태 전체의 불변을 검사했다. 로컬과 서버 revision은 별도 증가하므로 숫자가 같아야
+한다는 전제를 두지 않고 서버 source revision과 로컬 revision을 대조했다.
+
+실제 질문의 외부 OpenAI 요청은 이번 1회, 이전 실행 포함 **2/4회**였다. 추가 번역이나
+의미 검증은 호출하지 않았다. 등록된 합성 2청크와 앞 절의 실제 벡터 준비를 그대로
+사용했으므로 새 PDF 등록·파싱의 처음부터 끝까지 검증은 아니다. 질문/답변은 동기화
+전송 제외 대상이며 카드에도 안내됐다.
+
+읽기 상태·자동 재시도·MCP→동의/outbox→HTTP 관련 자동 회귀 8개가 통과했다.
+HTTP 인증·서버 저장 대역의 자동 회귀와 위 실제 staging 결과를 구분한다.
+기존 anyio 폐기 예정 경고 1개가 있었고 실패·skip은 없었다. 임시 MCP 설정은 원본과
+바이트 단위 일치하도록 복원하고 기본 Desktop을 다시 실행했다.
+
+### 현재 종료 전 남은 항목
+
+- A 협조: 실제 다른 계정의 메모 API 조회/갱신 거부, 미존재 대상과 오류 동등성 및 기존 기록 보존.
+- C 후속: 새 PDF 등록·파싱부터 학습·완료·실제 질문·동의 전송·웹까지 단일 흐름. 이번에는 이미 준비한 합성 학습 자료를 재사용했다.
+- 이번 최신 wheel 조건의 Windows 검증 또는 플랫폼별 지원 범위 합의. macOS 결과를 Windows 완료로 간주하지 않는다.
+- 계정·기기·새 origin 간 원격 생성 의도 복구는 분리된 #502 범위이며 현재 같은 origin 복구 보장에 포함하지 않는다.
+
+이 실행에서는 제품 코드 보완이 필요한 결함을 발견하지 않았다. #375와 #214는 위 범위가
+남아 있어 열어둔다. 완료 상태의 늦은 reading 거부 및 macOS wheel의 질문→완료 취소→
+서버/웹→재시작 부분은 더 이상 미검증 항목으로 나열하지 않는다.
