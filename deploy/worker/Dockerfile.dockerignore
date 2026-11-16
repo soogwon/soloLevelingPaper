@@ -1,0 +1,9 @@
+**
+!deploy/
+!deploy/worker/
+!deploy/worker/model-lock.json
+!src/
+!src/solo_leveling/
+!src/solo_leveling/**
+**/__pycache__
+**/*.pyc

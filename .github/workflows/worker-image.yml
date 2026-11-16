@@ -1,0 +1,27 @@
+name: Worker 이미지 입력 검증
+on:
+  pull_request:
+    paths:
+      - deploy/worker/**
+      - src/solo_leveling/workers/image_preflight.py
+      - tests/unit/test_worker_image.py
+      - tests/image/worker_image_smoke.py
+      - .github/workflows/worker-image.yml
+permissions:
+  contents: read
+jobs:
+  worker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: docker/setup-buildx-action@v3
+      - name: 검사 도구 설치
+        run: python -m pip install pytest
+      - name: 모델 다운로드 없는 합성 이미지 검증
+        env:
+          PYTHONPATH: src:.
+        run: python tests/image/worker_image_smoke.py
