@@ -25,6 +25,19 @@ def _require(ok, code='PROCESSING_EMBEDDING_CONFIG_INVALID'):
         raise ProcessingError(code)
 
 
+def _directory_link(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, 'is_junction', None)
+    if callable(is_junction) and is_junction():
+        return True
+    # Python 3.11에는 Path.is_junction이 없다. Windows의 reparse directory는
+    # rglob에서 빠진 모델 입력을 loader가 읽을 수 있어 lstat 속성으로도 거부한다.
+    return bool(getattr(path.lstat(), 'st_file_attributes', 0) & 0x400)
+
+
 def processing_artifact_sha256(folder: Path) -> str:
     """#391 artifact_digest와 같은 파일 집합·정렬 JSON 규칙. 모델을 import하지 않는다."""
     entries = []
@@ -33,7 +46,7 @@ def processing_artifact_sha256(folder: Path) -> str:
             continue
         # HF blob를 가리키는 파일 링크는 내용 해시로 묶지만, 디렉터리 링크는 rglob의
         # 미추적 영역을 loader가 읽을 수 있으므로 허용하지 않는다.
-        _require(not (path.is_dir() and (path.is_symlink() or getattr(path, 'is_junction', lambda: False)())),
+        _require(not _directory_link(path),
                  'PROCESSING_EMBEDDING_ARTIFACT_MISMATCH')
         if not path.is_file() or path.suffix not in ('.json', '.txt', '.model', '.safetensors', '.bin'):
             continue

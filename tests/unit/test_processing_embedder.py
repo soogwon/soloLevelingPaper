@@ -399,3 +399,31 @@ def test_directory_link_observation_cannot_hide_loader_inputs_from_manifest(fixt
     with pytest.raises(ProcessingError, match='^PROCESSING_EMBEDDING_ARTIFACT_MISMATCH$'):
         adapter.embed(items, spec)
     factory.assert_not_called()
+
+
+def test_windows_reparse_directory_is_rejected_without_path_is_junction_api(fixture, monkeypatch):
+    adapter, spec, items, _, factory = fixture
+    # Python 3.11에는 Path.is_junction이 없다. 실제 OS 링크를 만들지 않고 lstat 관측을 대체한다.
+    monkeypatch.delattr(module.Path, 'is_junction', raising=False)
+    path_type = type(adapter.model_dir)
+    original = path_type.lstat
+    class ReparseStat:
+        def __init__(self, result): self.result = result
+        @property
+        def st_file_attributes(self): return 0x10 | 0x400
+        def __getattr__(self, name): return getattr(self.result, name)
+    def observed(path):
+        result = original(path)
+        return ReparseStat(result) if path == adapter.model_dir/'1_Pooling' else result
+    monkeypatch.setattr(path_type, 'lstat', observed)
+    with pytest.raises(ProcessingError, match='^PROCESSING_EMBEDDING_ARTIFACT_MISMATCH$'):
+        adapter.embed(items, spec)
+    factory.assert_not_called()
+
+
+def test_plain_snapshot_keeps_same_hash_without_path_is_junction_api(fixture, monkeypatch):
+    adapter, spec, items, _, factory = fixture
+    monkeypatch.delattr(module.Path, 'is_junction', raising=False)
+    assert module.processing_artifact_sha256(adapter.model_dir) == spec.artifact_sha256
+    assert adapter.embed(items, spec).spec == spec
+    factory.assert_called_once()

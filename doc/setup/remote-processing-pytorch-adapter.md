@@ -89,3 +89,6 @@ ruff check src/solo_leveling/infrastructure/embeddings/processing_embedder.py te
    승인 지문을 갖는 별도 set의 staging 저장·원자 게시·실제 원장 정산을 연결한다.
 
 #517은 실제 연결·실행·종단 검증이 남아 있어 열린 상태로 유지한다.
+
+#531/#532/#534/#535 병합 후 조합 검증과 Python 3.11의 디렉터리 링크 검사 보완은
+[worker 경계 합성 검증](remote-processing-worker-boundary-validation.md)에 별도로 기록했다.
