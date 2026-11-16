@@ -92,3 +92,29 @@ def test_embedding_rechecks_same_worker_callback(composed):
     check.side_effect = lambda current, phase: phase != 'embedding'
     with pytest.raises(ProcessingError): factory(source, check).run(source, pdf)
     model_factory.assert_not_called()
+
+
+def test_worker_runs_scoped_composition_without_publishing(composed):
+    from solo_leveling.interfaces.http.object_storage import DownloadedObject
+    from solo_leveling.interfaces.http.processing_jobs import ProcessingJob
+    from solo_leveling.workers.remote_processing import RemoteProcessingInput, RemoteProcessingWorker
+
+    factory, source, pdf, ledger, post, _, model_factory, _, _ = composed
+    job = ProcessingJob(source.job_id, source.owner_user_id, source.paper_id, source.version_id,
+        'full_processing', 'request', source.pdf_sha256, 'running', 1, 3, False, source.lease_token)
+    jobs, inputs, objects = Mock(), Mock(), Mock()
+    jobs.claim.return_value = job
+    inputs.load.return_value = RemoteProcessingInput(source, 'synthetic.pdf', 'application/pdf')
+    inputs.allowed.return_value = True
+    objects.read_object.return_value = DownloadedObject('synthetic.pdf', len(pdf),
+        'application/pdf', source.pdf_sha256, True, pdf)
+    worker = RemoteProcessingWorker(jobs, inputs, objects, None, worker_id='synthetic',
+        lease_seconds=30, stages_factory=factory)
+    result = worker.run_once()
+    assert result.result.status == 'prepared' and result.job == job
+    assert post.call_count == len(ledger.observed) == 2
+    assert model_factory.call_count == 1
+    assert {'parse', 'translation', 'embedding', 'result'} <= {
+        call.args[1] for call in inputs.allowed.call_args_list}
+    assert all(call.args[0] == source for call in inputs.allowed.call_args_list)
+    jobs.succeed.assert_not_called()
