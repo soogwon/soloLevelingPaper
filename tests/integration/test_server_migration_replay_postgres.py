@@ -27,8 +27,11 @@ def test_annotation_origin_migration_preserves_existing_rows_and_is_rerunnable()
     with psycopg.connect(DSN, autocommit=True) as admin:
         admin.execute(f'CREATE SCHEMA "{schema}"')
     try:
-        migrations = discover_migrations(MIGRATIONS)
-        before_origin = migrations[:-1]
+        # 후속 migration이 추가되어도 0032 직전의 기존 행 이관을 검사한다.
+        migrations = tuple(item for item in discover_migrations(MIGRATIONS)
+                           if item.version <= "0032")
+        assert migrations[-1].name == "0032_annotation_creation_origin.sql"
+        before_origin = tuple(item for item in migrations if item.version < "0032")
         first = migrate(DSN, before_origin, connector=connect)
         assert first.applied == tuple(item.name for item in before_origin)
 
@@ -83,6 +86,7 @@ def test_annotation_origin_migration_preserves_existing_rows_and_is_rerunnable()
                 """SELECT annotation_id,body,segments,creation_origin
                    FROM server_annotations ORDER BY local_annotation_id"""
             ).fetchall()
+            assert [row[0] for row in rows] == annotation_ids
             assert [row[1] for row in rows] == [
                 "synthetic-body-0",
                 "synthetic-body-1",
@@ -103,6 +107,14 @@ def test_annotation_origin_migration_preserves_existing_rows_and_is_rerunnable()
                 (annotation_ids[1],),
             )
 
+            # 건수만 같고 행·체크섬·적용 시각이 바뀌는 회귀도 검출한다.
+            data_before = conn.execute(
+                "SELECT * FROM server_annotations ORDER BY local_annotation_id"
+            ).fetchall()
+            history_before = conn.execute(
+                "SELECT * FROM server_schema_migrations ORDER BY version"
+            ).fetchall()
+
         second = migrate(DSN, migrations, connector=connect)
         assert second.applied == ()
         assert second.pending == ()
@@ -116,8 +128,12 @@ def test_annotation_origin_migration_preserves_existing_rows_and_is_rerunnable()
                 ("synthetic-body-2", [{"page": 3}], "unknown"),
             ]
             assert conn.execute(
-                "SELECT count(*) FROM server_schema_migrations"
-            ).fetchone()[0] == len(migrations)
+                "SELECT * FROM server_annotations ORDER BY local_annotation_id"
+            ).fetchall() == data_before
+            assert conn.execute(
+                "SELECT * FROM server_schema_migrations ORDER BY version"
+            ).fetchall() == history_before
+            assert len(history_before) == len(migrations)
     finally:
         with psycopg.connect(DSN, autocommit=True) as admin:
             admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

@@ -80,6 +80,24 @@ jobs:
           name: pgvector-shared-contract
           path: pgvector-shared-contract.xml
           if-no-files-found: warn
+      - name: PostgreSQL 이관 재실행 개별 검증
+        run: |
+          python -m pytest tests/integration/test_server_migration_replay_postgres.py -v -p no:cacheprovider --junitxml=migration-replay.xml
+          python - <<'PYTEST'
+          import xml.etree.ElementTree as ET
+          cases = ET.parse('migration-replay.xml').findall('.//testcase')
+          assert len(cases) == 1, f'이관 재실행 사례 수 불일치: {len(cases)}'
+          assert not any(case.find(tag) is not None for case in cases
+                         for tag in ('skipped', 'failure', 'error')), '이관 재실행 검증 미통과'
+          print('PostgreSQL 이관 재실행: 1 passed, 0 skipped')
+          PYTEST
+      - name: PostgreSQL 이관 재실행 결과 보관
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-replay
+          path: migration-replay.xml
+          if-no-files-found: error
       - name: 단위 테스트
         run: python -m pytest tests/unit -q -p no:cacheprovider
       - name: 통합 테스트
