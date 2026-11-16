@@ -11,7 +11,7 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from solo_leveling.application.annotations.service import AnnotationService
 from solo_leveling.infrastructure.database.schema import get_connection
 from solo_leveling.interfaces.mcp.server import MCPServices, create_server
-from solo_leveling.interfaces.mcp.annotation_tools import Segment, original_segments
+from solo_leveling.interfaces.mcp.annotation_tools import Segment, validated_segments
 from tests.unit.test_learning_persistence import setup_db, publish
 
 
@@ -57,7 +57,7 @@ def test_keyed_create_survives_mcp_restart_and_rejects_conflict(environment):
 def test_quote_length_mismatch_preserves_specific_error_code():
     segment = Segment(chunk_id='c1', start_offset=0, end_offset=5, quote_snapshot='Bad')
     with pytest.raises(ToolError, match='QUOTE_LENGTH_MISMATCH'):
-        original_segments([segment])
+        validated_segments([segment])
 
 
 def test_persistence_pagination_conflict_and_location(environment):
@@ -104,7 +104,7 @@ def test_persistence_pagination_conflict_and_location(environment):
     ('list_annotations', {'limit': 51}, 'INVALID_LIMIT'),
     ('list_annotations', {'cursor': 'PRIVATE_MARKER'}, 'INVALID_CURSOR'),
     ('create_annotation', {'kind': 'note', 'body': 'PRIVATE_MARKER', 'segments': [
-        {'chunk_id': 'c1', 'start_offset': 0, 'end_offset': 5, 'quote_snapshot': 'First', 'target': 'translation'}]}, 'TRANSLATION_NOT_SUPPORTED'),
+        {'chunk_id': 'c1', 'start_offset': 0, 'end_offset': 5, 'quote_snapshot': 'First', 'target': 'translation'}]}, 'INVALID_INPUT'),
     ('create_annotation', {'kind': 'note', 'body': {'secret': 'PRIVATE_MARKER'}}, 'INVALID_ARGUMENT'),
     ('create_annotation', {'kind': 'note', 'body': 'PRIVATE_MARKER', 'segments': [
         {'chunk_id': 'c1', 'start_offset': True, 'end_offset': 5, 'quote_snapshot': 'First'}]}, 'INVALID_ARGUMENT'),
@@ -189,7 +189,7 @@ def test_rejected_update_and_filter_cursor_preserve_records(environment):
             mixed = await client.call_tool('update_annotation', {'request': {
                 **target, 'expected_revision': 1, 'body': '저장되면 안 되는 수정',
                 'segments': [segment, {**segment, 'target': 'translation'}]}})
-            assert mixed.isError and 'TRANSLATION_NOT_SUPPORTED' in mixed.content[0].text
+            assert mixed.isError and 'INVALID_ARGUMENT' in mixed.content[0].text
             restored = await call(client, 'get_annotation', target)
             assert restored['annotation'] == saved['annotation']
             page = await call(client, 'list_annotations', {**scope, 'limit': 1})
