@@ -6,6 +6,7 @@ import pytest
 
 from tests.integration.test_remote_processing_postgres import pool, db  # noqa: F401
 from solo_leveling.interfaces.http.remote_uploads import PostgresRemoteUploadIntentStore, RemoteUploadVerificationService
+from solo_leveling.interfaces.http.remote_upload_consents import PostgresRemoteUploadConsentStore
 
 pytestmark = pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'), reason='실제 PostgreSQL DSN 필요')
 
@@ -19,6 +20,8 @@ def test_cleanup_acknowledges_success_and_retries_partial_failure(pool, db, fail
     db('INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,\'합성\')', (owner,))
     store = PostgresRemoteUploadIntentStore(pool)
     intent = store.create(owner, 'request', 'paper.pdf', 10, 'application/pdf', 'a' * 64)
+    PostgresRemoteUploadConsentStore(pool).grant(
+        owner, intent.intent_id, 'storage', 'cleanup-consent')
     reservation, _ = store.reserve_upload(owner, intent.intent_id)
     db("UPDATE server_remote_upload_intents SET expires_at=clock_timestamp()-interval '1 hour' WHERE intent_id=%s",
        (intent.intent_id,))
