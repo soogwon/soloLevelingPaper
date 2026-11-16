@@ -72,6 +72,24 @@ PostgreSQL/pgvector에서 함께 실행할 수 있다. skip을 pgvector 통과�
 **92 passed, 16 skipped**. 실제 PostgreSQL DSN/실행기가 없어 pgvector 비교 16개는 미실행이다.
 실제 API·모델·원본 데이터 접근은 없다. 이번 단계에서 CI/실환경 통과를 주장하지 않는다.
 
+### C 재검토 결과 (2026-11-16)
+
+위 결과는 작성자의 Windows 로컬 실행 기록이다. 이후 PR #486 head `2276cda`를
+macOS에서 같은 6개 테스트 파일로 재실행해 **92 passed, 16 skipped**를 확인했다.
+이 환경에도 PostgreSQL DSN이 없어 pgvector 16개는 건너뛰었으며 로컬 통과로 계산하지 않는다.
+
+동일 head의 [CI 실행 310](https://github.com/soogwon/soloLevelingPaper/actions/runs/43801361632)은
+9개 체크가 모두 성공했다. Python 로그에서 일회용 PostgreSQL/pgvector 서비스와
+`SOLO_TEST_POSTGRES_DSN` 설정, 단위 테스트 **3933 passed, 6 skipped** 및
+통합 테스트 **479 passed, 29 skipped**를 확인했다. 이는 CI 전체 집계다.
+개별 사례의 결과 목록을 제공하는 출력은 아니므로 별도 로컬 pgvector 실행 결과와
+혼용하지 않는다. 배포 서버·실제 임베딩 모델·ANN 품질 검증의 증거로도 사용하지 않는다.
+
+후속 CI에서는 `pgvector 공통 계약 개별 검증` 단계로 해당 파일을 `-v`로 별도 실행한다.
+JUnit 결과에 최소 16개 사례가 있고 skipped/failure/error가 하나도 없어야 성공한다.
+따라서 DSN 누락으로 전부 skip되면 pytest 자체가 성공하더라도 이 단계는 실패한다.
+사례별 결과는 로그와 `pgvector-shared-contract` artifact로 보관한다.
+
 OAuth/MCP·원장·제공자·답변/근거 저장·인용 허용 구절의 전체 흐름이나 게시 시 vector/manifest
 집합 불일치 거부를 새로 검증한 것은 아니다. C 제품/호스트 연결, A 게시 집합 검증 위치 확인,
 #391 실제 runtime 판정은 별도다. #390은 계속 열어둔다.
