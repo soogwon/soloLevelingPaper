@@ -163,13 +163,31 @@ staging PostgreSQL 경계의 읽기 상태 **조회** owner/source 격리와 충
 수행 근거는 [A의 검증 코멘트](https://github.com/soogwon/soloLevelingPaper/issues/375#issuecomment-6909781095)다.
 C는 이번 문서 리뷰에서 코멘트와 기록을 대조했으며 실제 자격으로 재실행하지 않았다.
 
+### 실제 staging 인증 거부 행렬 후속 검증
+
+후속 main·Render staging 배포 `430afe7b10bdec6134fdd59d5ff6899130d30e78`에서
+동일한 합성 논문의 읽기 상태를 대조군으로 삼아 갱신·자격 거부를 추가 확인했다.
+
+| 요청 | 결과 |
+| --- | --- |
+| 소유 계정 device token + 임의 source `PUT` | `404 paper_not_found` |
+| 소유 계정 device token + 미존재 paper `PUT` | 위 요청과 상태 코드·오류 본문 동일 |
+| 형식만 맞춘 무효 device token 조회 | `401 authentication_required`, Bearer challenge |
+| 두 번째 계정 device token + 실제 paper/source `PUT` | `404 paper_not_found` |
+| 두 번째 계정 device token + 미존재 paper `PUT` | 위 요청과 상태 코드·오류 본문 동일 |
+| 임시 기기 해제 후 같은 access token 조회 | `401 authentication_required`, Bearer challenge |
+| 모든 거부 뒤 소유 계정 재조회 | `reading`, server revision 1/source revision 6 불변 |
+
+두 번째 계정 자격은 메모리에만 보관했고, 기기 해제 성공 뒤 같은 access token의 실제 거부까지
+확인했다. 기존 첫 번째 계정의 Windows 자격 저장소는 변경하지 않았다. 이 후속 결과로 읽기 상태
+API의 타 owner·다른 source **갱신** 거부, 미존재 대상과의 공개 오류 동등성, 무효·폐기 자격 거부를
+실제 Auth0·staging PostgreSQL 경계에서 확인했다. 메모 API나 completed 상태 전이는 검증 범위가 아니다.
+
 남은 #375 범위는 context 없는 초기 `not_started`의 실제 배포 전송, 완료 후 실제 질문,
 같은 배포 버전의 Desktop→동의→서버→웹 재대조 및 macOS 전체 흐름이다.
 
-이번 표만으로 다음 항목을 완료 처리하지 않는다.
+두 번의 실제 API 표만으로 다음 항목을 완료 처리하지 않는다.
 
-- 타 계정·다른 source의 갱신 거부, 미존재 대상과 공개 오류의 동등성, 무효·폐기 자격 거부.
-  기기 해제 조작 자체는 해제된 자격으로 API 재호출을 거부한 증거가 아니다.
 - 메모 API의 본문·구간·신고 주체 불변. 이번 직접 요청은 읽기 상태 API에 한정된다.
 - 실제 completed 상태의 지연 전송/동일 operation 재생. 이번 staging 대조군은 reading이었다.
 - 응답 유실·재시작 후 요청 키 복구의 지원 범위. #490 내부 모듈을 제품 카드에 연결하고
