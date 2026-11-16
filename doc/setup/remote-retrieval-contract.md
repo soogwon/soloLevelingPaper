@@ -1,5 +1,9 @@
 # #390 B의 원격 검색·근거 경계 준비
 
+> 공통 합성 자료를 실제 Chroma/pgvector에 적용하는 후속 테스트는
+> [공통 계약 회귀](shared-retrieval-contract.md)에 정리했다. 로컬 hybrid와 vector,
+> L2 제곱 거리와 cosine 점수, DSN 부재 skip을 구분하며 제품 검색 정책은 변경하지 않는다.
+
 ## 검색 composition 구현 (후속)
 
 `application/evidence_qa/remote_search.py`와 `infrastructure/retrieval/remote_factory.py`가 기존 C/A
