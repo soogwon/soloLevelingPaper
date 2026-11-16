@@ -6,8 +6,8 @@ set -eu
 solo-leveling-server-migrate
 
 # Free Web Service에는 Shell/One-Off Job이 없다. 명시적으로 켠 staging에서만
-# 배포 시작 시 bounded 삭제 큐를 한 번 비운다. 정리 실패는 안전 상태(failed)를
-# 남기므로 API를 올려 상태 조회와 다음 배포 재시도를 가능하게 한다.
+# 프로세스 시작 시 삭제 큐를 제한된 건수만 처리한다. 정리 명령이 실패해도
+# API를 올려 상태 조회와 다음 시작 시 재시도를 가능하게 한다.
 if [ "${REMOTE_DELETION_CLEANUP_ON_START:-false}" = "true" ]; then
     if ! solo-leveling-remote-deletion-cleanup \
         --apply \
