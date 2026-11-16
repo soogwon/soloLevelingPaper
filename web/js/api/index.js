@@ -99,6 +99,7 @@ export const api = {
   prepareRemoteUpload: intentId => send('POST', `/remote-uploads/intents/${id(intentId)}/prepare`),
   completeRemoteUpload: intentId => send('POST', `/remote-uploads/intents/${id(intentId)}/complete`),
   putRemoteUpload,
+  getRemoteProcessing: intentId => send('GET', `/remote-uploads/intents/${id(intentId)}/processing`),
   getRemoteUploadConsents: (intentId) => send('GET', `/remote-uploads/intents/${id(intentId)}/consents`),
   grantRemoteUploadConsent: (intentId, purpose, noticeVersion, key) => send('POST',
     `/remote-uploads/intents/${id(intentId)}/consents/${id(purpose)}`,
