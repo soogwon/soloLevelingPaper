@@ -1,0 +1,285 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-11-16T14:18:13.075002+00:00",
+  "baseline_main": "5edb42c",
+  "approval_source": "https://github.com/soogwon/soloLevelingPaper/issues/391#issuecomment-6918803245",
+  "approval_timestamp": null,
+  "status": "policy_and_dataset_frozen_environment_incomplete",
+  "model_execution_count": 0,
+  "api_call_count": 0,
+  "dataset_canonical_sha256": "6df95d142a81c36308057f0158de718e514ba8e0c8bdb149f206f7e09c0953ef",
+  "dataset_file_sha256": "0b7117ffaaf241ad387d945947eea583a9dca46c7d65da590c2b3b2313c78659",
+  "policy_canonical_sha256": "fd17795e8b111cee15811a1c366314ecfefac7fc4a479a6b178ce053667934d3",
+  "file_sha256": {
+    "cases.json": "0b7117ffaaf241ad387d945947eea583a9dca46c7d65da590c2b3b2313c78659",
+    "approved-policy.json": "6cd3a8986579d6f03eed84ef603e54d71068b8178a7ed45d63bd2788f13f6cfe",
+    "comparison.py": "0481955127ac2350e6a061f89ae34c6d89c8229dd1c5dc48ea48c9a866bf28f2",
+    "artifacts.py": "df575a09cf33e08efe41a88189bce592201a980ddcdb824fc9bfc015a6218639",
+    "pytorch_capture.py": "91157d25c5e9a8e0ba3884e8c961fa9dbc1f0839cfe2a30ecb8219f620d00217",
+    "onnx_capture.py": "ea2727e74306c731c77e10e40a4dbfd8947d29d371a3401596c484cc8ff7eaa9",
+    "threshold-proposal.md": "4d83eeef395c8cee9d8ea01836aa2079e8f867bde4eba94ea58a4df67793c951",
+    "precomparison-review.md": "4b7f69ac71569c096f086b2c3b3c2723e8a5a0010fa4d4f0ca16bd4085ea542c",
+    "README.md": "51593e47774ebda18abc3cce4ad28909961cf7671710dcfef01c968335f6adc7",
+    "label-review.md": "9d21c968fd82d4c5fef8311583739d2aa6d360782acd99aa68aa1e7bfff88e84",
+    "approved-preflight-20261116.md": "b76000478b3de11c39cd6f389330be82fc71820355100aead8d29c07a8f69c72"
+  },
+  "environment": {
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "executable_sha256": "5fc3c5244b5eef01a82fbefd1932d1382b79c72fe6e64ffe8df1e3ce3643f02f",
+    "os": "Windows-11-10.0.26300-SP0",
+    "architecture": "AMD64",
+    "cpu": "Intel(R) Core(TM) i7-10750H CPU @ 2.60GHz",
+    "logical_cpus": 12,
+    "packages": {
+      "torch": "2.14.0",
+      "sentence-transformers": "6.1.0",
+      "transformers": "5.17.0",
+      "optimum": null,
+      "optimum-onnx": null,
+      "onnx": null,
+      "onnxruntime": "1.30.0",
+      "numpy": "2.5.3",
+      "tokenizers": "0.23.2",
+      "psutil": null
+    },
+    "current_thread_env": {
+      "OMP_NUM_THREADS": null,
+      "MKL_NUM_THREADS": null
+    },
+    "optional_measurement_tools": {
+      "psutil_version": "7.2.2",
+      "files": [
+        [
+          "psutil-7.2.2.dist-info/METADATA",
+          "a263a40220d921d9cb963fc636d34f817aa2eb72c2696e3e3465d088cdb1976b"
+        ],
+        [
+          "psutil-7.2.2.dist-info/RECORD",
+          "55fd2f55e72c18fd0017a0a033af4661d0227e339c5d772a40a29375e6f740d7"
+        ],
+        [
+          "psutil-7.2.2.dist-info/WHEEL",
+          "d4e0a5b3c507754487a0cdd46a453f48ec93d5ff66e527d511df0e830f267494"
+        ],
+        [
+          "psutil/__init__.py",
+          "7b6a0675824eb1fa2ff0cb1eb36e358dc454703e51dfa4e9a0e6ccd26a159f0c"
+        ],
+        [
+          "psutil/_common.py",
+          "6fc6bf5f86491ba962521374472570238929003cebea8e9b6c55224084b52bb0"
+        ],
+        [
+          "psutil/_ntuples.py",
+          "96f42bc24549636b5707a949b7cc92e89c87f7cea7d343a6d17821ac670dfcd2"
+        ],
+        [
+          "psutil/_psaix.py",
+          "a51e0031f92ba5dab84f7750a0315e41b4b0bba545b6e62a8fb5d357dc8a0346"
+        ],
+        [
+          "psutil/_psbsd.py",
+          "68de935cb6556674a09f6106b36d70c18c4cc82ed9f8236b895ad98d869c33aa"
+        ],
+        [
+          "psutil/_pslinux.py",
+          "571c6cd7919971df4c1381cfd514808ff934f7f7fc79c312b52278fcd0c7dd10"
+        ],
+        [
+          "psutil/_psosx.py",
+          "c766ad9002385269c313afb8a1fa883364e1f951b46b54dde72a8de4896d85fc"
+        ],
+        [
+          "psutil/_psposix.py",
+          "3bad08a5eaec4e081fce822e1c4a3f95b1d54d9d0b0d5ca31583fbcdc7574809"
+        ],
+        [
+          "psutil/_pssunos.py",
+          "5b9be0b2790a0313c68f52a7a730aa15dd9f467ed0f849f79ec73d92b4c3a147"
+        ],
+        [
+          "psutil/_psutil_windows.pyd",
+          "0035450801bd7d938e9e146c5ec28e619cb5a5f4a18cdc53ac7e9734c7f94f78"
+        ],
+        [
+          "psutil/_pswindows.py",
+          "0bbd52dcb214735be4168d11a2ae192d5bc7265c8cf72c611179476479687f54"
+        ]
+      ],
+      "automatically_on_sys_path": false
+    }
+  },
+  "environment_canonical_sha256": "6cb89be7ed6bedd04b7911d436d5090676f1c760b0b2ffe51dc1e5cf2c26f27e",
+  "model": {
+    "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "snapshot": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+    "files": [
+      [
+        "1_Pooling/config.json",
+        190,
+        "4be450dde3b0273bb9787637cfbd28fe04a7ba6ab9d36ac48e92b11e350ffc23"
+      ],
+      [
+        "README.md",
+        3888,
+        "1e98ea05b0de579fcaad3d625b62ea55647142ed674d5f5ebf1440e4bbbb6f23"
+      ],
+      [
+        "config.json",
+        645,
+        "6300193cb75e01cf80c96decef7187dfb33094d97cc1490b7ead6ff134476e4e"
+      ],
+      [
+        "config_sentence_transformers.json",
+        122,
+        "b8c64b5cece00d8424b4896ea75b512b6008576088497609dfeb6bd63e6d36b8"
+      ],
+      [
+        "model.safetensors",
+        470641600,
+        "eaa086f0ffee582aeb45b36e34cdd1fe2d6de2bef61f8a559a1bbc9bd955917b"
+      ],
+      [
+        "modules.json",
+        229,
+        "8f4b264b80206c830bebbdcae377e137925650a433b689343a63bdc9b3145460"
+      ],
+      [
+        "sentence_bert_config.json",
+        53,
+        "70f4448f31320443fe3557cacea5abf2dcc4915dda8c80646bec9f3bb0aa5a1f"
+      ],
+      [
+        "special_tokens_map.json",
+        239,
+        "378eb3bf733eb16e65792d7e3fda5b8a4631387ca04d2015199c4d4f22ae554d"
+      ],
+      [
+        "tokenizer.json",
+        9081518,
+        "2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8"
+      ],
+      [
+        "tokenizer_config.json",
+        526,
+        "5036ea374ffedd706e3bef33e2e0d6953cb868ef8a490e76e32ba0faa37a6b9b"
+      ]
+    ],
+    "pytorch_artifact_sha256": "715d2c3d56264ca48e372fceeb7ba2ac9d41d30e259386c1d81008d3df50164a",
+    "input_artifacts_sha256": "de9aa76bbd78daf2c9c0ae6a205413ace7c5c213dacc8bea4b77e6a133a29297",
+    "modules": [
+      {
+        "idx": 0,
+        "name": "0",
+        "path": "",
+        "type": "sentence_transformers.models.Transformer"
+      },
+      {
+        "idx": 1,
+        "name": "1",
+        "path": "1_Pooling",
+        "type": "sentence_transformers.models.Pooling"
+      }
+    ],
+    "sentence_settings": {
+      "max_seq_length": 128,
+      "do_lower_case": false
+    },
+    "pooling": {
+      "word_embedding_dimension": 384,
+      "pooling_mode_cls_token": false,
+      "pooling_mode_mean_tokens": true,
+      "pooling_mode_max_tokens": false,
+      "pooling_mode_mean_sqrt_len_tokens": false
+    },
+    "transformer_config": {
+      "_name_or_path": "old_models/paraphrase-multilingual-MiniLM-L12-v2/0_Transformer",
+      "architectures": [
+        "BertModel"
+      ],
+      "attention_probs_dropout_prob": 0.1,
+      "gradient_checkpointing": false,
+      "hidden_act": "gelu",
+      "hidden_dropout_prob": 0.1,
+      "hidden_size": 384,
+      "initializer_range": 0.02,
+      "intermediate_size": 1536,
+      "layer_norm_eps": 1e-12,
+      "max_position_embeddings": 512,
+      "model_type": "bert",
+      "num_attention_heads": 12,
+      "num_hidden_layers": 12,
+      "pad_token_id": 0,
+      "position_embedding_type": "absolute",
+      "transformers_version": "4.7.0",
+      "type_vocab_size": 2,
+      "use_cache": true,
+      "vocab_size": 250037
+    },
+    "tokenizer_settings": {
+      "do_lower_case": true,
+      "unk_token": "<unk>",
+      "sep_token": "</s>",
+      "pad_token": "<pad>",
+      "cls_token": "<s>",
+      "mask_token": {
+        "content": "<mask>",
+        "single_word": false,
+        "lstrip": true,
+        "rstrip": false,
+        "normalized": true,
+        "__type": "AddedToken"
+      },
+      "tokenize_chinese_chars": true,
+      "strip_accents": null,
+      "bos_token": "<s>",
+      "eos_token": "</s>",
+      "model_max_length": 512,
+      "special_tokens_map_file": null,
+      "name_or_path": "old_models/paraphrase-multilingual-MiniLM-L12-v2/0_Transformer",
+      "tokenizer_class": "PreTrainedTokenizerFast"
+    },
+    "input_encoding_verified": false
+  },
+  "onnx": {
+    "inspection_scope": "fixed Hugging Face snapshot only; no candidate path supplied",
+    "graph_file_count": 0,
+    "manifest": null,
+    "runtime_session_observed": false
+  },
+  "intended_capture": {
+    "procedure": "local-capture-v2;imports+load+encode+token-count;cold-and-warm-rss",
+    "batch": 8,
+    "threads": 1,
+    "omp": 1,
+    "mkl": 1,
+    "provider": "CPUExecutionProvider",
+    "execution_mode": "ORT_SEQUENTIAL",
+    "normalization": "L2",
+    "max_length": 128,
+    "dimension": 384,
+    "precision": "float32",
+    "rss_interval_ms": 10,
+    "distance": "cosine"
+  },
+  "pending": [
+    "ONNX graph/external-weight/export metadata manifest",
+    "Optimum and onnx dependencies",
+    "measurement psutil explicit import path or prepared environment",
+    "actual ORT provider/threads/mode and input encoding comparison",
+    "final execution environment freeze",
+    "paired orchestration/aggregation and approved threshold integration",
+    "separate worker deployment budget",
+    "execution timeout and detailed retry budget/scope before measurement"
+  ],
+  "baseline_main_full": "5edb42c7986c90d3bf47f3c110b1da1b4c447b98",
+  "reviewed_at_utc": "2026-11-16T14:22:37.170694+00:00",
+  "measurement_ready": false,
+  "environment_fingerprint_scope": "Selected package metadata versions, Python executable bytes, OS/CPU description, OMP/MKL environment values and optional psutil files. Not a complete dependency lock, binary manifest or host-load observation.",
+  "runtime_configuration_verified": false,
+  "capture_entrypoints_sha256": {
+    "scripts/capture_pytorch_embeddings.py": "8d40c6f3f2d272d126709f2830c9a6cd30c613ef4785082465922cde3dba470e",
+    "scripts/capture_onnx_embeddings.py": "1c0b0650fa0268e95a97a87b7ca0cfc4b6a6daff3fb9a263f44c77e9acb4663a",
+    "scripts/compare_embedding_captures.py": "22f0918f697a435381d8c32b30be8ac15d00ec47c697384810e2931941e3555e"
+  }
+}
