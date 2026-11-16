@@ -33,6 +33,7 @@ def create_app(
     knowledge_graph=None,
     remote_mcp_settings: "RemoteMcpSettings | None" = None,
     remote_mcp_verifier: "TokenVerifier | None" = None,
+    deletion_store=None,
 ) -> "FastAPI":
     """명시적 설정 또는 환경 설정으로 독립적인 API 앱을 만든다."""
 
@@ -40,6 +41,8 @@ def create_app(
 
     from .auth import RejectAllTokenVerifier, create_auth_dependency
     from .annotation_routes import create_annotation_router
+    from .deletion_routes import create_deletion_router
+    from .remote_deletions import PostgresRemoteDeletionStore
     from .collection_routes import create_collection_router
     from .collections import PostgresCollectionStore, UnavailableCollectionStore
     from .device_auth import DeviceAuthorizingTokenVerifier, RejectAllDeviceRegistry
@@ -81,6 +84,8 @@ def create_app(
             managed_store = PostgresDeviceStore.from_dsn(database.dsn)
             device_store = managed_store
     selected_store = device_store if device_store is not None else UnavailableDeviceStore()
+    if deletion_store is None and managed_store is not None:
+        deletion_store = PostgresRemoteDeletionStore(managed_store.connection_pool)
     if paper_store is None and managed_store is not None:
         paper_store = PostgresPaperStore(managed_store.connection_pool)
     selected_paper_store = paper_store if paper_store is not None else UnavailablePaperStore()
@@ -184,6 +189,7 @@ def create_app(
         require_principal, selected_remote_upload_store,
         RemoteUploadVerificationService(selected_remote_upload_store, object_storage)))
     app.include_router(create_annotation_router(require_principal, selected_paper_store))
+    app.include_router(create_deletion_router(require_principal, deletion_store))
     app.include_router(create_collection_router(require_principal, selected_collection_store))
     app.include_router(create_resume_router(require_principal, selected_resume_store))
     selected_graph = knowledge_graph if knowledge_graph is not None else load_server_graph()

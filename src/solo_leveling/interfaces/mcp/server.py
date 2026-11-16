@@ -102,6 +102,10 @@ FULL/PARTIAL 완료 뒤에도 새 context 선택은 사용자에게 별도로 �
 입력을 재사용하고, 성공하면 반환된 context_id로 후속 질문을 진행하세요.
 외부 웹 표시를 위한 논문 동기화는 prepare_paper_server_sync 안내 카드에서 사용자가 승인한
 경우에만 시작합니다. 계정 연결이나 논문 등록을 동기화 동의로 해석하지 마세요.
+서버 논문 삭제는 사용자가 명시적으로 요청한 경우에만 prepare_server_paper_deletion 카드를
+표시하세요. 로컬 삭제·동기화 중지·동의 철회를 서버 삭제로 해석하지 마세요. 삭제 접수와
+재전송은 카드 전용이며 결과가 미확정이면 get_server_paper_deletion으로 기존 요청을 조회하세요.
+complete는 활성 저장소 정리 완료이며 백업 완전 삭제나 복구 가능을 뜻하지 않습니다.
 sync_paper_to_server와 cancel_paper_server_sync는 카드 전용입니다. 응답을 확인하지 못하면
 새 작업을 만들지 말고 기존 operation_id로 get_paper_server_sync를 조회하세요.
 사용자가 PDF 서버 업로드를 명시적으로 요청한 경우에만 prepare_paper_pdf_upload 카드를 표시하세요.
@@ -147,6 +151,7 @@ class MCPServices:
     recovery: object | None = None
     reparse: object | None = None
     server_sync: object | None = None
+    server_deletion: object | None = None
     pdf_upload: object | None = None
     resume: object | None = None
     learning_path: object | None = None
@@ -511,6 +516,9 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         register_quiz(server, services.quiz)
     if services.server_sync is not None:
         register_server_sync(server, services.server_sync, confirmations=services.confirmations)
+    if services.server_deletion is not None:
+        from .server_deletion_tools import register_server_deletion
+        register_server_deletion(server, services.server_deletion, confirmations=services.confirmations)
     if services.pdf_upload is not None:
         register_pdf_upload(server, services.pdf_upload, confirmations=services.confirmations)
     if services.resume is not None:
