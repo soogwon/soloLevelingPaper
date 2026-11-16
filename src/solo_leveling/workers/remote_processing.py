@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from hashlib import sha256
+from threading import Event, Lock, Thread
 from typing import Protocol
 from uuid import uuid4
 
@@ -16,6 +17,10 @@ PROCESSING_PHASES = (
 
 class RemoteProcessingInputRejected(RuntimeError):
     """현재 owner/lease/동의/원본 범위에서 실행할 수 없다."""
+
+
+class RemoteProcessingLeaseLost(RuntimeError):
+    """heartbeat 실패로 현재 실행 세대의 결과를 사용할 수 없다."""
 
 
 @dataclass(frozen=True, repr=False)
@@ -33,6 +38,8 @@ class ClaimedProcessingResult:
 
 class JobQueue(Protocol):
     def claim(self, worker_id: str, *, lease_seconds: int) -> ProcessingJob | None: ...
+    def heartbeat(self, owner_user_id: str, job_id: str, lease_token: str,
+                  *, lease_seconds: int) -> None: ...
 
 
 class ProcessingInputStore(Protocol):
@@ -46,6 +53,50 @@ class ObjectReader(Protocol):
 
 class ProcessingStages(Protocol):
     def run(self, source: ProcessingSource, pdf: bytes) -> ProcessingResult: ...
+
+
+class _LeaseHeartbeat:
+    """blocking 처리 중 별도 thread에서 lease를 연장하고 실패를 보존한다."""
+
+    def __init__(self, jobs: JobQueue, job: ProcessingJob, *, lease_seconds: int,
+                 interval_seconds: float):
+        self._jobs, self._job = jobs, job
+        self._lease_seconds, self._interval_seconds = lease_seconds, interval_seconds
+        self._stop, self._lock = Event(), Lock()
+        self._failure: Exception | None = None
+        self._thread = Thread(
+            target=self._run, name="remote-processing-heartbeat", daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval_seconds):
+            try:
+                self._jobs.heartbeat(
+                    self._job.owner_user_id, self._job.job_id, self._job.lease_token,
+                    lease_seconds=self._lease_seconds,
+                )
+            except Exception as exc:
+                with self._lock:
+                    self._failure = exc
+                self._stop.set()
+                return
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=min(1.0, max(0.1, self._interval_seconds * 2)))
+        if self._thread.is_alive():
+            with self._lock:
+                self._failure = RuntimeError("heartbeat_stop_timeout")
+
+    def check(self) -> None:
+        with self._lock:
+            failure = self._failure
+        if failure is not None:
+            # DB/driver 원문이나 자격 증명이 상위 공개 오류로 유출되지 않게 고정한다.
+            raise RemoteProcessingLeaseLost("remote_processing_lease_lost") from None
 
 
 class PostgresRemoteProcessingInputStore:
@@ -98,36 +149,62 @@ class RemoteProcessingWorker:
     """한 작업을 claim하고 검증된 bytes로 처리한다. 게시 전에는 job을 성공 처리하지 않는다."""
 
     def __init__(self, jobs: JobQueue, inputs: ProcessingInputStore, objects: ObjectReader,
-                 stages: ProcessingStages, *, worker_id: str, lease_seconds: int = 60):
+                 stages: ProcessingStages, *, worker_id: str, lease_seconds: int = 60,
+                 heartbeat_interval_seconds: float | None = None):
         if not isinstance(worker_id, str) or not worker_id.strip() or type(lease_seconds) is not int or lease_seconds < 1:
+            raise ValueError("remote_processing_worker_config_invalid")
+        interval = lease_seconds / 3 if heartbeat_interval_seconds is None else heartbeat_interval_seconds
+        if (type(interval) not in (int, float) or not 0 < interval < lease_seconds):
             raise ValueError("remote_processing_worker_config_invalid")
         self.jobs, self.inputs, self.objects, self.stages = jobs, inputs, objects, stages
         self.worker_id, self.lease_seconds = worker_id, lease_seconds
+        self.heartbeat_interval_seconds = float(interval)
 
     def run_once(self) -> ClaimedProcessingResult | None:
         job = self.jobs.claim(self.worker_id, lease_seconds=self.lease_seconds)
         if job is None:
             return None
-        prepared = self.inputs.load(job)
-        if self.inputs.allowed(prepared.source, "parse") is not True:
-            raise RemoteProcessingInputRejected("remote_processing_input_rejected")
-        downloaded = self.objects.read_object(
-            prepared.object_key, expected_size=prepared.source.pdf_size,
+        if not job.lease_token:
+            raise RemoteProcessingLeaseLost("remote_processing_lease_lost")
+        heartbeat = _LeaseHeartbeat(
+            self.jobs, job, lease_seconds=self.lease_seconds,
+            interval_seconds=self.heartbeat_interval_seconds,
         )
-        if (
-            downloaded.object_key != prepared.object_key
-            or downloaded.content_type != prepared.content_type
-            or downloaded.file_size != prepared.source.pdf_size
-            or downloaded.sha256_hex != prepared.source.pdf_sha256
-            or not downloaded.pdf_header_valid
-            or type(downloaded.body) is not bytes
-        ):
-            raise RemoteProcessingInputRejected("remote_processing_object_mismatch")
-        if self.inputs.allowed(prepared.source, "parse") is not True:
-            raise RemoteProcessingInputRejected("remote_processing_input_rejected")
-        result = self.stages.run(prepared.source, downloaded.body)
-        if not isinstance(result, ProcessingResult) or result.source != prepared.source:
-            raise RuntimeError("remote_processing_result_invalid")
+        heartbeat.start()
+        result = None
+        failure = None
+        try:
+            prepared = self.inputs.load(job)
+            heartbeat.check()
+            if self.inputs.allowed(prepared.source, "parse") is not True:
+                raise RemoteProcessingInputRejected("remote_processing_input_rejected")
+            downloaded = self.objects.read_object(
+                prepared.object_key, expected_size=prepared.source.pdf_size,
+            )
+            heartbeat.check()
+            if (
+                downloaded.object_key != prepared.object_key
+                or downloaded.content_type != prepared.content_type
+                or downloaded.file_size != prepared.source.pdf_size
+                or downloaded.sha256_hex != prepared.source.pdf_sha256
+                or not downloaded.pdf_header_valid
+                or type(downloaded.body) is not bytes
+            ):
+                raise RemoteProcessingInputRejected("remote_processing_object_mismatch")
+            if self.inputs.allowed(prepared.source, "parse") is not True:
+                raise RemoteProcessingInputRejected("remote_processing_input_rejected")
+            result = self.stages.run(prepared.source, downloaded.body)
+            heartbeat.check()
+            if not isinstance(result, ProcessingResult) or result.source != prepared.source:
+                raise RuntimeError("remote_processing_result_invalid")
+        except Exception as exc:
+            failure = exc
+        finally:
+            heartbeat.stop()
+        # 처리 오류와 동시에 heartbeat가 실패했다면 stale 결과 폐기를 우선한다.
+        heartbeat.check()
+        if failure is not None:
+            raise failure
         return ClaimedProcessingResult(job, result)
 
 

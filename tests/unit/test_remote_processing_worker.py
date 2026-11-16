@@ -1,6 +1,8 @@
 from contextlib import nullcontext
 from hashlib import sha256
 from io import BytesIO
+from threading import Event
+from time import sleep
 
 import pytest
 
@@ -12,6 +14,7 @@ from solo_leveling.workers.remote_processing import (
     PostgresRemoteProcessingInputStore,
     RemoteProcessingInput,
     RemoteProcessingInputRejected,
+    RemoteProcessingLeaseLost,
     RemoteProcessingWorker,
 )
 
@@ -155,6 +158,117 @@ def test_worker_rejects_r2_metadata_mismatch_before_processing():
 
     with pytest.raises(RemoteProcessingInputRejected, match="object_mismatch"):
         RemoteProcessingWorker(Jobs(), Inputs(), Objects(), Stages(), worker_id="worker").run_once()
+
+
+def test_worker_renews_lease_during_blocking_processing_and_stops_after_return():
+    claimed, prepared = job(), RemoteProcessingInput(source(), "private/files/paper.pdf", "application/pdf")
+    heartbeated = Event()
+
+    class Jobs:
+        def __init__(self): self.heartbeats = []
+        def claim(self, *_args, **_kwargs): return claimed
+        def heartbeat(self, owner, job_id, token, *, lease_seconds):
+            self.heartbeats.append((owner, job_id, token, lease_seconds))
+            heartbeated.set()
+    class Inputs:
+        def load(self, _job): return prepared
+        def allowed(self, _source, _phase): return True
+    class Objects:
+        def read_object(self, key, *, expected_size):
+            return DownloadedObject(key, expected_size, "application/pdf", SHA, True, b"%PDF-data")
+    class Stages:
+        def run(self, current, _pdf):
+            assert heartbeated.wait(1)
+            return ProcessingResult(
+                current, ParsedDocument(1, ()), TranslationSettings("provider", "model", "v1"),
+                (), None, (), "prepared",
+            )
+
+    jobs = Jobs()
+    result = RemoteProcessingWorker(
+        jobs, Inputs(), Objects(), Stages(), worker_id="worker", lease_seconds=1,
+        heartbeat_interval_seconds=0.01,
+    ).run_once()
+    count = len(jobs.heartbeats)
+    sleep(0.04)
+
+    assert result.job == claimed
+    assert jobs.heartbeats[0] == ("owner", "job", "lease", 1)
+    assert len(jobs.heartbeats) == count
+
+
+def test_worker_discards_result_when_heartbeat_fails_without_leaking_driver_error():
+    claimed, prepared = job(), RemoteProcessingInput(source(), "private/files/paper.pdf", "application/pdf")
+    attempted = Event()
+
+    class Jobs:
+        def claim(self, *_args, **_kwargs): return claimed
+        def heartbeat(self, *_args, **_kwargs):
+            attempted.set()
+            raise RuntimeError("postgresql://secret@private-host")
+    class Inputs:
+        def load(self, _job): return prepared
+        def allowed(self, _source, _phase): return True
+    class Objects:
+        def read_object(self, key, *, expected_size):
+            return DownloadedObject(key, expected_size, "application/pdf", SHA, True, b"%PDF-data")
+    class Stages:
+        def run(self, current, _pdf):
+            assert attempted.wait(1)
+            return ProcessingResult(
+                current, ParsedDocument(1, ()), TranslationSettings("provider", "model", "v1"),
+                (), None, (), "prepared",
+            )
+
+    with pytest.raises(RemoteProcessingLeaseLost, match="^remote_processing_lease_lost$") as error:
+        RemoteProcessingWorker(
+            Jobs(), Inputs(), Objects(), Stages(), worker_id="worker", lease_seconds=1,
+            heartbeat_interval_seconds=0.01,
+        ).run_once()
+    assert error.value.__cause__ is None
+    assert "private-host" not in str(error.value)
+
+
+def test_worker_discards_result_when_heartbeat_call_does_not_stop():
+    claimed, prepared = job(), RemoteProcessingInput(source(), "private/files/paper.pdf", "application/pdf")
+    entered, release = Event(), Event()
+
+    class Jobs:
+        def claim(self, *_args, **_kwargs): return claimed
+        def heartbeat(self, *_args, **_kwargs):
+            entered.set()
+            release.wait(1)
+    class Inputs:
+        def load(self, _job): return prepared
+        def allowed(self, _source, _phase): return True
+    class Objects:
+        def read_object(self, key, *, expected_size):
+            return DownloadedObject(key, expected_size, "application/pdf", SHA, True, b"%PDF-data")
+    class Stages:
+        def run(self, current, _pdf):
+            assert entered.wait(1)
+            return ProcessingResult(
+                current, ParsedDocument(1, ()), TranslationSettings("provider", "model", "v1"),
+                (), None, (), "prepared",
+            )
+
+    try:
+        with pytest.raises(RemoteProcessingLeaseLost, match="^remote_processing_lease_lost$"):
+            RemoteProcessingWorker(
+                Jobs(), Inputs(), Objects(), Stages(), worker_id="worker", lease_seconds=1,
+                heartbeat_interval_seconds=0.01,
+            ).run_once()
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("interval", [True, 0, -1, 1, 1.1, "0.1"])
+def test_worker_rejects_unsafe_heartbeat_interval(interval):
+    with pytest.raises(ValueError, match="remote_processing_worker_config_invalid"):
+        RemoteProcessingWorker(
+            object(), object(), object(), object(), worker_id="worker", lease_seconds=1,
+            heartbeat_interval_seconds=interval,
+        )
 
 
 class Body(BytesIO):
