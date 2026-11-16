@@ -2,7 +2,8 @@
 
 2026-11-14에 Windows 합성 데이터 자동 검증을 수행했고, 2026-11-16에 실제 Windows
 Claude Desktop과 staging 웹, PostgreSQL migration·인증 API 검증을 추가했다. macOS
-Desktop→서버→웹 전체 검증은 아직 완료하지 않았으므로 #375의 전체 검증이 끝난 것으로 기록하지 않는다.
+Desktop→서버→웹 전송과 전체 출처 대조를 추가 확인했다. 실제 두 계정의 메모 API 격리 등
+남은 항목이 있으므로 #375의 전체 검증이 끝난 것으로 기록하지 않는다.
 
 ## 최신 main 반영 상태 (2026-11-16)
 
@@ -54,12 +55,14 @@ python -m pytest tests/integration/test_mcp_stdio.py -q
 - [x] 서버 migration 전체 이력(최초 신고 주체 0032 포함) 적용 확인 및 일회용 PostgreSQL에서 제품 도구 재실행 안전성 검증(#489).
 - [x] Windows Claude Desktop에서 원문/번역문 하이라이트 저장과 조회 카드 표시.
 - [x] Windows Desktop·MCP 재시작 뒤 같은 request_key 재전달과 기존 기록 반환.
-- [ ] 카드의 응답 유실 후 재시작·저장소 변경에서도 같은 키가 복원되는지 확인.
+- [x] 같은 origin·저장소 및 입력 재제공 조건의 카드 재시작 복구 확인(#500·#501).
+- [ ] origin·저장소 변경 및 계정·기기 간 복구는 별도 #502 범위로 검증.
 - [x] 실제 Desktop에서 잘못된 인용 거부·수정 revision 충돌 시 원본 보존.
 - [x] 실제 서버 전송 동의 후 같은 계정 웹 목록·상세의 내용·시각·작성 주체·상태 대조.
 - [x] 다른 계정으로 동일 상세 URL 접근 시 웹 화면 미노출 확인.
 - [x] macOS 로컬 Desktop 메모 저장·읽기 상태 재시작 검증(#485).
-- [ ] macOS Desktop→실제 서버→웹 전체 흐름 확인.
+- [x] macOS Desktop 동의→실제 서버 전송→같은 계정 웹 조회 확인.
+- [ ] 실제 다른 계정의 메모 API 격리 및 아래 남은 상태 전이 검증.
 - [x] 자동 계약: #372의 context 없는 신규 논문 `not_started`가 별도 reading-state API로 전송되고
   가짜 learning record를 만들지 않음을 확인한다. 실제 배포 환경 확인은 아래 수동 표에 남긴다.
 
@@ -188,7 +191,8 @@ context 없는 초기 `not_started` 전송, 명시적 완료 취소, 연결 실�
 재시작 자동 재시도를 확인했다. 이는 이 절의 인증 거부 행렬과 별도 실행 결과다.
 [일반 대화 재시작 복구](https://github.com/soogwon/soloLevelingPaper/issues/375#issuecomment-6911226492)는
 main `ce1b2eb`의 합성 로컬 DB 검증이며 원격 서버 검증은 아니다.
-실제 학습 시작·완료 후 질문, 늦은 완료/재전송, 메모 API 격리와 전체 출처·시각 대조는 남아 있다.
+이 시점에는 학습 시작·완료 후 질문, 늦은 완료/재전송, 메모 API 격리와 전체 출처·시각 대조가
+남아 있었다. 아래 C 후속 결과에서 완료한 범위와 현재 남은 범위를 구분한다.
 
 두 번의 실제 API 표만으로 다음 항목을 완료 처리하지 않는다.
 
@@ -199,3 +203,71 @@ main `ce1b2eb`의 합성 로컬 DB 검증이며 원격 서버 검증은 아니�
 - 실제 전송 실패 후 로컬 기록 보존·같은 승인 작업 재개와 서버 중복 방지, 실험별 설치본/배포 식별.
 
 #492의 합성 인증+실제 DB 회귀와 위 실제 자격 검증을 구분한다. #375 또는 #214를 닫지 않는다.
+
+
+## C의 macOS·staging 후속 검증 (2026-11-16)
+
+제품 소스는 main `247333441790c6dc5ad95fef2b140c03a8e05ec0`, 환경은 macOS
+26.7.1 arm64, Claude Desktop 5.11492.5 일반 대화다. Render의 마지막 성공 배포도
+동일 SHA로 확인했다. 기존 제품 Python 환경에 최신 소스를 `PYTHONPATH`로 연결한
+합성 데이터 전용 MCP이며, 새 wheel 설치 검증은 아니다.
+
+### 실제 서버 재전송·불변값·웹 대조
+
+기존에 동의하여 전송한 합성 메모 2건과 원문/번역문 하이라이트 각 1건을 사용했다.
+실제 키체인 기기 자격과 staging PostgreSQL 경계에서 확인했다.
+
+| 검증 | 결과 |
+| --- | --- |
+| 최신 reopen operation 재전송 | 200, 상태·revision 등 응답 전체 동일 |
+| reopen 뒤 이전 completed operation 지연 도착 | 409, 현재 상태 불변 |
+| 현재 CAS revision을 사용해도 오래된 source revision 전송 | 409, 현재 상태 불변 |
+| 메모/하이라이트 4건 동일 payload 재전송 | 모두 200, 같은 기록·revision 1 유지 |
+| 각 기록의 본문·선택 판본·최초 신고 주체·원래 생성 시각 변경 재전송 | 각 4가지 모두 409, 원래 요청 재전송으로 기존 기록 불변 확인 |
+| 다른 source와 미존재 paper에 각 기록 PUT | 모두 404, 공개 오류 본문 동일, 기존 기록 불변 |
+| 로그인한 웹의 메모 조회 API와 로컬 저장값 대조 | 4건 모두 본문·종류·판본·단계·신고 주체·생성/수정 시각 일치 |
+| 원문/번역문 구간 대조 | chunk·파싱/번역 revision·target·문자 범위·인용문 일치 |
+
+웹 목록/상세의 표시 검증은 앞선 macOS 실행과 연결하고, 이번에는 로그인된 웹 조회
+응답의 전체 필드를 대조했다. 다른 source 거부를 실제 다른 계정(owner)의 거부로
+간주하지 않는다. 읽기 상태 대조군은 **reading**이었으므로 completed 상태에서 늦은
+reading 전송을 막는 검증과도 구분한다.
+
+### 완료 후 실제 질문과 명시적 재열기
+
+| Desktop 공개 도구 순서 | 관찰 결과 |
+| --- | --- |
+| start_learning(v1, understand) | ready, 기존 context 반환 |
+| 명시적 완료(expected revision 3) | completed/revision 4, basis v1 |
+| 완료 후 start_learning(v1) | ready, completed/revision 4 및 시각 유지 |
+| 앱 재시작 후 상태 조회 | completed/revision 4 유지 |
+| ask_paper 실제 답변 성공 | “첫 번째 근거의 문장은 First.”, 원문 First./번역 첫째. 근거 연결 |
+| 질문 직후 상태 조회 | completed/revision 4 및 시각 불변 |
+| 없는 판본으로 start_learning | NOT_FOUND, completed/revision 4 및 시각 불변 |
+| 명시적 완료 취소(expected revision 4) | reading/revision 5, action reopen |
+| 후속 공개 조회와 SQLite 대조 | reading/revision 5, 동일 시각·basis v1 |
+
+사용자 승인 합성 원문 First./Second., 번역 첫째./둘째.와 질문을 사용했으며
+OpenAI 요청은 승인 최대 4회 중 **1회**였다. 답변은 `ok`, `structural_only`,
+`verification_history=not_used`로 표시됐고 의미 검증 완료로 간주하지 않는다.
+
+초기 합성 fixture는 가짜 임베딩 메타데이터만 있어 Chroma 검증에 실패했다.
+실제 캐시된 다국어 임베딩 모델로 합성 2청크의 벡터를 만들고 테스트 DB의 메타데이터를
+맞췄다. 이후 외부 API 허용 설정이 빠져 발생한 UPSTREAM_UNAVAILABLE도 테스트 설정을
+수정한 뒤 재검증했다. 두 초기 실패 모두 유료 API 호출 전이었고 완료 상태는 유지됐다.
+실제 PDF 등록·파싱 파이프라인을 이 fixture 준비로 대체 검증했다고 주장하지 않는다.
+
+질문 검증용 MCP에는 서버 자동 동기화를 연결하지 않았으므로 로컬 revision 4→5를
+staging에 전송한 결과로 간주하지 않는다. 임시 MCP 설정은 백업과 바이트 단위로 일치하게
+복원하고 Desktop을 재실행했다. API 키·토큰·개인 DB·모델 파일은 저장소에 포함하지 않는다.
+
+### 현재 남은 범위와 종료 판단
+
+- 실제 두 번째 계정으로 **메모 API** 조회/갱신 거부, 미존재 대상과 오류 동등성 및 소유 기록 보존 확인(A 협조 필요).
+- 실제 staging completed 상태에서 늦은 reading 전송 거부·동일 완료 operation 재생 확인.
+- 이번 완료→실제 추가 질문→완료 취소를 등록부터 연결한 단일 제품 흐름과 서버/웹 최종 상태 대조.
+- 새 wheel 및 Windows의 이번 후속 조건은 미검증으로 유지한다. 이전 Windows 증거를 대체하지 않는다.
+- #371은 A·B 합의와 165개 관련 회귀 통과 후 종료했다. 계정·기기·새 origin 간 원격 요청 키 복구는 #502로 분리했으며 현재 지원 보장에 포함하지 않는다.
+
+이번 후속 검증에서 제품 코드 결함은 새로 확인하지 않았다. #375와 상위 #214는 열어두며,
+위 남은 검증과 플랫폼 지원 범위를 합의한 뒤 종료 여부를 판단한다.
