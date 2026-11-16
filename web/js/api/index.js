@@ -92,9 +92,16 @@ export const api = {
   /** DELETE /v1/devices/{기기 ID} */
   disconnectDevice: (deviceId) => send('DELETE', `/devices/${id(deviceId)}`),
 
-  // #393: 보관 동의 계약 연결 전에는 파일 전송·처리 접수를 노출하지 않는다.
+  // #393: 등록 준비와 목적별 동의만 연결하며 파일 전송·처리 접수는 노출하지 않는다.
   createRemoteUploadIntent: (body, key) => send('POST', '/remote-uploads/intents', { body, idempotencyKey: key }),
   getRemoteUploadIntent: (intentId) => send('GET', `/remote-uploads/intents/${id(intentId)}`),
+  getRemoteUploadConsents: (intentId) => send('GET', `/remote-uploads/intents/${id(intentId)}/consents`),
+  grantRemoteUploadConsent: (intentId, purpose, noticeVersion, key) => send('POST',
+    `/remote-uploads/intents/${id(intentId)}/consents/${id(purpose)}`,
+    {body:{notice_version:noticeVersion}, idempotencyKey:key}),
+  revokeRemoteUploadConsent: (intentId, purpose, revision) => send('POST',
+    `/remote-uploads/intents/${id(intentId)}/consents/${id(purpose)}/revoke`,
+    {body:{expected_revision:revision}}),
 
   // ---------- 2. 논문 목록 ----------
   /**

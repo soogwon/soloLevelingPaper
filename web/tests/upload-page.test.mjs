@@ -19,6 +19,31 @@ function view() {
   }};
 }
 const file={name:'sample.pdf',type:'application/pdf',size:8,arrayBuffer:async()=>new TextEncoder().encode('%PDF-1.7').buffer};
+test('제품 화면은 두 동의를 구분하고 조회·고지 확인 뒤에만 각각 승인한다',async(t)=>{
+  const calls=[];let status='created';
+  const record=p=>({consent_id:id,purpose:p,revision:1,state:'current',notice_version:'v1',granted_at:'2026-01-01T00:00:00Z',revoked_at:null});
+  t.mock.method(api,'createRemoteUploadIntent',async()=>response);
+  t.mock.method(api,'getRemoteUploadIntent',async()=>({...response,status}));
+  t.mock.method(api,'getRemoteUploadConsents',async()=>({intent_id:id,notice_version:'v1',storage_notice:'<b>합성 보관 고지</b>',ai_provider_notice:'합성 AI 고지',storage:null,ai_provider:null}));
+  t.mock.method(api,'grantRemoteUploadConsent',async(...args)=>{calls.push(args);return record(args[1]);});
+  const v=view();page({view:v});const node=s=>v.querySelector(s);
+  assert.match(v.innerHTML,/PDF 보관 동의/);assert.match(v.innerHTML,/AI 전송 동의/);
+  node('[data-file]').files=[file];await node('[data-file]').events.change();
+  node('[data-agree]').checked=true;await node('[data-create]').events.click();
+  assert.equal(node('[data-grant-storage]').disabled,true);
+  await node('[data-consent-read]').events.click();
+  assert.equal(node('[data-notice-storage]').textContent,'<b>합성 보관 고지</b>');
+  assert.equal(node('[data-approve-ai_provider]').disabled,true);
+  await node('[data-grant-storage]').events.click();assert.equal(calls.length,0);
+  node('[data-approve-storage]').checked=true;node('[data-approve-storage]').events.change();
+  await node('[data-grant-storage]').events.click();assert.equal(calls[0][1],'storage');
+  assert.equal(node('[data-approve-storage]').checked,false);
+  status='verified';await node('[data-read]').events.click();await node('[data-consent-read]').events.click();
+  node('[data-approve-ai_provider]').checked=true;node('[data-approve-ai_provider]').events.change();
+  await node('[data-grant-ai_provider]').events.click();assert.equal(calls[1][1],'ai_provider');
+  listeners.get('auth:logout')();assert.equal(node('[data-notice-storage]').textContent,'');
+  assert.equal(node('[data-grant-ai_provider]').disabled,true);
+});
 test('제품 화면은 명시 동의 후에만 API로 보내고 취소·로그아웃에서 이전 표시를 지운다',async(t)=>{
   const calls=[];t.mock.method(api,'createRemoteUploadIntent',async(...args)=>{calls.push(args);return response;});
   const v=view();page({view:v});const node=s=>v.querySelector(s);
