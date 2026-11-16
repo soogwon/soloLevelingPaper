@@ -35,8 +35,8 @@ export default function uploadPage({ view }) {
         <p>AI 동의는 서버에서 PDF 검증이 완료된 뒤에만 저장할 수 있어요.
         동의 철회는 서버 파일 삭제와 다르며, 이미 전송된 요청을 되돌리지 않아요.</p>
       </section>
-      <p>현재는 동의 저장·조회·철회만 지원해요. 파일 업로드·AI 전송·학습 처리는 시작하지 않아요.</p>
-      <button class="btn" type="button" disabled>PDF 업로드 (준비 중)</button>
+      <p>보관 동의 후 아래 버튼을 누르면 PDF를 서버 저장소로 전송하고 검증해요. AI 전송·학습 처리는 시작하지 않아요.</p>
+      <button class="btn" type="button" data-upload disabled>PDF 업로드</button>
       <p class="hint">새로고침·화면 이동·로그아웃 시 이 화면의 요청 키는 지워져요. 결과가 미확정이면
       화면을 유지하고 같은 요청을 확인하세요. 새로 파일을 선택하면 별도 등록 준비가 생길 수 있어요.</p>
     </section>`);
@@ -44,23 +44,31 @@ export default function uploadPage({ view }) {
   const create = view.querySelector('[data-create]'), read = view.querySelector('[data-read]');
   const consents = createUploadConsents({api, changed:drawConsents});
   const controller = createUploadIntent({ api, changed: draw });
+  function drawUpload() {
+    const state = controller.snapshot(), consent = consents.snapshot();
+    const button = view.querySelector('[data-upload]');
+    button.disabled = CONFIG.USE_MOCK || !state.canUpload || consent.busy || consent.status !== 'ready'
+      || consent.values.storage?.state !== 'current';
+    button.textContent = state.putAttempted ? '업로드 결과 확인 (재전송 없음)' : 'PDF 업로드';
+  }
   function drawConsents(state, clearChecks = true) {
     if (!view.isConnected) return;
-    view.querySelector('[data-consent-read]').disabled = CONFIG.USE_MOCK || !state.canRead;
+    view.querySelector('[data-consent-read]').disabled = CONFIG.USE_MOCK || controller.snapshot().busy || !state.canRead;
     view.querySelector('[data-consent-status]').textContent = consentMessages[state.busy ? 'busy' : state.status];
     view.querySelector('[data-notice-version]').textContent = state.notice ? `고지 버전: ${state.notice.version}` : '';
     const labels = {current:'동의됨',stale:'고지 변경 · 재동의 필요',revoked:'철회됨'};
     for (const p of consentPurposes) {
       const check = view.querySelector(`[data-approve-${p}]`);
       if (clearChecks) check.checked = false;
-      check.disabled = CONFIG.USE_MOCK || !state.canGrant[p];
+      check.disabled = CONFIG.USE_MOCK || controller.snapshot().busy || !state.canGrant[p];
       view.querySelector(`[data-notice-${p}]`).textContent = state.notice?.[p] ?? '';
       view.querySelector(`[data-consent-${p}]`).textContent = state.notice
         ? (state.values[p] ? `${labels[state.values[p].state]} · revision ${state.values[p].revision}` : '동의 기록 없음')
         : '동의 상태 미확인';
       view.querySelector(`[data-grant-${p}]`).disabled = check.disabled || !check.checked;
-      view.querySelector(`[data-revoke-${p}]`).disabled = CONFIG.USE_MOCK || !state.canRevoke[p];
+      view.querySelector(`[data-revoke-${p}]`).disabled = CONFIG.USE_MOCK || controller.snapshot().busy || !state.canRevoke[p];
     }
+    drawUpload();
   }
   function draw(state) {
     if (!view.isConnected) return;
@@ -71,6 +79,7 @@ export default function uploadPage({ view }) {
     create.textContent = state.status === 'uncertain' && !state.intent ? '같은 등록 준비 요청 확인' : '등록 준비 저장';
     read.disabled = CONFIG.USE_MOCK || !state.canRead;
     consents.bind(state.intent ? {...state.intent, status:state.status === 'expired' ? 'expired' : state.intent.status} : null);
+    drawConsents(consents.snapshot());
   }
   const select = () => { agree.checked = false; return controller.select(input.files?.[0] ?? null); };
   input.addEventListener('change', select);
@@ -92,6 +101,11 @@ export default function uploadPage({ view }) {
       if (view.isConnected && !CONFIG.USE_MOCK) return consents.revoke(p);
     });
   }
+  view.querySelector('[data-upload]').addEventListener('click', () => {
+    if (view.isConnected && !CONFIG.USE_MOCK && !view.querySelector('[data-upload]').disabled) {
+      return controller.upload(consents.snapshot().values.storage);
+    }
+  });
   const events = ['auth:expired','auth:logout','hashchange','pagehide'];
   function dispose() {
     events.forEach(event => window.removeEventListener(event, dispose));

@@ -30,3 +30,9 @@ test('동의 조회·승인·철회는 별도 경로와 고지·revision·CSRF�
   assert.deepEqual(JSON.parse(calls[3].body),{expected_revision:7});
   for(const call of calls.slice(1))assert.equal(call.headers['X-CSRF-Token'],'test-csrf');
 });
+test('prepare·complete는 같은 의도에 웹 세션과 CSRF를 보내고 본문·새 키를 만들지 않는다',async()=>{
+  const calls=[];globalThis.fetch=async(url,options)=>{calls.push({url:String(url),...options});return {ok:true,status:200,json:async()=>({})};};
+  await api.prepareRemoteUpload('intent/id');await api.completeRemoteUpload('intent/id');
+  assert.deepEqual(calls.map(x=>x.url),['https://example.test/v1/remote-uploads/intents/intent%2Fid/prepare','https://example.test/v1/remote-uploads/intents/intent%2Fid/complete']);
+  for(const call of calls){assert.equal(call.method,'POST');assert.equal(call.credentials,'include');assert.equal(call.headers['X-CSRF-Token'],'test-csrf');assert.equal(call.body,undefined);assert.equal(call.headers['Idempotency-Key'],undefined);}
+});

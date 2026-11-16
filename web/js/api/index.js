@@ -1,5 +1,6 @@
 // 화면 코드는 이 파일의 api 객체만 사용한다.
 // 기본은 실제 백엔드이며 ?mock=1일 때만 메모리 예시 서버를 사용한다.
+import { putRemoteUpload } from './upload-transfer.js';
 import { CONFIG } from '../config.js';
 import { request, ApiError, RouteNotFoundError } from './client.js';
 
@@ -92,9 +93,12 @@ export const api = {
   /** DELETE /v1/devices/{기기 ID} */
   disconnectDevice: (deviceId) => send('DELETE', `/devices/${id(deviceId)}`),
 
-  // #393: 등록 준비와 목적별 동의만 연결하며 파일 전송·처리 접수는 노출하지 않는다.
+  // #393: 등록 준비·동의·PDF 전송을 연결하며 AI 처리 접수는 노출하지 않는다.
   createRemoteUploadIntent: (body, key) => send('POST', '/remote-uploads/intents', { body, idempotencyKey: key }),
   getRemoteUploadIntent: (intentId) => send('GET', `/remote-uploads/intents/${id(intentId)}`),
+  prepareRemoteUpload: intentId => send('POST', `/remote-uploads/intents/${id(intentId)}/prepare`),
+  completeRemoteUpload: intentId => send('POST', `/remote-uploads/intents/${id(intentId)}/complete`),
+  putRemoteUpload,
   getRemoteUploadConsents: (intentId) => send('GET', `/remote-uploads/intents/${id(intentId)}/consents`),
   grantRemoteUploadConsent: (intentId, purpose, noticeVersion, key) => send('POST',
     `/remote-uploads/intents/${id(intentId)}/consents/${id(purpose)}`,
