@@ -26,15 +26,24 @@
 ## 조회 adapter 인계
 
 `DeletionReader`와 `DeletionSnapshot`은 **C 내부 대역 포트**이며 확정된 공개 wire 계약이 아니다.
-현재 저장소에는 `request()`와 worker 메서드가 있지만 C용 owner/request-key 읽기 adapter는
-아직 없다. `request()`를 상태 조회 용도로 호출하면 삭제를 접수할 수 있으므로 사용하지 않는다.
+`PostgresRemoteDeletionStore.get_existing()`은 owner·paper·request key가 모두 일치하는
+기존 요청만 SELECT한다. 미존재 시 접수하지 않고 None을 반환한다. 접수 메서드와 달리
+다른 요청 키를 같은 논문의 기존 요청에 연결하지 않는다.
+`request()`를 상태 조회 용도로 호출하면 삭제를 접수할 수 있으므로 사용하지 않는다.
+
+`OwnerScopedDeletionReader`는 이 조회를 고정 안내에 연결한다. 인증 경계가 제공하는
+`current_owner`를 조회 전후 확인하여 다른 계정·로그아웃 시 응답을 버린다. 콜백에는
+사용자 입력이 아니라 검증된 인증 주체를 제공해야 한다. 동기 내부 adapter이므로
+HTTP 인증·기기 폐기 검사나 비동기 카드의 세션 세대 검사를 대신하지 않는다.
+같은 owner로 로그아웃·재로그인하는 전환은 구분하지 못하므로 제품 연결 때 세대 검사가 필요하다.
+공개 도구/라우트에는 아직 연결하지 않았으며 삭제 접수 권한을 새로 부여하지 않는다.
 
 - owner는 인증 경계에서 제공하며 클라이언트가 지정한 owner를 신뢰하지 않는다.
 - owner·paper·request key의 정확한 기존 요청과 현재 조회 권한을 확인한다.
 - `access_allowed`는 삭제된 자료의 본문 접근 허용이 아니라 **삭제 요청 상태 조회 권한**이다.
 - 조회는 tombstone/작업 생성, 물리 삭제 재실행, 동의 소비, 외부 호출을 일으키지 않는다.
 - `backup_erasure_confirmed`는 향후 백업 계층의 검증된 사실만 전달한다. 현재 adapter가
-  없으므로 기본 false이고, 임의 입력·시각·UI 체크로 true를 만들면 안 된다.
+  없으므로 이 adapter는 항상 false를 반환한다. 임의 입력·시각·UI 체크로 true를 만들면 안 된다.
 - 반환 안내에는 원문·원시 오류·owner/paper/request key/request ID를 넣지 않는다.
 - 계정 전환·늦은 응답 차단은 실제 비동기 카드 연결 시 추가 검증한다. 이 동기 대역으로
   Desktop 재시작이나 계정 전환 완료를 주장하지 않는다.
@@ -42,12 +51,16 @@
 ## 자동 검증
 
 ```sh
-python -m pytest tests/unit/mcp/test_deletion_guidance.py tests/unit/test_deletion_policy.py -q
+python -m pytest tests/unit/mcp/test_deletion_guidance.py tests/unit/mcp/test_deletion_status_reader.py tests/unit/test_remote_deletions.py -q
+python -m pytest tests/integration/test_deletion_status_reader_postgres.py -q
 ```
 
 서로 다른 삭제 의도, 상태별 문구, 반복 조회의 동일 키 사용, 다른 owner/대상/키 거부,
 백업 완료의 별도 확인, 모르는 상태/오류의 비식별화, 고정 문구 위조 거부를 검사한다.
-합성 데이터만 사용하며 DB·PDF·외부 API에 접근하지 않는다.
+단위 테스트는 저장소 대역을 사용한다. PostgreSQL 통합 테스트는 별도 테스트 DSN과
+임시 스키마의 합성 자료로 정확한 키 조회, 타인·다른 논문 거부, 미존재 조회의 무변경,
+반복 조회 전후 행 전체 불변을 확인한다. DSN이 없으면 skip한다.
+PDF·외부 AI API·운영 데이터에는 접근하지 않는다.
 
 ## 남은 #368 범위
 

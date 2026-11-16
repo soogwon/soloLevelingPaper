@@ -67,6 +67,18 @@ class PostgresRemoteDeletionStore:
             ).fetchone()
         return _view(row)
 
+    def get_existing(self, owner_user_id: str, paper_id: str, request_key: str) -> DeletionRequest | None:
+        """정확히 일치하는 기존 요청만 읽는다. 접수·재시도·잠금 갱신은 하지 않는다."""
+        if not all(isinstance(v, str) and v.strip() for v in (owner_user_id, paper_id, request_key)):
+            raise ValueError("remote_deletion_input_invalid")
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                """SELECT request_id,paper_id,status FROM server_deletion_requests
+                   WHERE owner_user_id=%s AND paper_id=%s AND request_key=%s""",
+                (owner_user_id, paper_id, request_key),
+            ).fetchone()
+        return None if row is None else _view(row)
+
     def claim_cleanup(self, worker_id: str, *, lease_seconds: int) -> DeletionCleanup | None:
         _lease_input(worker_id, lease_seconds)
         token = str(uuid4())
