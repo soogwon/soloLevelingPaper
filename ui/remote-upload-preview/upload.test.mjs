@@ -174,3 +174,13 @@ test('화면에서 응답 유실 후 재조회는 동일 작업 ID를 유지',as
   page.lookup('running');assert.match(page.html(),/기존 작업을 처리 중/);
   assert.equal(page.html().match(/기존 작업 ID: ([^<]+)/)[1],id);
 });
+
+// 브라우저가 같은 파일 재선택을 change로 전달해도 이전 작업을 재사용하지 않는다.
+test('화면에서 동일 파일 change 재선택 후 기존 작업 초기화',async()=>{
+  const page=await pageHarness();page.choose('same.pdf');page.upload('verified');page.lookup('running');
+  assert.match(page.html(),/기존 작업 ID:/);
+  page.choose('same.pdf');page.lookup('succeeded');
+  assert.match(page.html(),/same.pdf/);
+  assert.match(page.html(),/아직 서버로 전송하지/);
+  assert.doesNotMatch(page.html(),/기존 작업 ID:/);
+});
