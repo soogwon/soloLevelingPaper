@@ -11,7 +11,7 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from solo_leveling.application.annotations.service import AnnotationService
 from solo_leveling.infrastructure.database.schema import get_connection
 from solo_leveling.interfaces.mcp.server import MCPServices, create_server
-from solo_leveling.interfaces.mcp.annotation_tools import Segment, original_segments
+from solo_leveling.interfaces.mcp.annotation_tools import Segment, validated_segments
 from tests.unit.test_learning_persistence import setup_db, publish
 
 
@@ -57,7 +57,7 @@ def test_keyed_create_survives_mcp_restart_and_rejects_conflict(environment):
 def test_quote_length_mismatch_preserves_specific_error_code():
     segment = Segment(chunk_id='c1', start_offset=0, end_offset=5, quote_snapshot='Bad')
     with pytest.raises(ToolError, match='QUOTE_LENGTH_MISMATCH'):
-        original_segments([segment])
+        validated_segments([segment])
 
 
 def test_persistence_pagination_conflict_and_location(environment):
