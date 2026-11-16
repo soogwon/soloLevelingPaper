@@ -120,7 +120,7 @@ test('목차 제목과 메모 저장을 함께 유지하고 출처 불일치와 
   let request;
   app.callServerTool = async call => {
     request = call;
-    return {structuredContent:{outcome:'saved',annotation:{annotation_id:'a',context_id:'ctx',kind:'note',body:'내 메모'}}};
+    return {structuredContent:{outcome:'saved',annotation:{annotation_id:'a',context_id:'ctx',kind:'note',body:'내 메모',revision:1}}};
   };
   app.ontoolresult(detailPayload({section_catalog:[row],evidence:[first],keywords:[{text:'Methods'}]}));
   assert.match(el('toc-items').textContent,/Methods/);
@@ -156,7 +156,7 @@ test('저장 중 근거를 전환해도 요청 위치와 표시 목록은 섞이
   assert.equal(request.context_id, 'ctx');
   assert.deepEqual(request.segments, [{chunk_id:'c-e1', start_offset:3, end_offset:5, quote_snapshot:'😀가'}]);
   el('evidence-list').lastChild.click();
-  finish({structuredContent: {outcome:'saved', annotation: {...request, annotation_id:'a1'}}});
+  finish({structuredContent: {outcome:'saved', annotation: {...request, annotation_id:'a1', revision:1}}});
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(el('records').children.length, 0);
   el('evidence-list').firstChild.click();
@@ -222,7 +222,7 @@ test('저장 공간이 유지된 카드 재시작에서는 같은 요청 키를 
   assert.doesNotMatch(storage.key(0) + storage.getItem(storage.key(0)), /미확정 메모|c-e1/);
   const b = setup();
   b.doc.defaultView.localStorage.setItem(storage.key(0), storage.getItem(storage.key(0)));
-  const record = {...original, annotation_id:'a1'};
+  const record = {...original, annotation_id:'a1', revision:1};
   b.app.ontoolresult(detailPayload({evidence:[{...first, annotations:[record], annotation_count:1}]}));
   b.app.callServerTool = async call => {
     assert.deepEqual(call.arguments.request, original);
@@ -276,7 +276,7 @@ test('작성 주체 도입 전 미확정 요청은 이전 키와 입력을 그�
 
 test('다음 페이지의 기존 기록 재사용은 건수를 늘리지 않고 더 보기에서도 중복하지 않는다', async () => {
   const {app, el} = setup();
-  const old = {annotation_id:'old',context_id:'ctx',kind:'note',body:'수정된 메모'};
+  const old = {annotation_id:'old',context_id:'ctx',kind:'note',body:'수정된 메모',revision:2};
   app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,
     annotations:[{annotation_id:'new',kind:'note',body:'최근 메모'}],annotation_count:2,annotation_cursor:'next'})]}));
   app.callServerTool = async call => call.name === 'create_annotation'
@@ -297,7 +297,7 @@ test('번역문 하이라이트는 번역 위치·리비전을 보내고 원문 
   let request;
   app.callServerTool = async call => {
     request = call.arguments.request;
-    return {structuredContent:{outcome:'saved',annotation:{...request,annotation_id:'translation'}}};
+    return {structuredContent:{outcome:'saved',annotation:{...request,annotation_id:'translation',revision:1}}};
   };
   app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,
     translation_annotation_start:2,annotations:[],annotation_count:0})]}));
@@ -442,7 +442,7 @@ test('원문 위치가 모호해도 고유한 번역 위치는 저장할 수 있
   let request;
   app.callServerTool = async call => {
     request = call.arguments.request;
-    return {structuredContent:{outcome:'saved', annotation:{...request,annotation_id:'translation'}}};
+    return {structuredContent:{outcome:'saved', annotation:{...request,annotation_id:'translation',revision:1}}};
   };
   app.ontoolresult(detailPayload({evidence:[e]}));
   assert.equal(el('editor').disabled, false);
@@ -476,7 +476,7 @@ test('빈 저장 공간은 같은 내용도 확인 전에는 새 키를 만들�
   app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,annotations:[record],annotation_count:1})]}));
   el('note-body').value=record.body;
   let calls=0;
-  app.callServerTool=async call=>{calls++;return {structuredContent:{outcome:'saved',annotation:{...call.arguments.request,annotation_id:'new'}}};};
+  app.callServerTool=async call=>{calls++;return {structuredContent:{outcome:'saved',annotation:{...call.arguments.request,annotation_id:'new',revision:1}}};};
   await el('save-note').onclick();
   assert.equal(calls,0);
   assert.equal(doc.defaultView.localStorage.length,0);
@@ -511,5 +511,35 @@ for (const button of ['save-highlight', 'save-translation-highlight']) {
     assert.equal(calls,0);
     assert.equal(doc.defaultView.localStorage.length,0);
     assert.match(el('record-status').textContent,/전체 기록을 확인/);
+  });
+}
+
+for (const revision of [undefined, null, 0, -1, 1.5, '1', Number.MAX_SAFE_INTEGER + 1]) {
+  test(`유효하지 않은 저장 revision ${revision}은 키를 보존하고 같은 키로 복구한다`, async () => {
+    const {app, el, doc} = setup();
+    const payload = () => detailPayload({evidence:[evidence('e1',{annotation_start:0,annotations:[]})]});
+    let original;
+    app.ontoolresult(payload());
+    app.callServerTool = async call => {
+      original = call.arguments.request;
+      return {structuredContent:{outcome:'saved',annotation:{...original,annotation_id:'a1',revision}}};
+    };
+    el('note-body').value = '복구할 메모';
+    el('new-annotation').checked = true;
+    await el('save-note').onclick();
+    assert.equal(doc.defaultView.localStorage.length,1);
+    assert.equal(el('records').children.length,0);
+    assert.equal(el('editor').disabled,true);
+    app.ontoolresult(payload());
+    el('note-body').value = '복구할 메모';
+    app.callServerTool = async call => {
+      assert.deepEqual(call.arguments.request,original);
+      return {structuredContent:{outcome:'saved',reused:true,
+        annotation:{...original,annotation_id:'a1',body:'이미 수정된 현재 메모',revision:2}}};
+    };
+    await el('save-note').onclick();
+    assert.equal(doc.defaultView.localStorage.length,0);
+    assert.equal(el('records').children.length,1);
+    assert.match(el('records').textContent,/이미 수정된 현재 메모/);
   });
 }
