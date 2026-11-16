@@ -68,7 +68,7 @@ Chroma 파일은 DSN 없이 실제 로컬 어댑터 15개 사례를 실행한다
 원격 준비는 기존 임시 schema fixture를 사용하며 운영 DB를 지정하지 않는다. 기존 CI의 일회용
 PostgreSQL/pgvector에서 함께 실행할 수 있다. skip을 pgvector 통과로 기록하지 않는다.
 
-이번 로컬 확인: 신규 Chroma 15개 통과. 기존 범위 검색/hybrid·원격 계약 회귀 포함
+PR #486 작성 당시 Windows 로컬 확인: 신규 Chroma 15개 통과. 기존 범위 검색/hybrid·원격 계약 회귀 포함
 **92 passed, 16 skipped**. 실제 PostgreSQL DSN/실행기가 없어 pgvector 비교 16개는 미실행이다.
 실제 API·모델·원본 데이터 접근은 없다. 이번 단계에서 CI/실환경 통과를 주장하지 않는다.
 
@@ -89,6 +89,50 @@ macOS에서 같은 6개 테스트 파일로 재실행해 **92 passed, 16 skipped
 JUnit 결과에 최소 16개 사례가 있고 skipped/failure/error가 하나도 없어야 성공한다.
 따라서 DSN 누락으로 전부 skip되면 pytest 자체가 성공하더라도 이 단계는 실패한다.
 사례별 결과는 로그와 `pgvector-shared-contract` artifact로 보관한다.
+
+### B의 실제 pgvector 개별 CI 결과 확인 (2026-11-16)
+
+최신 main `437131e5d1c34467c4e5e0cc962c14c349a5522f`의
+[CI 실행 43808635412](https://github.com/soogwon/soloLevelingPaper/actions/runs/43808635412),
+[Python job 133105079937](https://github.com/soogwon/soloLevelingPaper/actions/runs/43808635412/job/133105079937)
+로그를 직접 확인했다. Ubuntu 24.04 / Python 3.12, 일회용 PostgreSQL 16 호환
+`pgvector/pgvector:0.8.7-pg16`, 테스트 전용 DSN을 사용하는 실행이다.
+
+`pgvector 공통 계약 개별 검증`은 **16 passed in 3.58s, 0 skipped**이며 다음 사례 각각의
+PASSED 출력을 확인했다. 두 backend 비교는 이 파일의 실제 Chroma·PostgreSQL fixture로 수행된다.
+
+| 테스트 | 개별 결과 수 |
+|---|---:|
+| 전체/페이지/섹션 범위, top1, 동점, 큰 k, strict 일반 검색, 빈 결과, 반대 벡터 | 10 passed |
+| 부분 게시에서 실패 청크 제외: top1 및 전체 ID | 2 passed |
+| 재게시 후 기존 context·출처 고정 | 1 passed |
+| 원격 owner 격리 | 1 passed |
+| 같은 단위 벡터의 네이티브 점수 차이 | 1 passed |
+| 독립 수학 기대값과 양쪽 원시 거리 비교 | 1 passed |
+
+JUnit 검사 단계가 사례 수 16개 이상과 skipped/failure/error 0건을 확인했고,
+`pgvector 공통 계약 결과 보관` 단계도 성공했다. 결과 파일은 `pgvector-shared-contract` artifact의
+`pgvector-shared-contract.xml`이다. 코드/설정은 이 확인 작업에서 변경하지 않았다.
+
+같은 job의 전체 집계는 단위 **3933 passed, 6 skipped**(69 subtests 별도),
+통합 **482 passed, 29 skipped**다. 전체 skip 29개를 위 파일의 skip으로 오해하지 않으며,
+전체 집계도 공통 계약 신규 테스트 개수로 표시하지 않는다.
+
+따라서 **실제 pgvector 공통 비교 16개는 위 CI 환경에서 확인 완료**다. 이전 Windows/macOS의
+16개 skip 기록은 당시 로컬 결과로 보존하며 로컬 PostgreSQL 성공으로 바꾸지 않는다.
+로그 조회 외에 외부 AI API·원본 DB·배포 서버에는 접근하지 않았다.
+
+### #390에서 남은 범위
+
+| 확인 범위 | 현재 증거 / 다음 담당 |
+|---|---|
+| 공통 검색 범위·순위·거리·출처·부분 게시·과거 context | 위 실제 CI 16개와 로컬 Chroma 15개. 이 구간의 pgvector 비교 미실행은 해소 |
+| strict_pages·섹션과 허용 보충 구절 | 위 strict 사례는 일반 검색만 검사. 기존 #108/B 원문 구절 검사를 실제 원격 실행에 연결한 증거는 별도 |
+| 실제 runtime의 전체 fingerprint·질의 벡터 | A+B/#391. 고정 합성 벡터로 실제 모델 품질을 판정하지 않음 |
+| 인증 owner→MCP→생성/의미 검사→원자 저장→재조회 | C 공개 연결, A 저장/원장, B runner를 같은 실행으로 검증. #395/#397/#399와 연결 |
+
+#390은 위 잔여 연결·검증 때문에 열어둔다. CI 합성 계약 통과로 원격 제품 공개나 상위 티켓
+종료를 승인하지 않는다.
 
 OAuth/MCP·원장·제공자·답변/근거 저장·인용 허용 구절의 전체 흐름이나 게시 시 vector/manifest
 집합 불일치 거부를 새로 검증한 것은 아니다. C 제품/호스트 연결, A 게시 집합 검증 위치 확인,
