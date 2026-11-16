@@ -87,7 +87,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     finally:
         pool_logger.removeFilter(suppress_details)
-    print(json.dumps({"status": "complete", **result}))
+    print(json.dumps({"status": "failed" if result["failed"] else "complete", **result}))
     return 1 if result["failed"] else 0
 
 

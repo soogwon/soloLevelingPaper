@@ -1,3 +1,4 @@
+import json
 import logging
 from unittest.mock import Mock
 
@@ -13,6 +14,14 @@ SETTINGS = {
     "OBJECT_STORAGE_ACCESS_KEY_ID": "key",
     "OBJECT_STORAGE_SECRET_ACCESS_KEY": "secret",
 }
+
+
+@pytest.mark.parametrize("failed,expected_status,exit_code", [(0, "complete", 0), (1, "failed", 1)])
+def test_main_reports_failure_consistently_with_exit_code(monkeypatch, capsys, failed, expected_status, exit_code):
+    result = {"processed": 1, "completed": 1 - failed, "failed": failed, "idle": False}
+    monkeypatch.setattr(remote_deletion_cleanup, "_run", lambda *_: result)
+    assert remote_deletion_cleanup.main(["--apply"]) == exit_code
+    assert json.loads(capsys.readouterr().out) == {"status": expected_status, **result}
 
 
 class Pool:
