@@ -156,12 +156,15 @@ class RemoteProcessingWorker:
 
     def __init__(self, jobs: JobQueue, inputs: ProcessingInputStore, objects: ObjectReader,
                  stages: ProcessingStages, *, worker_id: str, lease_seconds: int = 60,
-                 heartbeat_interval_seconds: float | None = None):
+                 heartbeat_interval_seconds: float | None = None, stages_factory=None):
         if not isinstance(worker_id, str) or not worker_id.strip() or type(lease_seconds) is not int or lease_seconds < 1:
             raise ValueError("remote_processing_worker_config_invalid")
         interval = lease_seconds / 3 if heartbeat_interval_seconds is None else heartbeat_interval_seconds
         if (type(interval) not in (int, float) or not 0 < interval < lease_seconds):
             raise ValueError("remote_processing_worker_config_invalid")
+        if stages_factory is not None and not callable(stages_factory):
+            raise ValueError("remote_processing_worker_config_invalid")
+        self.stages_factory = stages_factory
         self.jobs, self.inputs, self.objects, self.stages = jobs, inputs, objects, stages
         self.worker_id, self.lease_seconds = worker_id, lease_seconds
         self.heartbeat_interval_seconds = float(interval)
@@ -199,7 +202,21 @@ class RemoteProcessingWorker:
                 raise RemoteProcessingInputRejected("remote_processing_object_mismatch")
             if self.inputs.allowed(prepared.source, "parse") is not True:
                 raise RemoteProcessingInputRejected("remote_processing_input_rejected")
-            result = self.stages.run(prepared.source, downloaded.body)
+            def check_allowed(current, phase):
+                heartbeat.check()
+                if current != prepared.source:
+                    return False
+                allowed = self.inputs.allowed(current, phase)
+                heartbeat.check()
+                return allowed is True
+
+            # 실행별로 조립하여 다른 작업의 callback이나 heartbeat를 공유하지 않는다.
+            stages = self.stages if self.stages_factory is None else self.stages_factory(
+                prepared.source, check_allowed,
+            )
+            if not callable(getattr(stages, "run", None)):
+                raise RuntimeError("remote_processing_stages_invalid")
+            result = stages.run(prepared.source, downloaded.body)
             heartbeat.check()
             if not isinstance(result, ProcessingResult) or result.source != prepared.source:
                 raise RuntimeError("remote_processing_result_invalid")
