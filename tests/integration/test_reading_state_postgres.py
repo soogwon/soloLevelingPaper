@@ -14,6 +14,7 @@ from solo_leveling.interfaces.http import create_app
 from solo_leveling.interfaces.http.auth import AccessTokenRejected, AuthenticatedPrincipal
 from solo_leveling.interfaces.http.papers import PaperNotFound, PostgresPaperStore
 from solo_leveling.interfaces.http.reading_states import ReadingStateConflict
+from solo_leveling.interfaces.http.remote_deletions import PostgresRemoteDeletionStore
 from tests.integration.test_remote_processing_postgres import db, make_paper, pool  # noqa: F401
 
 
@@ -177,6 +178,51 @@ def test_owner_and_source_boundaries_hide_existing_reading_state(pool, db):
             )
 
     assert store.get_reading_state(owner, paper_id, source_id) == saved
+
+
+def test_deletion_tombstone_hides_and_freezes_reading_state_over_http(pool, db):
+    owner = "reading-state-deleted-owner"
+    paper_id = make_paper(db, owner)
+    source_id = str(db(
+        "SELECT source_instance_id FROM server_papers WHERE paper_id=%s", (paper_id,)
+    )[0]["source_instance_id"])
+    store = PostgresPaperStore(pool)
+    initial = request(
+        source_id, status="reading", action="start", source_revision=1)
+    saved = store.put_reading_state(owner, paper_id, initial)
+    assert saved.status == "reading" and saved.revision == 1
+
+    deletion = PostgresRemoteDeletionStore(pool).request(owner, paper_id, "reading-state-delete-key")
+    assert deletion is not None and deletion.status == "blocking"
+
+    attempted = request(
+        source_id, status="completed", action="complete",
+        expected_revision=1, source_revision=2)
+    with pytest.raises(PaperNotFound):
+        store.get_reading_state(owner, paper_id, source_id)
+    with pytest.raises(PaperNotFound):
+        store.put_reading_state(owner, paper_id, attempted)
+
+    app = create_app(
+        token_verifier=SimpleNamespace(
+            verify=lambda _: AuthenticatedPrincipal(owner, "device", "deleted-device")),
+        device_registry=SimpleNamespace(is_active=lambda *_: True),
+        paper_store=store,
+    )
+    path = f"/v1/mcp/papers/{paper_id}/reading-state"
+    headers = {"Authorization": "Bearer deleted-owner"}
+    with TestClient(app) as client:
+        read = client.get(path, params={"source_instance_id": source_id}, headers=headers)
+        write = client.put(path, json=attempted, headers=headers)
+    assert read.status_code == write.status_code == 404
+    assert read.json() == write.json() == {"detail": {"code": "paper_not_found"}}
+
+    row = db(
+        "SELECT status,revision,operation_id FROM server_paper_reading_states WHERE paper_id=%s",
+        (paper_id,),
+    )[0]
+    assert (row["status"], row["revision"], str(row["operation_id"])) == (
+        "reading", 1, initial["operation_id"])
 
 
 def test_authenticated_http_boundaries_and_conflict_preserve_state(pool, db):

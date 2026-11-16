@@ -21,7 +21,8 @@ def get_state(pool, owner, paper_id, source_id):
     from .papers import _connection, PaperNotFound
     with _connection(pool) as conn:
         if conn.execute('SELECT 1 FROM server_papers WHERE paper_id=%s AND owner_user_id=%s '
-                        'AND source_instance_id=%s', (paper_id, owner, source_id)).fetchone() is None:
+                        'AND source_instance_id=%s AND deleted_at IS NULL',
+                        (paper_id, owner, source_id)).fetchone() is None:
             raise PaperNotFound
         row = conn.execute('SELECT * FROM server_paper_reading_states WHERE paper_id=%s', (paper_id,)).fetchone()
         return _view(paper_id, row)
@@ -35,7 +36,8 @@ def put_state(pool, owner, paper_id, request):
     with _connection(pool) as conn:
         # 최초 생성도 논문 행으로 직렬화한다. 다른 계정/출처는 상태 존재를 노출하지 않는다.
         paper = conn.execute('SELECT paper_id FROM server_papers WHERE paper_id=%s AND owner_user_id=%s '
-            'AND source_instance_id=%s FOR UPDATE', (paper_id, owner, request['source_instance_id'])).fetchone()
+            'AND source_instance_id=%s AND deleted_at IS NULL FOR UPDATE',
+            (paper_id, owner, request['source_instance_id'])).fetchone()
         if paper is None:
             raise PaperNotFound
         row = conn.execute('SELECT * FROM server_paper_reading_states WHERE paper_id=%s', (paper_id,)).fetchone()

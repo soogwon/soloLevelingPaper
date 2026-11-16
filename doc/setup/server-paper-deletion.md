@@ -57,6 +57,21 @@ visibility는 호스트의 도구 노출 계약이지 HTTP 인증을 대신하�
 PostgreSQL 통합 사례는 테스트 전용 스키마에서 두 인증 클라이언트의 동일 키 재전송과 tombstone
 이후 쓰기 차단을 확인한다. **두 HTTP 클라이언트 테스트는 실제 두 기기 검증을 대신하지 않는다.**
 
+### staging 학습 상태 tombstone 후속
+
+실제 staging에서 삭제 접수·같은 키 재전송·다른 키 거부·미인증 조회 거부는 통과했으나,
+삭제 접수 뒤 학습 상태가 `reading` revision 1에서 `completed` revision 2로 변경되는 결함을 확인했다.
+원인은 학습 상태 읽기·쓰기의 논문 소유권 쿼리가 `server_papers.deleted_at`을 검사하지 않은 것이다.
+
+학습 상태 GET은 tombstone 논문을 미존재 논문과 같은 `paper_not_found`로 숨긴다. PUT은 논문 행을
+`FOR UPDATE`로 잠그면서 `deleted_at IS NULL`을 함께 검사하므로 삭제 접수와 직렬화되고, 삭제가 먼저
+커밋된 뒤에는 같은 operation 재생을 포함한 모든 상태 쓰기를 거부한다. 기존 상태 행은 물리 정리
+단계 전까지 변경하지 않으며 외부 조회만 차단한다. 실제 PostgreSQL 회귀는 삭제 요청이 `blocking`인
+상태에서 GET/PUT 404와 기존 `reading` revision 1 불변을 함께 확인한다.
+
+이 후속은 활성 저장소의 접근·처리 차단 보완이다. 실제 R2·백업 물리 삭제 또는 두 실제 기기의
+수정↔삭제 경합 검증을 완료한 것으로 해석하지 않는다.
+
 남은 제품·운영 검증:
 
 - 배포 후 합성 논문으로 실제 Desktop 카드 표시·확인·오프라인/재시작, 두 기기 수정↔삭제 경합 확인.
