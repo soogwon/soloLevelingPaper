@@ -2,8 +2,10 @@
 
 2026-11-14에 Windows 합성 데이터 자동 검증을 수행했고, 2026-11-16에 실제 Windows
 Claude Desktop과 staging 웹, PostgreSQL migration·인증 API 검증을 추가했다. macOS
-Desktop→서버→웹 전송과 전체 출처 대조를 추가 확인했다. 실제 두 계정의 메모 API 격리 등
-남은 항목이 있으므로 #375의 전체 검증이 끝난 것으로 기록하지 않는다.
+Desktop→서버→웹 전송과 전체 출처 대조를 추가 확인했다. 이후 A의 실제 두 계정 메모 API
+격리와 Windows 신규 PDF 단일 흐름도 확인했다. 현재 합의 범위의 체크리스트는 누적 근거로
+완료했으며, 아래 과거 절의 잔여 목록은 각 실행 당시 상태다. 최종 판단은 문서 마지막의
+Windows 검증·체크리스트 대조를 따른다. 사용자 요청으로 #375와 #214는 종료하지 않는다.
 
 ## 최신 main 반영 상태 (2026-11-16)
 
@@ -386,3 +388,37 @@ python -m pytest -q tests/unit/test_reading_state.py \
 
 새 PDF 등록→실제 번역/색인→학습→완료→실제 질문→동의 전송→웹→재시작→완료 취소는
 이번 macOS 실행으로 확인했다. #375와 #214는 위 남은 범위 때문에 열어둔다.
+
+
+## Windows 신규 PDF 흐름 및 최종 체크리스트 대조 (2026-11-16)
+
+[티켓 검증 결과](https://github.com/soogwon/soloLevelingPaper/issues/375#issuecomment-6913867440)
+
+### 환경
+- Windows 26H2, build 26300.9974 / Claude Desktop 5.11492.5.0 일반 대화.
+- 제품 main `4e9be39015feee3bddd1a5ac0c185f1414ae6015`, 별도 설치 wheel 0.1.0. SHA-256: `b9230d6111ab29bbe20fc769896e2d07b915900dda0d9296065a9f0e5696515e`.
+- Python 3.12.14. 실제 import가 별도 wheel 설치 경로임을 확인했습니다. 기존 Python 의존성과 모델 캐시는 재사용했으므로 새 PC 전체 설치 검증은 아닙니다.
+- 실행 시 확인한 Render 성공 배포(서버/웹): `6b89fe2643a9708e7bea6ef14d00d1a10d5f0641`. GitHub 배포 기록 기준이며 실행 인스턴스 내부 SHA 직접 조회는 아닙니다.
+- 빈 DATA_ROOT와 새 1페이지 합성 PDF. 실제 등록·파싱·번역·색인을 사용했으며 DB에 청크·번역·벡터를 주입하지 않았습니다.
+
+### 실제 통과 결과
+1. 등록 안내 카드의 외부 API 전송 범위 확인 → 동의 → ready, 원문/번역 2청크 모두 완료.
+2. 학습 시작 후 메모 생성 2회(동일 입력·request key): 최초 reused=false, 재요청 true. 같은 ID·revision 1·생성 시각, 로컬 1건 유지.
+3. 명시적 완료: reading/revision 2 → completed/revision 3. 실제 ask_paper 1회 성공 후에도 completed/revision 3·수정 시각 불변. 원문/번역 및 PDF 페이지 근거 표시. structural_only/not_used이며 의미 검증 완료는 아닙니다.
+4. 원문·번역 하이라이트 각각 저장 및 실제 카드 표시. 메모 포함 총 3건, 올바른 구간·번역 revision과 최초 신고 주체 AI 표시.
+5. 실제 전송 동의 카드 클릭 후 synced. 같은 계정 staging 웹 목록·상세에서 읽기 완료·기준 버전·기록 3건 확인.
+6. Desktop 완전 종료·재실행 후 공개 도구로 completed/revision 3, 같은 기록 3건과 기존 operation의 synced 보존 확인.
+7. 명시적 완료 취소에서만 reading/revision 4로 변경. 새 동의·동기화 후 웹도 읽는 중, 같은 기록 3건 유지.
+8. 후속 읽기 전용 대조: 로그인된 웹 메모 조회 응답과 로컬 3건의 본문·종류·단계·판본·chunk/parse/translation revision·target·코드 포인트 구간·인용·신고 주체·생성/수정 시각(마이크로초)이 일치했습니다. 실제 device GET 200의 reading/source_revision 4·basis도 로컬과 일치했습니다. 서버 자체 revision 2는 로컬 revision과 별도 증가하는 값입니다.
+
+임시 MCP 설정은 원본과 바이트 단위 일치하게 복원하고 기본 Desktop을 재실행했습니다. 임시 env의 API 키도 제거했습니다. 토큰·개인 본문·내부 계정/자료 ID는 이 코멘트에 포함하지 않습니다.
+
+### 체크리스트 대조와 제한
+- 다른 계정 메모 API 격리는 [A 최신 결과](https://github.com/soogwon/soloLevelingPaper/issues/375#issuecomment-6913216827)로 완료됐습니다.
+- 잘못된 인용·revision 충돌은 [기존 Windows](https://github.com/soogwon/soloLevelingPaper/issues/375#issuecomment-6905907126), 연결 실패 후 로컬 보존·재시작 자동 재시도는 [macOS 결과](https://github.com/soogwon/soloLevelingPaper/issues/375#issuecomment-6910469726)를 연결합니다. 실제 서버 전체 장애를 유발한 시험은 아닙니다.
+- 응답 유실 복구는 [불완전 응답 주입](https://github.com/soogwon/soloLevelingPaper/issues/375#issuecomment-6910989944) 및 [같은 일반 대화 origin에서 재시작 복구](https://github.com/soogwon/soloLevelingPaper/issues/375#issuecomment-6911226492)의 합의 범위입니다. 실제 패킷 유실이나 계정·기기·새 origin 복구를 주장하지 않습니다. 후자는 #502 별도 범위입니다.
+- completed 상태의 늦은 reading 거부·동일 operation 재생은 [기존 실제 staging 결과](https://github.com/soogwon/soloLevelingPaper/issues/375#issuecomment-6912341074)로 확인됐으며 이번에 반복하지 않았습니다.
+- [macOS 신규 PDF 흐름](https://github.com/soogwon/soloLevelingPaper/issues/375#issuecomment-6912820657)과 이번 Windows 결과를 합쳐 플랫폼 잔여를 해소했습니다.
+- 새 PC 설치, PDF 서버 업로드/웹 열기, 의미 검증은 이번 결과에 포함하지 않으며 현재 #375 필수 체크리스트에 추가하지 않습니다.
+
+현재 합의 범위에서 체크리스트 9개에 완료 근거를 연결합니다. 문서에도 Windows 결과와 최종 대조를 반영합니다. **사용자 요청에 따라 #375는 닫지 않으며, 상위 #214 종료 여부도 별도 판단합니다.**
