@@ -57,7 +57,7 @@ python -m pytest tests/integration/test_mcp_stdio.py -q
 - [ ] 카드의 응답 유실 후 재시작·저장소 변경에서도 같은 키가 복원되는지 확인.
 - [x] 실제 Desktop에서 잘못된 인용 거부·수정 revision 충돌 시 원본 보존.
 - [x] 실제 서버 전송 동의 후 같은 계정 웹 목록·상세의 내용·시각·작성 주체·상태 대조.
-- [x] 실제 다른 계정에서 동일 ID 조회 차단.
+- [x] 다른 계정으로 동일 상세 URL 접근 시 웹 화면 미노출 확인.
 - [x] macOS 로컬 Desktop 메모 저장·읽기 상태 재시작 검증(#485).
 - [ ] macOS Desktop→실제 서버→웹 전체 흐름 확인.
 - [x] 자동 계약: #372의 context 없는 신규 논문 `not_started`가 별도 reading-state API로 전송되고
@@ -89,7 +89,7 @@ Windows Claude Desktop에서 별도 `DATA_ROOT`와 공개 가능한 합성 논�
 | 읽기 완료·재시작·다시 열기 | 통과 | `reading` revision 4 → `completed` revision 5 → 재시작 후 유지 → `reading` revision 6, action `reopen` |
 | staging 서버 동기화 | 통과 | 사용자가 카드에서 전송 범위를 확인하고 승인, 작업 `d3dead07-49cc-46e6-8825-0ae695f31aec`가 `synced` |
 | 같은 계정 웹 조회 | 통과 | 논문·기준 버전·읽기 상태와 원문/번역문 하이라이트 2건, 구간·본문·최초 신고 주체 표시 일치 |
-| 다른 계정 접근 차단 | 통과 | 두 번째 테스트 계정으로 같은 상세 URL 접근 시 `기록을 찾을 수 없어요` 표시 |
+| 다른 계정 웹 화면 미노출 | 통과 | 두 번째 테스트 계정으로 같은 상세 URL 접근 시 `기록을 찾을 수 없어요` 표시. API 직접 접근 차단 검증과 구분 |
 
 staging 웹에서 원문 하이라이트 `[0, 32)`와 번역문 하이라이트 `[0, 42)`가 표시됐고,
 두 기록 모두 최초 작성 주체가 `사용자(신고)`로 보존됐다. PDF 파일·전체 추출 원문·번역문·로컬
@@ -120,3 +120,21 @@ Windows의 같은 키 재전달 성공과 macOS의 카드 키 유실은 검증 �
 다른 계정의 웹 화면 미노출은 확인된 UI 결과다. API 직접 접근의 상태 코드와
 계정·source 경계, 실제 PostgreSQL CAS/행 잠금·migration 안전성은 별도 증거가 필요하다.
 이 문서는 관찰 결과와 남은 범위를 기록하며 #371·#372·#375·#214를 자동 종료하지 않는다.
+
+## Windows 자동 통합 재검증 (2026-11-16)
+
+PR #484의 `4201bfb`를 Windows, Python 3.12.14, pytest 9.1.1에서 다시 실행했다.
+`PYTHONPATH=src`, `LOCAL_ONLY=true`, `ALLOW_EXTERNAL_API=false`, 모델 오프라인 설정을
+사용하고 별도 임시 DB 디렉터리를 지정했다.
+
+```sh
+python -m pytest tests/integration/test_annotation_reading_workflow.py -vv -p no:cacheprovider -o faulthandler_timeout=60 --basetemp <새 임시 디렉터리>
+```
+
+4개 사례 모두 통과했다(8.17초). 원문·번역문 메모 재시도와 읽기 상태 전송,
+context 없는 초기 상태 전송, 전송 실패 후 로컬 보존·같은 작업 재개를 확인했다.
+기존 anyio `BlockingPortal` 폐기 예정 경고 1건이 있었다.
+이번 실행은 실행 도구의 샌드박스 제한 밖에서 수행했으며 정지는 재현되지 않았다.
+이 결과만으로 이전 Windows 정지의 원인을 확정하거나 해결됐다고 판단하지 않는다.
+인증과 서버 저장소는 대역이므로 실제 PostgreSQL·배포 서버·Claude Desktop 화면
+검증 완료를 뜻하지 않는다.
