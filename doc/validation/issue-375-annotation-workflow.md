@@ -1,7 +1,7 @@
 # #214 후속 통합 검증 — #375
 
 2026-11-14에 Windows 합성 데이터 자동 검증을 수행했고, 2026-11-16에 실제 Windows
-Claude Desktop과 staging 웹 검증을 추가했다. PostgreSQL migration 이력 직접 확인과 macOS
+Claude Desktop과 staging 웹, PostgreSQL migration·인증 API 검증을 추가했다. macOS
 Desktop→서버→웹 전체 검증은 아직 완료하지 않았으므로 #375의 전체 검증이 끝난 것으로 기록하지 않는다.
 
 ## 최신 main 반영 상태 (2026-11-16)
@@ -46,12 +46,12 @@ python -m pytest tests/integration/test_mcp_stdio.py -q
 첫 파일은 4개 사례이며, 2026-11-16 macOS 재검증에서도 통과했다. stdio 검증은 실제 자식 프로세스의 도구 목록과
 읽기 상태 조회·완료 호출을 검사한다. 각 테스트는 임시 DB를 쓰며 실제 서버·사용자 DB를 변경하지 않는다.
 
-## 실제 환경에서 아직 해야 할 검증
+## 실제 환경 검증 체크리스트
 
-이 작업 환경에서는 PostgreSQL/배포 서버 migration을 실행하지 않았다. `psql`·`docker` 실행 파일도
-확인되지 않았다. A·B 계약 검토와 서버 배포가 선행돼야 하며 이를 완료된 것으로 기록하지 않는다.
+초기 문서 작성 환경에는 `psql`·`docker`가 없어 PostgreSQL 검증을 수행하지 못했다. 이후 staging
+읽기 전용 이력 확인과 CI 일회용 PostgreSQL의 제품 migration 도구 검증을 별도 근거로 완료했다.
 
-- [ ] 서버 migration 전체 이력(최초 신고 주체 0032 포함) 적용 및 재실행/버전 이력 확인.
+- [x] 서버 migration 전체 이력(최초 신고 주체 0032 포함) 적용 확인 및 일회용 PostgreSQL에서 제품 도구 재실행 안전성 검증(#489).
 - [x] Windows Claude Desktop에서 원문/번역문 하이라이트 저장과 조회 카드 표시.
 - [x] Windows Desktop·MCP 재시작 뒤 같은 request_key 재전달과 기존 기록 반환.
 - [ ] 카드의 응답 유실 후 재시작·저장소 변경에서도 같은 키가 복원되는지 확인.
@@ -101,6 +101,7 @@ staging 웹에서 원문 하이라이트 `[0, 32)`와 번역문 하이라이트 
 - [ ] macOS Claude Desktop에서 실제 서버 동기화와 웹 대조까지 확인한다.
 - [ ] Windows OS/Claude 버전, MCP wheel 커밋·해시, 서버·웹 배포 커밋을 회수한다. 회수 불가 시 다음 실험에서 기록한다.
 - [ ] 실제 배포 환경에서 context 없는 초기 not_started 전송, 완료 후 추가 질문, 지연된 상태 전송의 CAS 충돌을 확인한다.
+- [x] 실제 배포 환경의 device token API에서 무인증·source·owner 경계와 stale revision 충돌 후 상태 보존을 확인한다.
 
 ## 재검토와 macOS 검증의 범위 (2026-11-16)
 
@@ -138,3 +139,27 @@ context 없는 초기 상태 전송, 전송 실패 후 로컬 보존·같은 작
 이 결과만으로 이전 Windows 정지의 원인을 확정하거나 해결됐다고 판단하지 않는다.
 인증과 서버 저장소는 대역이므로 실제 PostgreSQL·배포 서버·Claude Desktop 화면
 검증 완료를 뜻하지 않는다.
+
+## 실제 staging 인증 API 검증 (2026-11-16)
+
+Render의 마지막 성공 배포가 main `f1b54a8cd53df79365decfcd99553e977d947b4f`임을
+확인한 뒤 별도 테스트 계정 2개와 기존 합성 논문으로 API를 직접 검증했다. 토큰·이메일,
+내부 owner ID, paper/source ID는 결과에 기록하지 않았다.
+
+| 요청 | 결과 |
+| --- | --- |
+| 무인증 읽기 상태 조회 | `401 authentication_required`, `WWW-Authenticate: Bearer` |
+| 소유 계정의 실제 device token 조회 | `200`, 기존 `reading`, server revision 1/source revision 6 확인 |
+| 소유 계정 device token + 임의 source | `404 paper_not_found` |
+| 소유 계정 device token + 틀린 expected revision 갱신 | `409 reading_state_conflict` |
+| 충돌 전후 재조회 | 상태·revision·source revision 전체 불변 |
+| 두 번째 계정의 실제 device token + 같은 paper/source | `404 paper_not_found` |
+
+두 번째 계정은 Native PKCE와 등록된 loopback callback으로 임시 연결했다. 자격은 메모리에만
+보관했으며 검증 직후 임시 기기를 해제했다. 기존 첫 번째 계정의 Windows 자격 저장소는
+덮어쓰지 않았다. 이 결과는 실제 Auth0→기기 등록→서버 opaque device token→FastAPI→
+staging PostgreSQL 경계의 owner/source 격리와 충돌 후 보존 증거다.
+
+남은 #375 범위는 context 없는 초기 `not_started`의 실제 배포 전송, 완료 후 실제 질문,
+같은 배포 버전의 Desktop→동의→서버→웹 재대조 및 macOS 전체 흐름이다. 이 검증만으로
+#375 또는 #214를 닫지 않는다.
