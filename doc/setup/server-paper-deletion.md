@@ -1,6 +1,6 @@
 # 서버 논문 삭제 연결과 검증 (#368)
 
-2026-11-16. 기준 main `ce1b2eb`. 기존 60/30/30 정책과 A의 삭제 저장소·worker를 재사용한다.
+2026-11-16. 기준 main `f1449d8`. 기존 60/30/30 정책과 A의 삭제 저장소·worker를 재사용한다.
 이 문서는 이번 제품 연결 범위이며, [기존 내부 안내 대역](deletion-guidance-preview.md)의
 세션 화면 제어와 실제 Desktop 인증 이벤트 연결이 완료됐다는 뜻은 아니다.
 
@@ -18,8 +18,25 @@
    사용한다. 미접수 요청은 카드의 같은 요청 재전송으로 재개하며 새 요청 키를 만들지 않는다.
 
 실행 조건: 서버 DB 마이그레이션 적용, 인증된 기기 연결, `SERVER_API_URL` 설정 및 해당 논문의
-서버 매핑이 필요하다. MCP는 기존 runtime의 설정 검사를 따른다. 서버 정리 worker의 운영 배포와
-스케줄은 이 API가 자동으로 시작하지 않는다. API만 연결하면 `blocking`에 머무를 수 있다.
+서버 매핑이 필요하다. MCP는 기존 runtime의 설정 검사를 따른다. 서버 정리 worker는 API 프로세스가
+자동으로 시작하지 않으므로 운영 scheduler에서 별도로 실행해야 한다. 실행하지 않으면 요청은
+`blocking`에 머무른다.
+
+## 삭제 worker 실행
+
+worker에는 API와 같은 `DATABASE_URL`, `OBJECT_STORAGE_ENDPOINT`, `OBJECT_STORAGE_BUCKET`,
+`OBJECT_STORAGE_ACCESS_KEY_ID`, `OBJECT_STORAGE_SECRET_ACCESS_KEY`를 주입한다. 한 번의 scheduler
+실행은 다음처럼 큐를 비우거나 최대 개수에 도달할 때까지 처리한다.
+
+```console
+solo-leveling-remote-deletion-cleanup --apply --max-jobs 100 --lease-seconds 300
+```
+
+`--apply`가 없으면 연결하거나 삭제하지 않는다. 실패한 요청은 `failed`로 남기고 같은 실행에서 바로
+재접수하지 않아 지속 장애의 hot loop를 막는다. 다음 scheduler 실행이 기존 단계 표식부터 재시도한다.
+출력은 처리·완료·실패 개수만 포함하며 DSN, 객체 key, 사용자·논문 ID는 기록하지 않는다. lease는
+각 저장소 호출의 최대 제한 시간보다 길어야 한다. 한 worker 실행이 0이 아닌 종료 코드를 반환하면
+운영 알림을 발생시키고 설정·저장소 상태를 확인한 뒤 재실행한다.
 
 ## HTTP 계약
 
@@ -80,7 +97,8 @@ PostgreSQL 통합 사례는 테스트 전용 스키마에서 두 인증 클라�
 - 실제 인증 UI의 로그아웃·같은 계정 재로그인 이벤트와 카드 폐기 연결은 아직 없다.
   서버 접근은 매번 인증하지만, 이미 표시된 상태를 즉시 지우는 호스트 동작은 검증해야 한다.
 - 웹 삭제 버튼, 로컬 자료까지 지우는 별도 확인 흐름, 계정 삭제·복구 기능은 이번 범위에 포함하지 않는다.
-- A/운영의 worker 배포·R2 정리·실패 복구 실측, 백업 만료 집행/복원 후 tombstone 재적용 및 백업
-  완료 adapter 증거가 필요하다. 시간 경과만으로 백업 삭제 완료를 추정하지 않는다.
+- 격리 DB/R2의 백업 복원 뒤 tombstone 재적용 훈련은 완료했다. A/운영의 worker scheduler 배포,
+  staging R2 정리·실패 복구 실측, 백업 만료 집행과 백업 완료 adapter 증거는 여전히 필요하다.
+  시간 경과만으로 백업 삭제 완료를 추정하지 않는다.
 
 #368은 위 실제 다중 기기·운영 증거가 모이기 전까지 닫지 않는다.
