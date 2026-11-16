@@ -1,5 +1,38 @@
 import { prepareAnnotationRequest } from './annotation-request.js';
 
+// 인증 adapter가 보유한 연결만 받는다. 모델/카드 입력으로 연결을 만들지 않는다.
+// adapter는 로그아웃·재로그인마다 새 연결 객체를 반환해야 한다.
+export function createAuthenticatedAnnotationRecovery({getConnection, ...options}) {
+  const fail = () => { throw new Error('ANNOTATION_RECOVERY_UNAVAILABLE'); };
+  return {
+    async prepare(request, settings) {
+      try {
+        const connection = getConnection();
+        if (!connection || typeof connection.send !== 'function') fail();
+        const sender = connection.send;
+        const expected = Object.fromEntries(['service','owner','session'].map(k => [k,connection[k]]));
+        function assertCurrent() {
+          if (getConnection() !== connection || connection.send !== sender
+              || Object.keys(expected).some(k => connection[k] !== expected[k])) fail();
+        }
+        const recovery = createRemoteAnnotationRecovery({...options, currentScope() {
+          assertCurrent();
+          return expected;
+        }});
+        const ticket = await recovery.prepare(request, settings);
+        if (!ticket) return null;
+        return {
+          // 호출자가 다른 sender를 끼워 넣을 수 없도록 준비 시점의 연결에 고정한다.
+          async send() {
+            return ticket.send(payload => sender.call(connection, payload, {assertCurrent}));
+          },
+          confirm() { ticket.confirm(); },
+        };
+      } catch { fail(); }
+    },
+  };
+}
+
 // C 내부 포트다. 인증된 서비스·계정·세션 세대는 호스트 adapter만 제공한다.
 // 공개 원격 도구나 서버의 멱등성·소유권 검사를 대신하지 않는다.
 export function createRemoteAnnotationRecovery({storage, crypto, locks, currentScope}) {
@@ -42,9 +75,10 @@ export function createRemoteAnnotationRecovery({storage, crypto, locks, currentS
         return await locks.request(namespace, async () => {
           same(expected);
           const scopedStorage = {
-            getItem: key => storage.getItem(namespace + key),
-            setItem: (key,value) => storage.setItem(namespace + key,value),
-            removeItem: key => storage.removeItem(namespace + key),
+            // 입력 해시 계산도 비동기다. 그 사이 인증이 바뀌면 키 읽기·쓰기부터 막는다.
+            getItem: key => { same(expected); return storage.getItem(namespace + key); },
+            setItem: (key,value) => { same(expected); storage.setItem(namespace + key,value); },
+            removeItem: key => { same(expected); storage.removeItem(namespace + key); },
           };
           const prepared = await prepareAnnotationRequest(input, scopedStorage, crypto, allowNew === true);
           same(expected);

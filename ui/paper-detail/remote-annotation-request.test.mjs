@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { prepareAnnotationRequest } from './annotation-request.js';
-import { createRemoteAnnotationRecovery } from './remote-annotation-request.js';
+import { createRemoteAnnotationRecovery, createAuthenticatedAnnotationRecovery } from './remote-annotation-request.js';
 
 const input = {context_id:'ctx',kind:'note',body:'비공개 메모',creation_origin:'unknown',segments:[]};
 function harness() {
@@ -122,4 +122,88 @@ test('JSON 직렬화에서 입력이 달라지는 빈 배열 칸과 undefined는
     const h=harness();await assert.rejects(h.make().prepare({...input,segments},{allowNew:true}));
     assert.equal(h.values.size,0);
   }
+});
+
+function authenticatedHarness() {
+  const h = harness();
+  let connection = {service:'server-a',owner:'owner-a',session:'login-1',
+    async send(request, {assertCurrent}) { assertCurrent(); return request.request_key; }};
+  const make = () => createAuthenticatedAnnotationRecovery({...h.options,getConnection:()=>connection});
+  return {...h,make,connection:()=>connection,replace:value=>{connection=value;}};
+}
+
+test('인증 연결의 sender만 사용하고 외부 sender 인자는 호출하지 않는다',async()=>{
+  const h=authenticatedHarness();const ticket=await h.make().prepare(input,{allowNew:true});
+  const result=await ticket.send(()=>assert.fail('다른 전송 함수 실행 금지'));
+  assert.equal(typeof result,'string');assert.ok(result.length>0);
+});
+
+test('연결 교체·로그아웃·연결 내부 변경은 전송과 확정을 막고 키를 보존한다',async()=>{
+  for(const mutate of [h=>h.replace(null),h=>h.replace({...h.connection()}),
+    h=>{h.connection().owner='other';},h=>{h.connection().session='new';},
+    h=>{h.connection().service='other';},h=>{h.connection().send=()=>assert.fail('변경 sender');}]) {
+    const h=authenticatedHarness();const ticket=await h.make().prepare(input,{allowNew:true});mutate(h);
+    await assert.rejects(ticket.send(),/^Error: ANNOTATION_RECOVERY_UNAVAILABLE$/);
+    assert.throws(()=>ticket.confirm(),/ANNOTATION_RECOVERY_UNAVAILABLE/);
+    assert.equal(h.values.size,1);
+  }
+});
+
+test('인증 adapter의 전송 대기 중 계정 전환은 실제 전송 전에 차단한다',async()=>{
+  const h=authenticatedHarness();let release,entered,dispatches=0;
+  const waiting=new Promise(resolve=>{entered=resolve;});
+  h.connection().send=async(request,{assertCurrent})=>{
+    entered();await new Promise(resolve=>{release=resolve;});
+    assertCurrent();dispatches++;return request.request_key;
+  };
+  const ticket=await h.make().prepare(input,{allowNew:true});const pending=ticket.send();
+  await waiting;h.replace({...h.connection(),owner:'other',session:'new'});release();
+  await assert.rejects(pending,/ANNOTATION_RECOVERY_UNAVAILABLE/);
+  assert.equal(dispatches,0);assert.equal(h.values.size,1);
+});
+
+test('전송 후 늦은 응답은 버리고 같은 계정 재로그인은 기존 키를 복구한다',async()=>{
+  const h=authenticatedHarness();let sent;
+  const connection=h.connection();
+  connection.send=async request=>{sent=request.request_key;h.replace({...connection,session:'login-2'});return {id:'private'};};
+  const ticket=await h.make().prepare(input,{allowNew:true});
+  await assert.rejects(ticket.send(),/ANNOTATION_RECOVERY_UNAVAILABLE/);
+  h.connection().send=async request=>request.request_key;
+  const retry=await h.make().prepare(input);
+  assert.equal(await retry.send(),sent);assert.equal(h.values.size,1);
+  retry.confirm();assert.equal(h.values.size,0);
+});
+
+test('인증 연결 부재·인증 조회 실패는 새 키를 만들지 않고 고정 오류로 응답한다',async()=>{
+  for(const getConnection of [()=>null,()=>({}),()=>{throw Error('token secret');}]) {
+    const h=harness();const recovery=createAuthenticatedAnnotationRecovery({...h.options,getConnection});
+    await assert.rejects(recovery.prepare(input,{allowNew:true}),/^Error: ANNOTATION_RECOVERY_UNAVAILABLE$/);
+    assert.equal(h.values.size,0);
+  }
+});
+
+test('입력 또는 구형 입력 해시 계산 중 인증 연결 변경은 키 저장 전에 거부한다',async()=>{
+  for(const changeAt of [2,3]) {
+    const h=authenticatedHarness();let digests=0;
+    h.options.crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{
+      const result=await webcrypto.subtle.digest(...args);
+      if(++digests===changeAt) h.replace({...h.connection(),session:'new-login'});
+      return result;
+    }}};
+    await assert.rejects(h.make().prepare(input,{allowNew:true}),/ANNOTATION_RECOVERY_UNAVAILABLE/);
+    assert.equal(h.values.size,0);
+  }
+});
+
+test('전송 전 키 재조회 중 연결 변경도 sender를 실행하지 않고 기존 키를 보존한다',async()=>{
+  const h=authenticatedHarness();let switchOn=false,calls=0;
+  h.connection().send=async()=>{calls++;};
+  h.options.crypto={randomUUID:()=>webcrypto.randomUUID(),subtle:{digest:async(...args)=>{
+    const result=await webcrypto.subtle.digest(...args);
+    if(switchOn) h.replace({...h.connection(),session:'new-login'});
+    return result;
+  }}};
+  const ticket=await h.make().prepare(input,{allowNew:true});switchOn=true;
+  await assert.rejects(ticket.send(),/ANNOTATION_RECOVERY_UNAVAILABLE/);
+  assert.equal(calls,0);assert.equal(h.values.size,1);
 });
