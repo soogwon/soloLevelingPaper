@@ -28,6 +28,7 @@
 
 - [중앙 HTTP 서버 실행 골격](setup/http-server.md)
 - [Render 스테이징 배포](setup/render-staging.md)
+- [원격 PDF 동의와 처리 접수](setup/remote-upload-consent-processing.md)
 - [Auth0 OIDC 설정](setup/auth0.md)
 - [외부 웹 로그인과 서버 세션](setup/web-auth-session.md)
 - [중앙 서버 인증·소유권 경계](setup/server-auth-boundary.md)

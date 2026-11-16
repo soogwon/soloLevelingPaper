@@ -124,18 +124,40 @@ class PostgresRemoteProcessingIntake:
             )
         return _view(row)
 
+    def get(self, owner_user_id: str, upload_intent_id: str) -> ProcessingAdmission | None:
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (owner_user_id, upload_intent_id)
+        ):
+            raise ValueError("remote_processing_input_invalid")
+        with self._pool.connection() as conn:
+            row = _existing(conn, owner_user_id, upload_intent_id, by_intent=True, lock=False)
+        return _view(row) if row is not None else None
 
-def _existing(conn, owner_user_id, key, *, by_intent=False):
+
+def _existing(conn, owner_user_id, key, *, by_intent=False, lock=True):
     column = "a.upload_intent_id" if by_intent else "j.request_key"
+    suffix = " FOR UPDATE OF j,a" if lock else ""
     return conn.execute(
         f"""SELECT j.job_id,j.paper_id,j.server_version_id,j.status,j.payload_hash,
                   a.upload_intent_id,a.storage_consent_id,a.ai_consent_id,a.notice_version
            FROM server_processing_jobs j
            JOIN server_processing_job_authorizations a
              ON a.owner_user_id=j.owner_user_id AND a.job_id=j.job_id
-           WHERE j.owner_user_id=%s AND {column}=%s FOR UPDATE OF j,a""",
+           WHERE j.owner_user_id=%s AND {column}=%s
+             AND EXISTS (SELECT 1 FROM server_papers p
+                 WHERE p.owner_user_id=j.owner_user_id AND p.paper_id=j.paper_id
+                   AND p.deleted_at IS NULL){suffix}""",
         (owner_user_id, key),
     ).fetchone()
+
+
+class UnavailableRemoteProcessingIntake:
+    def admit(self, *args, **kwargs):
+        raise RuntimeError("remote_processing_unavailable")
+
+    def get(self, *args, **kwargs):
+        raise RuntimeError("remote_processing_unavailable")
 
 
 def _validate_existing(row, intent_id, storage_id, ai_id, notice):

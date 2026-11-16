@@ -13,6 +13,19 @@ from solo_leveling.interfaces.http.remote_processing_intake import PostgresRemot
 pytestmark = pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'), reason='실제 PostgreSQL DSN 필요')
 
 
+def test_deleted_paper_hides_recovery_and_same_key_replay(pool, db):
+    owner, intent, storage, ai = admitted_source(pool, db)
+    intake = PostgresRemoteProcessingIntake(pool)
+    first = intake.admit(owner, intent, "deleted-key", storage, ai, "notice")
+    assert intake.get(owner, intent) == first
+    db("UPDATE server_papers SET deleted_at=CURRENT_TIMESTAMP WHERE paper_id=%s",
+       (first.paper_id,))
+    assert intake.get(owner, intent) is None
+    assert intake.admit(owner, intent, "deleted-key", storage, ai, "notice") is None
+    assert db("SELECT count(*) AS n FROM server_processing_jobs WHERE paper_id=%s",
+              (first.paper_id,))[0]["n"] == 1
+
+
 def admitted_source(pool, db):
     db("""INSERT INTO server_dispatch_controls(control_id,generation,dispatch_enabled,intake_enabled)
           VALUES ('provider_dispatch',1,true,true)
