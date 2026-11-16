@@ -21,6 +21,8 @@ class ProcessingSource:
     embedding_set_id: str
     pdf_sha256: str
     pdf_size: int
+    # 원격 worker에서만 사용한다. 로컬/합성 처리 단계는 None을 유지할 수 있다.
+    lease_token: str | None = None
 
 
 @dataclass(frozen=True)

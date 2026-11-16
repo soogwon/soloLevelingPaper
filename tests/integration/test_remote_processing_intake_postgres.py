@@ -45,7 +45,9 @@ def admitted_source(pool, db):
         def inspect_upload(self, pending):
             return StoredObject(pending.object_key, 10, 'application/pdf', 'a' * 64, True)
         def finalize_upload(self, pending):
-            return StoredObject('private/files/' + new_id() + '.pdf', 10, 'application/pdf', 'a' * 64, True)
+            # 실제 게시 adapter와 같은 owner/paper/version 경계를 보존한다.
+            prefix = pending.object_key.rsplit('/', 1)[0].replace('private/tmp/', 'private/files/', 1)
+            return StoredObject(prefix + '/' + new_id() + '.pdf', 10, 'application/pdf', 'a' * 64, True)
         def delete_upload(self, pending):
             pass
 

@@ -24,6 +24,16 @@ class StoredObject:
     pdf_header_valid: bool = True
 
 
+@dataclass(frozen=True, repr=False)
+class DownloadedObject:
+    object_key: str
+    file_size: int
+    content_type: str
+    sha256_hex: str
+    pdf_header_valid: bool
+    body: bytes
+
+
 @dataclass(frozen=True)
 class PresignedDownload:
     url: str
@@ -44,6 +54,9 @@ class UnavailableObjectStorage:
         raise RuntimeError("object_storage_unavailable")
 
     def prepare_download(self, *args, **kwargs):
+        raise RuntimeError("object_storage_unavailable")
+
+    def read_object(self, *args, **kwargs):
         raise RuntimeError("object_storage_unavailable")
 
 
@@ -80,6 +93,58 @@ class S3ObjectStorage:
 
     def inspect_upload(self, upload) -> StoredObject | None:
         return self._inspect_key(upload.object_key, upload.file_size)
+
+    def read_object(self, object_key: str, *, expected_size: int) -> DownloadedObject:
+        if (
+            not isinstance(object_key, str)
+            or not object_key.startswith("private/files/")
+            or type(expected_size) is not int
+            or expected_size < 1
+        ):
+            raise ValueError("object_read_input_invalid")
+        try:
+            response = self._client.get_object(Bucket=self._bucket, Key=object_key)
+        except Exception:
+            raise RuntimeError("object_read_failed") from None
+        body = response.get("Body")
+        digest, observed, header = sha256(), 0, b""
+        chunks, failure = [], None
+        try:
+            declared = response.get("ContentLength")
+            if type(declared) is not int or declared != expected_size:
+                failure = "object_size_mismatch"
+            else:
+                while True:
+                    chunk = body.read(min(1024 * 1024, expected_size - observed + 1))
+                    if type(chunk) is not bytes:
+                        failure = "object_read_failed"
+                        break
+                    if not chunk:
+                        break
+                    observed += len(chunk)
+                    if observed > expected_size:
+                        failure = "object_size_mismatch"
+                        break
+                    header += chunk[:5-len(header)]
+                    digest.update(chunk)
+                    chunks.append(chunk)
+        except Exception:
+            failure = "object_read_failed"
+        finally:
+            if body is not None:
+                try:
+                    body.close()
+                except Exception:
+                    # 정리 실패의 원문 오류도 공개하지 않으며 성공 결과를 반환하지 않는다.
+                    failure = failure or "object_read_failed"
+        if failure:
+            raise RuntimeError(failure) from None
+        if observed != expected_size:
+            raise RuntimeError("object_size_mismatch")
+        return DownloadedObject(
+            object_key, observed, response.get("ContentType", ""), digest.hexdigest(),
+            header == b"%PDF-", b"".join(chunks),
+        )
 
     def _inspect_key(self, object_key: str, expected_size: int) -> StoredObject | None:
         try:
