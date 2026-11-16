@@ -307,6 +307,7 @@ export function mountDetailApp(app, doc, timeoutMs = 15000) {
         const record = saved?.annotation;
         if (result?.isError || saved?.outcome !== 'saved' || record?.context_id !== data.context_id
             || record.kind !== kind || typeof record.body !== 'string' || !nonempty(record.annotation_id)
+            || !Number.isSafeInteger(record.revision) || record.revision < 1
             || (saved.reused !== true && record.body !== body)) throw new Error();
         const index = e.annotations.findIndex(item => item.annotation_id === record.annotation_id);
         if (target === 'translation') {
