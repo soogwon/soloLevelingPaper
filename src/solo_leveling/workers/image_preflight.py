@@ -31,7 +31,7 @@ def read_json(path):
 
 
 def artifact_check(folder, lock):
-    require(type(lock) is dict and lock.get('schema_version') == 1)
+    require(type(lock) is dict and type(lock.get('schema_version')) is int and lock['schema_version'] == 1)
     revision = lock.get('revision')
     require(type(revision) is str and re.fullmatch('[0-9a-f]{40}', revision))
     require(folder.name == revision and folder.is_dir() and not folder.is_symlink())
@@ -73,7 +73,7 @@ def artifact_check(folder, lock):
 
 
 def runtime_check(lock, base_ref, *, get_version=version):
-    require(type(lock) is dict and lock.get('schema_version') == 1)
+    require(type(lock) is dict and type(lock.get('schema_version')) is int and lock['schema_version'] == 1)
     require(type(base_ref) is str and re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}', base_ref))
     require(lock.get('base_image') == base_ref and lock.get('system') == platform.system() == 'Linux'
             and lock.get('machine') == platform.machine() and lock.get('python') == platform.python_version())

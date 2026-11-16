@@ -63,10 +63,10 @@ manifest는 root 소유/쓰기 불가이며 실행 UID는 65532다. 운영자가
 
 - 단위: manifest 동일성, 파일 변조·누락·추가·경로 이탈·링크·중복 키 거부,
   runtime digest/OS/CPU/Python/필수 패키지 버전 불일치.
-- Linux CI: 임시 context에서만 합성 모델과 합성 lock으로 교체해 `artifact` 대상을 실제 빌드한다.
-  정상 검사, non-root, 모델/manifest 쓰기 거부, runtime 누락 시 최종 worker 빌드 실패,
+- Linux CI: 임시 context에서만 합성 모델과 합성 lock으로 교체해 `package` 대상을 실제 빌드한다.
+  정상 검사, Python 소스만 포함(환경/PDF/HTML 제외), non-root, 모델/manifest 쓰기 거부, runtime 누락 시 최종 worker 빌드 실패,
   모델 변조 시 빌드 실패를 확인한다. 이미지 push·배포·실제 모델 다운로드/추론·AI 호출은 없다.
-- `artifact` 대상 통과는 최종 `worker` 대상 통과가 아니다. CI용 Python base digest는 운영 승인값이 아니다.
+- `artifact`/`package` 대상 통과는 최종 `worker` 대상 통과가 아니다. CI용 Python base digest는 운영 승인값이 아니다.
 
 A: Linux runtime digest/전체 의존성·운영 자원과 worker loop 연결이 남는다.
 B: 실제 artifact/loader/tokenizer/pooling/FP32·RSS/시간 검증 및 #391 ONNX 비교가 남는다.

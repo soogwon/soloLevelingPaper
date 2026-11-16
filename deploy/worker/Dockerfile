@@ -17,14 +17,32 @@ USER 65532:65532
 ENTRYPOINT ["python", "/opt/worker/image_preflight.py"]
 CMD ["--artifact-only"]
 
+# worker 코드만 포장한다. 웹/MCP 자산·환경 파일·논문은 이미지에 넣지 않는다.
+FROM artifact AS package
+USER root
+RUN --network=none --mount=type=bind,source=src/solo_leveling,target=/source,ro python - <<'PYTHON'
+from pathlib import Path
+import shutil
+source = Path('/source')
+for path in source.rglob('*.py'):
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError('WORKER_SOURCE_INVALID')
+    output = Path('/app/src/solo_leveling') / path.relative_to(source)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(path, output)
+for path in Path('/app').rglob('*'):
+    path.chmod(0o555 if path.is_dir() else 0o444)
+Path('/app').chmod(0o555)
+PYTHON
+ENV PYTHONPATH=/app/src
+USER 65532:65532
+
 # 최종 대상은 사전 준비한 Linux 런타임을 요구한다. 패키지를 즉석 설치하지 않는다.
-FROM artifact AS worker
+FROM package AS worker
 USER root
 COPY --from=worker_runtime /runtime-lock.json /opt/worker/runtime-lock.json
-COPY src/solo_leveling/ /app/src/solo_leveling/
-ENV PYTHONPATH=/app/src
 RUN --network=none python /opt/worker/image_preflight.py \
     && python -c "from solo_leveling.workers.processing_composition import create_processing_worker" \
-    && chmod -R a-w /app /opt/worker
+    && chmod -R a-w /opt/worker
 USER 65532:65532
 CMD []

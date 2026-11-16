@@ -28,6 +28,8 @@ with tempfile.TemporaryDirectory() as raw:
     model = model.rename(root / revision)
     lock['revision'] = revision
     (context / 'deploy/worker/model-lock.json').write_text(json.dumps(lock))
+    for name in ('.env', 'private.pdf', 'private.html'):
+        (context / 'src/solo_leveling' / name).write_text('synthetic-secret-sentinel')
     runtime = root / 'runtime'
     runtime.mkdir()
     (runtime / 'runtime-lock.json').write_text('{}')
@@ -37,14 +39,16 @@ with tempfile.TemporaryDirectory() as raw:
     build = ['docker', 'buildx', 'build', '--load', '--build-arg', f'WORKER_RUNTIME_IMAGE={base}',
         '--build-context', f'worker_model={model}', '--build-context', f'worker_runtime={runtime}',
         '-f', str(context / 'deploy/worker/Dockerfile'), '-t', 'slp-worker-contract', str(context)]
-    run([*build, '--target', 'artifact'])
+    run([*build, '--target', 'package'])
     output = run(['docker', 'run', '--rm', '--network=none', '--read-only', 'slp-worker-contract'])
     assert output.strip() == 'WORKER_ARTIFACT_VERIFIED'
     script = '''import os
 from pathlib import Path
 assert os.getuid() != 0
-assert not Path('/app/src').exists()
-for root in ('/opt/models', '/opt/worker'):
+assert Path('/app/src/solo_leveling/workers/processing_composition.py').is_file()
+assert all(p.suffix == '.py' for p in Path('/app').rglob('*') if p.is_file())
+assert not any(p.name == '.env' for p in Path('/app').rglob('*'))
+for root in ('/opt/models', '/opt/worker', '/app'):
     for path in (Path(root), *Path(root).rglob('*')):
         assert path.stat().st_mode & 0o222 == 0
 try:
@@ -60,4 +64,4 @@ else:
     run([*build, '--target', 'worker'], success=False)
     (model / 'config.json').write_bytes(b'[]')
     run([*build, '--target', 'artifact'], success=False)
-    print('합성 이미지: 정상/비루트/읽기 전용/누락 runtime/변조 거부 통과')
+    print('합성 이미지: 정상/소스 선별/비루트/읽기 전용/누락 runtime/변조 거부 통과')
