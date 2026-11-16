@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
-  "version": "synthetic-embedding-v2-draft",
-  "provenance": "All texts and identities are synthetic, authored for issue #391. The subject matter (lantern relay, bucket chaining, depots, convoys) is fictional and does not restate any published paper. Relevance labels await human review.",
+  "schema_version": 2,
+  "version": "synthetic-embedding-v3-reviewed",
+  "provenance": "All texts and identities are synthetic, authored for issue #391. The subject matter (lantern relay, bucket chaining, depots, convoys) is fictional and does not restate any published paper. Relevance labels revised following user approval of the B review recommendations on 2026-11-16. Numerical acceptance thresholds remain pending; no ONNX candidate results were used for this revision.",
   "chunks": [
     {
       "owner_id": "user-a",
@@ -207,10 +207,13 @@
       "section_ids": [
         "s4"
       ],
-      "required_chunk_ids": [
-        "condition"
+      "top_k": 3,
+      "required_evidence_groups": [
+        [
+          "condition"
+        ]
       ],
-      "top_k": 3
+      "evaluation_kind": "retrieval"
     },
     {
       "owner_id": "user-a",
@@ -227,10 +230,13 @@
       "section_ids": [
         "s4"
       ],
-      "required_chunk_ids": [
-        "condition"
+      "top_k": 3,
+      "required_evidence_groups": [
+        [
+          "condition"
+        ]
       ],
-      "top_k": 3
+      "evaluation_kind": "retrieval"
     },
     {
       "owner_id": "user-a",
@@ -246,10 +252,13 @@
       "section_ids": [
         "s4"
       ],
-      "required_chunk_ids": [
-        "hops"
+      "top_k": 2,
+      "required_evidence_groups": [
+        [
+          "hops"
+        ]
       ],
-      "top_k": 2
+      "evaluation_kind": "retrieval"
     },
     {
       "owner_id": "user-a",
@@ -265,10 +274,13 @@
       "section_ids": [
         "s4"
       ],
-      "required_chunk_ids": [
-        "rounds"
+      "top_k": 2,
+      "required_evidence_groups": [
+        [
+          "rounds"
+        ]
       ],
-      "top_k": 2
+      "evaluation_kind": "retrieval"
     },
     {
       "owner_id": "user-a",
@@ -285,11 +297,16 @@
       "section_ids": [
         "s4"
       ],
-      "required_chunk_ids": [
-        "continuation-head",
-        "continuation-tail"
+      "top_k": 5,
+      "required_evidence_groups": [
+        [
+          "continuation-head"
+        ],
+        [
+          "continuation-tail"
+        ]
       ],
-      "top_k": 5
+      "evaluation_kind": "connection"
     },
     {
       "owner_id": "user-a",
@@ -305,10 +322,13 @@
       "section_ids": [
         "s4"
       ],
-      "required_chunk_ids": [
-        "continuation-head"
+      "top_k": 3,
+      "required_evidence_groups": [
+        [
+          "continuation-head"
+        ]
       ],
-      "top_k": 3
+      "evaluation_kind": "retrieval"
     },
     {
       "owner_id": "user-a",
@@ -324,10 +344,13 @@
       "section_ids": [
         "s5"
       ],
-      "required_chunk_ids": [
-        "near-b"
+      "top_k": 1,
+      "required_evidence_groups": [
+        [
+          "near-b"
+        ]
       ],
-      "top_k": 1
+      "evaluation_kind": "retrieval"
     },
     {
       "owner_id": "user-a",
@@ -336,17 +359,21 @@
       "translation_revision_id": "ko-1",
       "embedding_scope": "published-1",
       "id": "korean-source",
-      "text": "가상 검색기는 어떤 언어의 질문을 연결하나요?",
+      "text": "가상 검색기는 한국어 질문을 어떤 언어의 근거와 연결하나요?",
       "pdf_pages": [
         3
       ],
       "section_ids": [
         "s2"
       ],
-      "required_chunk_ids": [
-        "korean"
+      "top_k": 1,
+      "required_evidence_groups": [
+        [
+          "korean",
+          "multilingual"
+        ]
       ],
-      "top_k": 1
+      "evaluation_kind": "retrieval"
     },
     {
       "owner_id": "user-a",
@@ -362,10 +389,14 @@
       "section_ids": [
         "s2"
       ],
-      "required_chunk_ids": [
-        "multilingual"
+      "top_k": 1,
+      "required_evidence_groups": [
+        [
+          "korean",
+          "multilingual"
+        ]
       ],
-      "top_k": 1
+      "evaluation_kind": "retrieval"
     },
     {
       "owner_id": "user-a",
@@ -381,10 +412,13 @@
       "section_ids": [
         "s6"
       ],
-      "required_chunk_ids": [
-        "long"
+      "top_k": 1,
+      "required_evidence_groups": [
+        [
+          "long"
+        ]
       ],
-      "top_k": 1
+      "evaluation_kind": "truncation_observation"
     },
     {
       "owner_id": "user-a",
@@ -398,10 +432,13 @@
       "section_ids": [
         "s4"
       ],
-      "required_chunk_ids": [
-        "condition"
+      "top_k": 4,
+      "required_evidence_groups": [
+        [
+          "condition"
+        ]
       ],
-      "top_k": 4
+      "evaluation_kind": "retrieval"
     },
     {
       "owner_id": "user-a",
@@ -417,11 +454,14 @@
       "section_ids": [
         "s4"
       ],
-      "required_chunk_ids": [
-        "condition"
+      "top_k": 2,
+      "required_evidence_groups": [
+        [
+          "condition"
+        ]
       ],
-      "top_k": 2
+      "evaluation_kind": "retrieval"
     }
   ],
-  "review_status": "draft"
+  "review_status": "reviewed"
 }
