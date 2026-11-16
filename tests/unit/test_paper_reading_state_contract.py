@@ -27,11 +27,12 @@ class SqlPool:
     def __init__(self, path):
         self.path = str(path)
         conn = sqlite3.connect(self.path)
-        conn.executescript('''CREATE TABLE server_papers(paper_id TEXT PRIMARY KEY,owner_user_id TEXT,source_instance_id TEXT);
+        conn.executescript('''CREATE TABLE server_papers(paper_id TEXT PRIMARY KEY,owner_user_id TEXT,source_instance_id TEXT,
+            deleted_at TEXT);
             CREATE TABLE server_paper_reading_states(paper_id TEXT PRIMARY KEY,status TEXT,basis_version_id TEXT,
             revision INTEGER,source_revision INTEGER,action TEXT,operation_id TEXT,request_hash TEXT,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP);''')
-        conn.execute('INSERT INTO server_papers VALUES (?,?,?)', (SERVER_PAPER_ID, 'owner', SOURCE))
+        conn.execute('INSERT INTO server_papers VALUES (?,?,?,NULL)', (SERVER_PAPER_ID, 'owner', SOURCE))
         conn.commit()
         conn.close()
 
@@ -104,6 +105,28 @@ def test_owner_and_registered_source_checked_before_replay(store):
         store.put_reading_state('other', SERVER_PAPER_ID, request)
     with pytest.raises(PaperNotFound):
         store.put_reading_state('owner', SERVER_PAPER_ID, request | {'source_instance_id':str(uuid4())})
+
+
+def test_tombstone_hides_and_freezes_existing_reading_state(store):
+    initial = body('reading', 'start')
+    saved = store.put_reading_state('owner', SERVER_PAPER_ID, initial)
+    with store._pool.connection() as conn:
+        conn.execute('UPDATE server_papers SET deleted_at=? WHERE paper_id=?',
+                     ('2026-11-16T00:00:00+00:00', SERVER_PAPER_ID))
+
+    with pytest.raises(PaperNotFound):
+        store.get_reading_state('owner', SERVER_PAPER_ID, SOURCE)
+    with pytest.raises(PaperNotFound):
+        store.put_reading_state(
+            'owner', SERVER_PAPER_ID,
+            body('completed', 'complete', source_revision=3, expected_revision=1))
+
+    with store._pool.connection() as conn:
+        row = conn.execute(
+            'SELECT status,revision,operation_id FROM server_paper_reading_states WHERE paper_id=?',
+            (SERVER_PAPER_ID,)).fetchone()
+    assert (row['status'], row['revision'], row['operation_id']) == (
+        saved.status, saved.revision, initial['operation_id'])
 
 
 def test_http_state_contract_and_safe_errors(store):
