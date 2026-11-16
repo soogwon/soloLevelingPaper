@@ -132,6 +132,9 @@ A가 소유권·업로드·작업·실행 세대를 검증하고 고정 입력�
 
 ## 오프라인 테스트
 
+B 내부 결과·오류의 공개 코드 대응은 [분류 힌트 계약](remote-processing-public-code-contract.md)에
+별도로 정리했다. 이 helper는 공개 응답·job 상태·재시도 허가를 만들지 않으며 현재 실행 경로에 연결하지 않았다.
+
 ```powershell
 New-Item -ItemType Directory -Force runtime
 python -X utf8 -m pytest tests/unit/test_remote_processing_stages.py tests/unit/test_pdf_extractor.py tests/unit/test_pdf_extractor_errors.py tests/unit/test_chunker.py tests/unit/translation tests/unit/test_gated_responses.py tests/unit/test_remote_input_dispatch.py tests/unit/test_execution_budget.py -q --basetemp=runtime/pytest-517-unit
