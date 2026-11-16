@@ -84,6 +84,9 @@ await validateRemoteUploadConsentRace({
 });
 ```
 
-실행 결과의 `final_object_published=false`는 complete 거부로 확정 게시가 성립하지 않았다는
-판정이다. R2 객체 부재를 직접 읽은 결과가 아니므로, 서버 로그에서 안전한 정리 결과를 확인하거나
-R2에서 해당 intent와 DB 참조를 대조하기 전까지 물리 객체 삭제 완료로 확대 해석하지 않는다.
+실행 결과의 `complete_rejected=true`는 complete가 지정된 409로 거부됐다는 관측이다.
+`final_object_published=not_verified`는 DB/R2의 실제 게시 여부를 확인하지 않았다는 뜻이다.
+이 클라이언트 응답만으로 확정 객체 미게시나 물리 삭제 완료를 단정하지 않는다.
+서버 로그의 안전한 정리 결과와 R2 객체·DB 참조를 별도로 대조해야 한다.
+파일·API·PUT·확인 콜백의 원본 예외는 고정 `operation_failed` 코드로 제한하며,
+확인 창 대기 뒤 주소 만료와 최종 철회 동의의 동일 ID·revision도 검사한다.

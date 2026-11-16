@@ -69,7 +69,8 @@ test('prepare 뒤 철회, PUT, complete 409, 재조회 순서를 고정한다', 
     put_completed: true,
     complete_status: 409,
     complete_code: 'remote_upload_storage_consent_required',
-    final_object_published: false,
+    complete_rejected: true,
+    final_object_published: 'not_verified',
   });
   assert.equal(JSON.stringify(result).includes('signed'), false);
 });
@@ -112,4 +113,33 @@ test('staging 이외 origin에서는 prepare를 시작하지 않는다', async (
     confirmPrepared: async () => true,
   }), /invalid_input/);
   assert.deepEqual(calls, []);
+});
+
+for (const method of ['getRemoteUploadIntent','getRemoteUploadConsents','prepareRemoteUpload',
+  'revokeRemoteUploadConsent','putRemoteUpload']) test(`${method}의 민감한 원본 오류를 내보내지 않는다`, async () => {
+  const {api} = fixture({[method]:async()=>{throw new Error('https://r2.example/secret?token=private-cookie');}});
+  await assert.rejects(validateRemoteUploadConsentRace(input({api,file:pdf(),intentId:INTENT_ID,
+    confirmPrepared:async()=>true})), error => {
+      assert.equal(error.message,'remote_upload_race_validation:operation_failed');
+      assert.equal(error.cause,undefined);assert.equal(String(error.stack).includes('private-cookie'),false);return true;
+    });
+});
+test('명시 확인 콜백의 원본 오류도 숨긴다',async()=>{
+  const {api}=fixture();
+  await assert.rejects(validateRemoteUploadConsentRace(input({api,file:pdf(),intentId:INTENT_ID,
+    confirmPrepared:async()=>{throw new Error('secret');}})),/^Error: remote_upload_race_validation:operation_failed$/);
+});
+test('확인 대기 중 URL이 만료되면 철회·PUT을 시작하지 않는다',async()=>{
+  const {api,calls}=fixture();let prepared;
+  const prepare=api.prepareRemoteUpload;
+  api.prepareRemoteUpload=async id=>{prepared=await prepare(id);return prepared;};
+  await assert.rejects(validateRemoteUploadConsentRace(input({api,file:pdf(),intentId:INTENT_ID,
+    confirmPrepared:async()=>{prepared.expires_at='2000-01-01T00:00:00Z';return true;}})),/invalid_prepare/);
+  assert.equal(calls.some(c=>['put','revoke'].includes(c[0])),false);
+});
+test('최종 재조회가 다른 철회 기록이면 성공으로 취급하지 않는다',async()=>{
+  const {api}=fixture();const read=api.getRemoteUploadConsents;
+  api.getRemoteUploadConsents=async id=>{const value=await read(id);if(value.storage.state==='revoked')value.storage.revision=2;return value;};
+  await assert.rejects(validateRemoteUploadConsentRace(input({api,file:pdf(),intentId:INTENT_ID,
+    confirmPrepared:async()=>true})),/storage_consent_changed_after_revoke/);
 });

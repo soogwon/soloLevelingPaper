@@ -2,8 +2,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PDF_BYTES = 50 * 1024 * 1024;
 const STAGING_ORIGIN = 'https://solo-leveling-staging.soogyung.com';
 
+class ValidationError extends Error {}
+
 function invalid(message) {
-  throw new Error(`remote_upload_race_validation:${message}`);
+  throw new ValidationError(`remote_upload_race_validation:${message}`);
 }
 
 function checkedIntent(value, expectedId) {
@@ -52,9 +54,19 @@ async function checkedPdf(file) {
  * 로그인된 staging 페이지의 기존 API 객체로만 실행하는 수동 경합 검증기다.
  * presigned URL, 쿠키, CSRF, owner/object key는 결과나 오류에 포함하지 않는다.
  */
-export async function validateRemoteUploadConsentRace({ api, file, intentId, confirmPrepared,
+export async function validateRemoteUploadConsentRace(options) {
+  try {
+    return await runValidation(options);
+  } catch (error) {
+    // 전송·파일·확인 콜백의 원본 오류에는 URL이나 자격 정보가 포함될 수 있다.
+    if (error instanceof ValidationError) throw error;
+    invalid('operation_failed');
+  }
+}
+
+async function runValidation({ api, file, intentId, confirmPrepared,
   origin = globalThis.location?.origin }) {
-  if (origin !== STAGING_ORIGIN || !api || !UUID.test(intentId)
+  if (origin !== STAGING_ORIGIN || !api || typeof intentId !== 'string' || !UUID.test(intentId)
       || typeof confirmPrepared !== 'function') {
     invalid('invalid_input');
   }
@@ -76,6 +88,8 @@ export async function validateRemoteUploadConsentRace({ api, file, intentId, con
   }));
   if (approved !== true) invalid('cancelled_before_revoke');
 
+  // 확인 창에서 오래 대기한 경우 철회·전송 전에 주소 만료를 다시 검사한다.
+  checkedPrepared(prepared, intentId);
   const revoked = await api.revokeRemoteUploadConsent(intentId, 'storage', before.revision);
   if (revoked?.purpose !== 'storage' || revoked?.state !== 'revoked'
       || revoked?.consent_id !== before.consent_id || revoked?.revision !== before.revision) {
@@ -96,6 +110,9 @@ export async function validateRemoteUploadConsentRace({ api, file, intentId, con
 
   const after = checkedStorageConsent(
     await api.getRemoteUploadConsents(intentId), intentId, 'revoked');
+  if (after.consent_id !== before.consent_id || after.revision !== before.revision) {
+    invalid('storage_consent_changed_after_revoke');
+  }
   const finalIntent = checkedIntent(await api.getRemoteUploadIntent(intentId), intentId);
   return Object.freeze({
     intent_id: intentId,
@@ -104,6 +121,7 @@ export async function validateRemoteUploadConsentRace({ api, file, intentId, con
     put_completed: true,
     complete_status: rejection.status,
     complete_code: rejection.code,
-    final_object_published: false,
+    complete_rejected: true,
+    final_object_published: 'not_verified',
   });
 }
