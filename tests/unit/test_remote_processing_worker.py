@@ -188,3 +188,45 @@ def test_s3_reader_stops_when_object_exceeds_expected_size():
     with pytest.raises(RuntimeError, match="object_size_mismatch"):
         S3ObjectStorage(raw, "bucket").read_object("private/files/paper.pdf", expected_size=1)
     assert raw.body.closed_by_storage
+
+
+@pytest.mark.parametrize("failure", ["read", "close", "both"])
+def test_s3_reader_sanitizes_read_and_close_errors(failure):
+    raw = S3()
+
+    class FailingBody(Body):
+        def read(self, size=-1):
+            if failure in ("read", "both"):
+                raise RuntimeError("private-signed-url-token")
+            return super().read(size)
+
+        def close(self):
+            super().close()
+            if failure in ("close", "both"):
+                raise RuntimeError("private-close-token")
+
+    raw.body = FailingBody(raw.data)
+    with pytest.raises(RuntimeError, match="^object_read_failed$"):
+        S3ObjectStorage(raw, "bucket").read_object("private/files/paper.pdf", expected_size=len(raw.data))
+    assert raw.body.closed_by_storage
+
+
+def test_s3_reader_rejects_actual_growth_even_when_declared_length_matches():
+    raw = S3()
+    raw.body = Body(raw.data + b"excess")
+    with pytest.raises(RuntimeError, match="^object_size_mismatch$"):
+        S3ObjectStorage(raw, "bucket").read_object("private/files/paper.pdf", expected_size=len(raw.data))
+    assert raw.body.closed_by_storage
+
+
+def test_s3_reader_accepts_short_reads_without_truncating_pdf_header():
+    raw = S3()
+
+    class ShortBody(Body):
+        def read(self, size=-1):
+            return super().read(min(size, 2))
+
+    raw.body = ShortBody(raw.data)
+    result = S3ObjectStorage(raw, "bucket").read_object("private/files/paper.pdf", expected_size=len(raw.data))
+    assert result.body == raw.data and result.pdf_header_valid
+    assert raw.body.closed_by_storage

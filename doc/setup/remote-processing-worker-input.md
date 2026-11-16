@@ -40,3 +40,19 @@ heartbeat 수명 관리, 안전한 실패 분류, 프로세스 종료/재시작,
 
 실제 PostgreSQL 테스트는 격리된 `SOLO_TEST_POSTGRES_DSN`이 있을 때 실행한다. 실제 R2·provider·모델,
 비공개 PDF는 이 테스트에서 사용하지 않는다.
+
+## C 재검토 보완 (2026-11-17)
+
+기존 CI Python job의 실제 실패는 PostgreSQL 테스트 2개였다. 공용 `admitted_source`
+대역이 `private/files/<임의 ID>.pdf`를 게시해 worker의 owner/paper/version 경로 검사에서
+거부됐다. 대역은 실제 `finalize_upload`처럼 임시 객체의 owner/paper/version을 보존하도록
+수정했다. 제품의 경로 검사는 완화하지 않았다.
+
+R2 byte reader의 read/close 원본 예외도 고정 코드로 제한했다. 닫기 실패는 성공으로 처리하지
+않으며 선언 길이 검사와 실제 읽은 크기 제한을 모두 유지한다. 매번 남은 크기+1 이하를 요청하고
+짧은 응답을 반복해서 읽어 PDF 헤더·본문을 보존한다.
+
+macOS 로컬: worker·큐·B 처리 단계·HTTP 업로드 및 관련 PostgreSQL 테스트 묶음에서
+**169 passed, 8 skipped**. skip 8개는 실제 PostgreSQL DSN 부재이며 CI 성공을 뜻하지 않는다.
+읽기/닫기 오류 3종, 선언 길이와 다른 실제 증가, 짧은 응답 회귀 5개를 추가했다.
+실제 R2·provider 호출은 하지 않았다. 수정본 PostgreSQL CI 재검증이 남아 있다.
