@@ -19,6 +19,39 @@ function view() {
   }};
 }
 const file={name:'sample.pdf',type:'application/pdf',size:8,arrayBuffer:async()=>new TextEncoder().encode('%PDF-1.7').buffer};
+
+test('실제 조회 어댑터와 화면이 제한 안내를 표시하고 다음 조회에서 이전 사유를 지운다',async(t)=>{
+  t.mock.method(api,'createRemoteUploadIntent',async()=>response);
+  let value={job_id:id,paper_id:id,version_id:id,status:'failed',error_code:'usage_pending',retryable:true,detail:'<script>SECRET</script>'};
+  const calls=[];
+  t.mock.method(globalThis,'fetch',async(url,options)=>{
+    calls.push({url:String(url),method:options.method});
+    assert.equal(options.method,'GET');
+    assert.ok(String(url).endsWith(`/remote-uploads/intents/${id}/processing`));
+    return {ok:true,status:200,json:async()=>value};
+  });
+  const v=view();page({view:v});const node=s=>v.querySelector(s);
+  node('[data-file]').files=[file];await node('[data-file]').events.change();
+  node('[data-agree]').checked=true;await node('[data-create]').events.click();
+  assert.equal(calls.length,0);
+  await node('[data-processing-read]').events.click();
+  assert.match(node('[data-processing-status]').textContent,/사용량과 비용을 확인 중/);
+  assert.match(node('[data-processing-status]').textContent,/미과금이나 환급이 확정된 상태가 아니며/);
+  assert.doesNotMatch(node('[data-processing-status]').textContent,/SECRET|<script>/);
+  assert.equal(node('[data-processing-read]').disabled,false);
+  value={...value,error_code:'budget_unavailable'};
+  await node('[data-processing-read]').events.click();
+  assert.match(node('[data-processing-status]').textContent,/예산 또는 사용량 한도/);
+  assert.doesNotMatch(node('[data-processing-status]').textContent,/사용량과 비용을 확인 중/);
+  value={job_id:id,paper_id:id,version_id:id,status:'failed'};
+  await node('[data-processing-read]').events.click();
+  assert.match(node('[data-processing-status]').textContent,/상세 사유는 아직 제공되지/);
+  assert.equal(calls.length,3);
+  listeners.get('auth:logout')();
+  assert.match(node('[data-processing-status]').textContent,/다시 열어/);
+  assert.equal(node('[data-processing-job]').textContent,'');
+  assert.equal(node('[data-processing-read]').disabled,true);
+});
 test('제품 화면은 두 동의를 구분하고 조회·고지 확인 뒤에만 각각 승인한다',async(t)=>{
   const calls=[];let status='created';
   const record=p=>({consent_id:id,purpose:p,revision:1,state:'current',notice_version:'v1',granted_at:'2026-01-01T00:00:00Z',revoked_at:null});

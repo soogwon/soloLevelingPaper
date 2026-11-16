@@ -1,4 +1,4 @@
-import { createProcessingStatus, processingMessages } from '../lib/processing-status.js';
+import { createProcessingStatus } from '../lib/processing-status.js';
 import { api } from '../api/index.js';
 import { CONFIG } from '../config.js';
 import { html, setHTML } from '../lib/html.js';
@@ -53,7 +53,7 @@ export default function uploadPage({ view }) {
   function drawProcessing(state) {
     if (!view.isConnected) return;
     view.querySelector('[data-processing-read]').disabled = CONFIG.USE_MOCK || !state.canRead;
-    view.querySelector('[data-processing-status]').textContent = processingMessages[state.status];
+    view.querySelector('[data-processing-status]').textContent = state.message;
     view.querySelector('[data-processing-job]').textContent = state.job ? `작업 ID: ${state.job.job_id}` : '';
   }
   const consents = createUploadConsents({api, changed:drawConsents});

@@ -16,9 +16,25 @@ export const processingMessages = {
   invalid: '서버 작업 응답을 확인할 수 없어요. 완료로 판단하지 않고 다시 조회해 주세요.',
   closed: '로그인 또는 화면이 바뀌었어요. 다시 열어 주세요.',
 };
+// 서버가 확정한 공개 코드만 표시한다. 내부 오류나 재시도 가능성을 추정하지 않는다.
+const restrictionMessages = new Map([
+  ['storage_consent_required', 'PDF 보관 동의가 필요해요. 현재 동의 안내와 상태를 확인해 주세요.'],
+  ['ai_consent_required', '외부 AI 전송 동의가 필요해요. 현재 동의 안내와 상태를 확인해 주세요.'],
+  ['budget_unavailable', '처리에 필요한 예산 또는 사용량 한도를 확보하지 못했어요. 같은 작업 상태를 다시 확인해 주세요.'],
+  ['usage_pending', '사용량과 비용을 확인 중이에요. 미과금이나 환급이 확정된 상태가 아니며, 같은 작업 상태를 다시 확인해 주세요.'],
+  ['provider_temporarily_unavailable', 'AI 제공자를 일시적으로 사용할 수 없어요. 같은 작업 상태를 다시 확인해 주세요.'],
+  ['source_validation_failed', '원본 PDF 검증에 실패했어요. 입력 파일을 확인해 주세요.'],
+  ['lease_expired', '서버 작업의 실행 권한이 만료됐어요. 같은 작업 상태를 다시 확인해 주세요.'],
+  ['processing_failed', '처리를 완료하지 못했어요. 같은 작업 상태를 다시 확인해 주세요.'],
+]);
+export function processingGuidance(status, errorCode) {
+  if (status !== 'failed') return processingMessages[status];
+  const detail = restrictionMessages.get(errorCode);
+  return detail ? `${detail} 자동으로 재접수하거나 AI 호출을 다시 시작하지 않아요.` : processingMessages.failed;
+}
 export function createProcessingStatus({api, changed = () => {}}) {
   let target = null, job = null, jobId = null, generation = 0, closed = false, busy = false, status = 'empty';
-  const snapshot = () => ({status, job:job ? {...job} : null, busy, canRead:!!target && !busy && !closed});
+  const snapshot = () => ({status, job:job ? {...job} : null, message:processingGuidance(status, job?.error_code), busy, canRead:!!target && !busy && !closed});
   const publish = () => changed(snapshot());
   return {
     snapshot,
@@ -44,6 +60,7 @@ export function createProcessingStatus({api, changed = () => {}}) {
         } else {
           jobId = value.job_id;
           job = Object.fromEntries(['job_id','paper_id','version_id','status'].map(k => [k,value[k]]));
+          if (value.status === 'failed' && restrictionMessages.has(value.error_code)) job.error_code = value.error_code;
           status = value.status;
         }
       } catch (error) {
