@@ -15,3 +15,18 @@ test('실제 API에 쿠키·CSRF·멱등 키를 보내고 조회에는 키를 �
   assert.equal(calls[1].options.method,'GET');assert.equal(calls[1].options.headers['Idempotency-Key'],undefined);
 });
 test('업로드 화면은 인증 필수 경로다',()=>{const {route}=matchRoute('/uploads');assert.notEqual(route.public,true);assert.equal(route.parent,'/papers');});
+test('동의 조회·승인·철회는 별도 경로와 고지·revision·CSRF를 보낸다',async()=>{
+  const calls=[];globalThis.fetch=async(url,options)=>{calls.push({url:String(url),...options});return {ok:true,status:200,json:async()=>({})};};
+  await api.getRemoteUploadConsents('intent');
+  await api.grantRemoteUploadConsent('intent','storage','v2','storage-key');
+  await api.grantRemoteUploadConsent('intent','ai_provider','v2','ai-key');
+  await api.revokeRemoteUploadConsent('intent','storage',7);
+  assert.deepEqual(calls.map(c=>c.url.split('/v1/')[1]),[
+    'remote-uploads/intents/intent/consents','remote-uploads/intents/intent/consents/storage',
+    'remote-uploads/intents/intent/consents/ai_provider','remote-uploads/intents/intent/consents/storage/revoke']);
+  assert.deepEqual(calls.map(c=>c.method),['GET','POST','POST','POST']);
+  assert.equal(calls[1].headers['Idempotency-Key'],'storage-key');assert.equal(calls[2].headers['Idempotency-Key'],'ai-key');
+  assert.deepEqual(JSON.parse(calls[1].body),{notice_version:'v2'});
+  assert.deepEqual(JSON.parse(calls[3].body),{expected_revision:7});
+  for(const call of calls.slice(1))assert.equal(call.headers['X-CSRF-Token'],'test-csrf');
+});
