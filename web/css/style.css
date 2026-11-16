@@ -70,6 +70,8 @@ h1, h2, h3, p { overflow-wrap: anywhere; }
 .view { padding: 40px 32px 56px; display: flex; flex-direction: column; gap: 24px; width: 100%; max-width: 1160px; }
 .view:focus { outline: none; }
 
+/* 첫 로딩 중에는 로그인 여부를 모르므로 화면 전체를 숨긴다 (로그인 전 새로고침 시 논문 화면이 잠깐 보이는 문제) */
+body.booting .app { visibility: hidden; }
 body.bare .sidebar, body.bare .topbar { display: none; }
 body.bare .view { max-width: none; padding: 0; }
 
