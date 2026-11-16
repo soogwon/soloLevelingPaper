@@ -138,3 +138,89 @@ def test_ledger_insert_failure_rolls_back_annotation_and_key_can_be_retried(pool
         db("DROP TRIGGER fail_remote_annotation_ledger ON server_annotation_create_requests")
         db("DROP FUNCTION fail_remote_annotation_ledger()")
     assert store.create(owner, "paper-detail", context_id, "rollback-key", annotation(context)).annotation
+
+
+@pytest.mark.parametrize("operation", ["replay", "delete"])
+def test_annotation_writes_wait_for_parent_before_locking_children(pool, db, context, operation):
+    """부모를 기다리는 동안 자식 잠금을 잡아 물리 삭제와 교착하지 않는다."""
+    import time
+    from threading import Event
+
+    owner, context_id, _ = context
+    store = PostgresRemoteAnnotationStore(pool)
+    value = annotation(context)
+    saved = store.create(owner, "paper-detail", context_id, "parent-key", value)
+    annotation_id = saved.annotation.annotation_id
+    started = Event()
+
+    def write():
+        started.set()
+        if operation == "delete":
+            return store.mark_deleted(owner, annotation_id)
+        return store.create(owner, "paper-detail", context_id, "parent-key", value)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with pool.connection() as parent:
+            parent.execute(
+                """SELECT p.paper_id FROM server_papers p JOIN server_execution_contexts c
+                   ON c.owner_user_id=p.owner_user_id AND c.paper_id=p.paper_id
+                   WHERE c.owner_user_id=%s AND c.context_id=%s FOR UPDATE OF p""",
+                (owner, context_id),
+            )
+            future = executor.submit(write)
+            assert started.wait(5)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if future.done():
+                    pytest.fail("부모 잠금 해제 전에 쓰기가 완료됨")
+                parent.execute("SELECT pg_stat_clear_snapshot()")
+                waiting = parent.execute(
+                    "SELECT count(*) AS n FROM pg_stat_activity WHERE pid <> pg_backend_pid() "
+                    "AND wait_event_type='Lock' AND %s=ANY(pg_blocking_pids(pid))",
+                    (parent.info.backend_pid,),
+                ).fetchone()["n"]
+                if waiting:
+                    break
+                time.sleep(0.01)
+            else:
+                pytest.fail("부모 잠금 대기 미관측")
+            parent.execute("SET LOCAL lock_timeout='1s'")
+            parent.execute(
+                "SELECT annotation_id FROM server_context_annotations "
+                "WHERE owner_user_id=%s AND annotation_id=%s FOR UPDATE NOWAIT",
+                (owner, annotation_id),
+            )
+            parent.execute(
+                "SELECT annotation_id FROM server_annotation_create_requests "
+                "WHERE owner_user_id=%s AND annotation_id=%s FOR UPDATE NOWAIT",
+                (owner, annotation_id),
+            )
+        result = future.result(timeout=5)
+    assert result is True if operation == "delete" else result.reused
+
+
+def test_replay_and_delete_converge_without_deadlock(pool, context):
+    from threading import Barrier
+
+    owner, context_id, _ = context
+    store = PostgresRemoteAnnotationStore(pool)
+    value = annotation(context)
+    saved = store.create(owner, "paper-detail", context_id, "race-key", value)
+    barrier = Barrier(2)
+
+    def replay():
+        barrier.wait(timeout=5)
+        try:
+            return store.create(owner, "paper-detail", context_id, "race-key", value).reused
+        except RemoteAnnotationDeleted:
+            return True
+
+    def delete():
+        barrier.wait(timeout=5)
+        return store.mark_deleted(owner, saved.annotation.annotation_id)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first, second = executor.submit(replay), executor.submit(delete)
+        assert first.result(timeout=10) and second.result(timeout=10)
+    with pytest.raises(RemoteAnnotationDeleted):
+        store.create(owner, "paper-detail", context_id, "race-key", value)

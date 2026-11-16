@@ -101,7 +101,8 @@ class PostgresRemoteAnnotationStore:
                value: RemoteAnnotationInput) -> RemoteAnnotationCreateResult:
         if not all(isinstance(item, str) and item for item in (owner_user_id, context_id)):
             raise ValueError("remote_annotation_scope_invalid")
-        if not _SERVICE_ID.fullmatch(service_id) or not _REQUEST_KEY.fullmatch(request_key):
+        if (not isinstance(service_id, str) or not isinstance(request_key, str)
+                or not _SERVICE_ID.fullmatch(service_id) or not _REQUEST_KEY.fullmatch(request_key)):
             raise ValueError("remote_annotation_scope_invalid")
         if not isinstance(value, RemoteAnnotationInput):
             raise ValueError("remote_annotation_input_invalid")
@@ -113,6 +114,18 @@ class PostgresRemoteAnnotationStore:
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
                 (f"{owner_user_id}\x1f{service_id}\x1f{context_id}\x1f{request_key}",),
             )
+            # 물리 삭제·메모 삭제와 같은 순서로 부모를 먼저 잠근다.
+            # 원장→메모와 메모→원장의 교차 잠금을 부모 행 아래 직렬화한다.
+            parent = conn.execute(
+                """SELECT p.paper_id FROM server_papers p
+                   JOIN server_execution_contexts c
+                     ON c.owner_user_id=p.owner_user_id AND c.paper_id=p.paper_id
+                   WHERE c.owner_user_id=%s AND c.context_id=%s AND p.deleted_at IS NULL
+                   FOR UPDATE OF p""",
+                (owner_user_id, context_id),
+            ).fetchone()
+            if parent is None:
+                raise RemoteAnnotationReferenceError("annotation_create_not_found")
             old = conn.execute(
                 """SELECT r.*,a.* FROM server_annotation_create_requests r
                    JOIN server_context_annotations a
@@ -205,6 +218,18 @@ class PostgresRemoteAnnotationStore:
         if not all(isinstance(item, str) and item for item in (owner_user_id, annotation_id)):
             raise ValueError("remote_annotation_scope_invalid")
         with self._pool.connection() as conn:
+            parent = conn.execute(
+                """SELECT p.paper_id FROM server_papers p
+                   JOIN server_execution_contexts c
+                     ON c.owner_user_id=p.owner_user_id AND c.paper_id=p.paper_id
+                   JOIN server_context_annotations a
+                     ON a.owner_user_id=c.owner_user_id AND a.context_id=c.context_id
+                   WHERE a.owner_user_id=%s AND a.annotation_id=%s
+                   FOR UPDATE OF p""",
+                (owner_user_id, annotation_id),
+            ).fetchone()
+            if parent is None:
+                return False
             row = conn.execute(
                 """UPDATE server_context_annotations
                    SET body='',segments='[]'::jsonb,deleted_at=CURRENT_TIMESTAMP,

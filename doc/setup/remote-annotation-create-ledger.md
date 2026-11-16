@@ -18,7 +18,9 @@
 4. `server_annotation_create_requests`에 입력 SHA-256과 annotation ID를 저장한다.
 
 검증 실패나 DB 오류가 나면 두 테이블 모두 rollback되므로 request key만 소비되지 않는다.
-동일 범위 요청은 transaction advisory lock으로 직렬화한다.
+동일 범위 요청은 transaction advisory lock으로 직렬화한다. 생성·재조회·메모 삭제는
+논문 부모 행을 먼저 잠근 뒤 원장/메모를 변경한다. 물리 삭제와도 부모 우선 순서를 맞춰
+원장과 메모 사이 교차 잠금을 막는다. 같은 논문의 메모 쓰기는 이 부모 잠금 아래 직렬화된다.
 
 ## 입력 지문 v1
 

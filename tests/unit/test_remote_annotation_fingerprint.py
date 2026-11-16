@@ -32,3 +32,11 @@ def test_fingerprint_keeps_segment_order_and_explicit_defaults():
 def test_unknown_origin_must_be_explicitly_supported(origin):
     with pytest.raises(ValueError):
         value(creation_origin=origin)
+
+
+@pytest.mark.parametrize("service,key", [(None, "key"), ("service", None), (1, "key"), ("service", [])])
+def test_scope_types_are_rejected_before_database_access(service, key):
+    from solo_leveling.interfaces.http.remote_annotations import PostgresRemoteAnnotationStore
+
+    with pytest.raises(ValueError, match="remote_annotation_scope_invalid"):
+        PostgresRemoteAnnotationStore(None).create("owner", service, "context", key, value())
