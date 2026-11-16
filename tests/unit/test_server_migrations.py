@@ -41,8 +41,20 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 34)]
-    assert items[-1].name == "0033_remote_upload_consents.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 35)]
+    assert items[-1].name == "0034_remote_annotation_create_requests.sql"
+
+
+def test_remote_annotation_request_ledger_is_separate_from_device_sync_identity():
+    sql = (__import__("pathlib").Path("migrations/server") /
+           "0034_remote_annotation_create_requests.sql").read_text(encoding="utf-8")
+    assert "server_context_annotations" in sql
+    assert "server_annotation_create_requests" in sql
+    assert "PRIMARY KEY (owner_user_id, service_id, context_id, request_key)" in sql
+    assert "fingerprint_version" in sql
+    assert "client_confirmed_at" in sql
+    assert "source_instance_id" not in sql
+    assert "local_annotation_id" not in sql
 
 
 def test_remote_upload_consents_bind_owner_intent_purpose_and_revision():

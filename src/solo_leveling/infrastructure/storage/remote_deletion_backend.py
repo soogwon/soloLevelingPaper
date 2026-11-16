@@ -19,6 +19,12 @@ _DERIVED_DELETES = (
     """DELETE FROM server_remote_executions e USING server_execution_contexts c
        WHERE e.owner_user_id=%s AND c.owner_user_id=e.owner_user_id
          AND c.context_id=e.context_id AND c.paper_id=%s""",
+    """DELETE FROM server_annotation_create_requests r USING server_execution_contexts c
+       WHERE r.owner_user_id=%s AND c.owner_user_id=r.owner_user_id
+         AND c.context_id=r.context_id AND c.paper_id=%s""",
+    """DELETE FROM server_context_annotations a USING server_execution_contexts c
+       WHERE a.owner_user_id=%s AND c.owner_user_id=a.owner_user_id
+         AND c.context_id=a.context_id AND c.paper_id=%s""",
     "DELETE FROM server_execution_contexts WHERE owner_user_id=%s AND paper_id=%s",
     "UPDATE server_processing_versions SET active_publication_id=NULL WHERE owner_user_id=%s AND paper_id=%s AND active_publication_id IS NOT NULL",
     "DELETE FROM server_processing_publications WHERE owner_user_id=%s AND paper_id=%s",
