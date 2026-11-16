@@ -1,0 +1,191 @@
+{
+  "title": "Attention Is All You Need 이해도 퀴즈",
+  "paper": "Vaswani et al., Attention Is All You Need (arXiv 1706.03762v7)",
+  "goal": "이해",
+  "note": "샘플: solo-leveling-quiz 기본값(10문항, 정의 4 · 관계 3 · 적용 3)으로 만든 예시입니다. 자료 없이 10분 안에 풀어 보세요.",
+  "questions": [
+    {
+      "level": "정의",
+      "type": "multiple_choice",
+      "prompt": "이 논문이 제안한 트랜스포머(Transformer)의 구조를 가장 잘 설명한 것은?",
+      "choices": [
+        "순환과 합성곱 없이 어텐션만으로 입력과 출력의 관계를 잡는 구조",
+        "RNN에 어텐션을 더해 성능을 높인 구조",
+        "합성곱 층을 깊게 쌓아 병렬 처리를 늘린 구조",
+        "인코더 없이 디코더만으로 번역하는 구조"
+      ],
+      "correct_index": 0,
+      "explanation": "논문은 순환과 합성곱을 완전히 빼고 어텐션 메커니즘에만 기대는 구조로 트랜스포머를 소개한다.",
+      "evidence": [
+        {
+          "page": 1,
+          "quote": "based solely on attention mechanisms, dispensing with recurrence and convolutions entirely"
+        }
+      ]
+    },
+    {
+      "level": "정의",
+      "type": "short_answer",
+      "prompt": "셀프 어텐션(self-attention)은 무엇과 무엇의 관계를 계산하는 어텐션인가요?",
+      "answer": "한 시퀀스 안의 서로 다른 위치들 사이의 관계",
+      "grading_criteria": "'같은 시퀀스(문장) 안의 위치끼리'라는 뜻이 있으면 정답. '입력과 출력 사이'만 쓰면 오답.",
+      "explanation": "셀프 어텐션은 하나의 시퀀스 안에서 서로 다른 위치를 연결해 그 시퀀스의 표현을 계산한다.",
+      "evidence": [
+        {
+          "page": 2,
+          "quote": "an attention mechanism relating different positions of a single sequence in order to compute a representation of the sequence"
+        }
+      ]
+    },
+    {
+      "level": "정의",
+      "type": "multiple_choice",
+      "prompt": "기본 트랜스포머의 인코더는 같은 층을 몇 개 쌓았나요?",
+      "choices": [
+        "2개",
+        "4개",
+        "6개",
+        "8개"
+      ],
+      "correct_index": 2,
+      "explanation": "인코더와 디코더 모두 같은 층 N = 6개를 쌓는다. 8은 멀티헤드 어텐션의 헤드 수다.",
+      "evidence": [
+        {
+          "page": 3,
+          "quote": "The encoder is composed of a stack of N = 6 identical layers."
+        }
+      ]
+    },
+    {
+      "level": "정의",
+      "type": "multiple_choice",
+      "prompt": "위치별 피드포워드 네트워크(position-wise feed-forward network)의 구성으로 옳은 것은?",
+      "choices": [
+        "선형 변환 두 개 사이에 ReLU 활성화",
+        "합성곱 층 세 개와 풀링",
+        "어텐션 층 두 개와 소프트맥스",
+        "선형 변환 하나와 시그모이드"
+      ],
+      "correct_index": 0,
+      "explanation": "각 위치에 따로, 똑같이 적용되는 두 개의 선형 변환이며 그 사이에 ReLU가 있다.",
+      "evidence": [
+        {
+          "page": 5,
+          "quote": "This consists of two linear transformations with a ReLU activation in between."
+        }
+      ]
+    },
+    {
+      "level": "관계",
+      "type": "multiple_choice",
+      "prompt": "스케일드 닷-프로덕트 어텐션에서 내적을 sqrt(d_k)로 나누는 이유로 논문이 제시한 것은?",
+      "choices": [
+        "계산량을 줄이기 위해",
+        "출력 차원을 d_v에 맞추기 위해",
+        "학습률 조정을 대신하기 위해",
+        "d_k가 크면 내적 값이 커져 소프트맥스 기울기가 매우 작아지는 것을 막기 위해"
+      ],
+      "correct_index": 3,
+      "explanation": "d_k가 크면 내적의 크기가 커져 소프트맥스가 기울기가 극히 작은 영역으로 밀린다고 추정하고, 이를 상쇄하려고 나눈다.",
+      "evidence": [
+        {
+          "page": 4,
+          "quote": "the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients"
+        }
+      ]
+    },
+    {
+      "level": "관계",
+      "type": "short_answer",
+      "prompt": "RNN 대신 어텐션만 쓰면 학습 속도 면에서 어떤 이점이 있다고 논문은 설명하나요? RNN의 어떤 성질과 관련 있는지 함께 쓰세요.",
+      "answer": "RNN은 위치를 순서대로 계산해 한 예제 안에서 병렬 처리가 안 되지만, 트랜스포머는 이 순차 계산이 없어 훨씬 많이 병렬화할 수 있다.",
+      "grading_criteria": "'RNN의 순차 계산(순서대로 계산)'과 '병렬화가 가능해짐' 두 요소가 모두 있으면 정답, 하나만 있으면 부분 점수.",
+      "explanation": "RNN은 이전 은닉 상태에 의존해 순서대로 계산하므로 병렬화가 막히고, 트랜스포머는 이를 없애 병렬화를 크게 늘린다.",
+      "evidence": [
+        {
+          "page": 2,
+          "quote": "This inherently sequential nature precludes parallelization within training examples"
+        },
+        {
+          "page": 2,
+          "quote": "The Transformer allows for significantly more parallelization"
+        }
+      ]
+    },
+    {
+      "level": "관계",
+      "type": "multiple_choice",
+      "prompt": "멀티헤드 어텐션을 쓰는 이유로 논문이 든 것은?",
+      "choices": [
+        "헤드 하나보다 전체 계산 비용을 크게 줄일 수 있어서",
+        "위치 인코딩 없이도 순서를 알 수 있어서",
+        "서로 다른 표현 부분 공간의 정보를 서로 다른 위치에서 동시에 참고할 수 있어서",
+        "디코더에서 미래 단어를 가릴 수 있어서"
+      ],
+      "correct_index": 2,
+      "explanation": "멀티헤드는 여러 표현 부분 공간을 동시에 보게 해 준다. 헤드 하나면 평균을 내는 과정에서 이것이 막힌다. 계산 비용은 헤드 하나와 비슷하다고 한다.",
+      "evidence": [
+        {
+          "page": 5,
+          "quote": "Multi-head attention allows the model to jointly attend to information from different representation subspaces at different positions."
+        }
+      ]
+    },
+    {
+      "level": "적용",
+      "type": "short_answer",
+      "prompt": "순환도 합성곱도 없는 트랜스포머에 단어의 순서 정보를 알려 주려면 입력에 무엇을 더하나요? 논문이 고른 방식도 함께 쓰세요.",
+      "answer": "위치 인코딩(positional encoding). 서로 다른 주파수의 사인·코사인 함수를 쓴다.",
+      "grading_criteria": "'위치 인코딩(위치 임베딩)'이면 정답. 사인·코사인(sinusoid)까지 쓰면 만점, 위치 인코딩만 쓰면 부분 점수.",
+      "explanation": "순서 정보를 주려고 인코더·디코더 입력 임베딩에 위치 인코딩을 더하고, 서로 다른 주파수의 사인·코사인 함수를 쓴다.",
+      "evidence": [
+        {
+          "page": 6,
+          "quote": "we add \"positional encodings\" to the input embeddings at the bottoms of the encoder and decoder stacks"
+        },
+        {
+          "page": 6,
+          "quote": "we use sine and cosine functions of different frequencies"
+        }
+      ]
+    },
+    {
+      "level": "적용",
+      "type": "multiple_choice",
+      "prompt": "번역 모델의 디코더가 i번째 단어를 예측할 때 i번째 이후 단어를 보지 못하게 하려면, 논문의 방식대로 어디에 무엇을 해야 하나요?",
+      "choices": [
+        "인코더 출력에 드롭아웃을 더 세게 건다",
+        "위치 인코딩을 디코더에서만 뺀다",
+        "헤드 수를 1개로 줄인다",
+        "소프트맥스 입력에서 허용되지 않는 연결의 값을 -∞로 가린다(마스킹)"
+      ],
+      "correct_index": 3,
+      "explanation": "자기회귀 성질을 지키려고 스케일드 닷-프로덕트 어텐션 안에서, 소프트맥스 입력 중 허용되지 않는 연결을 -∞로 마스킹한다.",
+      "evidence": [
+        {
+          "page": 5,
+          "quote": "We implement this inside of scaled dot-product attention by masking out (setting to −∞) all values in the input of the softmax which correspond to illegal connections."
+        }
+      ]
+    },
+    {
+      "level": "적용",
+      "type": "multiple_choice",
+      "prompt": "다른 사람이 '트랜스포머는 영어→독일어 번역에서 기존 최고 결과를 앙상블까지 포함해 앞섰다'고 발표했습니다. 이 주장을 확인하려면 논문의 어느 결과를 보면 되나요?",
+      "choices": [
+        "6.3절 영어 구문 분석 표 4",
+        "6.1절 기계 번역 결과와 표 2 (Transformer (big) 28.4 BLEU)",
+        "4절 표 1의 층별 계산 복잡도",
+        "5.3절 옵티마이저 학습률 식"
+      ],
+      "correct_index": 1,
+      "explanation": "6.1절은 big 모델이 영어→독일어에서 앙상블을 포함한 기존 최고 모델보다 2.0 BLEU 이상 높은 28.4 BLEU를 냈다고 쓰고, 표 2에 비교가 정리되어 있다.",
+      "evidence": [
+        {
+          "page": 8,
+          "quote": "outperforms the best previously reported models (including ensembles) by more than 2.0 BLEU, establishing a new state-of-the-art BLEU score of 28.4"
+        }
+      ]
+    }
+  ]
+}

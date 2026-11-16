@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<!-- 수식: 인터넷이 되면 KaTeX로 그리고, 안 되면 원문 TeX를 그대로 보여 준다. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d232b; --muted: #5d6673; --line: #e3e0d8;
+  --accent: #1f6f78; --accent-soft: #e4f1f1; --evidence: #f6f1e4; --evidence-line: #c9a64a;
+  --tip: #eef3fb; --tip-line: #5b7fbf; --code: #f1efe9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15181c; --surface: #1c2026; --ink: #e8e6e1; --muted: #a2a9b3; --line: #2e343c;
+    --accent: #6cc3cb; --accent-soft: #1e3335; --evidence: #2a2619; --evidence-line: #b8963e;
+    --tip: #1b2433; --tip-line: #7c9ad1; --code: #242a31;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.75 "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+  word-break: keep-all; overflow-wrap: anywhere;
+}
+.layout { display: grid; grid-template-columns: 240px minmax(0, 760px); gap: 48px; max-width: 1080px; margin: 0 auto; padding: 48px 24px 96px; }
+nav.toc { position: sticky; top: 24px; align-self: start; font-size: 14px; line-height: 1.5; }
+nav.toc .label { font-size: 12px; letter-spacing: .08em; color: var(--muted); margin-bottom: 10px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; border-left: 2px solid var(--line); }
+nav.toc li a { display: block; padding: 6px 0 6px 14px; color: var(--muted); text-decoration: none; margin-left: -2px; border-left: 2px solid transparent; }
+nav.toc li a:hover { color: var(--accent); border-left-color: var(--accent); }
+header.cover { border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 36px; }
+.eyebrow { color: var(--accent); font-size: 13px; font-weight: 600; letter-spacing: .06em; }
+h1 { font-size: 34px; line-height: 1.3; margin: 8px 0 14px; letter-spacing: -.01em; }
+.paper { color: var(--muted); margin: 0 0 18px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.meta li { background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 3px 12px; font-size: 13px; }
+section.block { margin: 0 0 44px; }
+h2 { font-size: 24px; line-height: 1.4; margin: 0 0 6px; scroll-margin-top: 24px; }
+h2 .num { color: var(--accent); margin-right: 8px; }
+.lede { color: var(--muted); margin: 0 0 18px; }
+h3 { font-size: 18px; margin: 26px 0 8px; }
+p { margin: 0 0 14px; }
+ul.plain { margin: 0 0 14px; padding-left: 22px; }
+code { background: var(--code); padding: 1px 6px; border-radius: 4px; font-size: .92em; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin: 0 0 16px; }
+.objectives li { margin-bottom: 6px; }
+ol.path { counter-reset: step; list-style: none; padding: 0; margin: 0; }
+ol.path li { position: relative; padding: 0 0 16px 44px; }
+ol.path li::before { counter-increment: step; content: counter(step); position: absolute; left: 0; top: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--surface); font-size: 14px; display: grid; place-items: center; font-weight: 600; }
+ol.path li:not(:last-child)::after { content: ""; position: absolute; left: 13px; top: 30px; bottom: 2px; width: 2px; background: var(--line); }
+ol.path .why { color: var(--muted); font-size: 14px; display: block; }
+.evidence { background: var(--evidence); border-left: 3px solid var(--evidence-line); border-radius: 0 8px 8px 0; padding: 12px 16px; margin: 0 0 16px; }
+.evidence .where { font-size: 13px; font-weight: 600; color: var(--muted); }
+.evidence blockquote { margin: 6px 0; font-family: Georgia, "Times New Roman", serif; font-style: italic; }
+.tip { background: var(--tip); border-left: 3px solid var(--tip-line); border-radius: 0 8px 8px 0; padding: 12px 16px; margin: 0 0 16px; }
+.tip .tag, .example .tag { font-size: 12px; font-weight: 700; letter-spacing: .05em; color: var(--tip-line); display: block; margin-bottom: 4px; }
+.example { border: 1px dashed var(--line); border-radius: 8px; padding: 12px 16px; margin: 0 0 16px; }
+.example .tag { color: var(--accent); }
+.formula { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin: 0 0 16px; overflow-x: auto; }
+.formula .tex { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 15px; text-align: center; }
+.formula .explain { color: var(--muted); font-size: 14px; margin-top: 8px; }
+details.check { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 16px; margin: 0 0 10px; }
+details.check summary { cursor: pointer; font-weight: 600; }
+details.check .answer { margin-top: 8px; color: var(--muted); }
+table.glossary { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.glossary th, table.glossary td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.glossary th { font-size: 13px; color: var(--muted); font-weight: 600; }
+.keypoints li { margin-bottom: 8px; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 18px; }
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; gap: 0; padding: 28px 16px 64px; }
+  nav.toc { position: static; margin-bottom: 28px; }
+  h1 { font-size: 28px; }
+}
+@media print {
+  nav.toc { display: none; }
+  .layout { display: block; max-width: none; padding: 0; }
+  body { background: #fff; color: #000; font-size: 11pt; }
+  details.check { break-inside: avoid; }
+  section.block { break-inside: auto; }
+  h2 { break-after: avoid; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc" aria-label="목차">
+  <div class="label">목차</div>
+  <ol>
+{{TOC}}
+  </ol>
+</nav>
+<main>
+{{BODY}}
+</main>
+</div>
+<script>
+// 인쇄할 때는 확인 문제의 답을 펼쳐서 함께 찍는다.
+window.addEventListener('beforeprint', function () {
+  document.querySelectorAll('details.check').forEach(function (d) { d.open = true; });
+});
+document.addEventListener('DOMContentLoaded', function () {
+  if (!window.katex) return;  // 오프라인이면 TeX 원문을 그대로 둔다.
+  document.querySelectorAll('.tex[data-tex]').forEach(function (el) {
+    try { window.katex.render(el.getAttribute('data-tex'), el, { displayMode: true, throwOnError: false }); }
+    catch (e) { /* 원문 유지 */ }
+  });
+});
+</script>
+</body>
+</html>

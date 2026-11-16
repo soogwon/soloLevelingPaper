@@ -1,0 +1,118 @@
+{
+  "title": "어텐션만으로 번역하기: Transformer 핵심 정리",
+  "paper": {"title": "Attention Is All You Need", "authors": "Vaswani et al.", "source": "arXiv 1706.03762v7 · NIPS 2017"},
+  "goal": "이해",
+  "level": "RNN과 행렬 곱을 아는 학부생",
+  "date": "2026-11-16",
+  "objectives": [
+    "RNN의 순차 계산이 왜 병렬화를 막는지, 트랜스포머가 이를 어떻게 피하는지 설명할 수 있다.",
+    "스케일드 닷-프로덕트 어텐션의 계산 순서와 sqrt(d_k)로 나누는 이유를 설명할 수 있다.",
+    "멀티헤드 어텐션이 트랜스포머 안에서 쓰이는 세 가지 방식을 구분할 수 있다.",
+    "위치 인코딩이 필요한 이유와 논문이 고른 방식을 말할 수 있다."
+  ],
+  "path": [
+    {"name": "단어 임베딩", "why": "→ 인코더-디코더 구조에 필요 (p.5)"},
+    {"name": "인코더-디코더 구조", "why": "→ 어텐션 메커니즘에 필요 (p.2–3)"},
+    {"name": "내적 · 소프트맥스", "why": "→ 어텐션 점수를 계산하고 가중치로 바꾸는 데 필요 (p.4)"},
+    {"name": "스케일드 닷-프로덕트 어텐션", "why": "→ 셀프 어텐션에 필요 (p.4)"},
+    {"name": "셀프 어텐션 · 멀티헤드 어텐션", "why": "→ 트랜스포머 인코더에 필요 (p.4–5)"},
+    {"name": "위치 인코딩", "why": "→ 순환이 없어 순서 정보를 따로 넣어야 함 (p.6)"},
+    {"name": "트랜스포머", "why": "논문의 목표 개념 (p.2–3)"}
+  ],
+  "path_note": "팀이 검수한 개념 지도의 학습 순서를 묶어 줄였습니다. 아는 개념(RNN, 행렬 곱)은 뺐습니다.",
+  "chapters": [
+    {
+      "title": "왜 RNN을 버렸나",
+      "summary": "RNN은 순서대로 계산해야 해서 병렬 처리가 막힌다. 트랜스포머는 순환을 빼고 어텐션만 쓴다.",
+      "sections": [
+        {"type": "text", "body": "RNN은 t번째 은닉 상태를 t−1번째 은닉 상태로 계산한다. 앞 단어가 끝나야 다음 단어를 계산할 수 있어서, **한 문장 안에서는 병렬로 처리할 수 없다.** 문장이 길수록 이 제약이 커진다."},
+        {"type": "evidence", "page": 2, "section": "1 Introduction",
+         "quote": "This inherently sequential nature precludes parallelization within training examples, which becomes critical at longer sequence lengths",
+         "note": "순차 계산이라는 성질이 학습 예제 안의 병렬화를 막는다고 지적한다."},
+        {"type": "text", "body": "트랜스포머는 순환과 합성곱을 모두 빼고, 입력과 출력 사이의 관계를 **어텐션만으로** 잡는다. 그래서 훨씬 많이 병렬화할 수 있다."},
+        {"type": "evidence", "page": 2, "section": "1 Introduction",
+         "quote": "The Transformer allows for significantly more parallelization and can reach a new state of the art in translation quality after being trained for as little as twelve hours on eight P100 GPUs."}
+      ],
+      "check": [{"q": "RNN이 긴 문장에서 특히 불리한 이유는 무엇인가요?", "a": "순서대로 계산하는 성질 때문에 한 예제 안에서 병렬 처리가 안 되고, 메모리 제약으로 예제끼리 묶는 것도 제한되기 때문이다 (p.2)."}]
+    },
+    {
+      "title": "스케일드 닷-프로덕트 어텐션",
+      "summary": "쿼리와 키의 내적으로 관련도를 재고, 소프트맥스로 만든 가중치로 값을 섞는다.",
+      "sections": [
+        {"type": "text", "body": "어텐션은 **쿼리** 하나와 **키-값** 쌍 여러 개를 받아 출력을 만든다. 출력은 값들의 가중합이고, 각 값의 가중치는 쿼리와 해당 키가 얼마나 맞는지로 정한다.\n\n- 쿼리(query): 지금 찾고 있는 것\n- 키(key): 각 위치가 가진 '찾아질 수 있는 특징'\n- 값(value): 실제로 가져올 정보"},
+        {"type": "formula", "tex": "\\mathrm{Attention}(Q,K,V)=\\mathrm{softmax}\\left(\\frac{QK^{\\top}}{\\sqrt{d_k}}\\right)V",
+         "explain": "논문 식 (1). 모든 쿼리를 행렬 Q로 묶어 한 번의 행렬 곱으로 계산한다."},
+        {"type": "text", "body": "왜 sqrt(d_k)로 나눌까? d_k가 크면 내적 값이 커지고, 소프트맥스가 기울기가 거의 0인 구간으로 밀려 학습이 잘 안 된다. 논문은 이를 **추정(suspect)**으로 설명한다."},
+        {"type": "evidence", "page": 4, "section": "3.2.1 Scaled Dot-Product Attention",
+         "quote": "We suspect that for large values of dk, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients",
+         "note": "각주 4: q와 k의 성분이 평균 0, 분산 1인 독립 확률변수라면 내적의 분산은 d_k가 된다."},
+        {"type": "tip", "body": "수식이 낯설면 '내적 = 얼마나 비슷한가, 소프트맥스 = 비율로 바꾸기'라고만 기억하고 넘어가도 된다."}
+      ],
+      "check": [
+        {"q": "덧셈 어텐션(additive attention) 대신 내적 어텐션을 쓰면 실무에서 어떤 이점이 있나요?", "a": "이론적 복잡도는 비슷하지만, 최적화된 행렬 곱 코드로 구현할 수 있어 훨씬 빠르고 메모리 효율이 좋다 (p.4)."}
+      ]
+    },
+    {
+      "title": "멀티헤드 어텐션과 세 가지 쓰임",
+      "summary": "어텐션을 8개 헤드로 나눠 병렬로 하고, 트랜스포머 안의 세 곳에서 다르게 쓴다.",
+      "sections": [
+        {"type": "text", "body": "헤드 하나로 어텐션을 하면 여러 위치를 평균 내는 과정에서 정보가 뭉개진다. 멀티헤드는 쿼리·키·값을 h번 서로 다르게 투영해 **서로 다른 표현 부분 공간**을 동시에 보게 한다. 이 논문은 h = 8, 헤드마다 d_k = d_v = 64를 쓰며, 전체 계산 비용은 헤드 하나와 비슷하다."},
+        {"type": "evidence", "page": 5, "section": "3.2.2 Multi-Head Attention",
+         "quote": "Multi-head attention allows the model to jointly attend to information from different representation subspaces at different positions. With a single attention head, averaging inhibits this."},
+        {"type": "text", "body": "트랜스포머는 멀티헤드 어텐션을 세 가지 방식으로 쓴다 (p.5, 3.2.3).\n\n- **인코더-디코더 어텐션:** 쿼리는 디코더에서, 키·값은 인코더 출력에서 온다. 디코더의 모든 위치가 입력 문장 전체를 본다.\n- **인코더 셀프 어텐션:** 쿼리·키·값이 모두 인코더 이전 층에서 온다.\n- **디코더 셀프 어텐션(마스킹):** 각 위치는 자기 자신과 그 앞 위치까지만 본다."},
+        {"type": "evidence", "page": 5, "section": "3.2.3",
+         "quote": "We implement this inside of scaled dot-product attention by masking out (setting to −∞) all values in the input of the softmax which correspond to illegal connections.",
+         "note": "−∞를 넣으면 소프트맥스 뒤 가중치가 0이 되어, 미래 단어를 볼 수 없다."},
+        {"type": "example", "body": "\"나는 학교에 간다\"를 번역하며 세 번째 단어를 만들 때, 디코더는 이미 만든 앞의 두 단어만 볼 수 있다. 아직 만들지 않은 뒤 단어를 보면 시험 중에 정답을 보는 것과 같다."}
+      ],
+      "check": [{"q": "디코더 셀프 어텐션에서 마스킹을 하는 이유는 무엇인가요?", "a": "왼쪽으로 정보가 흐르는 것(미래 위치 참고)을 막아 자기회귀(auto-regressive) 성질을 지키기 위해서다 (p.5)."}]
+    },
+    {
+      "title": "위치 인코딩",
+      "summary": "순환이 없으니 단어 순서를 알려 줄 정보를 입력에 더한다.",
+      "sections": [
+        {"type": "text", "body": "어텐션은 순서를 따지지 않고 모든 위치를 한꺼번에 본다. 그래서 단어 순서 정보를 **입력 임베딩에 더해** 준다. 위치 인코딩은 임베딩과 같은 차원 d_model이라 그대로 더할 수 있다."},
+        {"type": "formula", "tex": "PE_{(pos,2i)}=\\sin\\left(pos/10000^{2i/d_{model}}\\right),\\quad PE_{(pos,2i+1)}=\\cos\\left(pos/10000^{2i/d_{model}}\\right)",
+         "explain": "pos는 위치, i는 차원. 차원마다 주파수가 다른 사인파가 된다."},
+        {"type": "evidence", "page": 6, "section": "3.5 Positional Encoding",
+         "quote": "We chose the sinusoidal version because it may allow the model to extrapolate to sequence lengths longer than the ones encountered during training.",
+         "note": "학습형 위치 임베딩도 시험했지만 결과가 거의 같았고(표 3 (E)), 더 긴 문장으로 확장할 가능성 때문에 사인 방식을 골랐다."}
+      ],
+      "check": [{"q": "학습형 위치 임베딩과 사인·코사인 방식의 성능은 어땠나요?", "a": "거의 같은 결과를 냈다. 사인 방식을 고른 것은 학습 때보다 긴 문장으로 확장할 수 있을 것이라는 기대 때문이다 (p.6)."}]
+    },
+    {
+      "title": "전체 구조와 결과",
+      "summary": "같은 층 6개를 쌓은 인코더·디코더. 번역 품질 최고 기록을 더 적은 비용으로 냈다.",
+      "sections": [
+        {"type": "text", "body": "인코더 한 층 = 멀티헤드 셀프 어텐션 → 위치별 피드포워드 네트워크. 각 하위 층을 **잔차 연결**로 감싸고 **층 정규화**를 한다. 디코더는 여기에 인코더 출력을 보는 어텐션 층을 하나 더 둔다. 인코더와 디코더 모두 같은 층 N = 6개를 쌓는다 (p.3, 3.1)."},
+        {"type": "formula", "tex": "\\mathrm{LayerNorm}(x+\\mathrm{Sublayer}(x))", "explain": "각 하위 층의 출력. 잔차 연결 뒤 층 정규화."},
+        {"type": "evidence", "page": 8, "section": "6.1 Machine Translation",
+         "quote": "outperforms the best previously reported models (including ensembles) by more than 2.0 BLEU, establishing a new state-of-the-art BLEU score of 28.4",
+         "note": "WMT 2014 영어→독일어, Transformer (big). 8개 P100 GPU로 3.5일 학습."},
+        {"type": "tip", "body": "영어→프랑스어 BLEU는 초록·표 2(p.1, p.8)에 41.8, 6.1절 본문(p.8)에 41.0으로 서로 다르게 적혀 있다. 인용할 때는 어느 쪽을 쓰는지 밝혀 두자."}
+      ],
+      "check": [{"q": "인코더의 각 하위 층 출력은 어떤 식으로 계산되나요?", "a": "LayerNorm(x + Sublayer(x)), 즉 잔차 연결 뒤 층 정규화 (p.3)."}]
+    }
+  ],
+  "key_points": [
+    "RNN의 순차 계산을 없애고 어텐션만으로 입력·출력 관계를 잡아 병렬화를 크게 늘렸다 (p.2).",
+    "스케일드 닷-프로덕트 어텐션은 내적을 sqrt(d_k)로 나눠 소프트맥스 기울기 소실을 막는다 (p.4).",
+    "멀티헤드(h = 8)는 서로 다른 표현 부분 공간을 동시에 보게 하며, 트랜스포머 안의 세 곳에서 쓰인다 (p.5).",
+    "순서 정보는 사인·코사인 위치 인코딩을 입력 임베딩에 더해 넣는다 (p.6).",
+    "영어→독일어 28.4 BLEU로 앙상블 포함 기존 최고를 2.0 BLEU 넘게 앞섰다 (p.8)."
+  ],
+  "glossary": [
+    {"term": "셀프 어텐션", "en": "Self-attention", "definition": "한 시퀀스 안의 서로 다른 위치끼리 관계를 계산해 그 시퀀스의 표현을 만드는 어텐션", "page": 2},
+    {"term": "쿼리 · 키 · 값", "en": "Query · Key · Value", "definition": "찾는 것 · 찾아질 특징 · 가져올 정보. 쿼리와 키의 일치도로 값의 가중치를 정한다", "page": 3},
+    {"term": "멀티헤드 어텐션", "en": "Multi-head attention", "definition": "어텐션을 여러 번 다른 투영으로 병렬 수행한 뒤 이어 붙여 다시 투영하는 방식", "page": 4},
+    {"term": "위치 인코딩", "en": "Positional encoding", "definition": "토큰의 위치 정보를 담아 입력 임베딩에 더하는 벡터", "page": 6},
+    {"term": "자기회귀", "en": "Auto-regressive", "definition": "앞에서 만든 출력을 다음 출력을 만들 때 입력으로 쓰는 방식", "page": 2},
+    {"term": "BLEU", "en": "BLEU score", "definition": "기계 번역 결과가 정답 번역과 얼마나 겹치는지 재는 점수", "page": 1}
+  ],
+  "next_steps": [
+    "4 Why Self-Attention(p.6–7)의 표 1로 층 종류별 계산량·경로 길이를 비교해 본다.",
+    "구현이 목적이라면 5 Training(p.7)의 학습률 식과 정규화 설정을 정리한다.",
+    "solo-leveling-quiz로 이해도 퀴즈를 풀어 본다."
+  ],
+  "notes": "샘플 교재: 2026-11-16 Attention Is All You Need 학습 대화를 가정하고, 논문 원문(arXiv 1706.03762v7)에서 찾은 인용으로 만들었습니다. 쪽 번호는 PDF 쪽 번호입니다."
+}
