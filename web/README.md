@@ -162,5 +162,5 @@ prepare·presigned PUT·complete를 실행하며 유료 처리 접수는 연결�
 
 보관 동의를 확인한 뒤 `PDF 업로드` 버튼으로 prepare → PUT → complete를 실행한다.
 PUT의 쿠키·CSRF 비전송과 취소, 응답 유실 후 완료 재확인을 분리하며 AI 처리 접수는 연결하지 않는다.
-실제 저장소 검증 전 서버 보관 동의 강제 검사와 R2 CORS 확인이 남아 있다.
+서버는 URL 발급과 최종 게시에서 현재 보관 동의를 강제하며, 실제 저장소의 R2 CORS 검증이 남아 있다.
 현재 구현과 대역 검증 범위는 [업로드 검증 문서](../doc/setup/issue-393-web-upload-validation.md)를 따른다.

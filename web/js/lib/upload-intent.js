@@ -114,7 +114,8 @@ export function createUploadIntent({ api, changed = () => {}, digest = async byt
         }
         accept({...result,expires_at:target.expires_at});
       } catch (error) {
-        if (active()) status = error?.code === 'consent_required' ? 'consentRequired'
+        if (active()) status = ['consent_required','remote_upload_storage_consent_required'].includes(error?.code)
+          ? 'consentRequired'
           : error?.status === 410 ? 'expired'
           : [401,403,404,409,422].includes(error?.status) ? 'blocked'
           : putAttempted ? 'uploadUncertain' : 'uncertain';

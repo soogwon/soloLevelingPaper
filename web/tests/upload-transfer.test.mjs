@@ -113,3 +113,8 @@ test('prepare 응답 유실은 동일 의도 prepare를 재확인하고 PUT은 �
   await c.upload(consent);assert.deepEqual(targets,[id,id]);
   assert.equal(calls.filter(x=>x==='put').length,1);assert.equal(c.snapshot().status,'verified');
 });
+for(const phase of ['prepare','complete'])test(`${phase}에서 서버가 보관 동의를 거부하면 재동의를 안내한다`,async()=>{
+  const method=phase==='prepare'?'prepareRemoteUpload':'completeRemoteUpload';
+  const {c}=await setup({[method]:async()=>{throw {status:409,code:'remote_upload_storage_consent_required'};}});
+  await c.upload(consent);assert.equal(c.snapshot().status,'consentRequired');
+});
