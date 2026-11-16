@@ -3,11 +3,15 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import os
+from types import SimpleNamespace
 from threading import Barrier
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 
+from solo_leveling.interfaces.http import create_app
+from solo_leveling.interfaces.http.auth import AccessTokenRejected, AuthenticatedPrincipal
 from solo_leveling.interfaces.http.papers import PaperNotFound, PostgresPaperStore
 from solo_leveling.interfaces.http.reading_states import ReadingStateConflict
 from tests.integration.test_remote_processing_postgres import db, make_paper, pool  # noqa: F401
@@ -173,3 +177,107 @@ def test_owner_and_source_boundaries_hide_existing_reading_state(pool, db):
             )
 
     assert store.get_reading_state(owner, paper_id, source_id) == saved
+
+
+def test_authenticated_http_boundaries_and_conflict_preserve_state(pool, db):
+    owner = "reading-state-api-owner"
+    paper_id = make_paper(db, owner)
+    source_id = str(
+        db(
+            "SELECT source_instance_id FROM server_papers WHERE paper_id=%s",
+            (paper_id,),
+        )[0]["source_instance_id"]
+    )
+    store = PostgresPaperStore(pool)
+
+    class TokenVerifier:
+        def verify(self, token):
+            principals = {
+                "owner-device": AuthenticatedPrincipal(owner, "device", "owner-device"),
+                "foreign-device": AuthenticatedPrincipal(
+                    "reading-state-api-foreign",
+                    "device",
+                    "foreign-device",
+                ),
+                "owner-web": AuthenticatedPrincipal(owner, "web_session"),
+            }
+            try:
+                return principals[token]
+            except KeyError:
+                raise AccessTokenRejected from None
+
+    app = create_app(
+        token_verifier=TokenVerifier(),
+        device_registry=SimpleNamespace(is_active=lambda *_: True),
+        paper_store=store,
+    )
+    path = f"/v1/mcp/papers/{paper_id}/reading-state"
+    owner_headers = {"Authorization": "Bearer owner-device"}
+    foreign_headers = {"Authorization": "Bearer foreign-device"}
+    web_headers = {"Authorization": "Bearer owner-web"}
+    complete = request(source_id)
+
+    with TestClient(app) as client:
+        response = client.get(path, params={"source_instance_id": source_id})
+        assert response.status_code == 401
+        assert response.json()["detail"]["code"] == "authentication_required"
+
+        response = client.get(
+            path,
+            params={"source_instance_id": source_id},
+            headers=web_headers,
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"]["code"] == "device_credential_required"
+
+        for headers, attempted_source in (
+            (foreign_headers, source_id),
+            (owner_headers, str(uuid4())),
+        ):
+            response = client.get(
+                path,
+                params={"source_instance_id": attempted_source},
+                headers=headers,
+            )
+            assert response.status_code == 404
+            assert response.json()["detail"]["code"] == "paper_not_found"
+
+        response = client.put(path, json=complete, headers=foreign_headers)
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "paper_not_found"
+
+        response = client.put(
+            path,
+            json=request(str(uuid4())),
+            headers=owner_headers,
+        )
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "paper_not_found"
+
+        response = client.put(path, json=complete, headers=owner_headers)
+        assert response.status_code == 200
+        assert response.json()["status"] == "completed"
+        assert response.json()["revision"] == 1
+
+        response = client.put(
+            path,
+            json=request(
+                source_id,
+                status="reading",
+                action="start",
+                expected_revision=1,
+                source_revision=2,
+            ),
+            headers=owner_headers,
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "reading_state_conflict"
+
+        response = client.get(
+            path,
+            params={"source_instance_id": source_id},
+            headers=owner_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "completed"
+        assert response.json()["revision"] == 1
