@@ -17,12 +17,12 @@
   지원되지 않으면 실패하며 다른 provider/기본 스레드로 조용히 대체하지 않는다.
 
 이번 보완은 오프라인 파일·대역 테스트만 수행했다. 후보 실측·export·모델 다운로드는 하지 않았다.
-라벨은 2026-11-16 사용자 권장안 채택을 반영했으며 수치 허용값은 미확정이다.
-후보 결과를 보기 전에 허용값·환경과 데이터/기준 버전·해시를 최종 동결해야 한다. #391은 계속 열어둔다.
+라벨은 사용자 권장안 채택을, FP32 수치 허용값은 이후 A 승인을 반영했다.
+자료·정책 해시는 기록했으며 ONNX 산출물·실제 세션 대조와 환경 최종 동결은 미완료다. #391은 계속 열어둔다.
 
 이 PR은 B가 독립적으로 준비할 **합성 자료·캡처 형식·오프라인 비교기**이다.
 모델·ONNX exporter·DB·검색 어댑터·런타임 의존성은 추가하지 않는다.
-PyTorch 기준선과 ONNX 실측, 허용값 확정은 아직 남아 있으므로 #391을 닫지 않는다.
+새 자료의 PyTorch v2 기준선과 ONNX 실측·승인값 판정 연결이 남아 있으므로 #391을 닫지 않는다.
 
 ## 고정 자료
 
@@ -176,7 +176,7 @@ python scripts/compare_embedding_captures.py --baseline runtime/embedding-evalua
 
 | 항목 | 지금 준비한 범위 | 남은 담당·선행 |
 |---|---|---|
-| #391 | 합성 자료, 캡처 계약, 비교기·실패 방어 테스트 | B 정답 검토·실측/허용값, A 실제 런타임·export |
+| #391 | reviewed 자료, 승인된 FP32 기준, 캡처 계약·오프라인 비교기 | B 새 기준선·비교·판정 연결, A 실제 런타임·export·환경 대조 |
 | #390 | 비교기의 필터된 exact cosine 기준 검색 | A+B owner/context/revision/게시 포트 합의 후 어댑터 연결 |
 | #388/#399 | 변경 없음 | C 연결 스파이크·A 인증 검토 후 실제 MCP 연결 |
 | #389/#392~#396/#400 | 변경 없음 | DB·큐·동의·예산·운영 계약 및 실측 |
@@ -186,6 +186,10 @@ python scripts/compare_embedding_captures.py --baseline runtime/embedding-evalua
 이 준비 작업은 원격 전환·배포 승인이나 #391의 완료를 뜻하지 않는다.
 
 ## B의 로컬 PyTorch 기준선 캡처
+
+아래 기본 3회 명령은 과거 캡처 절차 설명이다. 승인된 다음 비교는 backend별 6회×warm 3회이며,
+두 backend의 교대 순서는 [사전 점검 기록](approved-preflight-20261116.md)을 따른다.
+현재 명령 각각을 기본값으로 실행하는 것만으로 승인된 교대 계획을 충족하지 않는다.
 
 `scripts/capture_pytorch_embeddings.py`는 이미 설치된 sentence-transformers/PyTorch와
 추가 측정 의존성 `psutil==7.2.2`를 사용한다. 제품 의존성에는 추가하지 않는다.
@@ -208,7 +212,7 @@ python scripts/capture_pytorch_embeddings.py --model-dir <로컬 snapshot 경로
 - 새 전용 디렉터리만 만들며 기존 결과를 덮어쓰지 않는다. 실패 시 부분 worker 결과는 그곳에만
   남는다. timeout 시 이 명령이 만든 worker 트리만 종료하며 MCP/다른 실행에는 손대지 않는다.
 - 원시 벡터·캡처는 runtime에만 둔다. 결과 문서에는 본문·개인 경로·벡터를 복사하지 않는다.
-- 라벨은 사용자 권장안을 반영했다. ONNX 실측·공동 허용값 확정·원격 set 연결은 별도이며
+- 라벨은 사용자 권장안을 반영했다. ONNX 실측·환경 최종 동결·원격 set 연결은 별도이며
   과거 캡처는 해당 시점의 draft 자료에 대한 결과다.
 
 ## ONNX 후보 캡처
@@ -222,19 +226,19 @@ python scripts/capture_onnx_embeddings.py --model-dir <동일 snapshot 경로> -
 ```
 
 새 프로세스 cold/warm/RSS와 반복 벡터를 PyTorch와 같은 형식으로 저장하지만, 이 자체 비교는 후보의
-반복 가능성만 확인한다. B가 라벨과 허용값을 후보 채점 전에 확정한 뒤 `compare_embedding_captures.py`로
+반복 가능성만 확인한다. 검토된 라벨과 A 승인 허용값을 유지하고 환경 사전 점검 후 `compare_embedding_captures.py`로
 PyTorch 기준선과 비교해야 하며, 통과해도 기존 context나 embedding set을 자동 교체하지 않는다.
 
 ## B 라벨 검토 제안
 
 [수치 허용값 제안서](threshold-proposal.md)에 B의 FP32 품질 기준과 A와 협의할
-반복·성능·메모리 기준을 수치·단위·집계법·이유별로 정리했다. 승인 전 초안이며 자동 판정은 연결하지 않았다.
+반복·성능·메모리 기준을 수치·단위·집계법·이유별로 정리했다. FP32 비교 기준과 로컬 측정 계획은 A 승인을 반영했으며 자동 판정은 연결하지 않았다.
 
 [12개 질의의 검토 반영과 사전 기준 제안](label-review.md)을 참고한다.
-라벨은 reviewed로 갱신했고 수치 기준 미확정이므로 후보 판정은 pending_thresholds를 유지한다.
+라벨은 reviewed이며 FP32 수치 기준은 승인됐다. 자동 판정 연결·실측은 미완료라 비교기의 pending_thresholds는 유지한다.
 
 [후보 실측 전 사람 검토·기준 동결 기록](precomparison-review.md)에 실제 질문·근거·범위와
-채택한 대안 근거, 허용값별 결정란을 모았다. 수치 승인란은 비어 있으며 모델 실행 없이 검토할 수 있다.
+채택한 대안 근거와 A 승인 상태를 모았다. [자료·환경 해시와 산출물 점검](approved-preflight-20261116.md)은 모델 실행 없이 기록했다.
 특히 long-tail은 허용 문서가 하나여서 문서 회수 성공을 끝 구절 보존의 증거로 쓰지 않는다.
 
 ## v3 라벨·그룹 판정 오프라인 검증
