@@ -92,6 +92,9 @@ A가 소유권·업로드·작업·실행 세대를 검증하고 고정 입력�
 
 ## 임베딩·실행 허용
 
+고정 로컬 PyTorch adapter 준비는 [별도 계약·대역 검증 문서](remote-processing-pytorch-adapter.md)를 참고한다.
+현재 실제 worker 조립에는 연결하지 않았으며 모델 실행·자원 격리·게시 검증도 완료하지 않았다.
+
 - 실제 모델 생성·자동 다운로드·기본 임베더 호출은 없다. `ProcessingEmbedder.embed(items, spec)`를
   주입하고 반환한 chunk ID 순서·개수·지문 및 벡터 개수·차원·유한성·0벡터·정규화를 검사한다.
   벡터는 Python int/float의 불변 tuple이며 bool·비유한·과도한 정수는 거부한다.
