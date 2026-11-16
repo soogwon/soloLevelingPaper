@@ -181,7 +181,11 @@ def test_request_key_conflict_is_stable_and_does_not_leak_input():
     assert "private details" not in response.text
 
 
-@pytest.mark.parametrize("status_code,code", [(404, "remote_upload_not_found"), (410, "remote_upload_expired")])
+@pytest.mark.parametrize("status_code,code", [
+    (404, "remote_upload_not_found"),
+    (410, "remote_upload_expired"),
+    (409, "remote_upload_storage_consent_required"),
+])
 def test_prepare_maps_safe_owner_scoped_errors(status_code, code):
     store = Store()
     store.error = ValueError(code)

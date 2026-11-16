@@ -151,7 +151,7 @@ def _known_error(exception_type, exc):
         return exception_type(status_code=404, detail={"code": code})
     if code == "remote_upload_expired":
         return exception_type(status_code=410, detail={"code": code})
-    if code == "remote_upload_state_invalid":
+    if code in ("remote_upload_state_invalid", "remote_upload_storage_consent_required"):
         return exception_type(status_code=409, detail={"code": code})
     if code == "remote_upload_object_invalid":
         return exception_type(status_code=422, detail={"code": code})

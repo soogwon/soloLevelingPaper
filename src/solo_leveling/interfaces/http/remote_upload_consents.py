@@ -170,7 +170,7 @@ class PostgresRemoteUploadConsentStore:
         if purpose not in PURPOSES or type(expected_revision) is not int or expected_revision < 1:
             raise ValueError("remote_upload_consent_input_invalid")
         with self._pool.connection() as conn:
-            if not _owned_intent(conn, owner_user_id, intent_id):
+            if not _owned_intent(conn, owner_user_id, intent_id, for_update=True):
                 return None
             row = conn.execute(
                 """UPDATE server_remote_upload_consent_bindings
@@ -201,13 +201,14 @@ class PostgresRemoteUploadConsentStore:
         return _view(row)
 
 
-def _owned_intent(conn, owner_user_id, intent_id):
+def _owned_intent(conn, owner_user_id, intent_id, *, for_update=False):
+    lock = " FOR UPDATE OF i" if for_update else ""
     return conn.execute(
         """SELECT 1 FROM server_remote_upload_intents i
            WHERE i.owner_user_id=%s AND i.intent_id=%s
              AND EXISTS (SELECT 1 FROM server_papers p
                  WHERE p.owner_user_id=i.owner_user_id AND p.paper_id=i.paper_id
-                   AND p.deleted_at IS NULL)""",
+                   AND p.deleted_at IS NULL)""" + lock,
         (owner_user_id, intent_id),
     ).fetchone() is not None
 

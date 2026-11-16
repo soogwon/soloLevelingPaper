@@ -12,6 +12,7 @@ from solo_leveling.interfaces.http.remote_uploads import (
 )
 from solo_leveling.interfaces.http.file_uploads import PendingUpload, UploadReservation, CompletedUpload
 from solo_leveling.interfaces.http.object_storage import StoredObject
+from solo_leveling.interfaces.http.remote_upload_routes import _known_error
 
 
 class Result:
@@ -32,6 +33,16 @@ class Pool:
 
 NOW=datetime(2026,1,1,tzinfo=timezone.utc)
 SHA="a"*64
+
+
+def test_storage_consent_error_is_a_stable_conflict():
+    class HttpError(Exception):
+        def __init__(self, **kwargs): self.kwargs = kwargs
+    error = _known_error(HttpError, ValueError("remote_upload_storage_consent_required"))
+    assert error.kwargs == {
+        "status_code": 409,
+        "detail": {"code": "remote_upload_storage_consent_required"},
+    }
 
 
 def test_creates_remote_paper_version_and_intent_without_fake_local_ids():
@@ -125,6 +136,46 @@ def test_verification_service_rejects_checksum_without_state_change():
         def inspect_upload(self, upload): return StoredObject(upload.object_key, 10, "application/pdf", "b"*64, True)
     with pytest.raises(ValueError, match="remote_upload_object_invalid"):
         RemoteUploadVerificationService(Store(), Objects()).complete("owner", "intent")
+
+
+def test_verification_service_deletes_final_object_when_publish_is_rejected():
+    pending = PendingUpload("u", "p", "v", "paper.pdf", 10, "application/pdf", SHA,
+                            "private/tmp/object.pdf", NOW, "pending")
+    class Store:
+        def get_completed(self, *_): return None
+        def reserve_upload(self, *_): return UploadReservation("u", pending.object_key, NOW), pending
+        def mark_verified(self, *_): raise ValueError("remote_upload_storage_consent_required")
+    class Objects:
+        deleted = []
+        def inspect_upload(self, upload): return StoredObject(upload.object_key, 10, "application/pdf", SHA, True)
+        def finalize_upload(self, _): return StoredObject("private/files/orphan.pdf", 10, "application/pdf", SHA, True)
+        def delete_upload(self, key): self.deleted.append(key)
+    objects = Objects()
+    with pytest.raises(ValueError, match="remote_upload_storage_consent_required"):
+        RemoteUploadVerificationService(Store(), objects).complete("owner", "intent")
+    assert objects.deleted == ["private/files/orphan.pdf"]
+
+
+def test_verification_service_preserves_committed_object_after_lost_response():
+    pending = PendingUpload("u", "p", "v", "paper.pdf", 10, "application/pdf", SHA,
+                            "private/tmp/object.pdf", NOW, "pending")
+    completed = CompletedUpload("u", "p", "v", "paper.pdf", 10, "application/pdf", SHA,
+                                "private/files/final.pdf", NOW)
+    class Store:
+        saved = None
+        def get_completed(self, *_): return self.saved
+        def reserve_upload(self, *_): return UploadReservation("u", pending.object_key, NOW), pending
+        def mark_verified(self, *_):
+            self.saved = completed
+            raise OSError("lost response")
+    class Objects:
+        deleted = []
+        def inspect_upload(self, upload): return StoredObject(upload.object_key, 10, "application/pdf", SHA, True)
+        def finalize_upload(self, _): return StoredObject(completed.object_key, 10, "application/pdf", SHA, True)
+        def delete_upload(self, key): self.deleted.append(key)
+    objects = Objects()
+    assert RemoteUploadVerificationService(Store(), objects).complete("owner", "intent") == completed
+    assert objects.deleted == [pending.object_key]
 
 
 @pytest.mark.parametrize('cleanup_fails', [False, True])
