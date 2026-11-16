@@ -1,11 +1,14 @@
 # #395 동일 실행의 읽기 전용 복구 경계
 
+> 실제 PostgreSQL 실행/저장/복구는 main에 연결돼 있다. 구현 근거와 아직 남은
+> runner·정책·종결 경합은 [A·B·C 실행 연결 계약](remote-question-runner-contract.md)에서 구분한다.
+
 `application/remote_replay.py`는 인증된 서버 owner·operation·request key로만 기존 실행을 조회한다.
 input_hash는 유일 키가 아니라 일치 검사용이다. 같은 키의 다른 hash/context는 충돌이며 새 실행을
 만들지 않는다. 조회 실패·결과 손상도 생성·재접수·다른 키로 대체하지 않는다.
 
-ExecutionReader는 A의 영속 조회 adapter가 구현할 **포트 초안**이다. 현재 조회 권한과 원자 저장된
-결과를 같은 읽기 snapshot에서 반환해야 한다. 메모리 대역은 실제 영속 멱등성 증명이 아니다.
+ExecutionReader는 A의 `PostgresRemoteExecutionStore`가 구현하는 읽기 포트다. 현재 조회 권한과
+원자 저장된 결과를 같은 읽기 snapshot에서 반환한다. 메모리 대역은 실제 영속 멱등성 증명이 아니다.
 각 호출 전 인증/owner 매핑은 C/#390 경계가 수행하며 이 DTO 생성은 인증을 보장하지 않는다.
 
 저장 결과는 정확한 UTF-8 JSON과 SHA-256을 함께 읽는다. B는 hash·공개 필드·context·기존 주장/인용
@@ -18,8 +21,10 @@ SHA-256은 인증 서명이나 서버 저장의 진위 증명이 아니다.
 실행 상태·cancel_requested/cancelled·결과 가용성을 구분하고 완료라도 결과가 없으면 상태만 반환한다.
 
 이 코드에는 submit/run/provider/save 포트가 없고 제품 도구에 등록하지 않는다.
-실제 원격 접수·답변/근거/usage의 원자 저장, A 조회 구현·C 공개 코드 매핑, Desktop 재시작·두 계정·
-동시 요청 검증은 남아 있다. 기존 SQLite 실행 저장을 원격으로 재사용하지 않는다.
+접수·답변/근거의 원자 저장과 usage 원장의 각 저장 경계는 구현돼 있으나, 이들을 실행하는
+runner와 정책 snapshot·deadline·heartbeat·종결 사유 분리, C 공개 매핑은 남아 있다.
+답변/근거/usage 모두를 하나의 트랜잭션에 저장하는 것으로 간주하지 않는다.
+실제 Desktop 재시작·두 계정·종단 동시 요청 검증은 별도이며 기존 SQLite 실행 저장을 원격으로 재사용하지 않는다.
 가짜 결과를 새 검증 결과로 만들거나 타임아웃을 근거 부족으로 해석하지 않는다. #395는 열어둔다.
 
 ## C 계정별 복구 모델
