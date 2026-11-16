@@ -121,3 +121,56 @@ test('작업 ID escape와 상태 사본의 독립성',()=>{
   assert.doesNotMatch(renderPreview(view),/<img/);
   view.job.job_id='modified';assert.equal(model.snapshot().job.job_id,'<img src=x>');
 });
+
+// 실제 HTML의 이벤트 연결을 실행하여 모델 검사만으로 놓치는 취소 경로를 확인한다.
+async function pageHarness() {
+  const {readFileSync} = await import('node:fs');
+  const {runInNewContext} = await import('node:vm');
+  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+  class Element extends EventTarget {
+    files = [];
+    innerHTML = '';
+    _value = '';
+    get value() {return this._value;}
+    set value(value) {this._value=value;if(value==='') this.files=[];}
+  }
+  const elements = Object.fromEntries(['file','cancel','fixture','apply','job-state','job-apply','preview']
+    .map(id=>[id,new Element()]));
+  const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1]
+    .replace(/import .* from '.\/upload.mjs';/, '');
+  runInNewContext(script, {createPreview,renderPreview,document:{querySelector:s=>elements[s.slice(1)]}});
+  const emit = (id,type='click')=>elements[id].dispatchEvent(new Event(type));
+  const choose = name=>{elements.file.files=[{...PDF,name}];emit('file','change');};
+  const upload = status=>{elements.fixture.value=status;emit('apply');};
+  const lookup = status=>{elements['job-state'].value=status;emit('job-apply');};
+  return {elements,emit,choose,upload,lookup,html:()=>elements.preview.innerHTML};
+}
+for (const cancel of ['picker','button']) {
+  test(`화면에서 ${cancel} 취소 후 기존 파일과 작업을 다시 표시하지 않음`,async()=>{
+    const page=await pageHarness();
+    page.choose('old.pdf');page.upload('verified');page.lookup('running');
+    assert.match(page.html(),/기존 작업 ID:/);
+    page.emit(cancel==='picker'?'file':'cancel',cancel==='picker'?'cancel':'click');
+    assert.equal(page.elements.file.files.length,0);
+    assert.match(page.html(),/PDF를 선택하세요/);
+    assert.doesNotMatch(page.html(),/old.pdf|기존 작업 ID:/);
+    page.upload('verified');page.lookup('succeeded');
+    assert.doesNotMatch(page.html(),/old.pdf|기존 작업 ID:/);
+    page.choose('old.pdf');
+    assert.match(page.html(),/아직 서버로 전송하지/);
+    assert.doesNotMatch(page.html(),/기존 작업 ID:/);
+  });
+}
+test('화면에서 파일 교체 후 검증 전에는 이전 작업을 표시하지 않음',async()=>{
+  const page=await pageHarness();page.choose('old.pdf');page.upload('verified');page.lookup('running');
+  page.choose('new.pdf');page.lookup('succeeded');
+  assert.match(page.html(),/new.pdf/);
+  assert.doesNotMatch(page.html(),/old.pdf|기존 작업 ID:/);
+});
+test('화면에서 응답 유실 후 재조회는 동일 작업 ID를 유지',async()=>{
+  const page=await pageHarness();page.choose('paper.pdf');page.upload('verified');page.lookup('queued');
+  const id=page.html().match(/기존 작업 ID: ([^<]+)/)[1];
+  page.lookup('응답 유실');assert.match(page.html(),/접수 여부를 확인하지 못했습니다/);
+  page.lookup('running');assert.match(page.html(),/기존 작업을 처리 중/);
+  assert.equal(page.html().match(/기존 작업 ID: ([^<]+)/)[1],id);
+});
