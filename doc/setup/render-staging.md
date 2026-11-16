@@ -7,7 +7,7 @@
 
 - `render.yaml`: 무료 Web Service와 무료 Render Postgres Blueprint
 - `Dockerfile`: 서버 의존성과 API·웹 파일을 포함한 이미지
-- `deploy/render-start.sh`: 서버 시작 전 PostgreSQL 마이그레이션 실행
+- `deploy/render-start.sh`: 서버 시작 전 PostgreSQL 마이그레이션과 staging 삭제 큐 1회 실행
 - `WEB_STATIC_ROOT=/app/web`: API route 등록 후 외부 사이트를 `/`에 mount
   - 웹 파일(HTML·JS·CSS)은 `Cache-Control: no-cache`로 응답한다. 브라우저는 매번 ETag로 재확인하고, 바뀌지 않은 파일은 304로 재사용한다. 배포 직후에도 새로고침하면 새 파일을 받는다(이미 열린 탭은 다시 불러와야 한다).
 - Render가 주입하는 `PORT`: `API_PORT`가 없을 때 자동 사용
@@ -16,6 +16,14 @@
 시작할 때 마이그레이션을 먼저 실행합니다. 마이그레이션은 PostgreSQL advisory lock과 적용 이력으로
 중복 실행을 방지합니다. 나중에 유료 Web Service로 전환하면 Dashboard의 Pre-Deploy Command를
 `solo-leveling-server-migrate`로 지정하고 시작 명령을 `solo-leveling-api`로 분리하는 편이 좋습니다.
+
+무료 Web Service는 Shell과 One-Off Job도 제공하지 않는다. 이 staging Blueprint는 마이그레이션 뒤
+`REMOTE_DELETION_CLEANUP_ON_START=true`를 확인해 삭제 요청을 한 배포당 최대 10건 처리한다. 이 gate는
+기본적으로 꺼져 있고 staging에서만 명시적으로 켠다. 정리 실패는 요청을 `failed`로 남기고 API 시작을
+막지 않으며, 다음 배포에서 완료 표식 이후부터 재시도한다. 이는 검증용 1회 실행 수단이지 정기 scheduler가
+아니다. 유료 worker 또는 외부 scheduler를 준비하면 이 값을 `false`로 바꾸고 삭제 CLI를 별도로 실행한다.
+기존 Blueprint의 Auto Sync가 꺼져 있으면 `render.yaml` 변경이 자동 반영되지 않으므로 Blueprint 화면에서
+Manual Sync를 실행한 뒤 Web Service의 새 배포를 확인한다.
 
 ## 최초 배포
 
