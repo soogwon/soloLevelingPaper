@@ -255,6 +255,19 @@ test('동일 입력 키는 보존하고 성공 확인 뒤 의도적인 새 저�
   assert.notEqual(first.request.request_key, fresh.request.request_key);
 });
 
+test('작성 주체 도입 전 미확정 요청은 이전 키와 입력을 그대로 재사용한다', async () => {
+  const {doc} = setup();
+  const storage = doc.defaultView.localStorage;
+  const request = {context_id:'ctx',kind:'note',body:'기존 요청',segments:[]};
+  const old = await prepareAnnotationRequest(request, storage, webcrypto);
+  const next = await prepareAnnotationRequest({...request,creation_origin:'user'}, storage, webcrypto);
+  assert.deepEqual(next.request, old.request);
+  next.confirm();
+  const fresh = await prepareAnnotationRequest({...request,creation_origin:'user'}, storage, webcrypto);
+  assert.equal(fresh.request.creation_origin, 'user');
+  assert.notEqual(fresh.request.request_key, old.request.request_key);
+});
+
 test('다음 페이지의 기존 기록 재사용은 건수를 늘리지 않고 더 보기에서도 중복하지 않는다', async () => {
   const {app, el} = setup();
   const old = {annotation_id:'old',context_id:'ctx',kind:'note',body:'수정된 메모'};
@@ -397,7 +410,8 @@ for (const event of ['ontoolinput', 'ontoolcancelled']) {
     const {app, doc, el} = setup();
     let finish;
     Object.defineProperty(doc.defaultView, 'crypto', {value: {
-      subtle: {digest: () => new Promise(resolve => { finish = resolve; })},
+      subtle: {digest: () => finish ? Promise.resolve(new Uint8Array(32).buffer)
+        : new Promise(resolve => { finish = resolve; })},
       randomUUID: () => 'cancelled-request',
     }, configurable: true});
     let calls = 0;
@@ -429,4 +443,18 @@ test('원문 위치가 모호해도 고유한 번역 위치는 저장할 수 있
   await el('save-translation-highlight').onclick();
   assert.equal(request.segments[0].target, 'translation');
   assert.equal(request.segments[0].start_offset, 2);
+});
+
+
+test('저장 클릭만으로 본문 생성 주체를 user로 추정하지 않는다', async () => {
+  const {app, el} = setup();
+  let request;
+  app.callServerTool = async call => {
+    if (call.name === 'create_annotation') request = call.arguments.request;
+    return {isError:true};
+  };
+  app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,annotations:[]})]}));
+  el('note-body').value = 'AI에서 복사했을 수도 있는 문장';
+  await el('save-note').onclick();
+  assert.equal(request.creation_origin, 'unknown');
 });

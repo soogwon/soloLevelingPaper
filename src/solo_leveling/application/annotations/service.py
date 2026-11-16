@@ -60,11 +60,11 @@ class AnnotationService:
 
     def create(self, context_id: str, kind: str, body: str, *,
                segments: Sequence[SegmentInput] = (), step: str | None = None,
-               request_key: str | None = None) -> AnnotationResult:
+               request_key: str | None = None, creation_origin: str = 'unknown') -> AnnotationResult:
         _require_context(context_id)
         segments = _validated_segments(segments)
         return store.create_annotation(self.db_path, context_id, kind, body, segments, step,
-                                       request_key=request_key)
+                                       request_key=request_key, creation_origin=creation_origin)
 
     def get(self, context_id: str, annotation_id: str, *, source_position: int | None = None) -> AnnotationDetail:
         _require_context(context_id)

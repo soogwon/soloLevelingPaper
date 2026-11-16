@@ -41,8 +41,8 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 32)]
-    assert items[-1].name == "0031_remote_deletion_active_pointer.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 33)]
+    assert items[-1].name == "0032_annotation_creation_origin.sql"
 
 
 def test_tombstone_cleanup_only_allows_clearing_active_publication_pointer():
