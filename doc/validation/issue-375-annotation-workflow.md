@@ -183,12 +183,16 @@ C는 이번 문서 리뷰에서 코멘트와 기록을 대조했으며 실제 �
 API의 타 owner·다른 source **갱신** 거부, 미존재 대상과의 공개 오류 동등성, 무효·폐기 자격 거부를
 실제 Auth0·staging PostgreSQL 경계에서 확인했다. 메모 API나 completed 상태 전이는 검증 범위가 아니다.
 
-남은 #375 범위는 context 없는 초기 `not_started`의 실제 배포 전송, 완료 후 실제 질문,
-같은 배포 버전의 Desktop→동의→서버→웹 재대조 및 macOS 전체 흐름이다.
+후속 [C의 macOS 검증](https://github.com/soogwon/soloLevelingPaper/issues/375#issuecomment-6910469726)에서
+context 없는 초기 `not_started` 전송, 명시적 완료 취소, 연결 실패 후 기존 승인 작업의
+재시작 자동 재시도를 확인했다. 이는 이 절의 인증 거부 행렬과 별도 실행 결과다.
+[일반 대화 재시작 복구](https://github.com/soogwon/soloLevelingPaper/issues/375#issuecomment-6911226492)는
+main `ce1b2eb`의 합성 로컬 DB 검증이며 원격 서버 검증은 아니다.
+실제 학습 시작·완료 후 질문, 늦은 완료/재전송, 메모 API 격리와 전체 출처·시각 대조는 남아 있다.
 
 두 번의 실제 API 표만으로 다음 항목을 완료 처리하지 않는다.
 
-- 메모 API의 본문·구간·신고 주체 불변. 이번 직접 요청은 읽기 상태 API에 한정된다.
+- 메모 API의 본문·구간·작성 주체 불변. 이번 직접 요청은 읽기 상태 API에 한정된다.
 - 실제 completed 상태의 지연 전송/동일 operation 재생. 이번 staging 대조군은 reading이었다.
 - 응답 유실·재시작 후 요청 키 복구의 지원 범위. #490 내부 모듈을 제품 카드에 연결하고
   새 시크릿 origin·저장소 유실·다중 기기 범위를 검증하거나 명시적으로 합의해야 한다.
