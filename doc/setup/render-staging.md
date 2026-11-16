@@ -7,7 +7,7 @@
 
 - `render.yaml`: 무료 Web Service와 무료 Render Postgres Blueprint
 - `Dockerfile`: 서버 의존성과 API·웹 파일을 포함한 이미지
-- `deploy/render-start.sh`: 서버 시작 전 PostgreSQL 마이그레이션과 staging 삭제 큐 1회 실행
+- `deploy/render-start.sh`: 서버 시작 전 PostgreSQL 마이그레이션, 만료 원격 업로드 정리와 staging 삭제 큐 1회 실행
 - `WEB_STATIC_ROOT=/app/web`: API route 등록 후 외부 사이트를 `/`에 mount
   - 웹 파일(HTML·JS·CSS)은 `Cache-Control: no-cache`로 응답한다. 브라우저는 매번 ETag로 재확인하고, 바뀌지 않은 파일은 304로 재사용한다. 배포 직후에도 새로고침하면 새 파일을 받는다(이미 열린 탭은 다시 불러와야 한다).
 - Render가 주입하는 `PORT`: `API_PORT`가 없을 때 자동 사용
@@ -18,9 +18,12 @@
 `solo-leveling-server-migrate`로 지정하고 시작 명령을 `solo-leveling-api`로 분리하는 편이 좋습니다.
 
 무료 Web Service는 Shell과 One-Off Job도 제공하지 않는다. 이 staging Blueprint는 마이그레이션 뒤
-`REMOTE_DELETION_CLEANUP_ON_START=true`를 확인해 프로세스 시작당 삭제 요청을 최대 10건 처리한다.
+`REMOTE_UPLOAD_CLEANUP_ON_START=true`를 확인해 만료된 원격 업로드를 최대 100건 정리하고,
+`REMOTE_DELETION_CLEANUP_ON_START=true`를 확인해 삭제 요청을 최대 10건 처리한다.
 재배포뿐 아니라 프로세스 재시작에도 실행된다. 이 gate는 기본적으로 꺼져 있고 staging에서만 명시적으로 켠다.
-정리 명령이 실패로 종료해도 API 시작은 계속한다. 작업 확보 후 정리에 실패하면 가능한 경우 요청을
+두 정리 명령 중 하나가 실패로 종료해도 API 시작은 계속한다. 원격 업로드 정리는 만료된
+`private/tmp/` 객체만 삭제하고 intent를 `expired`, upload를 `failed/upload_expired`로 확정한다.
+객체 삭제가 실패하면 pending을 유지해 다음 시작에서 재시도한다. 삭제 작업 확보 후 정리에 실패하면 가능한 경우 요청을
 `failed`로 기록하지만, 설정·DB 연결 실패나 lease 만료 시에는 해당 상태 기록을 보장하지 않는다.
 다음 시작 시 재시도 가능한 요청을 확보하고 완료된 단계는 건너뛴다. 최대 건수와 lease는 실행 시간 제한이
 아니므로, 정리 명령이 끝나기 전에는 API가 시작되지 않는다. 이는 검증용 실행 수단이지 정기 scheduler가
