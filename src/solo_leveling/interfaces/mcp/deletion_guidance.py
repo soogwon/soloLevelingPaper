@@ -1,5 +1,6 @@
 """#368 C 읽기 전용 안내 대역. 삭제 접수·공개 MCP 계약은 별도다."""
 
+from asyncio import CancelledError
 from dataclasses import dataclass
 from html import escape
 from typing import Protocol
@@ -44,6 +45,9 @@ class DeletionGuidance:
 
 
 _VIEWS = {
+    'signed_out': ('로그인 필요', '이전 세션의 삭제 상태를 지웠습니다. 로그인 후 다시 조회하세요.', '로그인 확인'),
+    'idle': ('삭제 상태 조회 대기', '현재 세션에서 삭제 요청 상태를 다시 조회하세요.', '삭제 요청 상태 확인'),
+    'checking': ('삭제 상태 조회 중', '현재 세션에서 기존 요청을 조회하고 있습니다. 새 삭제 요청은 만들지 않습니다.', '조회 결과 대기'),
     'local_only': ('로컬 삭제', '이 기기의 삭제는 서버 삭제를 뜻하지 않습니다.', '삭제 범위 확인'),
     'stop_sync': ('동기화 중지', '새 동기화를 중지해도 서버 자료는 삭제되지 않습니다.', '동기화 범위 확인'),
     'revoke_consent': ('전송 동의 철회', '새 외부 AI 전송을 차단하는 동작이며 서버 자료 삭제와 다릅니다.', '동의 범위 확인'),
@@ -75,6 +79,10 @@ def recover_deletion_guidance(reader: DeletionReader, lookup: DeletionLookup) ->
         snapshot = reader.read(lookup)
     except Exception:
         return _view('unavailable')
+    return _snapshot_guidance(snapshot, lookup)
+
+
+def _snapshot_guidance(snapshot: DeletionSnapshot | None, lookup: DeletionLookup) -> DeletionGuidance:
     if snapshot is None:
         return _view('not_found')
     if not isinstance(snapshot, DeletionSnapshot):
@@ -103,3 +111,61 @@ def render_deletion_preview(view: DeletionGuidance) -> tuple[str, str]:
             '<p>미리보기: 실제 삭제 기능은 연결되지 않았습니다.</p>'
             f'<button type="button" disabled>{escape(view.action)}</button></main></html>')
     return text, html
+
+
+class AsyncDeletionReader(Protocol):
+    """인증된 읽기 전용 adapter. 공개 wire 계약이나 삭제 접수 포트가 아니다."""
+
+    async def read(self, lookup: DeletionLookup) -> DeletionSnapshot | None:
+        ...
+
+
+class DeletionStatusScreen:
+    """한 화면·이벤트 루프의 조회 제어. 인증 전환마다 session_changed를 호출한다."""
+
+    def __init__(self, reader: AsyncDeletionReader):
+        self._reader = reader
+        self._owner: str | None = None
+        self._pending: object | None = None
+        self._view = _view('signed_out')
+
+    def session_changed(self, owner: str | None) -> None:
+        """검증된 인증 경계만 호출한다. 같은 owner의 재로그인도 반드시 알린다."""
+        # 동일 계정이라도 기존 조회 표식을 폐기해 로그아웃→재로그인 응답을 버린다.
+        self._pending = None
+        self._owner = owner if isinstance(owner, str) and owner.strip() else None
+        self._view = _view('idle' if self._owner else 'signed_out')
+
+    def render(self) -> tuple[str, str]:
+        """현재 표시만 렌더링한다. 호출자는 과거 조회 결과를 별도 캐시하지 않는다."""
+        return render_deletion_preview(self._view)
+
+    async def refresh(self, lookup: DeletionLookup) -> bool:
+        """현재 안내를 반영하면 True. 늦은 성공·실패는 화면 변경 없이 False."""
+        ticket = object()
+        self._pending = ticket
+        if self._owner is None:
+            self._view = _view('signed_out')
+            self._pending = None
+            return True
+        if not isinstance(lookup, DeletionLookup) or lookup.owner_id != self._owner:
+            self._view = _view('not_found')
+            self._pending = None
+            return True
+        self._view = _view('checking')
+        try:
+            snapshot = await self._reader.read(lookup)
+        except CancelledError:
+            if self._pending is ticket:
+                self._pending = None
+                self._view = _view('unavailable')
+            raise
+        except Exception:
+            view = _view('unavailable')
+        else:
+            view = _snapshot_guidance(snapshot, lookup)
+        if self._pending is not ticket:
+            return False
+        self._pending = None
+        self._view = view
+        return True
