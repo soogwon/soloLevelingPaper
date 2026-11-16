@@ -7,6 +7,7 @@ import pytest
 from tests.integration.test_remote_processing_postgres import pool, db  # noqa: F401
 from solo_leveling.interfaces.http.remote_uploads import PostgresRemoteUploadIntentStore, RemoteUploadVerificationService
 from solo_leveling.interfaces.http.object_storage import StoredObject
+from solo_leveling.interfaces.http.remote_upload_consents import PostgresRemoteUploadConsentStore
 
 pytestmark = pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'), reason='실제 PostgreSQL DSN 필요')
 
@@ -15,6 +16,8 @@ def test_verified_result_replays_after_cleanup_failure_and_expiry(pool, db):
     db("INSERT INTO server_users(owner_user_id,display_name) VALUES ('upload-owner','합성 사용자')")
     store = PostgresRemoteUploadIntentStore(pool)
     intent = store.create('upload-owner', 'upload-key', 'paper.pdf', 10, 'application/pdf', 'a' * 64)
+    PostgresRemoteUploadConsentStore(pool).grant(
+        'upload-owner', intent.intent_id, 'storage', 'storage-consent')
     class Objects:
         copies = 0
         def inspect_upload(self, pending):
@@ -55,6 +58,7 @@ def test_expired_cleanup_rotates_beyond_batch_and_skips_empty_intents(pool, db):
     ids=[]
     for index in range(3):
         intent=store.create(owner,str(index),'paper.pdf',10,'application/pdf','a'*64)
+        PostgresRemoteUploadConsentStore(pool).grant(owner,intent.intent_id,'storage','consent-'+str(index))
         store.reserve_upload(owner,intent.intent_id)
         ids.append(intent.intent_id)
     db("UPDATE server_remote_upload_intents SET expires_at=clock_timestamp()-interval '1 hour',updated_at=clock_timestamp()-interval '1 day' WHERE owner_user_id=%s",(owner,))

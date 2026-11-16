@@ -28,6 +28,8 @@ def source(pool, db, *, verified=False):
     upload = PostgresRemoteUploadIntentStore(pool)
     intent = upload.create(owner, new_id(), "paper.pdf", 10, "application/pdf", "a" * 64)
     if verified:
+        PostgresRemoteUploadConsentStore(pool).grant(
+            owner, intent.intent_id, "storage", new_id())
         class Objects:
             def inspect_upload(self, pending):
                 return StoredObject(pending.object_key, 10, "application/pdf", "a" * 64, True)
@@ -122,3 +124,23 @@ def test_new_notice_reconsent_revokes_old_and_creates_new_revision(pool, db):
     )
     assert rows[0]["notice_version"] == "old-notice" and rows[0]["revoked_at"] is not None
     assert rows[1]["notice_version"] == NOTICE_VERSION and rows[1]["revoked_at"] is None
+
+
+def test_prepare_and_final_publish_require_current_storage_consent(pool, db):
+    owner, intent = source(pool, db)
+    uploads = PostgresRemoteUploadIntentStore(pool)
+    consents = PostgresRemoteUploadConsentStore(pool)
+    with pytest.raises(ValueError, match="remote_upload_storage_consent_required"):
+        uploads.reserve_upload(owner, intent)
+
+    granted = consents.grant(owner, intent, "storage", "storage-key")
+    uploads.reserve_upload(owner, intent)
+    consents.revoke(owner, intent, "storage", granted.revision)
+    with pytest.raises(ValueError, match="remote_upload_storage_consent_required"):
+        uploads.mark_verified(owner, intent, "private/files/rejected.pdf")
+    assert db(
+        """SELECT i.status,u.status AS upload_status FROM server_remote_upload_intents i
+           JOIN server_pdf_uploads u ON u.owner_user_id=i.owner_user_id AND u.upload_id=i.upload_id
+           WHERE i.owner_user_id=%s AND i.intent_id=%s""",
+        (owner, intent),
+    )[0] == {"status": "uploading", "upload_status": "pending"}

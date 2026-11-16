@@ -7,6 +7,7 @@ import json
 from uuid import uuid4
 
 from .file_uploads import CompletedUpload, PendingUpload, UploadReservation
+from .remote_upload_consents import NOTICE_VERSION
 
 
 class RemoteUploadConflict(ValueError): pass
@@ -157,6 +158,7 @@ class PostgresRemoteUploadIntentStore:
                 conn.execute("UPDATE server_remote_upload_intents SET status='expired' WHERE owner_user_id=%s AND intent_id=%s",
                              (owner_user_id, intent_id))
                 return None
+            _require_storage_consent(conn, owner_user_id, intent_id)
             upload_id = str(row["upload_id"] or uuid4())
             owner_hash = sha256(owner_user_id.encode()).hexdigest()[:24]
             object_key = f"private/tmp/{owner_hash}/{row['paper_id']}/{row['server_version_id']}/{upload_id}.pdf"
@@ -179,13 +181,25 @@ class PostgresRemoteUploadIntentStore:
 
     def mark_verified(self, owner_user_id: str, intent_id: str, final_object_key: str) -> CompletedUpload:
         with self._pool.connection() as conn:
-            conn.execute(
+            intent = conn.execute(
                 "SELECT intent_id FROM server_remote_upload_intents WHERE owner_user_id=%s AND intent_id=%s FOR UPDATE",
                 (owner_user_id, intent_id),
             ).fetchone()
+            if intent is None:
+                raise ValueError("remote_upload_not_found")
             completed = self._completed(conn, owner_user_id, intent_id)
             if completed is not None:
                 return completed
+            paper = conn.execute(
+                """SELECT p.paper_id FROM server_remote_upload_intents i
+                   JOIN server_papers p ON p.owner_user_id=i.owner_user_id AND p.paper_id=i.paper_id
+                   WHERE i.owner_user_id=%s AND i.intent_id=%s AND p.deleted_at IS NULL
+                   FOR UPDATE OF p""",
+                (owner_user_id, intent_id),
+            ).fetchone()
+            if paper is None:
+                raise ValueError("remote_upload_not_found")
+            _require_storage_consent(conn, owner_user_id, intent_id)
             row = conn.execute(
                 """UPDATE server_pdf_uploads u SET status='ready',object_key=%s,completed_at=CURRENT_TIMESTAMP,
                           failure_reason=NULL,updated_at=CURRENT_TIMESTAMP
@@ -325,7 +339,18 @@ class RemoteUploadVerificationService:
         if _object_mismatch(pending, final):
             self._delete_best_effort(final.object_key)
             raise ValueError("remote_upload_object_invalid")
-        completed = self.store.mark_verified(owner_user_id, intent_id, final.object_key)
+        try:
+            completed = self.store.mark_verified(owner_user_id, intent_id, final.object_key)
+        except Exception:
+            # 커밋 응답 유실이면 확정 객체를 보존한다. 실제 거절이면 orphan 최종 객체를 정리한다.
+            recovered = self.store.get_completed(owner_user_id, intent_id)
+            if recovered is not None:
+                if recovered.object_key != final.object_key:
+                    self._delete_best_effort(final.object_key)
+                self._delete_best_effort(pending.object_key)
+                return recovered
+            self._delete_best_effort(final.object_key)
+            raise
         if completed.object_key != final.object_key:
             self._delete_best_effort(final.object_key)
         self._delete_best_effort(pending.object_key)
@@ -349,6 +374,27 @@ def _object_mismatch(expected, actual):
     return (actual.file_size != expected.file_size
             or actual.content_type.split(";", 1)[0].strip().lower() != expected.content_type
             or actual.sha256_hex != expected.sha256_hex or not actual.pdf_header_valid)
+
+
+def _require_storage_consent(conn, owner_user_id, intent_id):
+    """현재 notice와 입력에 결합된 유효한 보관 동의를 트랜잭션 안에서 고정한다."""
+    row = conn.execute(
+        """SELECT b.consent_id
+           FROM server_remote_upload_consent_bindings b
+           JOIN server_remote_upload_intents i
+             ON i.owner_user_id=b.owner_user_id AND i.intent_id=b.upload_intent_id
+           JOIN server_remote_consents c
+             ON c.owner_user_id=b.owner_user_id AND c.consent_id=b.consent_id
+           WHERE b.owner_user_id=%s AND b.upload_intent_id=%s AND b.purpose='storage'
+             AND b.notice_version=%s AND b.revoked_at IS NULL
+             AND c.purpose='storage' AND c.input_hash=i.payload_hash
+             AND c.notice_version=b.notice_version AND c.revoked_at IS NULL
+           ORDER BY b.revision DESC LIMIT 1
+           FOR UPDATE OF b,c""",
+        (owner_user_id, intent_id, NOTICE_VERSION),
+    ).fetchone()
+    if row is None:
+        raise ValueError("remote_upload_storage_consent_required")
 
 
 def _view(row):
