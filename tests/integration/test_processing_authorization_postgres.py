@@ -67,7 +67,7 @@ def test_current_authority_changes_block_existing_ledger(pool, db, change):
         db("UPDATE server_dispatch_controls SET dispatch_enabled=false")
     assert not auth.allowed(source, 'translation')
     assert ledger.authorize(AttemptRequest(intent, 'first', 'translation', 100, 50)) is None
-    assert db('SELECT count(*) AS n FROM server_provider_attempts WHERE execution_id=%s', (source.job_id,))[0]['n'] == 0
+    assert db('SELECT count(*) AS n FROM server_processing_provider_attempts WHERE execution_id=%s', (source.job_id,))[0]['n'] == 0
 
     if change == 'lease':
         PostgresProcessingJobStore(pool).cancel(source.owner_user_id, source.job_id)
@@ -77,5 +77,22 @@ def test_current_authority_changes_block_existing_ledger(pool, db, change):
 def test_processing_ledger_rejects_non_translation_stages(pool, db, stage):
     _, source, ledger, intent = setup_authorization(pool, db)
     assert ledger.authorize(AttemptRequest(intent, 'other-stage', stage, 100, 50)) is None
+    assert db('SELECT count(*) AS n FROM server_processing_provider_attempts WHERE execution_id=%s',
+              (source.job_id,))[0]['n'] == 0
+
+
+def test_processing_attempt_fk_and_deletion_preserve_other_job(pool, db):
+    from solo_leveling.infrastructure.storage.remote_deletion_backend import PostgresObjectDeletionBackend
+    auth, source, ledger, intent = setup_authorization(pool, db)
+    assert ledger.authorize(AttemptRequest(intent, 'first', 'translation', 100, 50)) is not None
+    _, other_source, other_ledger, other_intent = setup_authorization(pool, db)
+    assert other_ledger.authorize(AttemptRequest(other_intent, 'first', 'translation', 100, 50)) is not None
     assert db('SELECT count(*) AS n FROM server_provider_attempts WHERE execution_id=%s',
               (source.job_id,))[0]['n'] == 0
+    PostgresProcessingJobStore(pool).cancel(source.owner_user_id, source.job_id)
+    db('UPDATE server_papers SET deleted_at=CURRENT_TIMESTAMP WHERE paper_id=%s', (source.paper_id,))
+    PostgresObjectDeletionBackend(pool, None).delete_derived(source.owner_user_id, source.paper_id)
+    assert db('SELECT count(*) AS n FROM server_processing_provider_attempts WHERE execution_id=%s',
+              (source.job_id,))[0]['n'] == 0
+    assert db('SELECT count(*) AS n FROM server_processing_provider_attempts WHERE execution_id=%s',
+              (other_source.job_id,))[0]['n'] == 1

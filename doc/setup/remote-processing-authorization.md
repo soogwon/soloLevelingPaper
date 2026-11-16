@@ -14,6 +14,12 @@ scope를 연결한다. 논문을 먼저 잠그고 실행·입력·동의 행을 
 서비스/사용자 예산, 운영 중지, 중복 전송, 사용량 정산은 기존 원장 계약을 사용한다.
 새 예산 수치나 운영 설정은 만들지 않는다.
 
+기존 질문 전송 원장은 server_remote_executions FK를 유지한다. migration 0035는
+server_processing_provider_attempts를 별도로 만들고 owner/job/동의 FK를 강제한다.
+예약·정산 코드는 같은 구현을 사용하되 원장 테이블은 서버 내부 허용 목록으로 고정한다.
+삭제 backend는 해당 owner/paper의 처리 시도만 job보다 먼저 정리한다. 비용 합계는
+임의 환급하지 않으며 기존 보존/삭제 정책을 유지한다.
+
 ## B: 실행별 조립
 
 RemoteProcessingWorker의 `stages_factory(source, check_allowed)` 포트는 R2 검증 후 호출된다.

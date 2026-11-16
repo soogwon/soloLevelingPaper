@@ -10,6 +10,9 @@ from solo_leveling.interfaces.http.remote_deletions import (
 
 
 _DERIVED_DELETES = (
+    """DELETE FROM server_processing_provider_attempts a USING server_processing_jobs j
+       WHERE a.owner_user_id=%s AND j.owner_user_id=a.owner_user_id
+         AND j.job_id=a.processing_job_id AND j.paper_id=%s""",
     """DELETE FROM server_provider_attempts a USING server_remote_executions e,
               server_execution_contexts c
        WHERE a.owner_user_id=%s AND e.owner_user_id=a.owner_user_id

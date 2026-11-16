@@ -14,7 +14,7 @@ _AUTH_SOURCE = _SOURCE_SQL.replace(
     "SELECT u.object_key,u.file_size,u.content_type,u.sha256_hex",
     "SELECT a.input_hash,a.storage_consent_id,a.ai_consent_id,a.notice_version",
 )
-_USAGE_BLOCKED = """SELECT 1 FROM server_provider_attempts
+_USAGE_BLOCKED = """SELECT 1 FROM server_processing_provider_attempts
     WHERE owner_user_id=%s AND execution_id=%s AND (
         status IN ('reserved','unknown') OR
         actual_input_tokens>reserved_input_tokens OR
@@ -83,6 +83,8 @@ class PostgresProcessingAuthorization(PostgresRemoteProcessingInputStore):
             return row is not None
 
         class BoundLedger(PostgresDispatchLedger):
+            _attempt_table = "server_processing_provider_attempts"
+
             def authorize(self, request):
                 # DB callback은 연결을 빌리기 전에 실행해 중첩 pool 대기를 피한다.
                 if (not isinstance(request, AttemptRequest) or request.stage != 'translation'

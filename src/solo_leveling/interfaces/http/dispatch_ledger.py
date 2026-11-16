@@ -13,11 +13,15 @@ class PostgresDispatchLedger:
     전송 세대이면 True를 반환해야 한다. 저장소별 실행 모델을 이 adapter가 추측하지 않는다.
     """
 
+    _attempt_table = "server_provider_attempts"
+
     def __init__(self, pool, policy_version: str, window_key: str, validate_scope: Callable):
         if not all(isinstance(value, str) and value.strip() for value in (policy_version, window_key)):
             raise ValueError("dispatch_policy_invalid")
         if not callable(validate_scope):
             raise ValueError("dispatch_scope_validator_invalid")
+        if self._attempt_table not in {"server_provider_attempts", "server_processing_provider_attempts"}:
+            raise ValueError("dispatch_ledger_invalid")
         self._pool = pool
         self._policy_version = policy_version
         self._window_key = window_key
@@ -39,7 +43,7 @@ class PostgresDispatchLedger:
                 return None
             # 재시작·lease 교체·새 전송 키로 미정산 또는 초과 사용을 우회하지 못하게 한다.
             blocked = conn.execute(
-                """SELECT 1 FROM server_provider_attempts
+                f"""SELECT 1 FROM {self._attempt_table}
                    WHERE owner_user_id=%s AND execution_id=%s AND (
                        status IN ('reserved','unknown') OR
                        actual_input_tokens>reserved_input_tokens OR
@@ -90,7 +94,7 @@ class PostgresDispatchLedger:
             ):
                 return None
             row = conn.execute(
-                """INSERT INTO server_provider_attempts
+                f"""INSERT INTO {self._attempt_table}
                        (attempt_id,owner_user_id,execution_id,lease_token,input_hash,
                         storage_consent_id,ai_consent_id,notice_version,dispatch_key,stage,
                         policy_version,window_key,control_generation,reserved_input_tokens,
@@ -140,13 +144,13 @@ class PostgresDispatchLedger:
         if not _usage_valid(attempt_id, input_tokens, output_tokens):
             raise ValueError("dispatch_usage_invalid")
         with self._pool.connection() as conn:
-            attempt = _lock_attempt(conn, attempt_id)
+            attempt = _lock_attempt(conn, attempt_id, self._attempt_table)
             if attempt["status"] == "observed":
                 if (attempt["actual_input_tokens"], attempt["actual_output_tokens"]) != (input_tokens, output_tokens):
                     raise ValueError("dispatch_usage_conflict")
                 return
             conn.execute(
-                """UPDATE server_provider_attempts
+                f"""UPDATE {self._attempt_table}
                    SET status='observed',actual_input_tokens=%s,actual_output_tokens=%s,
                        settled_at=CURRENT_TIMESTAMP
                    WHERE attempt_id=%s AND status IN ('reserved','unknown')""",
@@ -158,22 +162,22 @@ class PostgresDispatchLedger:
         if not isinstance(attempt_id, str) or not attempt_id.strip():
             raise ValueError("dispatch_attempt_invalid")
         with self._pool.connection() as conn:
-            attempt = _lock_attempt(conn, attempt_id)
+            attempt = _lock_attempt(conn, attempt_id, self._attempt_table)
             if attempt["status"] in {"unknown", "observed"}:
                 return
             conn.execute(
-                """UPDATE server_provider_attempts SET status='unknown',settled_at=CURRENT_TIMESTAMP
+                f"""UPDATE {self._attempt_table} SET status='unknown',settled_at=CURRENT_TIMESTAMP
                    WHERE attempt_id=%s AND status='reserved'""",
                 (attempt_id,),
             )
             # unknown은 예약을 반환하거나 소비로 추정하지 않는다.
 
 
-def _lock_attempt(conn, attempt_id):
+def _lock_attempt(conn, attempt_id, table):
     row = conn.execute(
-        """SELECT status,owner_user_id,policy_version,window_key,reserved_input_tokens,reserved_output_tokens,
+        f"""SELECT status,owner_user_id,policy_version,window_key,reserved_input_tokens,reserved_output_tokens,
                   actual_input_tokens,actual_output_tokens
-           FROM server_provider_attempts WHERE attempt_id=%s FOR UPDATE""",
+           FROM {table} WHERE attempt_id=%s FOR UPDATE""",
         (attempt_id,),
     ).fetchone()
     if row is None:
