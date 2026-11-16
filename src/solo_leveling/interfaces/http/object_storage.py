@@ -24,6 +24,16 @@ class StoredObject:
     pdf_header_valid: bool = True
 
 
+@dataclass(frozen=True, repr=False)
+class DownloadedObject:
+    object_key: str
+    file_size: int
+    content_type: str
+    sha256_hex: str
+    pdf_header_valid: bool
+    body: bytes
+
+
 @dataclass(frozen=True)
 class PresignedDownload:
     url: str
@@ -44,6 +54,9 @@ class UnavailableObjectStorage:
         raise RuntimeError("object_storage_unavailable")
 
     def prepare_download(self, *args, **kwargs):
+        raise RuntimeError("object_storage_unavailable")
+
+    def read_object(self, *args, **kwargs):
         raise RuntimeError("object_storage_unavailable")
 
 
@@ -80,6 +93,43 @@ class S3ObjectStorage:
 
     def inspect_upload(self, upload) -> StoredObject | None:
         return self._inspect_key(upload.object_key, upload.file_size)
+
+    def read_object(self, object_key: str, *, expected_size: int) -> DownloadedObject:
+        if (
+            not isinstance(object_key, str)
+            or not object_key.startswith("private/files/")
+            or type(expected_size) is not int
+            or expected_size < 1
+        ):
+            raise ValueError("object_read_input_invalid")
+        try:
+            response = self._client.get_object(Bucket=self._bucket, Key=object_key)
+        except Exception:
+            raise RuntimeError("object_read_failed") from None
+        body, digest, observed, header = response["Body"], sha256(), 0, b""
+        chunks = []
+        try:
+            while chunk := body.read(1024 * 1024):
+                if type(chunk) is not bytes:
+                    raise RuntimeError("object_read_failed")
+                observed += len(chunk)
+                if observed > expected_size:
+                    raise RuntimeError("object_size_mismatch")
+                header += chunk[:5-len(header)]
+                digest.update(chunk)
+                chunks.append(chunk)
+        except RuntimeError:
+            raise
+        except Exception:
+            raise RuntimeError("object_read_failed") from None
+        finally:
+            body.close()
+        if observed != expected_size or int(response["ContentLength"]) != expected_size:
+            raise RuntimeError("object_size_mismatch")
+        return DownloadedObject(
+            object_key, observed, response.get("ContentType", ""), digest.hexdigest(),
+            header == b"%PDF-", b"".join(chunks),
+        )
 
     def _inspect_key(self, object_key: str, expected_size: int) -> StoredObject | None:
         try:
