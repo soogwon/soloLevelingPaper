@@ -28,10 +28,15 @@
 ```http
 POST /v1/remote-uploads/intents/{intent_id}/consents/{storage|ai_provider}
 Idempotency-Key: <화면 동작에 고정한 키>
+Content-Type: application/json
+
+{"notice_version": "remote-pdf-processing-v1"}
 ```
 
 서버는 인증 owner와 업로드 의도의 canonical payload hash, 목적, 현재 고지 버전을 직접 결합한다.
-클라이언트가 input hash, owner, `confirmed`, 고지 버전을 제출하지 않는다. 동일 키·동일 입력은
+클라이언트는 조회하여 사용자에게 표시한 `notice_version`을 제출한다. 서버 현재 버전과 다르면
+`409 remote_upload_consent_notice_changed`로 거부하고 새 고지 조회·재동의를 요구한다.
+input hash, owner, `confirmed`는 받지 않는다. 동일 키·동일 입력은
 기존 동의를 재생하고 같은 owner/purpose 키가 다른 intent에 쓰이면 `409`로 거부한다. 이미 현재
 동의가 있을 때 새 키로 재확인해도 그 키를 별도 요청 원장에 결합해 이후 혼입을 막는다.
 저장된 동의의 고지 버전이 현재 서버 버전과 다르면 조회 상태는 `stale`이며 새 처리 접수에
@@ -88,3 +93,5 @@ gate와 운영 dispatch 제어를 계속 통과해야 한다. 저장된 결과 �
 자동 검증은 HTTP 자격·오류·응답 유실 복구, 요청 키 혼입, 철회/revision, PostgreSQL 동시 승인과
 기존 #215 업로드 회귀를 포함한다. 실제 R2와 두 테스트 계정의 종단 검증, 웹 버튼 연결,
 만료 정리 스케줄·presigned URL 로그 비노출은 #393의 후속 범위다.
+
+삭제 표식이 있는 논문은 기존 처리 job 재조회와 동일 키 재생에서도 제외한다.

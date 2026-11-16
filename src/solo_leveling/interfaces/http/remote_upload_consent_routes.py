@@ -34,6 +34,10 @@ def create_remote_upload_consent_router(require_principal: Any, consents: Any, p
         storage: ConsentView | None
         ai_provider: ConsentView | None
 
+    class GrantRequest(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        notice_version: str = Field(min_length=1, max_length=100)
+
     class RevokeRequest(BaseModel):
         model_config = ConfigDict(extra="forbid")
         expected_revision: int = Field(strict=True, ge=1)
@@ -77,12 +81,17 @@ def create_remote_upload_consent_router(require_principal: Any, consents: Any, p
     def grant_consent(
         intent_id: UUID,
         purpose: Literal["storage", "ai_provider"],
+        payload: GrantRequest,
         principal: Principal,
         response: Response,
         idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
     ):
         require_web(principal)
         response.headers["Cache-Control"] = "no-store"
+        # 사용자가 확인한 고지가 바뀌었으면 새 고지 조회와 재동의를 요구한다.
+        if payload.notice_version != NOTICE_VERSION:
+            raise HTTPException(
+                status_code=409, detail={"code": "remote_upload_consent_notice_changed"})
         try:
             value = consents.grant(
                 principal.user_id, str(intent_id), purpose, idempotency_key, NOTICE_VERSION)

@@ -144,7 +144,10 @@ def _existing(conn, owner_user_id, key, *, by_intent=False, lock=True):
            FROM server_processing_jobs j
            JOIN server_processing_job_authorizations a
              ON a.owner_user_id=j.owner_user_id AND a.job_id=j.job_id
-           WHERE j.owner_user_id=%s AND {column}=%s{suffix}""",
+           WHERE j.owner_user_id=%s AND {column}=%s
+             AND EXISTS (SELECT 1 FROM server_papers p
+                 WHERE p.owner_user_id=j.owner_user_id AND p.paper_id=j.paper_id
+                   AND p.deleted_at IS NULL){suffix}""",
         (owner_user_id, key),
     ).fetchone()
 

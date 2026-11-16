@@ -98,6 +98,7 @@ def test_web_can_read_grant_revoke_admit_and_recover_without_input_hash():
         status = client.get(f"/v1/remote-uploads/intents/{INTENT}/consents", headers=auth)
         granted = client.post(
             f"/v1/remote-uploads/intents/{INTENT}/consents/storage",
+            json={"notice_version": NOTICE_VERSION},
             headers={**auth, "Idempotency-Key": "grant-key"})
         revoked = client.post(
             f"/v1/remote-uploads/intents/{INTENT}/consents/storage/revoke",
@@ -138,6 +139,8 @@ def test_device_credential_is_rejected_before_stores(path, method):
     app, consents, processing = app_for("device")
     headers = {"Authorization": "Bearer test", "Idempotency-Key": "key"}
     options = {"headers": headers}
+    if path.endswith("/storage"):
+        options["json"] = {"notice_version": NOTICE_VERSION}
     if path.endswith("revoke"):
         options["json"] = {"expected_revision": 1}
     elif path.endswith("processing") and method == "post":
@@ -176,6 +179,7 @@ def test_consent_conflicts_are_stable_and_hide_private_details(error, code):
     with TestClient(app) as client:
         response = client.post(
             f"/v1/remote-uploads/intents/{INTENT}/consents/storage",
+            json={"notice_version": NOTICE_VERSION},
             headers={"Authorization": "Bearer test", "Idempotency-Key": "key"})
     assert response.status_code == 409
     assert response.json() == {"detail": {"code": code}}
@@ -213,3 +217,17 @@ def test_old_notice_is_reported_stale_without_mutation():
             headers={"Authorization": "Bearer test"})
     assert response.status_code == 200
     assert response.json()["storage"]["state"] == "stale"
+
+
+@pytest.mark.parametrize("purpose", ["storage", "ai_provider"])
+@pytest.mark.parametrize("payload,status", [(None, 422), ({"notice_version": "old-notice"}, 409)])
+def test_grant_rejects_unseen_or_outdated_notice_before_writing(purpose, payload, status):
+    app, consents, _ = app_for()
+    with TestClient(app) as client:
+        response = client.post(
+            f"/v1/remote-uploads/intents/{INTENT}/consents/{purpose}", json=payload,
+            headers={"Authorization": "Bearer test", "Idempotency-Key": "notice-key"})
+    assert response.status_code == status
+    assert consents.calls == []
+    if status == 409:
+        assert response.json()["detail"]["code"] == "remote_upload_consent_notice_changed"
