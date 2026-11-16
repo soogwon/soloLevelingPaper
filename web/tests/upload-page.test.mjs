@@ -139,3 +139,32 @@ test('제품 버튼과 실제 어댑터가 대역 prepare·PUT·complete를 연�
   assert.equal(calls.some(x=>x.path.includes('/processing')||x.path.endsWith('/consents/ai_provider')),false);
   listeners.get('auth:logout')();
 });
+test('처리 조회 버튼은 기존 작업을 표시하고 파일 취소 시 지운다',async(t)=>{
+  t.mock.method(api,'createRemoteUploadIntent',async()=>response);
+  const calls=[];
+  t.mock.method(api,'getRemoteProcessing',async key=>{calls.push(key);return {job_id:id,paper_id:id,version_id:id,status:'running'};});
+  const v=view();page({view:v});const node=s=>v.querySelector(s);
+  assert.equal(node('[data-processing-read]').disabled,true);
+  node('[data-file]').files=[file];await node('[data-file]').events.change();
+  node('[data-agree]').checked=true;await node('[data-create]').events.click();
+  assert.equal(calls.length,0);assert.equal(node('[data-processing-read]').disabled,false);
+  await node('[data-processing-read]').events.click();assert.deepEqual(calls,[id]);
+  assert.match(node('[data-processing-status]').textContent,/처리 중/);
+  assert.match(node('[data-processing-job]').textContent,new RegExp(id));
+  node('[data-file]').files=[];await node('[data-file]').events.cancel();
+  assert.equal(node('[data-processing-job]').textContent,'');assert.equal(node('[data-processing-read]').disabled,true);
+  listeners.get('auth:logout')();
+});
+for(const event of ['auth:logout','auth:expired','hashchange','pagehide'])test(`처리 조회 중 ${event} 뒤 작업 결과를 표시하지 않는다`,async(t)=>{
+  t.mock.method(api,'createRemoteUploadIntent',async()=>response);
+  let resolve;const pending=new Promise(r=>resolve=r);
+  t.mock.method(api,'getRemoteProcessing',()=>pending);
+  const v=view();page({view:v});const node=s=>v.querySelector(s);
+  node('[data-file]').files=[file];await node('[data-file]').events.change();
+  node('[data-agree]').checked=true;await node('[data-create]').events.click();
+  const request=node('[data-processing-read]').events.click();listeners.get(event)();
+  resolve({job_id:id,paper_id:id,version_id:id,status:'succeeded'});await request;
+  assert.equal(node('[data-processing-job]').textContent,'');
+  assert.match(node('[data-processing-status]').textContent,/다시 열어/);
+  assert.equal(node('[data-processing-read]').disabled,true);
+});

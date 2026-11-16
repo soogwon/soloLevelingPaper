@@ -1,3 +1,4 @@
+import { createProcessingStatus, processingMessages } from '../lib/processing-status.js';
 import { api } from '../api/index.js';
 import { CONFIG } from '../config.js';
 import { html, setHTML } from '../lib/html.js';
@@ -37,11 +38,24 @@ export default function uploadPage({ view }) {
       </section>
       <p>보관 동의 후 아래 버튼을 누르면 PDF를 서버 저장소로 전송하고 검증해요. AI 전송·학습 처리는 시작하지 않아요.</p>
       <button class="btn" type="button" data-upload disabled>PDF 업로드</button>
+      <section aria-label="기존 처리 작업 상태">
+        <h2>기존 처리 작업 상태</h2>
+        <button class="btn" type="button" data-processing-read disabled>처리 상태 조회</button>
+        <p role="status" aria-live="polite" data-processing-status></p>
+        <p data-processing-job></p>
+      </section>
       <p class="hint">새로고침·화면 이동·로그아웃 시 이 화면의 요청 키는 지워져요. 결과가 미확정이면
       화면을 유지하고 같은 요청을 확인하세요. 새로 파일을 선택하면 별도 등록 준비가 생길 수 있어요.</p>
     </section>`);
   const input = view.querySelector('[data-file]'), agree = view.querySelector('[data-agree]');
   const create = view.querySelector('[data-create]'), read = view.querySelector('[data-read]');
+  const processing = createProcessingStatus({api, changed:drawProcessing});
+  function drawProcessing(state) {
+    if (!view.isConnected) return;
+    view.querySelector('[data-processing-read]').disabled = CONFIG.USE_MOCK || !state.canRead;
+    view.querySelector('[data-processing-status]').textContent = processingMessages[state.status];
+    view.querySelector('[data-processing-job]').textContent = state.job ? `작업 ID: ${state.job.job_id}` : '';
+  }
   const consents = createUploadConsents({api, changed:drawConsents});
   const controller = createUploadIntent({ api, changed: draw });
   function drawUpload() {
@@ -78,6 +92,7 @@ export default function uploadPage({ view }) {
     create.disabled = CONFIG.USE_MOCK || !state.canCreate || !agree.checked;
     create.textContent = state.status === 'uncertain' && !state.intent ? '같은 등록 준비 요청 확인' : '등록 준비 저장';
     read.disabled = CONFIG.USE_MOCK || !state.canRead;
+    processing.bind(state.intent);
     consents.bind(state.intent ? {...state.intent, status:state.status === 'expired' ? 'expired' : state.intent.status} : null);
     drawConsents(consents.snapshot());
   }
@@ -106,12 +121,16 @@ export default function uploadPage({ view }) {
       return controller.upload(consents.snapshot().values.storage);
     }
   });
+  view.querySelector('[data-processing-read]').addEventListener('click', () => {
+    if (view.isConnected && !CONFIG.USE_MOCK) return processing.refresh();
+  });
   const events = ['auth:expired','auth:logout','hashchange','pagehide'];
   function dispose() {
     events.forEach(event => window.removeEventListener(event, dispose));
-    input.value = ''; agree.checked = false; controller.close(); consents.close();
+    input.value = ''; agree.checked = false; controller.close(); consents.close(); processing.close();
   }
   events.forEach(event => window.addEventListener(event, dispose));
+  drawProcessing(processing.snapshot());
   draw(controller.snapshot());
   drawConsents(consents.snapshot());
 }

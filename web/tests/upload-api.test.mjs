@@ -36,3 +36,10 @@ test('prepare·complete는 같은 의도에 웹 세션과 CSRF를 보내고 본�
   assert.deepEqual(calls.map(x=>x.url),['https://example.test/v1/remote-uploads/intents/intent%2Fid/prepare','https://example.test/v1/remote-uploads/intents/intent%2Fid/complete']);
   for(const call of calls){assert.equal(call.method,'POST');assert.equal(call.credentials,'include');assert.equal(call.headers['X-CSRF-Token'],'test-csrf');assert.equal(call.body,undefined);assert.equal(call.headers['Idempotency-Key'],undefined);}
 });
+test('처리 상태 조회는 인코딩한 의도에 GET만 보내고 새 작업 키나 본문을 보내지 않는다',async()=>{
+  const calls=[];globalThis.fetch=async(url,options)=>{calls.push({url:String(url),...options});return {ok:true,status:200,json:async()=>({})};};
+  await api.getRemoteProcessing('intent/id');
+  assert.equal(calls[0].url,'https://example.test/v1/remote-uploads/intents/intent%2Fid/processing');
+  assert.equal(calls[0].method,'GET');assert.equal(calls[0].credentials,'include');
+  assert.equal(calls[0].body,undefined);assert.equal(calls[0].headers['Idempotency-Key'],undefined);
+});
