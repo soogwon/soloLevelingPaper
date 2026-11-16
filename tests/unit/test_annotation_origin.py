@@ -39,6 +39,44 @@ def test_legacy_origin_is_unknown_and_bad_origin_is_rejected(env):
         service.create(ctx, 'note', '오류', creation_origin='owner-admin')
 
 
+def test_pre_origin_fingerprint_accepts_only_omitted_or_unknown_origin(env):
+    import hashlib
+    import json
+    db, ctx = env
+    service = AnnotationService(db)
+    saved = service.create(ctx, 'note', '기존 😀', request_key='before-upgrade').annotation
+    # origin 필드가 없던 이전 배포의 지문과 출처 행 부재를 직접 준비한다.
+    old_hash = hashlib.sha256(json.dumps(['note', '기존 😀', None, []],
+        ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('ascii')).hexdigest()
+    with closing(get_connection(db)) as conn, conn:
+        conn.execute('DELETE FROM annotation_creation_origins WHERE annotation_id=?', (saved.annotation_id,))
+        conn.execute('UPDATE annotation_create_requests SET input_hash=? WHERE context_id=? AND request_key=?',
+                     (old_hash, ctx, 'before-upgrade'))
+    init_db(db)
+    for options in ({}, {'creation_origin':'unknown'}):
+        replay = service.create(ctx, 'note', '기존 😀', request_key='before-upgrade', **options)
+        assert replay.reused and replay.annotation.annotation_id == saved.annotation_id
+        assert replay.annotation.creation_origin == 'unknown'
+    for origin in ('user', 'ai'):
+        assert service.create(ctx, 'note', '기존 😀', request_key='before-upgrade',
+                              creation_origin=origin).code == 'REQUEST_KEY_CONFLICT'
+    with closing(get_connection(db)) as conn:
+        assert conn.execute('SELECT count(*) FROM annotations').fetchone()[0] == 1
+        assert conn.execute('SELECT count(*) FROM annotation_create_requests').fetchone()[0] == 1
+
+
+def test_deleting_annotation_removes_origin_but_preserves_request_tombstone(env):
+    db, ctx = env
+    service = AnnotationService(db)
+    saved = service.create(ctx, 'note', '합성', creation_origin='ai', request_key='delete-origin').annotation
+    service.delete(ctx, saved.annotation_id, saved.revision)
+    with closing(get_connection(db)) as conn:
+        assert conn.execute('SELECT count(*) FROM annotation_creation_origins').fetchone()[0] == 0
+        assert conn.execute('PRAGMA foreign_key_check').fetchall() == []
+    assert service.create(ctx, 'note', '합성', creation_origin='ai',
+                          request_key='delete-origin').code == 'ANNOTATION_DELETED'
+
+
 def test_server_origin_conflict_and_legacy_preservation():
     from solo_leveling.interfaces.http.papers import AnnotationMetadata, AnnotationConflict, PostgresPaperStore
     from tests.unit.test_http_papers import Pool, Result, NOW, PAPER_ID, SOURCE_ID
