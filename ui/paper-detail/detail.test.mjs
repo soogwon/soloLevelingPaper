@@ -128,6 +128,7 @@ test('목차 제목과 메모 저장을 함께 유지하고 출처 불일치와 
   assert.match(el('availability').textContent,/키워드의 일부 출처를 확인할 수 없습니다/);
   assert.match(el('availability').textContent,/저장된 중요 문장 없음/);
   el('note-body').value = '내 메모';
+  el('new-annotation').checked = true;
   await el('save-note').onclick();
   assert.equal(request.name,'create_annotation');
   assert.equal(request.arguments.request.context_id,'ctx');
@@ -149,6 +150,7 @@ test('저장 중 근거를 전환해도 요청 위치와 표시 목록은 섞이
   };
   app.ontoolresult(detailPayload({evidence: [first, second]}));
   el('note-body').value = '첫 근거의 메모';
+  el('new-annotation').checked = true;
   el('save-note').click();
   while (!request) await new Promise(resolve => setImmediate(resolve));
   assert.equal(request.context_id, 'ctx');
@@ -191,11 +193,13 @@ test('저장 결과 미확정 뒤에는 근거 재선택으로 재시도할 수 
   let calls = 0;
   app.callServerTool = async () => { calls++; return {isError:true}; };
   app.ontoolresult(detailPayload({evidence:[first,second]}));
+  el('new-annotation').checked = true;
   await el('save-highlight').onclick();
   el('evidence-list').lastChild.click();
   assert.equal(el('editor').disabled,false);
   el('evidence-list').firstChild.click();
   assert.equal(el('editor').disabled,true);
+  el('new-annotation').checked = true;
   await el('save-highlight').onclick();
   assert.equal(calls,1);
   app.ontoolresult(detailPayload({evidence:[{...first,annotations:[{kind:'highlight',body:''}]}]}));
@@ -203,13 +207,14 @@ test('저장 결과 미확정 뒤에는 근거 재선택으로 재시도할 수 
   assert.match(el('records').textContent,/하이라이트/);
 });
 
-test('응답 유실 후 카드 재시작에서도 같은 요청 키를 사용하고 목록을 중복 표시하지 않는다', async () => {
+test('저장 공간이 유지된 카드 재시작에서는 같은 요청 키를 사용하고 목록을 중복 표시하지 않는다', async () => {
   const first = evidence('e1', {annotation_start:0, annotations:[]});
   const a = setup();
   let original;
   a.app.callServerTool = async call => { original = call.arguments.request; throw Error(); };
   a.app.ontoolresult(detailPayload({evidence:[first]}));
   a.el('note-body').value = '미확정 메모';
+  a.el('new-annotation').checked = true;
   await a.el('save-note').onclick();
   assert.ok(original.request_key);
   const storage = a.doc.defaultView.localStorage;
@@ -235,6 +240,7 @@ test('요청 키 보관 실패 시 생성 도구를 호출하지 않는다', asy
   let calls = 0;
   app.callServerTool = async () => { calls++; };
   app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,annotations:[]})]}));
+  el('new-annotation').checked = true;
   await el('save-highlight').onclick();
   assert.equal(calls, 0);
   assert.equal(el('editor').disabled, false);
@@ -278,6 +284,7 @@ test('다음 페이지의 기존 기록 재사용은 건수를 늘리지 않고 
     : {structuredContent:{context_id:'ctx',evidence_id:'e1',annotation_start:0,
         annotations:[old],annotation_count:2,annotation_cursor:null}};
   el('note-body').value = '최초 메모';
+  el('new-annotation').checked = true;
   await el('save-note').onclick();
   assert.match(el('record-status').textContent, /전체 2건/);
   await el('more-records').onclick();
@@ -294,6 +301,7 @@ test('번역문 하이라이트는 번역 위치·리비전을 보내고 원문 
   };
   app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,
     translation_annotation_start:2,annotations:[],annotation_count:0})]}));
+  el('new-annotation').checked = true;
   await el('save-translation-highlight').onclick();
   assert.equal(request.segments[0].target, 'translation');
   assert.equal(request.segments[0].translation_revision_id, 't');
@@ -418,6 +426,7 @@ for (const event of ['ontoolinput', 'ontoolcancelled']) {
     app.callServerTool = async () => { calls++; };
     app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,annotations:[]})]}));
     el('note-body').value = '취소된 맥락 메모';
+    el('new-annotation').checked = true;
     const saving = el('save-note').onclick();
     app[event]();
     finish(new Uint8Array(32).buffer);
@@ -440,6 +449,7 @@ test('원문 위치가 모호해도 고유한 번역 위치는 저장할 수 있
   assert.equal(el('save-note').disabled, true);
   assert.equal(el('save-highlight').disabled, true);
   assert.equal(el('save-translation-highlight').disabled, false);
+  el('new-annotation').checked = true;
   await el('save-translation-highlight').onclick();
   assert.equal(request.segments[0].target, 'translation');
   assert.equal(request.segments[0].start_offset, 2);
@@ -455,6 +465,51 @@ test('저장 클릭만으로 본문 생성 주체를 user로 추정하지 않는
   };
   app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,annotations:[]})]}));
   el('note-body').value = 'AI에서 복사했을 수도 있는 문장';
+  el('new-annotation').checked = true;
   await el('save-note').onclick();
   assert.equal(request.creation_origin, 'unknown');
 });
+
+test('빈 저장 공간은 같은 내용도 확인 전에는 새 키를 만들거나 전송하지 않는다', async () => {
+  const {app,el,doc}=setup();
+  const record={annotation_id:'existing',kind:'note',body:'응답 유실 메모'};
+  app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,annotations:[record],annotation_count:1})]}));
+  el('note-body').value=record.body;
+  let calls=0;
+  app.callServerTool=async call=>{calls++;return {structuredContent:{outcome:'saved',annotation:{...call.arguments.request,annotation_id:'new'}}};};
+  await el('save-note').onclick();
+  assert.equal(calls,0);
+  assert.equal(doc.defaultView.localStorage.length,0);
+  assert.match(el('record-status').textContent,/전체 기록을 확인/);
+  el('new-annotation').checked=true;
+  await el('save-note').onclick();
+  assert.equal(calls,1);
+  assert.equal(el('records').children.length,2);
+  assert.equal(el('new-annotation').checked,false);
+});
+
+test('새 기록 확인은 메모 입력 변경과 근거 전환 때 초기화한다',()=>{
+  const {app,el,doc}=setup();
+  app.ontoolresult(detailPayload({evidence:[evidence('e1',{annotation_start:0,annotations:[]}),evidence('e2',{annotation_start:0,annotations:[]})]}));
+  el('new-annotation').checked=true;
+  el('note-body').dispatchEvent(new doc.defaultView.Event('input'));
+  assert.equal(el('new-annotation').checked,false);
+  el('new-annotation').checked=true;
+  el('evidence-list').lastChild.click();
+  assert.equal(el('new-annotation').checked,false);
+});
+
+for (const button of ['save-highlight', 'save-translation-highlight']) {
+  test(`${button}도 새 요청 확인 전에는 키 발급과 전송을 차단한다`, async () => {
+    const {app,el,doc}=setup();
+    app.ontoolresult(detailPayload({evidence:[evidence('e1',{
+      annotation_start:0, translation_annotation_start:0, annotations:[], annotation_count:0,
+    })]}));
+    let calls=0;
+    app.callServerTool=async()=>{calls++;};
+    await el(button).onclick();
+    assert.equal(calls,0);
+    assert.equal(doc.defaultView.localStorage.length,0);
+    assert.match(el('record-status').textContent,/전체 기록을 확인/);
+  });
+}
