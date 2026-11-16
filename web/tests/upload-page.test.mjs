@@ -47,7 +47,7 @@ test('제품 화면은 두 동의를 구분하고 조회·고지 확인 뒤에�
 test('제품 화면은 명시 동의 후에만 API로 보내고 취소·로그아웃에서 이전 표시를 지운다',async(t)=>{
   const calls=[];t.mock.method(api,'createRemoteUploadIntent',async(...args)=>{calls.push(args);return response;});
   const v=view();page({view:v});const node=s=>v.querySelector(s);
-  assert.match(v.innerHTML,/PDF 업로드 \(준비 중\)/);assert.equal(calls.length,0);
+  assert.match(v.innerHTML,/data-upload disabled>PDF 업로드/);assert.equal(calls.length,0);
   node('[data-file]').files=[file];await node('[data-file]').events.change();
   assert.equal(node('[data-create]').disabled,true);
   node('[data-agree]').checked=true;node('[data-agree]').events.change();assert.equal(node('[data-create]').disabled,false);
@@ -105,4 +105,37 @@ test('로그아웃 뒤 늦은 API 오류도 닫힌 상태를 덮지 않는다',a
   listeners.get('auth:logout')();reject({status:403});await request;
   assert.match(node('[data-status]').textContent,/로그인 상태/);
   assert.equal(node('[data-intent]').textContent,'');assert.equal(node('[data-read]').disabled,true);
+});
+test('제품 버튼과 실제 어댑터가 대역 prepare·PUT·complete를 연결하고 AI 처리는 시작하지 않는다',async(t)=>{
+  const calls=[];let stored=false,verified=false;
+  const storage={consent_id:id,purpose:'storage',revision:1,state:'current',notice_version:'v1',granted_at:'2026-01-01T00:00:00Z',revoked_at:null};
+  t.mock.method(globalThis,'fetch',async(url,options)=>{
+    const path=String(url);calls.push({path,...options});let data;
+    if(path==='https://storage.example.test/test?signature=synthetic'){
+      assert.equal(options.method,'PUT');assert.equal(await options.body.text(),'%PDF-1.7');
+      assert.equal(options.credentials,'omit');return {ok:true,status:200};
+    }
+    if(path.endsWith('/consents/storage')){stored=true;data=storage;}
+    else if(path.endsWith('/consents'))data={intent_id:id,notice_version:'v1',storage_notice:'보관',ai_provider_notice:'AI',storage:stored?storage:null,ai_provider:null};
+    else if(path.endsWith('/prepare'))data={intent_id:id,method:'PUT',upload_url:'https://storage.example.test/test?signature=synthetic',headers:{'Content-Type':'application/pdf','Content-Length':'8'},expires_at:response.expires_at};
+    else if(path.endsWith('/complete')){verified=true;data={...response,status:'verified',file_name:'sample.pdf',file_size:8,content_type:'application/pdf'};}
+    else data={...response,status:verified?'verified':'created'};
+    return {ok:true,status:200,json:async()=>data};
+  });
+  const v=view();page({view:v});const node=s=>v.querySelector(s);
+  node('[data-file]').files=[file];await node('[data-file]').events.change();
+  node('[data-agree]').checked=true;await node('[data-create]').events.click();
+  await node('[data-consent-read]').events.click();
+  assert.equal(node('[data-upload]').disabled,true);await node('[data-upload]').events.click();
+  assert.equal(calls.some(x=>x.path.endsWith('/prepare')),false);
+  node('[data-approve-storage]').checked=true;await node('[data-grant-storage]').events.click();
+  assert.equal(node('[data-upload]').disabled,false);assert.equal(node('[data-approve-ai_provider]').disabled,true);
+  await node('[data-upload]').events.click();
+  assert.match(node('[data-status]').textContent,/PDF 검증이 완료/);
+  assert.equal(node('[data-upload]').disabled,true);
+  await node('[data-consent-read]').events.click();
+  assert.equal(node('[data-approve-ai_provider]').disabled,false);
+  assert.deepEqual(calls.filter(x=>x.path.endsWith('/prepare')||x.method==='PUT'||x.path.endsWith('/complete')).map(x=>x.method),['POST','PUT','POST']);
+  assert.equal(calls.some(x=>x.path.includes('/processing')||x.path.endsWith('/consents/ai_provider')),false);
+  listeners.get('auth:logout')();
 });
