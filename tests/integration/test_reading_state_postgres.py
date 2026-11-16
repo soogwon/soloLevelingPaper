@@ -218,46 +218,51 @@ def test_authenticated_http_boundaries_and_conflict_preserve_state(pool, db):
     complete = request(source_id)
 
     with TestClient(app) as client:
-        response = client.get(path, params={"source_instance_id": source_id})
-        assert response.status_code == 401
-        assert response.json()["detail"]["code"] == "authentication_required"
-
-        response = client.get(
-            path,
-            params={"source_instance_id": source_id},
-            headers=web_headers,
-        )
-        assert response.status_code == 403
-        assert response.json()["detail"]["code"] == "device_credential_required"
-
-        for headers, attempted_source in (
-            (foreign_headers, source_id),
-            (owner_headers, str(uuid4())),
-        ):
-            response = client.get(
-                path,
-                params={"source_instance_id": attempted_source},
-                headers=headers,
-            )
-            assert response.status_code == 404
-            assert response.json()["detail"]["code"] == "paper_not_found"
-
-        response = client.put(path, json=complete, headers=foreign_headers)
-        assert response.status_code == 404
-        assert response.json()["detail"]["code"] == "paper_not_found"
-
-        response = client.put(
-            path,
-            json=request(str(uuid4())),
-            headers=owner_headers,
-        )
-        assert response.status_code == 404
-        assert response.json()["detail"]["code"] == "paper_not_found"
-
+        # 보호할 완료 상태를 먼저 만들고 모든 거부 뒤 전체 응답이 같은지 확인한다.
         response = client.put(path, json=complete, headers=owner_headers)
         assert response.status_code == 200
-        assert response.json()["status"] == "completed"
-        assert response.json()["revision"] == 1
+        saved = response.json()
+        assert saved["status"] == "completed"
+        assert saved["revision"] == 1
+
+        def assert_preserved():
+            current = client.get(
+                path, params={"source_instance_id": source_id}, headers=owner_headers,
+            )
+            assert current.status_code == 200
+            assert current.json() == saved
+
+        for headers, expected_status, code in (
+            ({}, 401, "authentication_required"),
+            ({"Authorization": "Bearer invalid"}, 401, "authentication_required"),
+            (web_headers, 403, "device_credential_required"),
+        ):
+            for method in ("get", "put"):
+                response = (
+                    client.get(path, params={"source_instance_id": source_id}, headers=headers)
+                    if method == "get"
+                    else client.put(path, json=complete, headers=headers)
+                )
+                assert response.status_code == expected_status
+                assert response.json() == {"detail": {"code": code}}
+                assert_preserved()
+
+        # 타인·다른 source와 미존재 대상이 같은 공개 오류를 반환한다.
+        missing_path = f"/v1/mcp/papers/{uuid4()}/reading-state"
+        for attempted_path, headers, attempted_source in (
+            (path, foreign_headers, source_id),
+            (path, owner_headers, str(uuid4())),
+            (missing_path, owner_headers, source_id),
+        ):
+            for method in ("get", "put"):
+                response = (
+                    client.get(attempted_path, params={"source_instance_id": attempted_source}, headers=headers)
+                    if method == "get"
+                    else client.put(attempted_path, json=request(attempted_source), headers=headers)
+                )
+                assert response.status_code == 404
+                assert response.json() == {"detail": {"code": "paper_not_found"}}
+                assert_preserved()
 
         response = client.put(
             path,
@@ -271,13 +276,11 @@ def test_authenticated_http_boundaries_and_conflict_preserve_state(pool, db):
             headers=owner_headers,
         )
         assert response.status_code == 409
-        assert response.json()["detail"]["code"] == "reading_state_conflict"
+        assert response.json() == {"detail": {"code": "reading_state_conflict"}}
+        assert_preserved()
 
-        response = client.get(
-            path,
-            params={"source_instance_id": source_id},
-            headers=owner_headers,
-        )
+        # 인증 HTTP 경계에서도 같은 operation의 재생은 변경을 만들지 않는다.
+        response = client.put(path, json=complete, headers=owner_headers)
         assert response.status_code == 200
-        assert response.json()["status"] == "completed"
-        assert response.json()["revision"] == 1
+        assert response.json() == saved
+        assert_preserved()
