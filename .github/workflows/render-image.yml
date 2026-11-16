@@ -5,6 +5,9 @@ on:
       - Dockerfile
       - .dockerignore
       - deploy/render-start.sh
+      - src/solo_leveling/domain/deletion_policy.py
+      - src/solo_leveling/infrastructure/storage/remote_deletion_backend.py
+      - src/solo_leveling/interfaces/cli/remote_deletion_cleanup.py
       - src/solo_leveling/interfaces/http/**
       - .github/workflows/render-image.yml
 permissions:
@@ -29,5 +32,6 @@ jobs:
             test ! -e web/tests
             test -z "$(find /app -iname "*.pdf" -print -quit)"
             solo-leveling-server-migrate --help
+            solo-leveling-remote-deletion-cleanup --help
             WEB_STATIC_ROOT=/app/web python -c "from solo_leveling.interfaces.http import create_app; create_app()"
           '
