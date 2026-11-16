@@ -32,6 +32,12 @@ def test_render_staging_explicitly_enables_bounded_startup_cleanup():
     assert "REMOTE_DELETION_CLEANUP_LEASE_SECONDS\n        value: \"300\"" in blueprint
 
 
+def test_deployment_image_contains_every_startup_cleanup_entrypoint():
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    assert "src/solo_leveling/interfaces/cli/remote_upload_cleanup.py" in dockerfile
+    assert "src/solo_leveling/interfaces/cli/remote_deletion_cleanup.py" in dockerfile
+
+
 @pytest.mark.parametrize(
     ("enabled", "migration_exit", "upload_exit", "cleanup_exit", "expected", "exit_code"),
     [
