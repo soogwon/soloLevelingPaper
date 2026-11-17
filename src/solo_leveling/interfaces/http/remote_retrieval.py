@@ -11,6 +11,30 @@ class PostgresRemoteContextResolver:
     def __init__(self, connection_pool):
         self._pool = connection_pool
 
+    def pin(self, owner_user_id: str, context_id: str, paper_id: str, version_id: str):
+        """호출자가 보관한 context 키로 정확한 원격 판본의 현재 게시를 한 번만 고정한다."""
+        if not all(isinstance(v, str) and v.strip() for v in (owner_user_id, context_id, paper_id, version_id)):
+            raise ValueError("remote_context_lookup_invalid")
+        with self._pool.connection() as conn:
+            conn.execute(
+                """INSERT INTO server_execution_contexts
+                     (owner_user_id,context_id,paper_id,server_version_id,publication_id,parse_revision_id)
+                   SELECT v.owner_user_id,%s,v.paper_id,v.server_version_id,p.publication_id,p.parse_revision_id
+                   FROM server_processing_versions v
+                   JOIN server_papers paper ON paper.owner_user_id=v.owner_user_id
+                     AND paper.paper_id=v.paper_id AND paper.deleted_at IS NULL
+                   JOIN server_processing_publications p ON p.owner_user_id=v.owner_user_id
+                     AND p.paper_id=v.paper_id AND p.server_version_id=v.server_version_id
+                     AND p.publication_id=v.active_publication_id
+                   WHERE v.owner_user_id=%s AND v.paper_id=%s AND v.server_version_id=%s
+                   ON CONFLICT (owner_user_id,context_id) DO NOTHING""",
+                (context_id, owner_user_id, paper_id, version_id),
+            )
+        binding = self.resolve(owner_user_id, context_id)
+        if binding is not None and (binding.paper_id != paper_id or binding.server_version_id != version_id):
+            raise ValueError("remote_context_key_conflict")
+        return binding
+
     def resolve(self, owner_user_id: str, context_id: str) -> RemoteSearchBinding | None:
         if not all(isinstance(value, str) and value.strip() for value in (owner_user_id, context_id)):
             raise ValueError("remote_context_lookup_invalid")
