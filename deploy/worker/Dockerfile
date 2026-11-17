@@ -51,3 +51,6 @@ CMD []
 FROM worker AS render
 ENTRYPOINT ["python", "-m", "solo_leveling.workers.render_service"]
 CMD ["--mode", "standby"]
+
+# 기존 기본 빌드는 사전 검사로 종료한다. Render는 --target render로만 선택한다.
+FROM worker AS default
