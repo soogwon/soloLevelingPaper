@@ -36,6 +36,8 @@ class StoredExecution:
     result_available: bool = False
     payload_json: str | None = None
     payload_sha256: str | None = None
+    terminal_reason: str | None = None
+    usage_state: str = "known"
 
 
 @dataclass(frozen=True, repr=False)
@@ -44,6 +46,8 @@ class ReplayView:
     state: str
     budget_state: str
     payload: dict | None
+    terminal_reason: str | None = None
+    usage_state: str = "known"
 
 
 class ExecutionReader(Protocol):
@@ -117,9 +121,12 @@ def read_existing_execution(reader: ExecutionReader, lookup: ExecutionLookup) ->
     if (not isinstance(row.execution_id, str) or not row.execution_id.strip()
             or row.state not in ('queued', 'running', 'completed', 'failed', 'unknown', 'cancel_requested', 'cancelled')
             or row.budget_state not in ('available', 'limited', 'usage_unknown')
-            or type(row.result_available) is not bool):
+            or type(row.result_available) is not bool
+            or row.usage_state not in ('known', 'unknown')
+            or row.terminal_reason not in (None, 'budget_exhausted', 'deadline_exceeded',
+                'provider_failed', 'cancelled', 'scope_revoked', 'internal_failed')):
         raise ReplayError('REMOTE_EXECUTION_INVALID')
     if not row.result_available and (row.payload_json is not None or row.payload_sha256 is not None):
         raise ReplayError('REMOTE_EXECUTION_INVALID')
     return ReplayView(row.execution_id, row.state, row.budget_state,
-                      _saved_payload(row) if row.result_available else None)
+                      _saved_payload(row) if row.result_available else None, row.terminal_reason, row.usage_state)

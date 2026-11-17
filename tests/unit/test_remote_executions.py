@@ -120,7 +120,7 @@ def test_complete_requires_current_lease_context_and_tombstone_check():
     PostgresRemoteExecutionStore(pool).complete("owner", "execution", "lease", payload)
 
     sql, params = pool.conn.calls[0]
-    assert "lease_expires_at>CURRENT_TIMESTAMP" in sql
+    assert "lease_expires_at>clock_timestamp()" in sql
     assert "p.deleted_at IS NULL" in sql
     assert params[-1] == "context"
 
@@ -151,7 +151,7 @@ def test_dispatch_scope_locks_exact_execution_generation_and_paper():
     assert not validate_execution_scope(conn, intent)
     sql, params = conn.calls[0]
     assert "FOR UPDATE OF e,p" in sql
-    assert "lease_expires_at>CURRENT_TIMESTAMP" in sql
+    assert "lease_expires_at>clock_timestamp()" in sql
     assert "p.deleted_at IS NULL" in sql
     assert params == ("owner", "execution", "lease", "hash", "storage", "ai", "notice")
 

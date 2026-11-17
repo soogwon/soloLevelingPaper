@@ -26,9 +26,16 @@ class BudgetedExecutionScope:
         # 동일 실행 잠금은 원장 INSERT까지 유지한다. 다른 lease에서도 소비량을 초기화하지 않는다.
         if not validate_execution_scope(conn, intent):
             return False
+        policy_row = conn.execute("SELECT policy_snapshot FROM server_remote_executions WHERE owner_user_id=%s AND execution_id=%s",
+                                  (intent.owner_user_id,intent.execution_id)).fetchone()
+        budget = self.budget
+        if policy_row and policy_row.get('policy_snapshot'):
+            from solo_leveling.application.remote_execution_policy import RemoteExecutionPolicy
+            policy = RemoteExecutionPolicy(**policy_row['policy_snapshot'])
+            budget = ExecutionBudget(policy.max_calls,policy.max_input_tokens,policy.max_output_tokens,policy.timeout_seconds)
         row = conn.execute('''SELECT created_at + %s * interval '1 second' > clock_timestamp() AS within_time
             FROM server_remote_executions WHERE execution_id=%s AND owner_user_id=%s''',
-            (self.budget.timeout_seconds, intent.execution_id, intent.owner_user_id)).fetchone()
+            (budget.timeout_seconds, intent.execution_id, intent.owner_user_id)).fetchone()
         if not row or not row['within_time']:
             raise DispatchBudgetExceeded('time')
         usage = conn.execute('''SELECT count(*) AS calls,
@@ -36,8 +43,8 @@ class BudgetedExecutionScope:
             COALESCE(sum(GREATEST(reserved_output_tokens,COALESCE(actual_output_tokens,0))),0) AS output_tokens
             FROM server_provider_attempts WHERE execution_id=%s AND owner_user_id=%s''',
             (intent.execution_id, intent.owner_user_id)).fetchone()
-        if (usage['calls'] >= self.budget.max_calls
-                or usage['input_tokens'] + self.request.input_token_upper_bound > self.budget.max_input_tokens
-                or usage['output_tokens'] + self.request.max_output_tokens > self.budget.max_output_tokens):
+        if (usage['calls'] >= budget.max_calls
+                or usage['input_tokens'] + self.request.input_token_upper_bound > budget.max_input_tokens
+                or usage['output_tokens'] + self.request.max_output_tokens > budget.max_output_tokens):
             raise DispatchBudgetExceeded('calls_or_tokens')
         return True
