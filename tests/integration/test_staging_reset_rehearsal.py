@@ -70,7 +70,7 @@ def test_reset_preserves_login_and_rebuilds_isolated_schema():
                 conn.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(owner)))
                 return conn
 
-            assert len(migrate(target, migrations, connector=migration_connection).applied) == 37
+            assert len(migrate(target, migrations, connector=migration_connection).applied) == len(migrations)
             with psycopg.connect(target) as conn:
                 for role in (web, worker):
                     conn.execute(sql.SQL("GRANT USAGE ON SCHEMA slp_staging TO {}").format(sql.Identifier(role)))
