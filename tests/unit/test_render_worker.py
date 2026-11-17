@@ -152,3 +152,15 @@ def test_cleanup_error_is_not_raw(monkeypatch, capsys):
     assert render_service.supervise(stop, preflight=['test']) == 1
     output = capsys.readouterr().out
     assert 'render_cleanup_failed' in output and 'SECRET' not in output
+
+
+def test_build_cli_defaults_to_plan_without_docker(tmp_path, monkeypatch, capsys):
+    path = Path(__file__).resolve().parents[2] / 'deploy/worker/build_render.py'
+    spec = importlib.util.spec_from_file_location('render_build_plan', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    (tmp_path / 'runtime-lock.json').write_text('{}')
+    monkeypatch.setattr(module.subprocess, 'run', lambda *a, **kw: pytest.fail('계획 모드에서 Docker 실행'))
+    module.main(['--runtime-image', 'approved@sha256:' + 'a' * 64,
+                 '--model-dir', str(tmp_path), '--runtime-dir', str(tmp_path)])
+    assert 'linux/amd64' in capsys.readouterr().out
