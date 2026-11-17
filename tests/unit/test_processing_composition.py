@@ -94,7 +94,8 @@ def test_embedding_rechecks_same_worker_callback(composed):
     model_factory.assert_not_called()
 
 
-def test_worker_runs_scoped_composition_without_publishing(composed):
+@pytest.mark.parametrize("staging_failure", [False, True])
+def test_worker_runs_scoped_composition_without_publishing(composed, staging_failure):
     from solo_leveling.interfaces.http.object_storage import DownloadedObject
     from solo_leveling.interfaces.http.processing_jobs import ProcessingJob
     from solo_leveling.workers.remote_processing import RemoteProcessingInput, RemoteProcessingWorker
@@ -108,10 +109,19 @@ def test_worker_runs_scoped_composition_without_publishing(composed):
     inputs.allowed.return_value = True
     objects.read_object.return_value = DownloadedObject('synthetic.pdf', len(pdf),
         'application/pdf', source.pdf_sha256, True, pdf)
+    staging = Mock()
+    if staging_failure:
+        staging.save.side_effect = RuntimeError('staging failed')
     worker = RemoteProcessingWorker(jobs, inputs, objects, None, worker_id='synthetic',
-        lease_seconds=30, stages_factory=factory)
+        lease_seconds=30, stages_factory=factory, result_store=staging)
+    if staging_failure:
+        with pytest.raises(RuntimeError, match='staging failed'): worker.run_once()
+        jobs.succeed.assert_not_called()
+        return
     result = worker.run_once()
     assert result.result.status == 'prepared' and result.job == job
+    staging.save.assert_called_once_with(result.result)
+    assert result.staged is staging.save.return_value
     assert post.call_count == len(ledger.observed) == 2
     assert model_factory.call_count == 1
     assert {'parse', 'translation', 'embedding', 'result'} <= {

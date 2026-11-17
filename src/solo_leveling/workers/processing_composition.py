@@ -88,14 +88,19 @@ class ProcessingStagesFactory:
 
 
 def create_processing_worker(pool, objects, *, worker_id, lease_seconds,
-                             heartbeat_interval_seconds=None, **stage_options):
+                             max_staging_bytes, heartbeat_interval_seconds=None, **stage_options):
     """서버 소유 DB/R2 연결과 명시적 정책으로 실행 가능한 worker를 만든다."""
     from solo_leveling.interfaces.http.processing_jobs import PostgresProcessingJobStore
     from solo_leveling.workers.processing_authorization import PostgresProcessingAuthorization
     from solo_leveling.workers.remote_processing import RemoteProcessingWorker
 
+    from solo_leveling.workers.processing_staging import PostgresProcessingResultStaging
+
+    staging = PostgresProcessingResultStaging(pool, limits=stage_options["limits"],
+        translation_settings=stage_options["service_config"].translation_settings,
+        embedding_spec=stage_options["embedding_spec"], max_result_bytes=max_staging_bytes)
     authorization = PostgresProcessingAuthorization(pool)
     factory = ProcessingStagesFactory(authorization, **stage_options)
     return RemoteProcessingWorker(PostgresProcessingJobStore(pool), authorization, objects, None,
         worker_id=worker_id, lease_seconds=lease_seconds,
-        heartbeat_interval_seconds=heartbeat_interval_seconds, stages_factory=factory)
+        heartbeat_interval_seconds=heartbeat_interval_seconds, stages_factory=factory, result_store=staging)

@@ -38,6 +38,7 @@ class RemoteProcessingInput:
 class ClaimedProcessingResult:
     job: ProcessingJob
     result: ProcessingResult
+    staged: object | None = None
 
 
 class JobQueue(Protocol):
@@ -156,7 +157,7 @@ class RemoteProcessingWorker:
 
     def __init__(self, jobs: JobQueue, inputs: ProcessingInputStore, objects: ObjectReader,
                  stages: ProcessingStages, *, worker_id: str, lease_seconds: int = 60,
-                 heartbeat_interval_seconds: float | None = None, stages_factory=None):
+                 heartbeat_interval_seconds: float | None = None, stages_factory=None, result_store=None):
         if not isinstance(worker_id, str) or not worker_id.strip() or type(lease_seconds) is not int or lease_seconds < 1:
             raise ValueError("remote_processing_worker_config_invalid")
         interval = lease_seconds / 3 if heartbeat_interval_seconds is None else heartbeat_interval_seconds
@@ -164,6 +165,9 @@ class RemoteProcessingWorker:
             raise ValueError("remote_processing_worker_config_invalid")
         if stages_factory is not None and not callable(stages_factory):
             raise ValueError("remote_processing_worker_config_invalid")
+        if result_store is not None and not callable(getattr(result_store, "save", None)):
+            raise ValueError("remote_processing_worker_config_invalid")
+        self.result_store = result_store
         self.stages_factory = stages_factory
         self.jobs, self.inputs, self.objects, self.stages = jobs, inputs, objects, stages
         self.worker_id, self.lease_seconds = worker_id, lease_seconds
@@ -181,6 +185,7 @@ class RemoteProcessingWorker:
         )
         heartbeat.start()
         result = None
+        staged = None
         failure = None
         try:
             prepared = self.inputs.load(job)
@@ -220,6 +225,11 @@ class RemoteProcessingWorker:
             heartbeat.check()
             if not isinstance(result, ProcessingResult) or result.source != prepared.source:
                 raise RuntimeError("remote_processing_result_invalid")
+            if self.result_store is not None and result.status == "prepared":
+                if check_allowed(result.source, "result") is not True:
+                    raise RemoteProcessingInputRejected("remote_processing_input_rejected")
+                staged = self.result_store.save(result)
+                heartbeat.check()
         except Exception as exc:
             failure = exc
         finally:
@@ -228,7 +238,7 @@ class RemoteProcessingWorker:
         heartbeat.check()
         if failure is not None:
             raise failure
-        return ClaimedProcessingResult(job, result)
+        return ClaimedProcessingResult(job, result, staged)
 
 
 _SOURCE_SQL = """SELECT u.object_key,u.file_size,u.content_type,u.sha256_hex
