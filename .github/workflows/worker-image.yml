@@ -4,6 +4,9 @@ on:
     paths:
       - deploy/worker/**
       - src/solo_leveling/workers/image_preflight.py
+      - src/solo_leveling/workers/runtime_manifest.py
+      - tests/unit/test_runtime_manifest.py
+      - tests/image/worker_runtime_smoke.py
       - tests/unit/test_worker_image.py
       - tests/image/worker_image_smoke.py
       - .github/workflows/worker-image.yml
@@ -25,3 +28,7 @@ jobs:
         env:
           PYTHONPATH: src:.
         run: python tests/image/worker_image_smoke.py
+      - name: 합성 wheel 오프라인 runtime 빌드 검증
+        env:
+          PYTHONPATH: src:.
+        run: python tests/image/worker_runtime_smoke.py
