@@ -54,8 +54,24 @@ def test_remote_pdf_without_learning_record_is_visible_and_owned(pool, db):
             papers.get_paper(bad_owner, intent.paper_id, learning_record_id=None, version_id=bad_version)
     with pytest.raises(PaperNotFound):
         papers.get_paper(owner, intent.paper_id, learning_record_id=str(uuid4()), version_id=None)
+    # 더 최근 판본이 있어도 명시한 판본을 다른 파일로 대체하지 않는다.
+    other_version = str(uuid4())
+    db('INSERT INTO server_processing_versions(owner_user_id,paper_id,server_version_id) VALUES (%s,%s,%s)',
+       (owner, intent.paper_id, other_version))
+    db("""INSERT INTO server_pdf_uploads
+          (upload_id,owner_user_id,paper_id,server_version_id,file_name,file_size,
+           content_type,sha256_hex,object_key,status,expires_at,source_kind,updated_at)
+          SELECT %s,owner_user_id,paper_id,%s,'second.pdf',file_size,content_type,
+                 sha256_hex,'private/files/second.pdf','ready',expires_at,'remote',
+                 CURRENT_TIMESTAMP + interval '1 second'
+          FROM server_pdf_uploads WHERE owner_user_id=%s AND paper_id=%s""",
+       (str(uuid4()), other_version, owner, intent.paper_id))
+    assert detail().selected_version_id == other_version
+    assert detail(intent.server_version_id).file_name == 'synthetic.pdf'
+    assert files.get_file_access(owner, intent.paper_id, intent.server_version_id).object_key == 'private/files/synthetic.pdf'
     db('UPDATE server_papers SET deleted_at=CURRENT_TIMESTAMP WHERE paper_id=%s', (intent.paper_id,))
     with pytest.raises(PaperNotFound):
         detail()
     with pytest.raises(UploadTargetNotFound):
         files.get_file_access(owner, intent.paper_id, intent.server_version_id)
+    assert papers.list_papers(owner, query=None, reading_status=None, page=1, limit=20).total_count == 0

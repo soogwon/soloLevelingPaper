@@ -337,7 +337,7 @@ class PostgresPaperStore:
                     reading_status: str | None, page: int, limit: int,
                     collection_id: str | None = None, unassigned: bool = False) -> PaperPage:
         """웹 목록용 offset 페이지를 소유권 범위에서 안정적인 순서로 조회한다."""
-        filters = ["p.owner_user_id = %s"]
+        filters = ["p.owner_user_id = %s", "p.deleted_at IS NULL"]
         params: list[Any] = [owner_user_id]
         if query is not None:
             filters.append("p.title ILIKE %s ESCAPE '\\'")
