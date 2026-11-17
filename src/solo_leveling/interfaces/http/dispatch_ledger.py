@@ -14,6 +14,7 @@ class PostgresDispatchLedger:
     """
 
     _attempt_table = "server_provider_attempts"
+    _question_reservations = False
 
     def __init__(self, pool, policy_version: str, window_key: str, validate_scope: Callable):
         if not all(isinstance(value, str) and value.strip() for value in (policy_version, window_key)):
@@ -73,7 +74,7 @@ class PostgresDispatchLedger:
             ):
                 return None
             reservation = None
-            if self._attempt_table == 'server_provider_attempts':
+            if self._question_reservations:
                 reservation = conn.execute("SELECT * FROM server_question_budget_reservations WHERE owner_user_id=%s AND execution_id=%s FOR UPDATE",
                     (intent.owner_user_id,intent.execution_id)).fetchone()
                 if reservation is not None and (
@@ -232,3 +233,8 @@ def _usage_valid(attempt_id, input_tokens, output_tokens):
         and type(output_tokens) is int
         and output_tokens >= 0
     )
+
+
+class PostgresQuestionDispatchLedger(PostgresDispatchLedger):
+    """질문 제품 경로만 접수 시 예약한 토큰 할당을 사용한다."""
+    _question_reservations = True
