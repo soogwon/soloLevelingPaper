@@ -114,3 +114,13 @@ def test_duplicate_json_and_nonfinite_values_rejected(tmp_path):
     raw=raw_config();raw['generation']['timeout_seconds']=float('nan')
     path.write_text(json.dumps(raw))
     with pytest.raises(ValueError):bootstrap.load_plan(path)
+
+
+def test_evidence_ids_repeat_only_within_same_execution():
+    from uuid import uuid4
+    from solo_leveling.workers.question_composition import execution_ids
+    execution=str(uuid4())
+    first,second,other=execution_ids(execution),execution_ids(execution),execution_ids(str(uuid4()))
+    ids=[first() for _ in range(3)]
+    assert ids==[second() for _ in range(3)]
+    assert len(set(ids))==3 and not set(ids).intersection(other() for _ in range(3))

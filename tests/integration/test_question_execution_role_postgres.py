@@ -96,6 +96,8 @@ def test_readonly_preview_matches_real_bootstrap_dispatch(db,stores,pool,tmp_pat
     raw['database_name']=db('SELECT current_database() AS name')[0]['name']
     role='question_bootstrap_'+new_id().replace('-','')[:12];raw['database_role']=role
     path=tmp_path/'plan.json';path.write_text(json.dumps(raw));plan=bootstrap.load_plan(path)
+    with pytest.raises(ValueError):
+        bootstrap.preview_payload(pool,plan,'other-owner',saved.execution_id,source.embedding)
     first=bootstrap.preview_payload(pool,plan,'alice',saved.execution_id,source.embedding)
     second=bootstrap.preview_payload(pool,plan,'alice',saved.execution_id,source.embedding)
     assert first==second and post.call_count==0
