@@ -90,7 +90,7 @@ class PublicBoundaryMiddleware:
 def create_remote_mcp(
     settings: RemoteMcpSettings,
     verifier: TokenVerifier | None = None,
-    *, product_queries=None,
+    *, product_queries=None, question_service=None,
 ) -> RemoteMcpBundle:
     if not settings.enabled:
         raise ValueError("원격 MCP 설정이 활성화되어야 합니다.")
@@ -104,7 +104,8 @@ def create_remote_mcp(
             issuer_url=AnyHttpUrl(settings.issuer),
             resource_server_url=AnyHttpUrl(settings.resource_url),
             required_scopes=list(dict.fromkeys([settings.required_scope] +
-                (["papers:read"] if settings.product_reads_enabled else []))),
+                (["papers:read"] if settings.product_reads_enabled else []) +
+                (["questions:write"] if question_service is not None else []))),
             validate_token_resource=True,
         ),
         transport_security=TransportSecuritySettings(
@@ -143,6 +144,9 @@ def create_remote_mcp(
             raise ValueError("remote_product_queries_required")
         from solo_leveling.interfaces.mcp.remote_product import register_product_queries
         register_product_queries(server, product_queries)
+        if question_service is not None:
+            from solo_leveling.interfaces.mcp.remote_questions import register_question_tools
+            register_question_tools(server,product_queries,question_service)
 
     app = server.streamable_http_app()
     app.add_middleware(NoSessionMiddleware)

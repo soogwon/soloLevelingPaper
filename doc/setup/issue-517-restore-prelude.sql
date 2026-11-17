@@ -24,11 +24,11 @@ BEGIN
    RAISE EXCEPTION 'restore_public_not_empty';
  END IF;
  SELECT array_agg(tablename::text ORDER BY tablename) INTO actual FROM pg_tables WHERE schemaname='slp_staging';
- IF actual IS DISTINCT FROM ARRAY['server_annotation_create_requests', 'server_annotations', 'server_collection_papers', 'server_collections', 'server_context_annotations', 'server_deletion_requests', 'server_device_credentials', 'server_devices', 'server_dispatch_budget_limits', 'server_dispatch_controls', 'server_embedding_sets', 'server_embedding_vectors', 'server_execution_contexts', 'server_idempotency_records', 'server_learning_records', 'server_paper_reading_states', 'server_papers', 'server_parse_revisions', 'server_pdf_uploads', 'server_processing_chunks', 'server_processing_evidences', 'server_processing_job_authorizations', 'server_processing_jobs', 'server_processing_provider_attempts', 'server_processing_publications', 'server_processing_result_staging', 'server_processing_versions', 'server_provider_attempts', 'server_question_budget_reservations', 'server_remote_consents', 'server_remote_executions', 'server_remote_identities', 'server_remote_upload_consent_bindings', 'server_remote_upload_consent_requests', 'server_remote_upload_intents', 'server_resume_requests', 'server_schema_migrations', 'server_summaries', 'server_translation_chunks', 'server_translation_revisions', 'server_users', 'web_login_attempts', 'web_sessions']::text[] THEN
+ IF actual IS DISTINCT FROM ARRAY['server_annotation_create_requests', 'server_annotations', 'server_collection_papers', 'server_collections', 'server_context_annotations', 'server_deletion_requests', 'server_device_credentials', 'server_devices', 'server_dispatch_budget_limits', 'server_dispatch_controls', 'server_embedding_sets', 'server_embedding_vectors', 'server_execution_contexts', 'server_idempotency_records', 'server_learning_records', 'server_paper_reading_states', 'server_papers', 'server_parse_revisions', 'server_pdf_uploads', 'server_processing_chunks', 'server_processing_evidences', 'server_processing_job_authorizations', 'server_processing_jobs', 'server_processing_provider_attempts', 'server_processing_publications', 'server_processing_result_staging', 'server_processing_versions', 'server_provider_attempts', 'server_question_budget_reservations', 'server_question_reviews', 'server_remote_consents', 'server_remote_executions', 'server_remote_identities', 'server_remote_upload_consent_bindings', 'server_remote_upload_consent_requests', 'server_remote_upload_intents', 'server_resume_requests', 'server_schema_migrations', 'server_summaries', 'server_translation_chunks', 'server_translation_revisions', 'server_users', 'web_login_attempts', 'web_sessions']::text[] THEN
    RAISE EXCEPTION 'restore_table_manifest_mismatch';
  END IF;
  IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-     WHERE n.nspname='slp_staging' AND (p.proname || '(' || oidvectortypes(p.proargtypes) || ')') NOT IN ('mcp_read_lock_guard()', 'server_guard_execution_policy()', 'server_guard_processing_staging()', 'server_processing_guard_embedding_vectors()', 'server_processing_guard_parse_rows()', 'server_processing_guard_revision_generation()', 'server_processing_guard_translation_rows()', 'server_processing_require_lease(text, uuid, uuid)', 'server_release_question_budget()', 'server_reject_tombstoned_execution()', 'server_reject_tombstoned_paper()', 'web_readonly_guard()', 'worker_rehearsal_readonly_guard()')
+     WHERE n.nspname='slp_staging' AND (p.proname || '(' || oidvectortypes(p.proargtypes) || ')') NOT IN ('mcp_read_lock_guard()', 'server_guard_execution_policy()', 'server_guard_processing_staging()', 'server_processing_guard_embedding_vectors()', 'server_processing_guard_parse_rows()', 'server_processing_guard_revision_generation()', 'server_processing_guard_translation_rows()', 'server_processing_require_lease(text, uuid, uuid)', 'server_question_lock_guard()', 'server_release_question_budget()', 'server_reject_tombstoned_execution()', 'server_reject_tombstoned_paper()', 'web_readonly_guard()', 'worker_rehearsal_readonly_guard()')
      AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid='pg_proc'::regclass AND d.objid=p.oid AND d.deptype='e')) THEN
    RAISE EXCEPTION 'restore_function_manifest_mismatch';
  END IF;
@@ -65,6 +65,7 @@ DROP TABLE
     slp_staging.server_processing_versions,
     slp_staging.server_provider_attempts,
     slp_staging.server_question_budget_reservations,
+    slp_staging.server_question_reviews,
     slp_staging.server_remote_consents,
     slp_staging.server_remote_executions,
     slp_staging.server_remote_identities,
@@ -88,6 +89,7 @@ DROP FUNCTION IF EXISTS slp_staging.server_processing_guard_parse_rows() RESTRIC
 DROP FUNCTION IF EXISTS slp_staging.server_processing_guard_revision_generation() RESTRICT;
 DROP FUNCTION IF EXISTS slp_staging.server_processing_guard_translation_rows() RESTRICT;
 DROP FUNCTION IF EXISTS slp_staging.server_processing_require_lease(text,uuid,uuid) RESTRICT;
+DROP FUNCTION IF EXISTS slp_staging.server_question_lock_guard() RESTRICT;
 DROP FUNCTION IF EXISTS slp_staging.server_release_question_budget() RESTRICT;
 DROP FUNCTION IF EXISTS slp_staging.server_reject_tombstoned_execution() RESTRICT;
 DROP FUNCTION IF EXISTS slp_staging.server_reject_tombstoned_paper() RESTRICT;
