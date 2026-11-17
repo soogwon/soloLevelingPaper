@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import sys
+import subprocess
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -16,17 +17,37 @@ NAMES = ('solo-leveling-worker-runtime', 'solo-leveling-worker')
 BASE = 'python@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df'
 
 
-def private_package(name, *, allow_missing=False):
+def private_package(name):
     if name not in NAMES: raise ValueError('게시 대상 불일치')
     request = Request(f'https://api.github.com/users/{OWNER}/packages/container/{name}',
         headers={'Authorization': f"Bearer {os.environ['GH_TOKEN']}", 'Accept': 'application/vnd.github+json'})
     try:
         with urlopen(request, timeout=30) as response: package = json.load(response)
     except HTTPError as error:
-        if allow_missing and error.code == 404: return
+        if error.code == 404:
+            raise RuntimeError('미리 생성하고 private으로 확인한 package가 필요합니다.') from None
         raise RuntimeError('비공개 package 조회 실패') from None
     if package.get('visibility') != 'private':
         raise RuntimeError('기존 package가 private이 아니므로 게시 중단')
+
+
+def initialize_empty_worker():
+    """별도 승인한 빈 package만 만든다. 실제 이미지 게시를 이어서 실행하지 않는다."""
+    try:
+        private_package(NAMES[1])
+        print('기존 private worker package 확인: 초기화 생략')
+        return
+    except RuntimeError as error:
+        if str(error) != '미리 생성하고 private으로 확인한 package가 필요합니다.':
+            raise
+    tag = f'ghcr.io/{OWNER}/{NAMES[1]}:empty-initialization'
+    dockerfile = ('FROM scratch\n'
+        'LABEL org.opencontainers.image.source="https://github.com/soogwon/soloLevelingPaper"\n'
+        'LABEL org.opencontainers.image.description="Empty initialization; no application or data"\n')
+    subprocess.run(['docker', 'build', '--platform', 'linux/amd64', '-t', tag, '-'],
+        input=dockerfile, text=True, check=True)
+    run(['docker', 'push', tag])
+    print('빈 초기 package 생성 완료. UI에서 Private 설정을 확인하기 전 실제 게시 금지.')
 
 
 def main():
@@ -34,10 +55,14 @@ def main():
     parser.add_argument('--work-dir', type=Path, required=True)
     parser.add_argument('--tag', required=True)
     parser.add_argument('--publish', action='store_true')
+    parser.add_argument('--initialize-empty-worker', action='store_true')
     args = parser.parse_args()
     if not args.publish or not re.fullmatch(r'verified-[0-9a-f]{40}', args.tag):
         parser.error('명시적 게시 옵션과 검증 commit tag가 필요합니다.')
-    for name in NAMES: private_package(name, allow_missing=True)
+    if args.initialize_empty_worker:
+        initialize_empty_worker()
+        return
+    for name in NAMES: private_package(name)
     root = args.work_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
     wheels, reports = root / 'wheels', root / 'reports'
@@ -58,7 +83,7 @@ def main():
          '--label', 'org.opencontainers.image.source=https://github.com/soogwon/soloLevelingPaper',
          '--build-arg', f'PYTHON_RUNTIME_BASE={BASE}', '--build-context', f'worker_dependencies={wheels}',
          '-f', str(ROOT / 'deploy/worker/runtime-image/Dockerfile'), '-t', runtime_tag, str(ROOT)])
-    private_package(NAMES[0], allow_missing=True)
+    private_package(NAMES[0])
     run(['docker', 'push', runtime_tag])
     private_package(NAMES[0])
     runtime = output(['docker', 'inspect', '--format', '{{index .RepoDigests 0}}', runtime_tag])
@@ -67,7 +92,7 @@ def main():
     run([sys.executable, str(ROOT / 'deploy/worker/build_render.py'), '--runtime-image', runtime,
          '--model-dir', str(model), '--runtime-dir', str(reports), '--tag', worker_tag, '--execute'])
     verify_image(root, model, worker_tag)
-    private_package(NAMES[1], allow_missing=True)
+    private_package(NAMES[1])
     run(['docker', 'push', worker_tag])
     private_package(NAMES[1])
     worker = output(['docker', 'inspect', '--format', '{{index .RepoDigests 0}}', worker_tag])
