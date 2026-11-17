@@ -39,11 +39,21 @@ class PostgresRemoteExecutionStore:
         ai_consent_id: str,
         notice_version: str,
         *, policy: RemoteExecutionPolicy | None = None,
+        question_input=None,
     ) -> StoredExecution | None:
         if not isinstance(lookup, ExecutionLookup) or not _strings(storage_consent_id, ai_consent_id, notice_version):
             raise ValueError("remote_execution_input_invalid")
         if policy is not None and not isinstance(policy, RemoteExecutionPolicy):
             raise ValueError("remote_execution_policy_invalid")
+        if question_input is not None:
+            from solo_leveling.application.evidence_qa.remote_question_input import RemoteQuestionInput
+            if not isinstance(question_input, RemoteQuestionInput) or policy is None:
+                raise ValueError('remote_question_input_invalid')
+            binding, _, _, _, config = question_input.unpack()
+            if (lookup.operation != 'ask_paper' or lookup.owner_user_id != binding.owner_user_id
+                    or lookup.context_id != binding.context_id or lookup.input_hash != question_input.input_hash
+                    or policy.version != config['budget_policy_version']):
+                raise ValueError('remote_question_input_invalid')
         execution_id = str(uuid4())
         with self._pool.connection() as conn:
             conn.execute(
@@ -62,7 +72,21 @@ class PostgresRemoteExecutionStore:
             ).fetchone()
             if old is not None:
                 _same_input(old, lookup, storage_consent_id, ai_consent_id, notice_version)
+                if question_input is not None and old['question_snapshot'] is None:
+                    raise RemoteExecutionConflict('remote_execution_input_conflict')
                 return _stored(old)
+            if question_input is not None:
+                from solo_leveling.interfaces.http.remote_retrieval import PostgresRemoteContextResolver
+                # 같은 연결에서 고정 publication을 대조하며 입력 본문은 진단에 남기지 않는다.
+                from contextlib import nullcontext
+                from types import SimpleNamespace
+                current = PostgresRemoteContextResolver(SimpleNamespace(connection=lambda: nullcontext(conn))).resolve(
+                    lookup.owner_user_id, lookup.context_id)
+                if current != binding:
+                    return None
+                consent = _question_consent(conn,lookup.owner_user_id,storage_consent_id,ai_consent_id,lookup.input_hash,notice_version)
+                if consent is None:
+                    return None
             if self._admit is not None and not self._admit(
                 conn, lookup, storage_consent_id, ai_consent_id, notice_version
             ):
@@ -70,9 +94,9 @@ class PostgresRemoteExecutionStore:
             row = conn.execute(
                 """INSERT INTO server_remote_executions
                        (execution_id,owner_user_id,operation,request_key,input_hash,context_id,
-                        storage_consent_id,ai_consent_id,notice_version,state,budget_state,policy_snapshot,deadline_at)
+                        storage_consent_id,ai_consent_id,notice_version,state,budget_state,policy_snapshot,deadline_at,question_snapshot)
                    SELECT %s,c.owner_user_id,%s,%s,%s,c.context_id,%s,%s,%s,'queued','available',%s::jsonb,
-                          CASE WHEN %s::integer IS NULL THEN NULL ELSE CURRENT_TIMESTAMP+make_interval(secs=>%s) END
+                          CASE WHEN %s::integer IS NULL THEN NULL ELSE CURRENT_TIMESTAMP+make_interval(secs=>%s) END,%s::jsonb
                    FROM server_execution_contexts c
                    JOIN server_papers p
                      ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
@@ -90,6 +114,7 @@ class PostgresRemoteExecutionStore:
                     json.dumps(policy.snapshot()) if policy else None,
                     policy.timeout_seconds if policy else None,
                     policy.timeout_seconds if policy else None,
+                    question_input.encoded if question_input else None,
                     lookup.owner_user_id,
                     lookup.context_id,
                 ),
@@ -134,6 +159,26 @@ class PostgresRemoteExecutionStore:
                 (lease_token, lease_seconds, owner_user_id, execution_id),
             ).fetchone()
         return None if row is None else _intent(row)
+
+    def question_input(self, intent):
+        """현재 lease·동의·접근 범위를 확인한 worker만 저장 입력을 읽는다."""
+        from solo_leveling.application.evidence_qa.remote_question_input import RemoteQuestionInput
+        with self._pool.connection() as conn:
+            if not validate_execution_scope(conn, intent):
+                return None
+            if _question_consent(conn,intent.owner_user_id,intent.storage_consent_id,intent.ai_consent_id,intent.input_hash,intent.notice_version) is None:
+                return None
+            row = conn.execute("SELECT question_snapshot,context_id,policy_snapshot FROM server_remote_executions WHERE owner_user_id=%s AND execution_id=%s AND lease_token=%s",
+                               (intent.owner_user_id,intent.execution_id,intent.lease_token)).fetchone()
+            if row is None or row['question_snapshot'] is None:
+                return None
+            request = RemoteQuestionInput(json.dumps(row['question_snapshot']))
+            binding, _, _, _, config = request.unpack()
+            if (request.input_hash != intent.input_hash or binding.owner_user_id != intent.owner_user_id
+                    or binding.context_id != str(row['context_id']) or row['policy_snapshot'] is None
+                    or config['budget_policy_version'] != row['policy_snapshot']['version']):
+                raise ValueError('remote_question_input_invalid')
+            return request
 
     def policy(self, owner_user_id, execution_id):
         with self._pool.connection() as conn:
@@ -322,3 +367,16 @@ def _intent(row):
 
 def _strings(*values):
     return all(isinstance(value, str) and value.strip() for value in values)
+
+
+def _question_consent(conn,owner,storage_id,ai_id,input_hash,notice):
+    return conn.execute("""SELECT 1 FROM server_dispatch_controls control
+                    JOIN server_remote_consents storage ON storage.owner_user_id=%s
+                      AND storage.consent_id=%s AND storage.purpose='storage'
+                      AND storage.input_hash=%s AND storage.notice_version=%s AND storage.revoked_at IS NULL
+                    JOIN server_remote_consents ai ON ai.owner_user_id=storage.owner_user_id
+                      AND ai.consent_id=%s AND ai.purpose='ai_provider'
+                      AND ai.input_hash=storage.input_hash AND ai.notice_version=storage.notice_version AND ai.revoked_at IS NULL
+                    WHERE control.control_id='provider_dispatch' AND control.dispatch_enabled
+                    FOR SHARE OF control,storage,ai""",
+                    (owner,storage_id,input_hash,notice,ai_id)).fetchone()
