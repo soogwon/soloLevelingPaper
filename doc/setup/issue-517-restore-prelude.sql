@@ -28,7 +28,7 @@ BEGIN
    RAISE EXCEPTION 'restore_table_manifest_mismatch';
  END IF;
  IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-     WHERE n.nspname='slp_staging' AND (p.proname || '(' || oidvectortypes(p.proargtypes) || ')') NOT IN ('server_guard_processing_staging()', 'server_processing_guard_embedding_vectors()', 'server_processing_guard_parse_rows()', 'server_processing_guard_revision_generation()', 'server_processing_guard_translation_rows()', 'server_processing_require_lease(text, uuid, uuid)', 'server_reject_tombstoned_execution()', 'server_reject_tombstoned_paper()', 'web_readonly_guard()', 'worker_rehearsal_readonly_guard()')
+     WHERE n.nspname='slp_staging' AND (p.proname || '(' || oidvectortypes(p.proargtypes) || ')') NOT IN ('server_guard_execution_policy()', 'server_guard_processing_staging()', 'server_processing_guard_embedding_vectors()', 'server_processing_guard_parse_rows()', 'server_processing_guard_revision_generation()', 'server_processing_guard_translation_rows()', 'server_processing_require_lease(text, uuid, uuid)', 'server_reject_tombstoned_execution()', 'server_reject_tombstoned_paper()', 'web_readonly_guard()', 'worker_rehearsal_readonly_guard()')
      AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid='pg_proc'::regclass AND d.objid=p.oid AND d.deptype='e')) THEN
    RAISE EXCEPTION 'restore_function_manifest_mismatch';
  END IF;
@@ -79,6 +79,7 @@ DROP TABLE
     slp_staging.web_login_attempts,
     slp_staging.web_sessions
 RESTRICT;
+DROP FUNCTION IF EXISTS slp_staging.server_guard_execution_policy() RESTRICT;
 DROP FUNCTION IF EXISTS slp_staging.server_guard_processing_staging() RESTRICT;
 DROP FUNCTION IF EXISTS slp_staging.server_processing_guard_embedding_vectors() RESTRICT;
 DROP FUNCTION IF EXISTS slp_staging.server_processing_guard_parse_rows() RESTRICT;
