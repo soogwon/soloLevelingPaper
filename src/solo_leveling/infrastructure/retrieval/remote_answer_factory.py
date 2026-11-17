@@ -54,7 +54,7 @@ class PersistedRemoteAnswerService:
 
 
 def create_persisted_remote_answer_service(pool, resolve_authenticated_context, embedding_runtime,
-                                          generator, processing_config, *, semantic_verification=None, check_allowed=lambda: True):
+                                          generator, processing_config, *, semantic_verification=None, check_allowed=lambda: True, id_factory=None):
     """resolver는 현재 인증 owner를 해석하는 필수 포트다. 실제 생성기는 별도 dispatch gate가 필요하다."""
     def validate(intent):
         if check_allowed() is not True:
@@ -65,6 +65,6 @@ def create_persisted_remote_answer_service(pool, resolve_authenticated_context, 
     search = RemoteContextSearchService(resolve_authenticated_context,
         PostgresRemoteScopedSearch(pool, FingerprintCheckedEmbedder(embedding_runtime)))
     preparation = RemoteAnswerPreparationService(search, PostgresRemoteSourceReader(pool), generator,
-                                                 semantic_verification=semantic_verification)
+                                                 semantic_verification=semantic_verification, id_factory=id_factory)
     return PersistedRemoteAnswerService(resolve_authenticated_context, preparation,
                                        PostgresRemoteAnswerStore(pool), validate, processing_config)

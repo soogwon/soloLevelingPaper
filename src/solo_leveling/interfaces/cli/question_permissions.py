@@ -42,3 +42,35 @@ def grant_question_maintenance_role(conn, schema, role):
     for table, columns in updates.items():
         conn.execute(sql.SQL('GRANT UPDATE({}) ON {}.{} TO {}').format(sql.SQL(',').join(map(sql.Identifier,columns)),
             sql.Identifier(schema),sql.Identifier(table),sql.Identifier(role)))
+
+
+def grant_question_execution_role(conn, schema, role):
+    """질문 생성 역할의 검색·답변·사용량 권한. 원문·동의·정책 변경은 허용하지 않는다."""
+    from psycopg import sql
+    grant_question_maintenance_role(conn, schema, role)
+    reads = ('server_processing_publications','server_embedding_sets','server_parse_revisions',
+             'server_translation_revisions','server_processing_chunks','server_translation_chunks',
+             'server_embedding_vectors','server_processing_evidences','server_provider_attempts','server_dispatch_controls')
+    for table in reads:
+        conn.execute(sql.SQL('GRANT SELECT ON {}.{} TO {}').format(sql.Identifier(schema),sql.Identifier(table),sql.Identifier(role)))
+    for table in ('server_provider_attempts','server_processing_evidences'):
+        conn.execute(sql.SQL('GRANT INSERT ON {}.{} TO {}').format(sql.Identifier(schema),sql.Identifier(table),sql.Identifier(role)))
+    updates = {
+        'server_remote_executions': ('lease_generation','budget_state','payload_json','payload_sha256'),
+        'server_provider_attempts': ('status','actual_input_tokens','actual_output_tokens','settled_at'),
+        'server_dispatch_budget_limits': ('consumed_input_tokens','consumed_output_tokens'),
+    }
+    # PostgreSQL 행 잠금에는 UPDATE 권한이 필요하지만 실제 수정은 역할별 trigger로 차단한다.
+    locks = {'server_papers':'paper_id', 'server_dispatch_controls':'control_id',
+             'server_remote_consents':'consent_id','server_processing_publications':'publication_id',
+             'server_parse_revisions':'parse_revision_id','server_translation_revisions':'translation_revision_id',
+             'server_embedding_sets':'embedding_set_id'}
+    updates.update({table:(column,) for table,column in locks.items()})
+    for table, columns in updates.items():
+        conn.execute(sql.SQL('GRANT UPDATE({}) ON {}.{} TO {}').format(sql.SQL(',').join(map(sql.Identifier,columns)),
+            sql.Identifier(schema),sql.Identifier(table),sql.Identifier(role)))
+    trigger = 'question_lock_' + hashlib.sha256(role.encode()).hexdigest()[:12]
+    for table in locks:
+        conn.execute(sql.SQL('DROP TRIGGER IF EXISTS {} ON {}.{}').format(sql.Identifier(trigger),sql.Identifier(schema),sql.Identifier(table)))
+        conn.execute(sql.SQL('CREATE TRIGGER {} BEFORE UPDATE ON {}.{} FOR EACH ROW EXECUTE FUNCTION {}.server_question_lock_guard({})').format(
+            sql.Identifier(trigger),sql.Identifier(schema),sql.Identifier(table),sql.Identifier(schema),sql.Literal(role)))
