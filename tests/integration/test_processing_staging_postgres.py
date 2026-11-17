@@ -139,3 +139,23 @@ def test_expiry_at_final_check_discards_insert(pool, db, monkeypatch):
     monkeypatch.setattr(store, '_live', expire)
     with pytest.raises(ProcessingStagingError, match='not_allowed'): store.save(value)
     assert count(db, value) == 0
+
+
+@pytest.mark.parametrize('change', ['revoked', 'cancel', 'deleted', 'revision', 'translation-settings', 'model'])
+def test_saved_result_is_not_returned_after_authority_or_config_changes(pool, db, change):
+    store, value = setup(pool, db)
+    store.save(value)
+    source = value.source
+    if change == 'revoked':
+        intent = PostgresProcessingAuthorization(pool).dispatch_intent(source)
+        db('UPDATE server_remote_consents SET revoked_at=CURRENT_TIMESTAMP WHERE owner_user_id=%s AND consent_id=%s',
+           (source.owner_user_id, intent.storage_consent_id))
+    elif change == 'cancel': PostgresProcessingJobStore(pool).cancel(source.owner_user_id, source.job_id)
+    elif change == 'deleted': db('UPDATE server_papers SET deleted_at=CURRENT_TIMESTAMP WHERE paper_id=%s', (source.paper_id,))
+    elif change == 'revision': source = replace(source, parse_revision_id=source.job_id)
+    else:
+        store = PostgresProcessingResultStaging(pool, limits=LIMITS, max_result_bytes=100_000,
+            translation_settings=replace(SETTINGS, prompt_version='new') if change == 'translation-settings' else SETTINGS,
+            embedding_spec=replace(SPEC, runtime_version='new') if change == 'model' else SPEC)
+    with pytest.raises(ProcessingStagingError): store.load(source)
+    assert count(db, value) == 1

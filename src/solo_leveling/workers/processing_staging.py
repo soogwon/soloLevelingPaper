@@ -164,6 +164,8 @@ class PostgresProcessingResultStaging:
                 encoded = _encode(data)
                 _require(len(encoded) <= self.max_bytes and data.get('schema_version') == 1
                          and data['result']['source'] == asdict(source)
+                         and data['result']['translation_settings'] == asdict(self.settings)
+                         and data['result']['embeddings']['spec'] == asdict(self.spec)
                          and hashlib.sha256(encoded).hexdigest() == row['payload_sha256'])
                 return data
         except ProcessingStagingError:
