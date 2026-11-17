@@ -2,7 +2,7 @@
 
 ## 구현 범위
 
-- `solo-leveling-question-worker`는 기본적으로 실행하지 않는다. `--execute --runtime module:factory --max-jobs N`을 명시해야 한다.
+- `solo-leveling-question-worker`는 기본적으로 실행하지 않는다. `--execute --runtime module:factory`가 필요하며 기본 상한은 1건이다. 작업 수는 `--max-jobs N`, 상시 소비는 `--continuous`로 명시한다.
 - 신뢰하는 서버 bootstrap의 context manager가 runner를 반환한다. 질문 실행은 `question_runtime.execution_runtime(pool_factory, **options)`로 기존 `create_question_runner`의 검색·전송 원장·원자적 결과 저장에 연결한다.
 - `options`는 서버가 검토한 generation/semantic 설정, provider_profile_id, 로컬 embedding_runtime, window_key, token_upper_bound이며 사용자 입력이나 웹 요청에서 runtime 경로를 받지 않는다.
 - 실행 전 무효 질문을 한 건 정리한다. 만료·보관 동의 철회·AI 동의 철회·논문 삭제는 유효 lease가 남아 있어도 종료한다. 기존 lease의 heartbeat·완료 저장은 거부된다.
@@ -43,3 +43,37 @@ pytest -q tests/unit/test_question_worker_cli.py tests/unit/test_remote_question
 - B: 운영 bootstrap의 로컬 임베딩/제공자 프로필/토큰 상한을 고정하고 접수 snapshot과 일치시킨다. 기존 `staging-question-review-no-dispatch` 작업을 실제 생성용으로 재사용하지 않는다.
 - C: 승인된 신규 합성 질문으로 Desktop 동의→실행→답변/인용→재조회와 철회/만료 표시를 실제 staging에서 확인한다.
 - 이번 변경은 staging DB·Render 환경변수·worker 모드·Auth0 권한을 변경하지 않는다. 실제 API 호출에는 신규 승인이 필요하다. #395/#396/#399는 닫지 않는다.
+
+## 상시 소비 준비 (2026-11-18)
+
+이번 추가는 **코드·합성 자동 테스트**다. 배포 이미지, staging DB, Render 설정은 변경하지 않았다.
+앞서 별도 단일 프로세스에서 성공한 합성 질문 1건은 상시 프로세스 운영 검증과 구분한다.
+
+- CLI는 `--execute`를 생략하면 실행하지 않고, 수명을 생략하면 기존처럼 1건 상한이다.
+- `--continuous`를 명시하면 종료 신호까지 순차 소비한다. `--max-jobs`와 동시에 지정할 수 없다.
+- 빈 큐는 5초 간격으로 대기하며 종료 신호로 대기를 깨운다. 실행 중 종료 요청은 현재 작업을 마무리한 뒤 다음 claim을 막는다.
+- 실패·알 수 없는 결과·예산 제한에 도달하면 소비를 중단한다. Render 부모는 고정 실패 진단 후 standby가 되며 자동 재시작하지 않는다. **프로세스가 살아 있다는 사실만으로 큐가 소비 중이라고 판단하면 안 된다.**
+- `--shutdown-grace-seconds`는 1~600초, 기본 5초다. 대기 한도를 넘으면 자식 프로세스 그룹을 강제 종료·회수한다. 공급자에 이미 보낸 HTTP 요청을 취소하거나 사용량을 환불한다는 뜻은 아니다.
+- 호스트가 허용하는 종료 유예가 이 값보다 짧으면 호스트가 먼저 강제 종료할 수 있다. 실제 배포 전에 작업 timeout·정산 여유와 호스트 유예를 함께 맞춰야 한다. 아래 90초는 설정 전달 예시이며 운영 확정값이 아니다.
+
+```text
+python -m solo_leveling.workers.render_service --mode question-worker --runtime solo_leveling.workers.question_runtime:maintenance_factory --continuous --shutdown-grace-seconds 90
+```
+
+이는 **승인 후 적용할 정리 전용 예시**다. 그대로 실행하거나 실제 생성 runtime으로 교체하지 않는다.
+실제 생성 bootstrap의 payload 해시 허용 목록, 물리 호출 상한, 동의·정책·예산·lease 검사는 우회하지 않는다.
+고정 검증용 payload 설정을 임의 사용자 질문을 계속 처리하는 운영 설정으로 간주하지 않는다.
+재시작으로 인메모리 한도가 초기화되므로 DB 전송 원장·예산과 신규 호출 승인 확인 없이 재시작하지 않는다.
+
+### 이번 검증과 남은 승인
+
+| 역할 | 코드·자동 테스트 확인 | staging 상시 운영 전 남은 범위 |
+| --- | --- | --- |
+| A | 유휴/작업 중 종료, 자식 정상 회수·강제 회수, 잘못된 설정 차단 | 새 이미지 검토·게시, 실행 명령·종료 유예, 전용 역할·정리 주기·고정 진단 알림 설정 |
+| B | 기존 생성 bootstrap·전송 원장 제한 유지, 실패 후 재시도 금지 | 일반 질문의 토큰 상한·허용 전송 계약, 반복 작업 정책·사용자/서비스 예산 및 실제 호출 승인 |
+| C | CLI와 Render 옵션 연결, 기본 미실행/1건 유지, 민감 오류 출력 차단 | 실제 재배포/재시작 중 요청 키 재조회, 정상·철회·만료 상태의 Desktop 표시 |
+
+`render_verification_failed`, `render_service_failed`, `render_cleanup_failed`는 운영자가 원장·lease·사용량을 확인할 신호다.
+호스트의 자동 재배포/재시작까지 금지하는 기능은 아니므로 장애 후 자동 재전송 방지는 DB 계약과 함께 확인한다.
+복구는 승인된 이전 이미지와 `standby`, `QUESTION_WORKER_EXECUTION_ENABLED=false`로 되돌리고,
+미확정 전송은 원장 확인 전 재실행·환불하지 않는 순서로 진행한다. 이번 작업에서 실제 복구 조작은 하지 않는다.

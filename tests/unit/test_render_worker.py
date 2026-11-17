@@ -178,3 +178,53 @@ def test_question_worker_is_explicit_bounded_child(monkeypatch):
     ['--mode','question-worker','--runtime','approved:factory','--config','/secret'], ['--runtime','approved:factory']])
 def test_question_config_never_runs_in_standby(args):
     with pytest.raises(SystemExit): render_service.main(args)
+
+
+def test_continuous_requires_explicit_mode_and_passes_grace(monkeypatch):
+    captured = {}
+    def run(stop, command, **kwargs):
+        captured.update(command=command, **kwargs)
+        return 0
+    monkeypatch.setattr(render_service, 'supervise', run)
+    assert render_service.main(['--mode', 'question-worker', '--runtime', 'approved:factory',
+                                '--continuous', '--shutdown-grace-seconds', '90']) == 0
+    assert captured['command'][-1] == '--continuous'
+    assert '--max-jobs' not in captured['command']
+    assert captured['grace_seconds'] == 90
+
+
+@pytest.mark.parametrize('args', [
+    ['--continuous'], ['--mode', 'verify-once', '--config', '/approved', '--continuous'],
+    ['--mode', 'question-worker', '--runtime', 'approved:factory', '--continuous', '--max-jobs', '1'],
+    ['--shutdown-grace-seconds', '0'], ['--shutdown-grace-seconds', '601'],
+])
+def test_invalid_operations_config_never_starts(args, monkeypatch):
+    monkeypatch.setattr(render_service, 'supervise', lambda *a, **k: pytest.fail('잘못된 설정 실행'))
+    with pytest.raises(SystemExit):
+        render_service.main(args)
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='Render POSIX 프로세스 그룹 계약')
+def test_stop_waits_for_active_job_before_reaping(tmp_path):
+    ready, done = tmp_path / 'ready', tmp_path / 'done'
+    code = f'''import signal, time
+signal.signal(signal.SIGTERM, lambda *_: None)
+open({str(ready)!r}, 'w').close()
+time.sleep(0.3)
+open({str(done)!r}, 'w').write('완료')
+'''
+    stop = threading.Event()
+    result = []
+    thread = threading.Thread(target=lambda: result.append(render_service.supervise(
+        stop, [sys.executable, '-c', code], poll_seconds=0.01, grace_seconds=2)))
+    thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists()
+    finally:
+        stop.set()
+        thread.join(5)
+    assert not thread.is_alive() and result == [0]
+    assert done.read_text() == '완료'
