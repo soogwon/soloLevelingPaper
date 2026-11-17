@@ -22,7 +22,7 @@ class Verifier:
     async def verify_token(self,token):
         if token not in ('account-a','account-b'): return None
         value=RemoteIdentityAccessToken(token=token,client_id='test-client',subject=token,
-            scopes=['spike:read'],resource=SETTINGS.resource_url,expires_at=int(time.time())+60)
+            scopes=['spike:read','papers:read'],resource=SETTINGS.resource_url,expires_at=int(time.time())+60)
         value._verified_identity=VerifiedRemoteIdentity(SETTINGS.issuer,token+self.suffix)
         return value
 
@@ -98,3 +98,47 @@ def test_saved_result_survives_new_app_and_owner_switch_without_execution(db,sto
                    remote_mcp_verifier=Verifier('-replay'),remote_product_queries=RemoteProductQueries(pool))
     with TestClient(app,base_url=SETTINGS.resource_url[:-4]) as client:
         assert result(client,'get_remote_question',args)=={'status':'not_found'}
+
+
+def test_limited_database_role_can_pin_and_cannot_modify_other_data(db,stores,pool):
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import make_conninfo
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+    from tests.integration.test_remote_processing_postgres import DSN
+    remote=PgvectorContractStore(db,stores,pool);first=remote.publish()
+    role='mcp_read_'+uuid4().hex[:12]
+    tables=('server_remote_identities','server_papers','server_processing_versions',
+        'server_processing_publications','server_embedding_sets','server_execution_contexts',
+        'server_remote_executions','server_provider_attempts')
+    with pool.connection() as conn:
+        schema=conn.execute('SELECT current_schema() AS s').fetchone()['s']
+        conn.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD 'local-mcp-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS").format(sql.Identifier(role)))
+        conn.execute(sql.SQL('GRANT USAGE ON SCHEMA {} TO {}').format(sql.Identifier(schema),sql.Identifier(role)))
+        for table in tables:
+            conn.execute(sql.SQL('GRANT SELECT ON {}.{} TO {}').format(sql.Identifier(schema),sql.Identifier(table),sql.Identifier(role)))
+        conn.execute(sql.SQL('GRANT INSERT ON {}.server_execution_contexts TO {}').format(sql.Identifier(schema),sql.Identifier(role)))
+        conn.execute(sql.SQL('GRANT UPDATE(paper_id) ON {}.server_papers TO {}').format(sql.Identifier(schema),sql.Identifier(role)))
+        conn.execute(sql.SQL("""CREATE FUNCTION {}.mcp_read_lock_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN IF current_user=TG_ARGV[0] THEN RAISE EXCEPTION 'mcp_readonly_table' USING ERRCODE='42501'; END IF;
+            RETURN NEW; END $$""").format(sql.Identifier(schema)))
+        conn.execute(sql.SQL('CREATE TRIGGER mcp_read_lock_guard BEFORE UPDATE ON {}.server_papers FOR EACH ROW EXECUTE FUNCTION {}.mcp_read_lock_guard({})').format(sql.Identifier(schema),sql.Identifier(schema),sql.Literal(role)))
+    restricted=ConnectionPool(make_conninfo(DSN,user=role,password='local-mcp-only'),kwargs={'row_factory':dict_row,'options':f'-c search_path={schema}'},open=True)
+    try:
+        queries=RemoteProductQueries(restricted)
+        pinned=queries.contexts.pin(remote.owner,str(uuid4()),first.paper,'v1')
+        assert pinned.publication_id==first.publication
+        assert queries.contexts.resolve(remote.owner,pinned.context_id)==pinned
+        for statement in ('SELECT * FROM web_sessions','SELECT * FROM server_device_credentials',
+            'DELETE FROM server_execution_contexts','UPDATE server_papers SET paper_id=paper_id',
+            "UPDATE server_dispatch_controls SET dispatch_enabled=true"):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with restricted.connection() as conn:conn.execute(statement)
+    finally:
+        restricted.close()
+        with pool.connection() as conn:
+            conn.execute('DROP TRIGGER mcp_read_lock_guard ON server_papers')
+            conn.execute('DROP FUNCTION mcp_read_lock_guard()')
+            conn.execute(sql.SQL('DROP OWNED BY {}').format(sql.Identifier(role)))
+            conn.execute(sql.SQL('DROP ROLE {}').format(sql.Identifier(role)))

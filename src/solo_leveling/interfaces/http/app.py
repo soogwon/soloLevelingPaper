@@ -90,6 +90,7 @@ def create_app(
 
     selected = settings or load_http_settings()
     managed_store = None
+    managed_remote_store = None
     if device_store is None:
         database = load_database_settings()
         if database is not None:
@@ -131,9 +132,15 @@ def create_app(
                           else UnavailableObjectStorage())
     selected_remote_mcp = (remote_mcp_settings if remote_mcp_settings is not None
                            else load_remote_mcp_settings())
-    if selected_remote_mcp.product_reads_enabled and remote_product_queries is None and managed_store is not None:
+    if selected_remote_mcp.enabled and selected_remote_mcp.product_reads_enabled and remote_product_queries is None:
+        from os import environ
+        from .settings import DatabaseSettings
         from solo_leveling.interfaces.mcp.remote_product import RemoteProductQueries
-        remote_product_queries = RemoteProductQueries(managed_store.connection_pool)
+        dsn = environ.get('REMOTE_MCP_DATABASE_URL', '').strip()
+        if dsn:
+            database = DatabaseSettings(dsn)
+            managed_remote_store = PostgresDeviceStore.from_dsn(database.dsn)
+            remote_product_queries = RemoteProductQueries(managed_remote_store.connection_pool)
     remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries)
                      if selected_remote_mcp.enabled else None)
 
@@ -143,6 +150,9 @@ def create_app(
             if managed_store is not None:
                 managed_store.open()
                 stack.callback(managed_store.close)
+            if managed_remote_store is not None:
+                managed_remote_store.open()
+                stack.callback(managed_remote_store.close)
             if remote_bundle is not None:
                 await stack.enter_async_context(remote_bundle.server.session_manager.run())
             yield

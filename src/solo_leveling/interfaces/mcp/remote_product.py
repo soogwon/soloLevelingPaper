@@ -20,7 +20,8 @@ class RemoteProductQueries:
     def owner(self):
         token = get_access_token()
         if (not isinstance(token, RemoteIdentityAccessToken) or token.verified_identity() is None
-                or type(token.expires_at) is not int or token.expires_at <= time.time()):
+                or type(token.expires_at) is not int or token.expires_at <= time.time()
+                or 'papers:read' not in token.scopes):
             return None
         return self.owners.resolve_owner(token.verified_identity())
 

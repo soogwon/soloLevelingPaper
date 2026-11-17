@@ -17,9 +17,9 @@ owner는 도구 인자가 아니라 매 요청 SDK 검증 토큰의 issuer/raw s
 ## staging 적용 전 승인 범위
 
 1. 웹 이미지에 병합 코드를 반영하고 #395 migration을 관리자 경로로 적용한다.
-2. 별도 MCP DB 역할은 schema USAGE 및 아래 테이블 SELECT만 갖는다: server_remote_identities, server_papers, server_processing_versions, server_processing_publications, server_embedding_sets, server_execution_contexts, server_remote_executions, server_provider_attempts. 맥락 고정에는 server_execution_contexts INSERT만 추가한다. owner 접근 제한은 인증된 서버 쿼리에서 시행한다.
-3. 제품 role에 DDL·삭제·원장 쓰기·동의 변경·예산 변경·토큰 테이블·R2 권한을 주지 않는다. 실제 최소 권한 리허설 후 적용해야 하며 이 문서만으로 권한을 변경하지 않는다.
-4. 기존 웹 DB 역할에 자동으로 위 권한을 확대하지 않는다. 현재 앱은 관리 pool을 재사용하므로 별도 MCP pool 연결 설정 또는 검토된 웹 역할의 추가 권한이 필요하다.
-5. Auth0의 기존 spike scope를 제품 데이터 허용으로 무심코 확대하지 않는다. 제품 scope와 승인된 계정 연결을 확정하고 flag를 켜기 전에 사용자 승인을 받는다.
+2. 별도 MCP DB 역할은 schema USAGE 및 아래 테이블 SELECT만 갖는다: server_remote_identities, server_papers, server_processing_versions, server_processing_publications, server_embedding_sets, server_execution_contexts, server_remote_executions, server_provider_attempts. 맥락 고정에는 server_execution_contexts INSERT를 추가한다. tombstone 트리거의 행 잠금 때문에 server_papers의 paper_id 열 UPDATE 권한도 필요하나, 전용 역할의 실제 UPDATE는 읽기 전용 트리거로 거부한다. owner 접근 제한은 인증된 서버 쿼리에서 시행한다.
+3. 제품 role에 DDL·삭제·원장 쓰기·동의 변경·예산 변경·토큰 테이블·R2 권한을 주지 않는다. 로컬 비특권 역할에서 맥락 고정 성공과 토큰 테이블 조회·삭제·논문 수정·전송 제어 변경 거부를 확인했다. 이 문서만으로 실제 권한을 변경하지 않는다.
+4. 기존 웹 DB 역할에 자동으로 위 권한을 확대하지 않는다. `REMOTE_MCP_DATABASE_URL`의 별도 pool만 사용하며 일반 DATABASE_URL로 fallback하지 않는다. 값이 없으면 제품 도구 활성화를 거부한다.
+5. Auth0의 기존 spike scope를 제품 데이터 허용으로 무심코 확대하지 않는다. 제품 도구는 추가 `papers:read` scope를 요구한다. 해당 scope와 승인된 계정 연결을 확정하고 flag를 켜기 전에 사용자 승인을 받는다.
 
 현재는 코드·로컬 검증만 수행했다. 운영 flag, DB 권한, Auth0, Render 설정은 변경하지 않았다. 질문 입력 영속화·큐·provider 조립·운영 수치·호스트 카드와 실계정 검증이 남아 있으므로 원격 MCP 전환 완료가 아니다.
