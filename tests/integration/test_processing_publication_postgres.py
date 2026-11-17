@@ -125,7 +125,7 @@ def legacy_publication(pool, source):
         tx = _TransactionPool(conn)
         PostgresStagedProcessingPublisher._materialize(conn, tx, result(other))
         return PostgresProcessingPublicationStore(tx).publish(other.owner_user_id, other.paper_id, other.version_id,
-            other.parse_revision_id, other.translation_revision_id, other.embedding_set_id, other.job_id, other.lease_token)
+            other.parse_revision_id, other.translation_revision_id, other.embedding_set_id, other.job_id, other.lease_token, policy='complete')
 
 
 def test_pointer_conflict_and_replay_preserve_newer_publication(pool, db):

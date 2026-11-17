@@ -219,7 +219,7 @@ def test_publication_finishes_the_job_in_the_same_transaction():
     statements = [sql.split()[0:3] for sql, _ in conn.calls]
     assert statements[-1] == ["UPDATE", "server_processing_jobs", "SET"]
     sql, params = conn.calls[-1]
-    assert "status='succeeded'" in sql and "lease_expires_at>CURRENT_TIMESTAMP" in sql
+    assert "status='succeeded'" in sql and "lease_expires_at>clock_timestamp()" in sql
     assert params == ("user-a", "job", "lease")
 
 
