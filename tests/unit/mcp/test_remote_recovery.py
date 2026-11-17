@@ -109,3 +109,20 @@ def test_later_selection_in_same_account_cannot_be_overwritten():
         return row()
     result = model.recover('ask_paper', 'key', NS(lookup=delayed))
     assert result.result.execution_id == 'new-selection'
+
+
+def test_failed_budget_and_unknown_usage_are_independent():
+    from solo_leveling.application.remote_replay import ReplayView
+    from solo_leveling.interfaces.mcp.remote_recovery import restored_guidance
+    result=restored_guidance(ReplayView('same-id','failed','limited',None,'budget_exhausted','unknown'))
+    assert result['execution_id']=='same-id'
+    assert '처리 한도' in result['message'] and '사용량은 확인 중' in result['message']
+    assert result['action']=='refresh_status'
+    assert '자동으로 다시 제출하지 않습니다' in result['message']
+
+
+def test_completed_result_remains_readable_with_unknown_usage():
+    from solo_leveling.application.remote_replay import ReplayView
+    from solo_leveling.interfaces.mcp.remote_recovery import restored_guidance
+    result=restored_guidance(ReplayView('same-id','completed','available',{'saved':True},None,'unknown'))
+    assert result['action']=='read_result' and result['state']=='completed'

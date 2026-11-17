@@ -54,6 +54,7 @@ class PostgresRemoteAnswerStore:
                      ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
                    WHERE e.owner_user_id=%s AND e.execution_id=%s AND e.state='running'
                      AND e.lease_token=%s AND e.lease_expires_at>clock_timestamp()
+                     AND (e.deadline_at IS NULL OR e.deadline_at>clock_timestamp())
                      AND e.input_hash=%s AND e.context_id=%s
                      AND c.paper_id=%s AND c.server_version_id=%s
                      AND c.publication_id=%s AND c.parse_revision_id=%s
@@ -121,6 +122,7 @@ class PostgresRemoteAnswerStore:
                        finished_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
                    WHERE owner_user_id=%s AND execution_id=%s AND state='running'
                      AND lease_token=%s AND lease_expires_at>clock_timestamp()
+                     AND (deadline_at IS NULL OR deadline_at>clock_timestamp())
                    RETURNING execution_id""",
                 (raw, digest, intent.owner_user_id, intent.execution_id, intent.lease_token),
             ).fetchone()
