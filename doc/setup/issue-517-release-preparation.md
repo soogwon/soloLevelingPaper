@@ -29,7 +29,7 @@ cloud DB/R2 변경, Render 생성/배포, 실제 PDF 전송 및 AI 호출은 별
 게시 직전에 확인하며 필요한 고지는 모델 해시 대상 디렉터리 밖에 둔다.
 
 게시 순서:
-1. 기존 동일 이름 package 존재 여부와 private 접근 정책, 게시 자격 확인. 기존 package 정책을 임의 변경하지 않는다.
+1. 두 package가 이미 존재하고 private인지 확인한다. 404도 중단한다. 신규 package 기본 공개 범위에 의존하지 않으며, 기존 package 정책을 임의 변경하지 않는다.
 2. 검증 runtime을 게시하고 registry가 반환한 RepoDigest를 기록한다. 로컬 image ID와 혼동하지 않는다.
 3. 해당 외부 runtime reference로 runtime-lock을 다시 캡처한다.
 4. 같은 모델/소스/전체 의존성 lock으로 render target을 재빌드한다.
@@ -123,3 +123,16 @@ WORKER_BASE_REFERENCE는 이미지 값과 일치해야 하며 임의로 덮어�
 - 저장소 계약: verification_bootstrap.py, verification.py, processing_authorization.py, dispatch_ledger.py,
   remote_upload_consents.py, migrations/server/0033·0035·0037.
 - #517은 게시·DB/R2/동의·예산 준비만으로 종료하지 않는다.
+
+
+## 2026-11-17 첫 게시 시 발견한 제한
+
+실행 44014140496에서 runtime push는 성공했으나, 직후 검사에서 public으로 확인돼 중단됐다.
+GitHub UI도 Public을 표시했다. 즉시 Private으로 복구했고 worker는 게시하지 않았다.
+runtime에는 공개 라이브러리와 사전 검사 코드만 포함되며 사용자 PDF·DB 자격·API 키는 없다.
+공개 저장소 source label과 권한 상속이 설정돼 있었지만, 공개 생성 원인은 추가 확인이 필요하다.
+신규 package는 기본 private이라는 가정으로 재시도하지 않는다.
+
+후속 보완은 **존재하는 private package만 허용**한다. 두 package 중 하나라도 미존재·공개·조회 실패이면
+다운로드·빌드·push 전에 중단한다. worker package를 비공개로 사전 준비하는 절차가 확정되기 전
+게시를 완료했다고 간주하거나 실행을 재개하지 않는다. 기존 runtime은 삭제하지 않았다.
