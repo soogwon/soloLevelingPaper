@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - deploy/worker/**
+      - src/solo_leveling/workers/render_service.py
+      - tests/unit/test_render_worker.py
       - src/solo_leveling/workers/image_preflight.py
       - src/solo_leveling/workers/runtime_manifest.py
       - tests/unit/test_runtime_manifest.py
@@ -24,6 +26,10 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - name: 검사 도구 설치
         run: python -m pip install pytest
+      - name: Render 대기·종료·단발 실행 계약
+        env:
+          PYTHONPATH: src:.
+        run: python -m pytest tests/unit/test_render_worker.py -q
       - name: 모델 다운로드 없는 합성 이미지 검증
         env:
           PYTHONPATH: src:.
