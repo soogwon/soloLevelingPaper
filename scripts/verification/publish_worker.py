@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import sys
+import subprocess
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -30,14 +31,37 @@ def private_package(name):
         raise RuntimeError('기존 package가 private이 아니므로 게시 중단')
 
 
+def initialize_empty_worker():
+    """별도 승인한 빈 package만 만든다. 실제 이미지 게시를 이어서 실행하지 않는다."""
+    try:
+        private_package(NAMES[1])
+        print('기존 private worker package 확인: 초기화 생략')
+        return
+    except RuntimeError as error:
+        if str(error) != '미리 생성하고 private으로 확인한 package가 필요합니다.':
+            raise
+    tag = f'ghcr.io/{OWNER}/{NAMES[1]}:empty-initialization'
+    dockerfile = ('FROM scratch\n'
+        'LABEL org.opencontainers.image.source="https://github.com/soogwon/soloLevelingPaper"\n'
+        'LABEL org.opencontainers.image.description="Empty initialization; no application or data"\n')
+    subprocess.run(['docker', 'build', '--platform', 'linux/amd64', '-t', tag, '-'],
+        input=dockerfile, text=True, check=True)
+    run(['docker', 'push', tag])
+    print('빈 초기 package 생성 완료. UI에서 Private 설정을 확인하기 전 실제 게시 금지.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--work-dir', type=Path, required=True)
     parser.add_argument('--tag', required=True)
     parser.add_argument('--publish', action='store_true')
+    parser.add_argument('--initialize-empty-worker', action='store_true')
     args = parser.parse_args()
     if not args.publish or not re.fullmatch(r'verified-[0-9a-f]{40}', args.tag):
         parser.error('명시적 게시 옵션과 검증 commit tag가 필요합니다.')
+    if args.initialize_empty_worker:
+        initialize_empty_worker()
+        return
     for name in NAMES: private_package(name)
     root = args.work_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)

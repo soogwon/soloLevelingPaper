@@ -1,6 +1,11 @@
 name: 승인된 worker 비공개 이미지 게시
 on:
   workflow_dispatch:
+    inputs:
+      initialize_empty_worker:
+        description: '별도 승인한 빈 worker package만 생성 (실제 게시 아님)'
+        type: boolean
+        default: false
 permissions:
   contents: read
   packages: write
@@ -23,7 +28,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u soogwon --password-stdin
+      - name: 승인된 빈 package 초기화
+        if: inputs.initialize_empty_worker
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONPATH: src:.
+        run: python scripts/verification/publish_worker.py --work-dir "$RUNNER_TEMP/slp-private-release" --tag "verified-$GITHUB_SHA" --publish --initialize-empty-worker
       - name: 고정 입력 빌드·비공개 게시·digest 재검증
+        if: ${{ !inputs.initialize_empty_worker }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONPATH: src:.

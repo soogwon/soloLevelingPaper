@@ -52,3 +52,30 @@ def test_missing_package_blocks_before_build_or_push(missing_name, monkeypatch, 
     monkeypatch.setattr(publish, 'run', lambda *a, **kw: pytest.fail('빌드 또는 push 실행'))
     with pytest.raises(RuntimeError, match='미리 생성'): publish.main()
     assert not (tmp_path / 'release').exists()
+
+
+def test_empty_initializer_has_no_payload_or_followup(monkeypatch):
+    monkeypatch.setenv('GH_TOKEN', 'synthetic')
+    def missing(*args, **kwargs): raise HTTPError('synthetic', 404, 'missing', {}, None)
+    monkeypatch.setattr(publish, 'urlopen', missing)
+    builds, pushes = [], []
+    monkeypatch.setattr(publish.subprocess, 'run', lambda args, **kw: builds.append((args, kw)))
+    monkeypatch.setattr(publish, 'run', lambda args: pushes.append(args))
+    publish.initialize_empty_worker()
+    assert len(builds) == len(pushes) == 1
+    args, kwargs = builds[0]
+    assert args[-1] == '-'
+    assert kwargs['input'].splitlines()[0] == 'FROM scratch'
+    assert all(line.startswith(('FROM ', 'LABEL ')) for line in kwargs['input'].splitlines())
+    assert pushes == [['docker', 'push', 'ghcr.io/soogwon/solo-leveling-worker:empty-initialization']]
+
+
+@pytest.mark.parametrize('existing', ['private', 'public'])
+def test_empty_initializer_never_overwrites_existing_package(existing, monkeypatch):
+    monkeypatch.setenv('GH_TOKEN', 'synthetic')
+    monkeypatch.setattr(publish, 'urlopen', lambda *a, **kw: io.BytesIO(json.dumps({'visibility': existing}).encode()))
+    monkeypatch.setattr(publish.subprocess, 'run', lambda *a, **kw: pytest.fail('기존 package 덮어쓰기'))
+    monkeypatch.setattr(publish, 'run', lambda *a, **kw: pytest.fail('push 발생'))
+    if existing == 'private': publish.initialize_empty_worker()
+    else:
+        with pytest.raises(RuntimeError): publish.initialize_empty_worker()

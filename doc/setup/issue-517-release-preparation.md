@@ -136,3 +136,9 @@ runtime에는 공개 라이브러리와 사전 검사 코드만 포함되며 사
 후속 보완은 **존재하는 private package만 허용**한다. 두 package 중 하나라도 미존재·공개·조회 실패이면
 다운로드·빌드·push 전에 중단한다. worker package를 비공개로 사전 준비하는 절차가 확정되기 전
 게시를 완료했다고 간주하거나 실행을 재개하지 않는다. 기존 runtime은 삭제하지 않았다.
+
+
+빈 초기 package 생성·즉시 Private 전환에 대한 사용자 승인을 추가로 받았다.
+수동 workflow의 `initialize_empty_worker=true`는 `FROM scratch`와 두 LABEL만으로 빈 이미지를
+만들고 종료한다. 파일·모델·라이브러리·코드가 없으며 실제 worker 빌드를 이어서 실행하지 않는다.
+이 옵션은 기존 package를 덮어쓰지 않는다. 생성 후 UI에서 Private 확인 → 기본 옵션으로 실제 게시 순서다.
