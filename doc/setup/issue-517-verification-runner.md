@@ -41,7 +41,7 @@ python -m solo_leveling.interfaces.cli.processing_verification --config /secure/
 운영 DB가 아닌 일회용 검증 DB와 전용 비공개 schema를 준비하고 migration 0037까지 적용한다.
 검증 DB 자격에는 운영 DB 접근 권한을 주지 않는다. 이름 검사는 운영/검증 DB의 진위를 증명하지 않는다.
 매 연결에서 current_database/current_schema 및 전체 명시 search_path가 설정과 정확히 일치해야 한다.
-public·시스템 schema와 다른 schema fallback은 거부한다. PostgreSQL pool은 dict_row와 검증 schema 단독 search_path를 설정한다.
+public·시스템 schema와 다른 schema fallback은 거부한다. 암묵적인 임시 schema가 테이블을 가리는 연결도 거부한다. PostgreSQL pool은 dict_row와 검증 schema 단독 search_path를 설정한다.
 기존 전역 worker를 이 검증 DB에 동시에 연결하지 않는다.
 
 runtime은 사용자가 업로드한 파일이나 JSON에서 선택하는 확장이 아니라 **운영자가 검토한 신뢰하는 Python 코드**다.

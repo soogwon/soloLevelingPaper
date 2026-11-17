@@ -43,8 +43,9 @@ class IsolatedPool:
     @contextmanager
     def connection(self):
         with self.pool.connection() as conn:
-            row = conn.execute('SELECT current_database() AS db, current_schema() AS schema, current_schemas(false) AS schemas').fetchone()
-            if row != {'db': self.config.database_name, 'schema': self.config.schema_name, 'schemas': [self.config.schema_name]}:
+            row = conn.execute('SELECT current_database() AS db, current_schema() AS schema, current_schemas(false) AS schemas, current_schemas(true) AS resolved_schemas').fetchone()
+            if row != {'db': self.config.database_name, 'schema': self.config.schema_name, 'schemas': [self.config.schema_name],
+                       'resolved_schemas': ['pg_catalog', self.config.schema_name]}:
                 raise RuntimeError('verification_database_mismatch')
             yield conn
 

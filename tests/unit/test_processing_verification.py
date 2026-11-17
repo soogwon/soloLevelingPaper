@@ -83,8 +83,8 @@ def test_execute_without_runtime_does_not_run(tmp_path, monkeypatch, capsys):
 
 def test_each_connection_checks_full_search_path():
     conn = Mock()
-    rows = [dict(db='verification', schema='verification_test', schemas=['verification_test']),
-            dict(db='verification', schema='verification_test', schemas=['verification_test', 'public'])]
+    rows = [dict(db='verification', schema='verification_test', schemas=['verification_test'], resolved_schemas=['pg_catalog', 'verification_test']),
+            dict(db='verification', schema='verification_test', schemas=['verification_test', 'public'], resolved_schemas=['pg_catalog', 'verification_test', 'public'])]
     conn.execute.return_value.fetchone.side_effect = rows
     @contextmanager
     def borrow(): yield conn
@@ -106,3 +106,13 @@ def test_runner_uses_scoped_queue_and_does_not_retry(monkeypatch):
     assert factory.call_args.kwargs['jobs'].config == config()
     resources.stage_options['jobs'] = object()
     with pytest.raises(ValueError): run_once(config(), resources)
+
+
+def test_temporary_schema_cannot_shadow_verification_tables():
+    conn = Mock()
+    conn.execute.return_value.fetchone.return_value = dict(db='verification', schema='verification_test',
+        schemas=['verification_test'], resolved_schemas=['pg_temp_3', 'pg_catalog', 'verification_test'])
+    @contextmanager
+    def borrow(): yield conn
+    with pytest.raises(RuntimeError, match='database_mismatch'):
+        with IsolatedPool(NS(connection=borrow), config()).connection(): pytest.fail('임시 schema가 허용됨')

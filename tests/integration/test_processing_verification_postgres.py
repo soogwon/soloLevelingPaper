@@ -63,3 +63,35 @@ def test_wrong_database_rejected_before_mutation(pool, db):
     with pytest.raises(RuntimeError, match='database_mismatch'):
         claim(VerificationJobStore(IsolatedPool(pool, config), config))
     assert db('SELECT attempt FROM server_processing_jobs WHERE job_id=%s', (config.job_id,))[0]['attempt'] == 0
+
+
+def test_single_runner_reaches_real_staging_and_publication_without_external_calls(pool, db, monkeypatch):
+    from types import SimpleNamespace as NS
+    from tests.integration.test_remote_processing_intake_postgres import admitted_source
+    from solo_leveling.interfaces.http.remote_processing_intake import PostgresRemoteProcessingIntake
+    from solo_leveling.interfaces.http.remote_upload_consents import NOTICE_VERSION
+    from solo_leveling.interfaces.http.object_storage import DownloadedObject
+    from solo_leveling.workers.verification import run_once
+    from tests.fixtures.processing_result import result, LIMITS, SETTINGS, SPEC
+    import solo_leveling.workers.processing_composition as composition
+    owner, intent, storage, ai = admitted_source(pool, db)
+    job = PostgresRemoteProcessingIntake(pool).admit(owner, intent, new_id(), storage, ai, NOTICE_VERSION)
+    row = db('SELECT current_database() AS db, current_schema() AS schema')[0]
+    target = db('SELECT * FROM server_processing_jobs WHERE job_id=%s', (job.job_id,))[0]
+    config = VerificationConfig(row['db'], row['schema'], owner, job.job_id, str(target['paper_id']),
+        target['server_version_id'], target['payload_hash'], 'verification-worker', 60, 100_000)
+    monkeypatch.setattr(composition, 'ProcessingStagesFactory', lambda *_args, **_kwargs:
+        lambda source, check: NS(run=lambda current, body: result(current)))
+    class Objects:
+        calls = 0
+        def read_object(self, key, *, expected_size):
+            self.calls += 1
+            return DownloadedObject(key, expected_size, 'application/pdf', 'a' * 64, True, b'%PDF-test!')
+    objects = Objects()
+    resources = NS(pool=pool, objects=objects, stage_options=dict(limits=LIMITS,
+        service_config=NS(translation_settings=SETTINGS), embedding_spec=SPEC))
+    assert run_once(config, resources) == 'published'
+    assert run_once(config, resources) == 'not_claimed'
+    assert objects.calls == 1
+    assert db('SELECT status FROM server_processing_jobs WHERE job_id=%s', (job.job_id,))[0]['status'] == 'succeeded'
+    assert db('SELECT count(*) AS n FROM server_processing_publications WHERE source_job_id=%s', (job.job_id,))[0]['n'] == 1
