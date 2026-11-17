@@ -50,22 +50,27 @@ class ProcessingEmbedder(Protocol):
     def embed(self, items: tuple[ProcessedTranslation, ...], spec: EmbeddingSpec) -> EmbeddingBatch: ...
 
 
+def validate_processing_configuration(limits, translation_settings, embedding_spec):
+    _require(isinstance(limits, ProcessingLimits) and all(_positive(v) for v in
+             (limits.max_pdf_bytes, limits.max_pages, limits.max_chunks)), 'PROCESSING_CONFIG_INVALID')
+    _require(isinstance(translation_settings, TranslationSettings), 'PROCESSING_CONFIG_INVALID')
+    _require(isinstance(embedding_spec, EmbeddingSpec), 'PROCESSING_CONFIG_INVALID')
+    spec = embedding_spec
+    _require(all(_text(v) for v in (spec.model_id, spec.model_revision, spec.tokenizer_id,
+             spec.tokenizer_revision, spec.pooling, spec.runtime_version))
+             and _positive(spec.max_length) and _positive(spec.dimension) and _sha(spec.artifact_sha256)
+             and spec.runtime == 'pytorch' and spec.precision == 'float32'
+             and spec.distance == 'cosine' and spec.normalization in ('l2', 'none'),
+             'PROCESSING_CONFIG_INVALID')
+
+
 class RemoteProcessingStages:
     def __init__(self, parser: ProcessingParser, translator: ProcessingTranslator,
                  embedder: ProcessingEmbedder, *, limits: ProcessingLimits,
                  translation_settings: TranslationSettings, embedding_spec: EmbeddingSpec,
                  check_allowed: Callable[[ProcessingSource, str], bool]):
-        _require(isinstance(limits, ProcessingLimits) and all(_positive(v) for v in
-                 (limits.max_pdf_bytes, limits.max_pages, limits.max_chunks)), 'PROCESSING_CONFIG_INVALID')
-        _require(isinstance(translation_settings, TranslationSettings), 'PROCESSING_CONFIG_INVALID')
-        _require(isinstance(embedding_spec, EmbeddingSpec), 'PROCESSING_CONFIG_INVALID')
+        validate_processing_configuration(limits, translation_settings, embedding_spec)
         spec = embedding_spec
-        _require(all(_text(v) for v in (spec.model_id, spec.model_revision, spec.tokenizer_id,
-                 spec.tokenizer_revision, spec.pooling, spec.runtime_version))
-                 and _positive(spec.max_length) and _positive(spec.dimension) and _sha(spec.artifact_sha256)
-                 and spec.runtime == 'pytorch' and spec.precision == 'float32'
-                 and spec.distance == 'cosine' and spec.normalization in ('l2', 'none'),
-                 'PROCESSING_CONFIG_INVALID')
         _require(callable(check_allowed) and callable(getattr(parser, 'parse', None))
                  and callable(getattr(translator, 'translate', None))
                  and callable(getattr(embedder, 'embed', None)), 'PROCESSING_CONFIG_INVALID')
@@ -80,7 +85,8 @@ class RemoteProcessingStages:
             raise ProcessingError('PROCESSING_CHECK_UNAVAILABLE') from None
         _require(allowed is True, 'PROCESSING_NOT_ALLOWED')
 
-    def _document(self, document, source, limits):
+    @staticmethod
+    def _document(document, source, limits):
         _require(isinstance(document, ParsedDocument) and _positive(document.page_count), 'PROCESSING_PARSE_INVALID')
         _require(document.page_count <= limits.max_pages, 'PROCESSING_LIMIT_EXCEEDED')
         _require(isinstance(document.chunks, tuple) and isinstance(document.sections, tuple), 'PROCESSING_PARSE_INVALID')

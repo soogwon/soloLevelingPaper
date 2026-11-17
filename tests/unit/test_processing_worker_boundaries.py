@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from threading import Event
+from unittest.mock import Mock
 
 import pytest
 import requests
@@ -101,7 +102,9 @@ def test_worker_usage_uncertainty_reaches_classifier_and_never_loads_model(harne
 def test_worker_partial_translation_stays_unpublished_without_embedding(harness):
     worker, job, _, _, response, _, model, factory, *_ = harness
     response.json.return_value = envelope('')
+    worker.result_store = Mock()
     result = worker.run_once()
+    worker.result_store.save.assert_not_called()
     assert result.job == job and result.result.status == 'translation_incomplete'
     assert result.result.embeddings is None
     advice = processing_result_advice(result.result)
