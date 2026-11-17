@@ -85,3 +85,35 @@ def test_mcp_requires_write_scope_and_never_grants_consent(db,stores,pool):
         assert submitted['state']=='queued'
         assert result(client,'submit_remote_question',{'request_key':key})['execution_id']==submitted['execution_id']
         assert result(client,'get_remote_question',{'request_key':key})['status']=='ok'
+
+
+def test_restricted_review_role_submits_without_web_secrets_or_policy_edits(db,stores,pool):
+    from psycopg import sql
+    import psycopg
+    from psycopg.conninfo import make_conninfo
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+    from tests.integration.test_remote_processing_postgres import DSN
+    from solo_leveling.interfaces.cli.question_permissions import grant_question_review_role
+    service,key,_=review(db,stores,pool)
+    role='question_'+new_id().replace('-','')[:12]
+    with pool.connection() as conn:
+        schema=conn.execute('SELECT current_schema() AS s').fetchone()['s']
+        conn.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD 'local-question-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS").format(sql.Identifier(role)))
+        grant_question_review_role(conn,schema,role)
+    restricted=ConnectionPool(make_conninfo(DSN,user=role,password='local-question-only'),kwargs={'row_factory':dict_row,'options':f'-c search_path={schema}'},open=True)
+    try:
+        limited=PostgresQuestionReviews(restricted,policy=service.policy,processing_config=service.config,window_key=service.window,review_seconds=service.seconds,web_origin=service.web_origin)
+        limited.grant('alice',key,'storage',NOTICE);limited.grant('alice',key,'ai_provider',NOTICE)
+        saved=limited.submit('alice',key)
+        assert saved['state']=='queued' and limited.submit('alice',key)['execution_id']==saved['execution_id']
+        for statement in ('SELECT * FROM web_sessions','SELECT * FROM server_device_credentials','DELETE FROM server_question_reviews',
+            'UPDATE server_dispatch_budget_limits SET max_input_tokens=999999','UPDATE server_papers SET paper_id=paper_id',
+            "UPDATE server_remote_executions SET state='completed'",'UPDATE server_dispatch_controls SET control_id=control_id'):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with restricted.connection() as conn:conn.execute(statement)
+    finally:
+        restricted.close()
+        with pool.connection() as conn:
+            conn.execute(sql.SQL('DROP OWNED BY {}').format(sql.Identifier(role)))
+            conn.execute(sql.SQL('DROP ROLE {}').format(sql.Identifier(role)))

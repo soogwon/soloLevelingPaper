@@ -19,3 +19,10 @@ CREATE TABLE server_question_reviews (
     CHECK (jsonb_typeof(question_snapshot)='object' AND octet_length(question_snapshot::text)<=262144),
     CHECK (expires_at>created_at)
 );
+CREATE FUNCTION server_question_lock_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF current_user=TG_ARGV[0] THEN
+        RAISE EXCEPTION 'question_lock_only' USING ERRCODE='42501';
+    END IF;
+    RETURN NEW;
+END $$;

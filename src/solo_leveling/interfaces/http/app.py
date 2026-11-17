@@ -142,6 +142,19 @@ def create_app(
             database = DatabaseSettings(dsn)
             managed_remote_store = PostgresDeviceStore.from_dsn(database.dsn)
             remote_product_queries = RemoteProductQueries(managed_remote_store.connection_pool)
+    managed_question_store = None
+    if remote_questions is None:
+        from .remote_question_settings import load_question_settings
+        question_settings = load_question_settings()
+        if question_settings is not None:
+            from os import environ
+            from .settings import DatabaseSettings
+            from .remote_question_reviews import PostgresQuestionReviews
+            dsn = environ.get('REMOTE_QUESTION_DATABASE_URL','').strip()
+            if not selected_remote_mcp.enabled or not selected_remote_mcp.product_reads_enabled or not dsn:
+                raise ValueError('question_settings_invalid')
+            managed_question_store = PostgresDeviceStore.from_dsn(DatabaseSettings(dsn).dsn)
+            remote_questions = PostgresQuestionReviews(managed_question_store.connection_pool,**question_settings)
     remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries, question_service=remote_questions)
                      if selected_remote_mcp.enabled else None)
 
@@ -154,6 +167,9 @@ def create_app(
             if managed_remote_store is not None:
                 managed_remote_store.open()
                 stack.callback(managed_remote_store.close)
+            if managed_question_store is not None:
+                managed_question_store.open()
+                stack.callback(managed_question_store.close)
             if remote_bundle is not None:
                 await stack.enter_async_context(remote_bundle.server.session_manager.run())
             yield
