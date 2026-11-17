@@ -160,6 +160,38 @@ class PostgresRemoteExecutionStore:
             ).fetchone()
         return None if row is None else _intent(row)
 
+    def claim_next_question(self):
+        """행 잠금으로 단일 질문을 선택한다. 이전 전송 이력은 자동 재호출하지 않는다."""
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+        with self._pool.connection() as conn:
+            row = conn.execute("""SELECT e.* FROM server_remote_executions e
+                WHERE e.operation='ask_paper' AND e.question_snapshot IS NOT NULL
+                  AND e.policy_snapshot IS NOT NULL
+                  AND (e.state='queued' OR (e.state='running' AND e.lease_expires_at<=clock_timestamp()))
+                ORDER BY e.created_at,e.execution_id FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone()
+            if row is None:
+                return None
+            owner, execution = row['owner_user_id'], str(row['execution_id'])
+            scoped = PostgresRemoteExecutionStore(SimpleNamespace(connection=lambda: nullcontext(conn)))
+            if scoped.expire(owner, execution):
+                return ('expired', None, None)
+            paper = conn.execute("""SELECT 1 FROM server_execution_contexts c JOIN server_papers p
+                ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
+                WHERE c.owner_user_id=%s AND c.context_id=%s AND p.deleted_at IS NULL
+                FOR UPDATE OF p""", (owner,row['context_id'])).fetchone()
+            consent = _question_consent(conn,owner,row['storage_consent_id'],row['ai_consent_id'],row['input_hash'],row['notice_version'])
+            attempted = conn.execute("SELECT 1 FROM server_provider_attempts WHERE owner_user_id=%s AND execution_id=%s LIMIT 1",(owner,execution)).fetchone()
+            if paper is None or consent is None or attempted is not None:
+                reason = 'provider_failed' if attempted is not None else 'scope_revoked'
+                conn.execute("""UPDATE server_remote_executions SET state='failed',terminal_reason=%s,
+                    lease_token=NULL,lease_expires_at=NULL,finished_at=clock_timestamp(),updated_at=clock_timestamp()
+                    WHERE owner_user_id=%s AND execution_id=%s""",(reason,owner,execution))
+                return ('blocked', None, None)
+            policy = RemoteExecutionPolicy(**row['policy_snapshot'])
+            intent = scoped.claim(owner,execution,lease_seconds=min(policy.timeout_seconds,max(3,policy.stage_timeout_seconds)))
+            return ('claimed',intent,policy) if intent else ('blocked',None,None)
+
     def question_input(self, intent):
         """현재 lease·동의·접근 범위를 확인한 worker만 저장 입력을 읽는다."""
         from solo_leveling.application.evidence_qa.remote_question_input import RemoteQuestionInput
