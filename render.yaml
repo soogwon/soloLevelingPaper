@@ -16,10 +16,11 @@ services:
         value: 0.0.0.0
       - key: WEB_STATIC_ROOT
         value: /app/web
+      # 웹 제한 계정 URL은 Dashboard에서 관리하며 관리자 연결로 덮어쓰지 않는다.
       - key: DATABASE_URL
-        fromDatabase:
-          name: solo-leveling-staging-db
-          property: connectionString
+        sync: false
+      - key: SERVER_MIGRATION_MODE
+        value: check
       - key: OIDC_ISSUER
         sync: false
       - key: OIDC_AUDIENCE
@@ -68,21 +69,21 @@ services:
         sync: false
       - key: OBJECT_STORAGE_REGION
         value: auto
-      # 만료된 private/tmp 원격 업로드 객체와 DB pending 상태를 시작 시 제한적으로 정리한다.
-      # 운영 scheduler가 생기면 false로 바꾸고 별도 worker에서 실행한다.
+      # 제한 웹 계정에는 정리 권한을 주지 않는다. 별도 정리 실행 환경을 준비한다.
       - key: REMOTE_UPLOAD_CLEANUP_ON_START
-        value: "true"
+        value: "false"
       - key: REMOTE_UPLOAD_CLEANUP_LIMIT
         value: "100"
-      # Free staging에는 Shell/One-Off Job이 없어 프로세스 시작마다 삭제 큐를 제한된 건수만 처리한다.
-      # 운영 scheduler가 생기면 false로 바꾸고 별도 worker에서 실행한다.
+      # 삭제 큐도 웹 시작과 분리하고 정리 담당 계정으로만 실행한다.
       - key: REMOTE_DELETION_CLEANUP_ON_START
-        value: "true"
+        value: "false"
       - key: REMOTE_DELETION_CLEANUP_MAX_JOBS
         value: "10"
       - key: REMOTE_DELETION_CLEANUP_LEASE_SECONDS
         value: "300"
 
+# 이전 DB는 복구용으로 유지한다. 현재 웹은 이 DB를 자동 참조하지 않는다.
+# 새 v2 DB는 수동 관리하며 이 선언의 이름을 바꿔 신규 생성하지 않는다.
 databases:
   - name: solo-leveling-staging-db
     plan: free

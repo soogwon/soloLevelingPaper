@@ -5,39 +5,39 @@
 
 ## 저장소에 포함된 배포 구성
 
-- `render.yaml`: 무료 Web Service와 무료 Render Postgres Blueprint
+- `render.yaml`: 무료 Web Service와 복구용 이전 DB 선언
 - `Dockerfile`: 서버 의존성과 API·웹 파일을 포함한 이미지
-- `deploy/render-start.sh`: 서버 시작 전 PostgreSQL 마이그레이션, 만료 원격 업로드 정리와 staging 삭제 큐 1회 실행
+- `deploy/render-start.sh`: 서버 시작 전 migration 이력 확인; 관리자 migration·정리 작업은 별도 실행
 - `WEB_STATIC_ROOT=/app/web`: API route 등록 후 외부 사이트를 `/`에 mount
   - 웹 파일(HTML·JS·CSS)은 `Cache-Control: no-cache`로 응답한다. 브라우저는 매번 ETag로 재확인하고, 바뀌지 않은 파일은 304로 재사용한다. 배포 직후에도 새로고침하면 새 파일을 받는다(이미 열린 탭은 다시 불러와야 한다).
 - Render가 주입하는 `PORT`: `API_PORT`가 없을 때 자동 사용
 
-무료 Web Service에는 Render의 pre-deploy command가 제공되지 않습니다. 따라서 스테이징의 단일 인스턴스가
-시작할 때 마이그레이션을 먼저 실행합니다. 마이그레이션은 PostgreSQL advisory lock과 적용 이력으로
-중복 실행을 방지합니다. 나중에 유료 Web Service로 전환하면 Dashboard의 Pre-Deploy Command를
-`solo-leveling-server-migrate`로 지정하고 시작 명령을 `solo-leveling-api`로 분리하는 편이 좋습니다.
+현재 웹은 `solo-leveling-staging-db-v2`의 제한 웹 계정으로 연결한다.
+`DATABASE_URL`은 `sync: false`로 두고 Dashboard에서 직접 관리한다. Blueprint 업데이트는
+이 값을 덮어쓰지 않는다. DB 관리자의 `connectionString`이나 worker 자격을 입력하지 않는다.
+[Render 공식 동작](https://render.com/docs/blueprint-spec#environment-variables).
 
-무료 Web Service는 Shell과 One-Off Job도 제공하지 않는다. 이 staging Blueprint는 마이그레이션 뒤
-`REMOTE_UPLOAD_CLEANUP_ON_START=true`를 확인해 만료된 원격 업로드를 최대 100건 정리하고,
-`REMOTE_DELETION_CLEANUP_ON_START=true`를 확인해 삭제 요청을 최대 10건 처리한다.
-재배포뿐 아니라 프로세스 재시작에도 실행된다. 이 gate는 기본적으로 꺼져 있고 staging에서만 명시적으로 켠다.
-두 정리 명령 중 하나가 실패로 종료해도 API 시작은 계속한다. 원격 업로드 정리는 만료된
-`private/tmp/` 객체만 삭제하고 intent를 `expired`, upload를 `failed/upload_expired`로 확정한다.
-객체 삭제가 실패하면 pending을 유지해 다음 시작에서 재시도한다. 삭제 작업 확보 후 정리에 실패하면 가능한 경우 요청을
-`failed`로 기록하지만, 설정·DB 연결 실패나 lease 만료 시에는 해당 상태 기록을 보장하지 않는다.
-다음 시작 시 재시도 가능한 요청을 확보하고 완료된 단계는 건너뛴다. 최대 건수와 lease는 실행 시간 제한이
-아니므로, 정리 명령이 끝나기 전에는 API가 시작되지 않는다. 이는 검증용 실행 수단이지 정기 scheduler가
-아니다. 유료 worker 또는 외부 scheduler를 준비하면 이 값을 `false`로 바꾸고 삭제 CLI를 별도로 실행한다.
-기존 Blueprint의 Auto Sync가 꺼져 있으면 `render.yaml` 변경이 자동 반영되지 않으므로 Blueprint 화면에서
-Manual Sync를 실행한 뒤 Web Service의 새 배포를 확인한다.
+`SERVER_MIGRATION_MODE=check`로 migration 이름·체크섬·누락만 확인한다. 누락 또는 오류가 있으면
+웹 시작을 거부한다. migration 적용은 웹과 분리된 관리자 실행 단계에서 먼저 완료해야 한다.
+`REMOTE_UPLOAD_CLEANUP_ON_START=false`, `REMOTE_DELETION_CLEANUP_ON_START=false`를 유지한다.
+제한 웹 계정은 정리 담당 계정이 아니며, 별도 scheduler/정리 실행 환경은 아직 준비되지 않았다.
+따라서 현재 자동 정리는 실행되지 않는다. R2 lifecycle만으로 DB 정리까지 완료됐다고 판단하지 않는다.
 
-## 최초 배포
+`databases`의 이전 무료 DB 선언은 복구용 보존을 위해 남겨둔다. 새 v2 DB는 수동 생성·관리한다.
+이 Blueprint를 새로운 환경에 그대로 적용하면 복구용 DB도 생성되므로 새 환경 설치 전에
+DB 선언을 검토해야 한다. 기존 DB 삭제나 새 유료 자원 생성은 이 변경에 포함하지 않는다.
 
-1. Render Dashboard에서 **New > Blueprint**를 선택하고 이 GitHub 저장소를 연결합니다.
-2. Blueprint 경로로 저장소 루트의 `render.yaml`을 사용합니다.
-3. 생성 화면에서 `sync: false`로 표시되는 OIDC 값을 모두 입력합니다. 비밀값은 저장소에 커밋하지 않습니다.
-4. Blueprint를 적용합니다. DB 생성, Docker 이미지 빌드, 마이그레이션, API 시작 순서로 진행됩니다.
-5. Web Service의 Events와 Logs에서 `applied:` 출력과 `/health` 성공을 확인합니다.
+## 전환 및 이후 동기화
+
+1. 새 DB의 schema·pgvector·migration·제한 계정을 먼저 구성한다.
+2. 웹 계정의 실제 접속, migration check, 필요한 조회·쓰기 및 금지 권한을 검증한다.
+3. Render 웹 Environment에 웹 전용 `DATABASE_URL`을 직접 입력한다. 비밀값은 커밋하지 않는다.
+4. **Save only는 배포가 아니다.** 동일 검증 커밋을 배포해 저장된 환경변수를 반영한다.
+5. Live, `/health`, Auth0 재로그인과 새 DB 목록 조회를 확인한다. 기존 DB는 복구용으로 보존한다.
+6. Blueprint Auto Sync는 검토 중 `No`로 유지한다. 병합 후 Manual Sync의 변경 계획에서
+   DB 생성·삭제·관리자 URL 재연결이 없는지 확인하고 적용한다. 이는 웹 Auto-Deploy와 별도 설정이다.
+7. 실패하면 기존 DB URL을 사용자 입력으로 복원하고 검증 커밋을 재배포한다. DB 교체 후
+   새로 생긴 데이터는 자동으로 이전 DB에 옮겨지지 않는다.
 
 필수 OIDC 값은 다음과 같습니다.
 

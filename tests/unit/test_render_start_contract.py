@@ -23,11 +23,14 @@ def test_free_staging_runs_bounded_cleanups_after_migrations():
     assert '"status":"failed"' in script
 
 
-def test_render_staging_explicitly_enables_bounded_startup_cleanup():
+def test_render_staging_preserves_limited_web_credentials_and_disables_cleanup():
     blueprint = Path("render.yaml").read_text(encoding="utf-8")
-    assert "REMOTE_UPLOAD_CLEANUP_ON_START\n        value: \"true\"" in blueprint
+    assert "fromDatabase:" not in blueprint
+    assert "DATABASE_URL\n        sync: false" in blueprint
+    assert "SERVER_MIGRATION_MODE\n        value: check" in blueprint
+    assert "REMOTE_UPLOAD_CLEANUP_ON_START\n        value: \"false\"" in blueprint
     assert "REMOTE_UPLOAD_CLEANUP_LIMIT\n        value: \"100\"" in blueprint
-    assert "REMOTE_DELETION_CLEANUP_ON_START\n        value: \"true\"" in blueprint
+    assert "REMOTE_DELETION_CLEANUP_ON_START\n        value: \"false\"" in blueprint
     assert "REMOTE_DELETION_CLEANUP_MAX_JOBS\n        value: \"10\"" in blueprint
     assert "REMOTE_DELETION_CLEANUP_LEASE_SECONDS\n        value: \"300\"" in blueprint
 
