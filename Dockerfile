@@ -28,6 +28,7 @@ COPY web/css/ ./web/css/
 COPY web/js/ ./web/js/
 COPY web/landing/ ./web/landing/
 COPY deploy/render-start.sh ./deploy/
+COPY deploy/cleanup/run.py ./deploy/cleanup/run.py
 
 USER app
 
