@@ -164,4 +164,3 @@ def test_build_cli_defaults_to_plan_without_docker(tmp_path, monkeypatch, capsys
     module.main(['--runtime-image', 'approved@sha256:' + 'a' * 64,
                  '--model-dir', str(tmp_path), '--runtime-dir', str(tmp_path)])
     assert 'linux/amd64' in capsys.readouterr().out
-
