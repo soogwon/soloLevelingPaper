@@ -103,7 +103,8 @@ def create_remote_mcp(
         auth=AuthSettings(
             issuer_url=AnyHttpUrl(settings.issuer),
             resource_server_url=AnyHttpUrl(settings.resource_url),
-            required_scopes=[settings.required_scope],
+            required_scopes=list(dict.fromkeys([settings.required_scope] +
+                (["papers:read"] if settings.product_reads_enabled else []))),
             validate_token_resource=True,
         ),
         transport_security=TransportSecuritySettings(

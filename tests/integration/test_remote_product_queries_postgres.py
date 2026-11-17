@@ -156,6 +156,7 @@ def test_spike_scope_alone_cannot_read_product_data(pool):
     app=create_app(remote_mcp_settings=replace(SETTINGS,product_reads_enabled=True),
                    remote_mcp_verifier=SpikeVerifier(),remote_product_queries=queries)
     with TestClient(app,base_url=SETTINGS.resource_url[:-4]) as client:
-        assert result(client,'list_remote_papers')=={'status':'not_found'}
-        assert result(client,'get_remote_question',{'request_key':'same-key'})=={'status':'not_found'}
+        assert call(client,'tools/list').status_code==403
+        metadata=client.get('/.well-known/oauth-protected-resource/mcp').json()
+        assert 'papers:read' in metadata['scopes_supported']
     queries.owners.resolve_owner.assert_not_called()
