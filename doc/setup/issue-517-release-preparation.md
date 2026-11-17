@@ -1,8 +1,8 @@
 # #517 이미지 게시·검증 환경 설정 준비
 
 기준: main 5cecc25 (#549 병합), 2026-11-17 Asia/Seoul.
-현재 문서는 실행 승인 전 준비안이다. 외부 이미지 게시, cloud DB/R2 변경, Render 생성/배포,
-실제 PDF 전송 및 AI 호출을 수행하지 않는다. 비밀정보·실제 사용자 식별자를 포함하지 않는다.
+GHCR private runtime·worker 게시와 재검증은 사용자 승인을 받았다. 아래 수동 Actions로 진행하며,
+cloud DB/R2 변경, Render 생성/배포, 실제 PDF 전송 및 AI 호출은 별도 승인 전 수행하지 않는다. 비밀정보·실제 사용자 식별자를 포함하지 않는다.
 
 ## 1. 검증한 입력과 게시 후보
 
@@ -18,9 +18,9 @@
 아래 순서로 외부 reference와 runtime-lock을 일치시킨 새 최종 이미지를 검증한다.
 검증한 wheel hash lock을 고정하며 새로 의존성을 해석하지 않는다. 현재 모델·wheel·이미지는 외부에 게시하지 않았다.
 
-## 2. 게시 승인안
+## 2. 승인된 게시 경로
 
-제안 목적지(아직 생성하지 않음):
+승인한 목적지(게시 결과와 digest는 실행 artifact 및 #517에 기록):
 - ghcr.io/soogwon/solo-leveling-worker-runtime — private
 - ghcr.io/soogwon/solo-leveling-worker — private
 
@@ -28,7 +28,7 @@
 논문·사용자 기록·DB 덤프·환경 파일·토큰·API 키는 포함하지 않는다. 모델/패키지 라이선스·NOTICE 포함 여부를
 게시 직전에 확인하며 필요한 고지는 모델 해시 대상 디렉터리 밖에 둔다.
 
-승인 후 순서:
+게시 순서:
 1. 기존 동일 이름 package 존재 여부와 private 접근 정책, 게시 자격 확인. 기존 package 정책을 임의 변경하지 않는다.
 2. 검증 runtime을 게시하고 registry가 반환한 RepoDigest를 기록한다. 로컬 image ID와 혼동하지 않는다.
 3. 해당 외부 runtime reference로 runtime-lock을 다시 캡처한다.
@@ -37,11 +37,15 @@
 6. 최종 worker를 게시하고 RepoDigest·원본 commit·lock·재검증 결과를 기록한다.
 7. Render에는 나중에 별도의 read:packages 자격과 최종 digest를 설정한다. 게시용 쓰기 자격을 전달하지 않는다.
 
-로컬 게시에는 최소 write:packages 범위의 GitHub classic PAT가 필요하다. Actions 게시로 선택한다면
-packages:write를 가진 명시적 수동 workflow를 별도로 준비한다. 토큰을 채팅/Git/이미지에 넣지 않는다.
+`worker-publish.yml`의 수동 Actions에서 일회성 GITHUB_TOKEN의 packages:write 권한을 사용한다.
+main에서만 실행하며 게시 전후 private 여부를 검사하고, 게시 digest를 다시 내려받아 오프라인 검증한다. 토큰을 채팅/Git/이미지에 넣지 않는다.
 GHCR container 저장소/전송은 공식 문서상 현재 무료이나 Actions 및 향후 정책·계정 사용량은 별개다.
 
-## 3. DB 준비안 — 외부 변경 전 대상 확인 필요
+## 3. DB 준비안 — 기존 환경 읽기 확인 완료
+
+Render workspace에는 staging 웹과 `solo-leveling-staging-db` 두 서비스만 표시된다.
+DB는 PostgreSQL 18 Free이며, 별도 worker 검증용 DB 서비스는 없다.
+기존 DB 내부의 별도 database/schema 유무는 아직 확인하지 않았다. 기존 staging DB에 변경하지 않았다.
 
 - 운영 DB와 분리된 검증 DB, 전용 schema와 역할. 기본 이름 제안은 slp_worker_verify / worker_verify.
 - 연결 대상 host/DB 소유자·비용·삭제 일정을 확인한 뒤에만 생성한다. 기존 staging public schema를 사용하지 않는다.
@@ -58,6 +62,10 @@ queued·attempt=0·full_processing, tombstone 없음, 사용량 reserved/unknown
 실패한 작업의 attempt나 usage 원장을 초기화해 재실행하지 않는다.
 
 ## 4. R2와 제품 동의
+
+Cloudflare 계정에는 `solo-leveling-staging-pdfs` bucket 하나(4개 객체, 3.51 MB)만 표시된다.
+worker 검증 전용 bucket은 없으며, 확인 시점 R2 청구 표시는 $0.00이었다.
+기존 객체 조회·다운로드·변경이나 신규 bucket·자격 생성은 하지 않았다.
 
 - 검증 전용 비공개 bucket 제안: slp-worker-verification. 공개 접근을 켜지 않는다.
 - worker에는 해당 bucket의 읽기 자격만 제공한다. 준비/업로드/정리 자격은 별도로 제한한다.
@@ -102,7 +110,7 @@ WORKER_BASE_REFERENCE는 이미지 값과 일치해야 하며 임의로 덮어�
 
 ## 승인과 결제 시점
 
-1. 지금 필요한 결정: GHCR private 두 이미지 게시 및 게시 인증 방식.
+1. 승인 완료: GHCR private 두 이미지 게시, 일회성 Actions 인증. 실제 게시 완료 여부는 실행 결과로 판단한다.
 2. 다음: 검증 DB·R2 대상(기존 격리 환경/신규), 생성·migration·접수/동의 기록의 변경 승인.
 3. 실제 PDF 전송·AI 호출은 별도 구체적 범위/비용 승인.
 4. Render Background Worker 생성/Deploy 직전에 사양·표시 요금·대기 중 과금·중지 계획을 안내한다.
