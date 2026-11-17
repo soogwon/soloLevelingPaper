@@ -28,7 +28,7 @@ def wheel_lock(folder):
     lines, seen = [], set()
     for path in sorted(folder.glob('*.whl')):
         with ZipFile(path) as archive:
-            metadata = [n for n in archive.namelist() if n.endswith('.dist-info/METADATA')]
+            metadata = [n for n in archive.namelist() if n.count('/') == 1 and n.endswith('.dist-info/METADATA')]
             if len(metadata) != 1: raise ValueError('wheel metadata가 모호합니다.')
             parsed = BytesParser().parsebytes(archive.read(metadata[0]))
         name, version = parsed['Name'], parsed['Version']
@@ -83,6 +83,11 @@ def main():
     run([*pip, '--index-url', 'https://pypi.org/simple', '--find-links', '/wheels', 'torch==2.14.0+cpu',
          'sentence-transformers==6.1.0', 'transformers==5.17.0', 'pdfplumber==0.11.10',
          'requests==2.34.2', 'psycopg[binary]==3.3.9', 'psycopg-pool==3.3.3', 'boto3==1.44.4'])
+    build_and_verify(root, base)
+
+
+def build_and_verify(root, base):
+    wheels, reports = root / 'wheels', root / 'reports'
     wheel_lock(wheels)
     shutil.copyfile(wheels / 'requirements.lock', reports / 'requirements.lock')
     model = download_model(root / 'models')

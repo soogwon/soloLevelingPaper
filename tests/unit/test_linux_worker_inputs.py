@@ -35,3 +35,13 @@ def test_changed_model_rejected(tmp_path, monkeypatch, body):
     monkeypatch.setattr(worker, 'ROOT', tmp_path)
     monkeypatch.setattr(worker, 'urlopen', lambda *args, **kwargs: io.BytesIO(body))
     with pytest.raises(ValueError): worker.download_model(tmp_path / 'model')
+
+
+def test_bundled_dependency_metadata_does_not_replace_wheel_identity(tmp_path):
+    wheel = tmp_path / 'package-1.0-py3-none-any.whl'
+    with ZipFile(wheel, 'w') as archive:
+        archive.writestr('package-1.0.dist-info/METADATA', 'Name: package\nVersion: 1.0\n')
+        archive.writestr('package/vendor/other-2.0.dist-info/METADATA', 'Name: other\nVersion: 2.0\n')
+    worker.wheel_lock(tmp_path)
+    text = (tmp_path / 'requirements.lock').read_text()
+    assert text.startswith('package==1.0 ') and 'other' not in text
