@@ -26,6 +26,7 @@ def test_free_staging_runs_bounded_cleanups_after_migrations():
 def test_render_staging_preserves_limited_web_credentials_and_disables_cleanup():
     blueprint = Path("render.yaml").read_text(encoding="utf-8")
     assert "fromDatabase:" not in blueprint
+    assert 'autoDeployTrigger: "off"' in blueprint
     assert "DATABASE_URL\n        sync: false" in blueprint
     assert "SERVER_MIGRATION_MODE\n        value: check" in blueprint
     assert "REMOTE_UPLOAD_CLEANUP_ON_START\n        value: \"false\"" in blueprint

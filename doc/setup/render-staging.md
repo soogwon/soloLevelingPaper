@@ -13,6 +13,7 @@
 - Render가 주입하는 `PORT`: `API_PORT`가 없을 때 자동 사용
 
 현재 웹은 `solo-leveling-staging-db-v2`의 제한 웹 계정으로 연결한다.
+`autoDeployTrigger: "off"`를 명시해 Blueprint 동기화 후에도 수동 배포를 유지한다.
 `DATABASE_URL`은 `sync: false`로 두고 Dashboard에서 직접 관리한다. Blueprint 업데이트는
 이 값을 덮어쓰지 않는다. DB 관리자의 `connectionString`이나 worker 자격을 입력하지 않는다.
 [Render 공식 동작](https://render.com/docs/blueprint-spec#environment-variables).
