@@ -74,7 +74,7 @@ exec() { test "$1" = solo-leveling-api; echo api; }
 '''
     harness += Path("deploy/render-start.sh").read_text(encoding="utf-8")
     env = dict(os.environ)
-    env.update(REMOTE_DELETION_CLEANUP_ON_START=enabled,
+    env.update(SERVER_MIGRATION_MODE="apply", REMOTE_DELETION_CLEANUP_ON_START=enabled,
                REMOTE_UPLOAD_CLEANUP_ON_START=enabled,
                REMOTE_UPLOAD_CLEANUP_LIMIT="100",
                REMOTE_DELETION_CLEANUP_MAX_JOBS="10",
@@ -87,3 +87,25 @@ exec() { test "$1" = solo-leveling-api; echo api; }
     expected_failures = int(enabled == "true" and migration_exit == 0 and upload_exit != 0)
     expected_failures += int(enabled == "true" and migration_exit == 0 and cleanup_exit != 0)
     assert result.stderr.count('"status":"failed"') == expected_failures
+
+
+@pytest.mark.parametrize(('mode', 'status', 'expected', 'exit_code'), [
+    ('check', 0, ['migration --check', 'api'], 0),
+    ('check', 2, ['migration --check'], 2),
+    ('check', 1, ['migration --check'], 1),
+    ('skip', 0, [], 1),
+])
+def test_separate_migration_check_blocks_start_on_pending_or_failure(mode, status, expected, exit_code):
+    shell = shutil.which('bash')
+    if shell is None:
+        pytest.skip('bash가 필요합니다.')
+    harness = '''
+solo-leveling-server-migrate() { echo "migration $*"; return "$MIGRATION_EXIT"; }
+exec() { echo api; }
+'''
+    env = dict(os.environ, SERVER_MIGRATION_MODE=mode, MIGRATION_EXIT=str(status),
+               REMOTE_UPLOAD_CLEANUP_ON_START='false', REMOTE_DELETION_CLEANUP_ON_START='false')
+    result = subprocess.run([shell, '-c', harness + Path('deploy/render-start.sh').read_text()],
+                            env=env, capture_output=True, text=True, timeout=15)
+    assert result.returncode == exit_code
+    assert result.stdout.splitlines() == expected

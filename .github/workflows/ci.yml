@@ -61,6 +61,26 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: 테스트 의존성 설치
         run: python -m pip install -e ".[dev]"
+      - name: 제한 worker와 초기화 리허설 개별 검증
+        env:
+          SOLO_RESET_REHEARSAL_DSN: postgresql://postgres:ci-only@localhost:5432/postgres
+        run: |
+          python -m pytest tests/integration/test_staging_reset_rehearsal.py tests/integration/test_worker_permissions_postgres.py -v -p no:cacheprovider --junitxml=worker-permissions.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = ET.parse('worker-permissions.xml').findall('.//testcase')
+          assert len(cases) == 6, f'권한 리허설 사례 수 불일치: {len(cases)}'
+          assert not any(case.find(tag) is not None for case in cases
+                         for tag in ('skipped', 'failure', 'error')), '권한 리허설 미통과'
+          print('제한 worker와 초기화 리허설: 6 passed, 0 skipped')
+          PY
+      - name: 제한 worker 리허설 결과 보관
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-permissions
+          path: worker-permissions.xml
+          if-no-files-found: error
       - name: pgvector 공통 계약 개별 검증
         run: |
           python -m pytest tests/integration/test_pgvector_shared_contract.py -v -p no:cacheprovider --junitxml=pgvector-shared-contract.xml
