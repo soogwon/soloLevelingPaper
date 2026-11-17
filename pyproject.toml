@@ -22,6 +22,8 @@ solo-leveling-kg-check = "solo_leveling.interfaces.cli.kg_check:main"
 solo-leveling-remote-upload-cleanup = "solo_leveling.interfaces.cli.remote_upload_cleanup:main"
 solo-leveling-remote-deletion-cleanup = "solo_leveling.interfaces.cli.remote_deletion_cleanup:main"
 
+solo-leveling-worker-verify = "solo_leveling.interfaces.cli.processing_verification:main"
+
 [project.optional-dependencies]
 dev = ["pytest", "filelock>=3.13,<5", "mcp>=1,<2", "jsonschema>=4.20,<5", "pdfplumber", "chromadb>=1.5.9,<1.6", "requests>=2.32,<3", "python-dotenv>=1,<2", "fastapi>=0.121,<0.122", "PyJWT[crypto]>=2.10,<3", "psycopg[binary,pool]>=3.2,<4", "keyring>=25,<26"]
 server = ["requests>=2.32,<3", "fastapi>=0.121,<0.122", "uvicorn[standard]>=0.30,<1", "PyJWT[crypto]>=2.10,<3", "psycopg[binary,pool]>=3.2,<4", "boto3>=1.35,<2", "mcp==1.30.0"]
