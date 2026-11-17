@@ -36,3 +36,5 @@ owner는 도구 인자가 아니라 매 요청 SDK 검증 토큰의 issuer/raw s
 - 수정 이미지에서 `--network none`으로 전용 DB 풀 조립·조회 도구 3개 등록을 확인했다. DB 연결·PDF 전송·provider 호출은 하지 않았다.
 - 로컬 PostgreSQL 조회/권한 5개와 패키지 import 회귀 1개 통과. CI에 활성화된 제품 MCP 이미지 검증을 추가했다.
 - 후속 병합·이미지 재배포·MCP flag 활성화·Claude 재인증 및 실제 조회는 별도 결과로 기록한다.
+- PR 전체 CI에서 로컬 lifecycle→ingestion→local_files→errors의 순환 import가 확인됐다. local_files가 PDF 예외의 정의 모듈을 직접 참조하도록 보완했다. 종료 예외 객체는 변경하지 않았다.
+- import 순서 회귀와 진단 출력·강제 종료/재시작 로그 번들 테스트 25개가 로컬에서 통과했다. 수정 head의 전체 CI를 다시 확인한다.

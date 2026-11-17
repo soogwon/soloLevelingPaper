@@ -22,3 +22,12 @@ except AttributeError:
 else:
     raise AssertionError('없는 속성은 거부해야 합니다.')
 '''], check=True)
+
+
+def test_lifecycle_import_does_not_depend_on_server_import_order():
+    subprocess.run([sys.executable, '-c', """
+from solo_leveling.interfaces.mcp.lifecycle import report
+from solo_leveling.interfaces.mcp.errors import to_tool_error
+from solo_leveling.interfaces.mcp.ingestion import IngestionShuttingDownError
+assert 'SERVER_SHUTTING_DOWN' in str(to_tool_error(IngestionShuttingDownError()))
+"""], check=True)
