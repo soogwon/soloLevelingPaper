@@ -36,6 +36,7 @@ def create_app(
     remote_mcp_settings: "RemoteMcpSettings | None" = None,
     remote_mcp_verifier: "TokenVerifier | None" = None,
     deletion_store=None,
+    remote_product_queries=None,
 ) -> "FastAPI":
     """명시적 설정 또는 환경 설정으로 독립적인 API 앱을 만든다."""
 
@@ -130,7 +131,10 @@ def create_app(
                           else UnavailableObjectStorage())
     selected_remote_mcp = (remote_mcp_settings if remote_mcp_settings is not None
                            else load_remote_mcp_settings())
-    remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier)
+    if selected_remote_mcp.product_reads_enabled and remote_product_queries is None and managed_store is not None:
+        from solo_leveling.interfaces.mcp.remote_product import RemoteProductQueries
+        remote_product_queries = RemoteProductQueries(managed_store.connection_pool)
+    remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries)
                      if selected_remote_mcp.enabled else None)
 
     @asynccontextmanager

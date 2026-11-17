@@ -90,6 +90,7 @@ class PublicBoundaryMiddleware:
 def create_remote_mcp(
     settings: RemoteMcpSettings,
     verifier: TokenVerifier | None = None,
+    *, product_queries=None,
 ) -> RemoteMcpBundle:
     if not settings.enabled:
         raise ValueError("원격 MCP 설정이 활성화되어야 합니다.")
@@ -135,6 +136,12 @@ def create_remote_mcp(
             raise ValueError("지연은 0~5초 범위여야 합니다.")
         await asyncio.sleep(seconds)
         return {"completed": True, "delay_seconds": seconds}
+
+    if settings.product_reads_enabled:
+        if product_queries is None:
+            raise ValueError("remote_product_queries_required")
+        from solo_leveling.interfaces.mcp.remote_product import register_product_queries
+        register_product_queries(server, product_queries)
 
     app = server.streamable_http_app()
     app.add_middleware(NoSessionMiddleware)

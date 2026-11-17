@@ -53,6 +53,7 @@ class RemoteMcpSettings:
     allowed_origins: tuple[str, ...] = ()
     clock_skew_seconds: int = 0
     allowed_client_ids: tuple[str, ...] = ()
+    product_reads_enabled: bool = False
 
     def __post_init__(self) -> None:
         if not self.enabled:
@@ -215,6 +216,7 @@ def load_remote_mcp_settings(source: Mapping[str, str] | None = None) -> RemoteM
         raise ValueError("REMOTE_MCP_CLOCK_SKEW_SECONDS는 정수여야 합니다.") from exc
     return RemoteMcpSettings(
         enabled=True,
+        product_reads_enabled=_parse_bool("REMOTE_MCP_PRODUCT_READS_ENABLED", values.get("REMOTE_MCP_PRODUCT_READS_ENABLED", "false")),
         resource_url=resource_url,
         issuer=values.get("REMOTE_MCP_OIDC_ISSUER", "").strip(),
         audience=values.get("REMOTE_MCP_OIDC_AUDIENCE", "").strip(),
