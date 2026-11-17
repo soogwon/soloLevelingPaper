@@ -12,13 +12,14 @@ def test_limit_stops_before_next_claim():
     assert worker.run_once.call_count==2
 
 
-def test_stop_prevents_claim_and_idle_wait_is_interruptible():
+@pytest.mark.parametrize('max_jobs', [None, 1])
+def test_stop_prevents_claim_and_idle_wait_is_interruptible(max_jobs):
     stop=Event();stop.set();worker=Mock()
-    assert run_question_queue(worker,stop,max_jobs=1).status=='stopped'
+    assert run_question_queue(worker,stop,max_jobs=max_jobs).status=='stopped'
     worker.run_once.assert_not_called()
     stop=Mock();stop.is_set.return_value=False;stop.wait.return_value=True
     worker.run_once.return_value=None
-    assert run_question_queue(worker,stop,max_jobs=1).processed==0
+    assert run_question_queue(worker,stop,max_jobs=max_jobs).processed==0
     assert worker.run_once.call_count==1
     stop.wait.assert_called_once_with(5.0)
 

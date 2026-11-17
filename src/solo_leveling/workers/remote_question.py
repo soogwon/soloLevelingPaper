@@ -81,7 +81,7 @@ class PersistedQuestionExecutor:
 
 
 def run_question_queue(runner, stop, *, max_jobs, idle_seconds=5.0):
-    """중지와 처리 상한을 지키며 기존 질문만 소비한다. 오류 뒤 자동 재전송하지 않는다."""
+    """기존 질문만 소비한다. max_jobs=None은 상시 소비이며 오류 뒤 재전송하지 않는다."""
     from math import isfinite
     from .processing_queue import QueueRunResult
     if (not callable(getattr(runner,'run_once',None)) or not callable(getattr(stop,'wait',None))

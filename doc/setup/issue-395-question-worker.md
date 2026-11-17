@@ -2,7 +2,7 @@
 
 ## 구현 범위
 
-- `solo-leveling-question-worker`는 기본적으로 실행하지 않는다. `--execute --runtime module:factory --max-jobs N`을 명시해야 한다.
+- `solo-leveling-question-worker`는 기본적으로 실행하지 않는다. `--execute --runtime module:factory`가 필요하며 기본 상한은 1건이다. 작업 수는 `--max-jobs N`, 상시 소비는 `--continuous`로 명시한다.
 - 신뢰하는 서버 bootstrap의 context manager가 runner를 반환한다. 질문 실행은 `question_runtime.execution_runtime(pool_factory, **options)`로 기존 `create_question_runner`의 검색·전송 원장·원자적 결과 저장에 연결한다.
 - `options`는 서버가 검토한 generation/semantic 설정, provider_profile_id, 로컬 embedding_runtime, window_key, token_upper_bound이며 사용자 입력이나 웹 요청에서 runtime 경로를 받지 않는다.
 - 실행 전 무효 질문을 한 건 정리한다. 만료·보관 동의 철회·AI 동의 철회·논문 삭제는 유효 lease가 남아 있어도 종료한다. 기존 lease의 heartbeat·완료 저장은 거부된다.
