@@ -38,6 +38,9 @@ def test_roundtrip_replay_and_no_publication(pool, db):
     first = store.save(value)
     loaded = make_store(pool).load(value.source)
     assert loaded['result']['source'] == asdict(value.source)
+    intent = PostgresProcessingAuthorization(pool).dispatch_intent(value.source)
+    assert loaded['authorization'] == dict(input_hash=intent.input_hash, storage_consent_id=intent.storage_consent_id,
+        ai_consent_id=intent.ai_consent_id, notice_version=intent.notice_version)
     assert loaded['result']['document']['chunks'][0]['original_text'] == 'Synthetic text.'
     assert loaded['result']['translations'][0]['text'] == '합성 문장.'
     assert loaded['result']['document']['sections'][0]['title'] == 'Synthetic'
@@ -158,4 +161,16 @@ def test_saved_result_is_not_returned_after_authority_or_config_changes(pool, db
             translation_settings=replace(SETTINGS, prompt_version='new') if change == 'translation-settings' else SETTINGS,
             embedding_spec=replace(SPEC, runtime_version='new') if change == 'model' else SPEC)
     with pytest.raises(ProcessingStagingError): store.load(source)
+    assert count(db, value) == 1
+
+
+def test_rebinding_current_notice_does_not_reauthorize_existing_result(pool, db):
+    store, value = setup(pool, db)
+    store.save(value)
+    owner = value.source.owner_user_id
+    for table in ('server_processing_job_authorizations', 'server_remote_upload_consent_bindings', 'server_remote_consents'):
+        db(f"UPDATE {table} SET notice_version='synthetic-new-notice' WHERE owner_user_id=%s", (owner,))
+    assert PostgresProcessingAuthorization(pool).allowed(value.source, 'result')
+    with pytest.raises(ProcessingStagingError): store.load(value.source)
+    with pytest.raises(ProcessingStagingError, match='conflict'): store.save(value)
     assert count(db, value) == 1

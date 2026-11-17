@@ -112,6 +112,7 @@ class PostgresProcessingResultStaging:
         blocked = conn.execute(_USAGE_BLOCKED, (source.owner_user_id, source.job_id)).fetchone()
         if row is None or blocked is not None:
             raise ProcessingStagingError('processing_staging_not_allowed')
+        return dict(row)
 
     @staticmethod
     def _live(conn, source):
@@ -123,11 +124,14 @@ class PostgresProcessingResultStaging:
             raise ProcessingStagingError('processing_staging_not_allowed')
 
     def save(self, result):
-        _, encoded, digest = self._payload(result)
+        payload, _, _ = self._payload(result)
         source = result.source
         try:
             with self.pool.connection() as conn:
-                self._lock(conn, source)
+                payload['authorization'] = self._lock(conn, source)
+                encoded = _encode(payload)
+                _require(len(encoded) <= self.max_bytes)
+                digest = hashlib.sha256(encoded).hexdigest()
                 old = conn.execute('''SELECT payload_sha256, payload FROM server_processing_result_staging
                     WHERE owner_user_id=%s AND job_id=%s AND source_lease_token=%s''',
                     (source.owner_user_id, source.job_id, source.lease_token)).fetchone()
@@ -153,7 +157,7 @@ class PostgresProcessingResultStaging:
         try:
             _source(source)
             with self.pool.connection() as conn:
-                self._lock(conn, source)
+                authorization = self._lock(conn, source)
                 row = conn.execute('''SELECT payload_sha256,payload FROM server_processing_result_staging
                     WHERE owner_user_id=%s AND job_id=%s AND source_lease_token=%s''',
                     (source.owner_user_id, source.job_id, source.lease_token)).fetchone()
@@ -163,6 +167,7 @@ class PostgresProcessingResultStaging:
                 data = row['payload']
                 encoded = _encode(data)
                 _require(len(encoded) <= self.max_bytes and data.get('schema_version') == 1
+                         and data.get('authorization') == authorization
                          and data['result']['source'] == asdict(source)
                          and data['result']['translation_settings'] == asdict(self.settings)
                          and data['result']['embeddings']['spec'] == asdict(self.spec)

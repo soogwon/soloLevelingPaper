@@ -3,7 +3,7 @@
 9번은 게시용 parse/translation/embedding 테이블을 채우기 전의 **비공개 불변 결과 저장**이다.
 `server_processing_result_staging`에 schema_version=1 결과 JSON과 canonical SHA-256을 저장한다.
 원문/번역, 페이지·인쇄 페이지 라벨·섹션, 빈 페이지, 번역 설정, 전체 모델 지문·벡터,
-owner/job/원문 버전/리비전/lease/PDF hash·크기를 보존한다. PDF bytes·서비스 키는 저장하지 않는다.
+owner/job/원문 버전/리비전/lease/PDF hash·크기 및 저장 당시 입력 hash·보관/AI 동의 ID·고지 버전을 보존한다. PDF bytes·서비스 키는 저장하지 않는다.
 
 ## 저장 계약
 
@@ -42,3 +42,6 @@ worker는 heartbeat가 살아 있는 동안 prepared 결과를 저장한다. 저
 PR 생성 후 재검토에서 조회 시 번역 설정·모델 지문도 저장소의 기대값과 대조하도록 보완했다.
 저장 후 보관 동의 철회·취소·삭제, 다른 파싱 리비전, 변경된 prompt/모델 지문으로 조회하면
 기존 row가 남아 있어도 반환하지 않는다. row 정리는 별도 정책이며 조회 차단과 구분한다.
+
+저장 당시 DB에서 잠근 동의/입력 snapshot도 payload hash에 포함한다. 현재 job 동의 정보가
+다시 연결되어 유효해져도 저장 당시 정보와 다르면 이전 결과를 조회하거나 덮어쓰지 않는다.
