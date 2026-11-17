@@ -67,13 +67,19 @@ def main(argv=None):
     parser.add_argument('--mode', choices=('standby', 'verify-once', 'question-worker'), default='standby')
     parser.add_argument('--config')
     parser.add_argument('--runtime', help='검토한 질문 서버 runtime module:factory')
-    parser.add_argument('--max-jobs', type=int, default=1)
+    lifetime = parser.add_mutually_exclusive_group()
+    lifetime.add_argument('--max-jobs', type=int)
+    lifetime.add_argument('--continuous', action='store_true')
+    parser.add_argument('--shutdown-grace-seconds', type=int, default=5)
     args = parser.parse_args(argv)
+    if not 1 <= args.shutdown_grace_seconds <= 600:
+        parser.error('종료 대기 시간은 1~600초여야 합니다.')
+    max_jobs = 1 if args.max_jobs is None else args.max_jobs
     if args.mode == 'question-worker':
         import re
-        if args.config or not args.runtime or not re.fullmatch(r'[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*:[a-zA-Z_]\w*', args.runtime) or not 1 <= args.max_jobs <= 10000:
+        if args.config or not args.runtime or not re.fullmatch(r'[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*:[a-zA-Z_]\w*', args.runtime) or not 1 <= max_jobs <= 10000:
             parser.error('질문 runtime과 유효한 작업 상한이 필요합니다.')
-    elif args.runtime or args.max_jobs != 1:
+    elif args.runtime or args.max_jobs is not None or args.continuous:
         parser.error('질문 실행 설정은 question-worker 모드에서만 받습니다.')
     if args.mode == 'verify-once' and (not args.config or not os.path.isabs(args.config)):
         parser.error('검증 설정의 절대 경로가 필요합니다.')
@@ -88,9 +94,11 @@ def main(argv=None):
                    'solo_leveling.workers.verification_bootstrap:factory']
     if args.mode == 'question-worker':
         command = [sys.executable, '-m', 'solo_leveling.interfaces.cli.question_worker',
-                   '--execute', '--runtime', args.runtime, '--max-jobs', str(args.max_jobs)]
+                   '--execute', '--runtime', args.runtime]
+        command += ['--continuous'] if args.continuous else ['--max-jobs', str(max_jobs)]
     try:
-        return supervise(stop, command, preflight=[sys.executable, '/opt/worker/image_preflight.py'])
+        return supervise(stop, command, preflight=[sys.executable, '/opt/worker/image_preflight.py'],
+                         grace_seconds=args.shutdown_grace_seconds)
     finally:
         for sig, handler in previous.items(): signal.signal(sig, handler)
 

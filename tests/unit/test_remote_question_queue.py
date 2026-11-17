@@ -47,3 +47,31 @@ def test_invalid_config_never_claims(jobs,delay):
     worker=Mock()
     with pytest.raises(ValueError):run_question_queue(worker,Event(),max_jobs=jobs,idle_seconds=delay)
     worker.run_once.assert_not_called()
+
+
+@pytest.mark.parametrize('max_jobs', [None, 9])
+@pytest.mark.parametrize('failure', ['failed', 'limited', 'unknown', RuntimeError('비공개')])
+def test_continuous_and_bounded_fail_closed(max_jobs, failure):
+    worker = Mock()
+    if isinstance(failure, Exception):
+        worker.run_once.side_effect = failure
+    else:
+        worker.run_once.return_value = failure
+    result = run_question_queue(worker, Event(), max_jobs=max_jobs)
+    assert result.status == 'failed'
+    assert worker.run_once.call_count == 1
+
+
+def test_continuous_consumes_multiple_jobs_and_drains_on_stop():
+    stop = Event()
+    statuses = iter(['finished', 'expired', 'blocked', None, 'finished'])
+    worker = Mock()
+    def run():
+        status = next(statuses)
+        if worker.run_once.call_count == 5:
+            stop.set()
+        return status
+    worker.run_once.side_effect = run
+    result = run_question_queue(worker, stop, max_jobs=None, idle_seconds=0.1)
+    assert result.status == 'stopped' and result.processed == 4
+    assert worker.run_once.call_count == 5

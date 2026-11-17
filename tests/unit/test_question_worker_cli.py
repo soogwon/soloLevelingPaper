@@ -42,3 +42,35 @@ def test_execution_runtime_closes_pool_on_composition_failure(monkeypatch):
         with execution_runtime(lambda: pool, generation=None,semantic=None,provider_profile_id='',embedding_runtime=None,window_key='',token_upper_bound=None):
             pytest.fail('설정 실패 시 실행 금지')
     pool.close.assert_called_once()
+
+
+def test_continuous_signal_drains_and_closes_runtime(monkeypatch, capsys):
+    import signal
+    closed = []
+    runner = Mock()
+    def run():
+        if runner.run_once.call_count == 3:
+            signal.raise_signal(signal.SIGTERM)
+        return 'finished'
+    runner.run_once.side_effect = run
+    @contextmanager
+    def factory():
+        try:
+            yield runner
+        finally:
+            closed.append(True)
+    previous = signal.getsignal(signal.SIGTERM)
+    monkeypatch.setattr(question_worker.importlib, 'import_module', lambda _: SimpleNamespace(factory=factory))
+    assert question_worker.main(['--execute', '--runtime', 'approved:factory', '--continuous']) == 0
+    assert runner.run_once.call_count == 3 and closed == [True]
+    assert signal.getsignal(signal.SIGTERM) == previous
+    assert '"processed": 3' in capsys.readouterr().out
+
+
+def test_conflicting_lifetime_rejected_before_runtime(monkeypatch):
+    import pytest
+    load = Mock()
+    monkeypatch.setattr(question_worker.importlib, 'import_module', load)
+    with pytest.raises(SystemExit):
+        question_worker.main(['--execute', '--runtime', 'approved:factory', '--continuous', '--max-jobs', '1'])
+    load.assert_not_called()
