@@ -1,7 +1,7 @@
 """원격 Responses 전송을 영속 원장과 정확한 실행 scope 검사에 연결한다."""
 from solo_leveling.application.provider_dispatch import ProviderDispatch
 from solo_leveling.interfaces.http.dispatch_ledger import PostgresDispatchLedger
-from solo_leveling.interfaces.http.remote_executions import validate_execution_scope
+from solo_leveling.interfaces.http.remote_executions import validate_execution_scope, PostgresRemoteExecutionStore
 from .gated_responses import GatedResponsesTransport
 from .execution_budget import ExecutionBudget, BudgetedExecutionScope
 
@@ -17,6 +17,11 @@ def create_persisted_responses_transport(pool, intent, policy_version, window_ke
     if execution_budget is not None and not isinstance(execution_budget, ExecutionBudget):
         raise ValueError('execution_budget_invalid')
 
+    stored_policy = PostgresRemoteExecutionStore(pool).policy(intent.owner_user_id, intent.execution_id)
+    if stored_policy is not None:
+        execution_budget = ExecutionBudget(stored_policy.max_calls,stored_policy.max_input_tokens,
+                                           stored_policy.max_output_tokens,stored_policy.timeout_seconds)
+
     class Ledger(PostgresDispatchLedger):
         def authorize(self, request):
             # 전송마다 지역 adapter를 만들어 동시 호출 간 request를 공유하지 않는다.
@@ -24,4 +29,16 @@ def create_persisted_responses_transport(pool, intent, policy_version, window_ke
             return PostgresDispatchLedger(pool, policy_version, window_key, validator).authorize(request)
 
     ledger = Ledger(pool, policy_version, window_key, validate_execution_scope)
-    return GatedResponsesTransport(ProviderDispatch(ledger, intent), prepare, post=post)
+    transport = GatedResponsesTransport(ProviderDispatch(ledger, intent), prepare, post=post)
+    if stored_policy is None:
+        return transport
+
+    class PolicyTransport:
+        dispatch = transport.dispatch
+        def send(self, settings, payload, stage):
+            class LimitedSettings:
+                timeout_seconds = min(settings.timeout_seconds, stored_policy.stage_timeout_seconds)
+                def __getattr__(self, name):
+                    return getattr(settings, name)
+            return transport.send(LimitedSettings(), payload, stage)
+    return PolicyTransport()

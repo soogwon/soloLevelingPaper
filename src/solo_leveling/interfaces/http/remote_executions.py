@@ -4,6 +4,7 @@ import hashlib
 import json
 from uuid import uuid4
 
+from solo_leveling.application.remote_execution_policy import RemoteExecutionPolicy
 from solo_leveling.application.provider_dispatch import DispatchIntent
 from solo_leveling.application.remote_replay import ExecutionLookup, StoredExecution
 
@@ -37,9 +38,12 @@ class PostgresRemoteExecutionStore:
         storage_consent_id: str,
         ai_consent_id: str,
         notice_version: str,
+        *, policy: RemoteExecutionPolicy | None = None,
     ) -> StoredExecution | None:
         if not isinstance(lookup, ExecutionLookup) or not _strings(storage_consent_id, ai_consent_id, notice_version):
             raise ValueError("remote_execution_input_invalid")
+        if policy is not None and not isinstance(policy, RemoteExecutionPolicy):
+            raise ValueError("remote_execution_policy_invalid")
         execution_id = str(uuid4())
         with self._pool.connection() as conn:
             conn.execute(
@@ -66,8 +70,9 @@ class PostgresRemoteExecutionStore:
             row = conn.execute(
                 """INSERT INTO server_remote_executions
                        (execution_id,owner_user_id,operation,request_key,input_hash,context_id,
-                        storage_consent_id,ai_consent_id,notice_version,state,budget_state)
-                   SELECT %s,c.owner_user_id,%s,%s,%s,c.context_id,%s,%s,%s,'queued','available'
+                        storage_consent_id,ai_consent_id,notice_version,state,budget_state,policy_snapshot,deadline_at)
+                   SELECT %s,c.owner_user_id,%s,%s,%s,c.context_id,%s,%s,%s,'queued','available',%s::jsonb,
+                          CASE WHEN %s::integer IS NULL THEN NULL ELSE CURRENT_TIMESTAMP+make_interval(secs=>%s) END
                    FROM server_execution_contexts c
                    JOIN server_papers p
                      ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
@@ -82,6 +87,9 @@ class PostgresRemoteExecutionStore:
                     storage_consent_id,
                     ai_consent_id,
                     notice_version,
+                    json.dumps(policy.snapshot()) if policy else None,
+                    policy.timeout_seconds if policy else None,
+                    policy.timeout_seconds if policy else None,
                     lookup.owner_user_id,
                     lookup.context_id,
                 ),
@@ -118,6 +126,7 @@ class PostgresRemoteExecutionStore:
                    FROM server_execution_contexts c,server_papers p
                    WHERE e.owner_user_id=%s AND e.execution_id=%s
                      AND (e.state='queued' OR (e.state='running' AND e.lease_expires_at<=CURRENT_TIMESTAMP))
+                     AND (e.deadline_at IS NULL OR e.deadline_at>clock_timestamp())
                      AND c.owner_user_id=e.owner_user_id AND c.context_id=e.context_id
                      AND p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
                      AND p.deleted_at IS NULL
@@ -125,6 +134,46 @@ class PostgresRemoteExecutionStore:
                 (lease_token, lease_seconds, owner_user_id, execution_id),
             ).fetchone()
         return None if row is None else _intent(row)
+
+    def policy(self, owner_user_id, execution_id):
+        with self._pool.connection() as conn:
+            row = conn.execute("SELECT policy_snapshot FROM server_remote_executions WHERE owner_user_id=%s AND execution_id=%s",
+                               (owner_user_id, execution_id)).fetchone()
+        return RemoteExecutionPolicy(**row['policy_snapshot']) if row and row['policy_snapshot'] else None
+
+    def heartbeat(self, intent, *, lease_seconds=60):
+        if type(lease_seconds) is not int or lease_seconds < 1:
+            raise ValueError('remote_execution_input_invalid')
+        with self._pool.connection() as conn:
+            if not validate_execution_scope(conn, intent):
+                return False
+            row = conn.execute("""UPDATE server_remote_executions SET
+                  lease_expires_at=LEAST(deadline_at,clock_timestamp()+make_interval(secs=>%s)),
+                  updated_at=clock_timestamp()
+                WHERE owner_user_id=%s AND execution_id=%s AND lease_token=%s
+                  AND policy_snapshot IS NOT NULL AND deadline_at>clock_timestamp()
+                RETURNING execution_id""", (lease_seconds,intent.owner_user_id,intent.execution_id,intent.lease_token)).fetchone()
+        return row is not None
+
+    def fail(self, intent, reason):
+        if reason not in ('budget_exhausted','deadline_exceeded','provider_failed','scope_revoked','internal_failed'):
+            raise ValueError('remote_execution_reason_invalid')
+        with self._pool.connection() as conn:
+            row = conn.execute("""UPDATE server_remote_executions SET state='failed',
+                  terminal_reason=CASE WHEN deadline_at<=clock_timestamp() THEN 'deadline_exceeded' ELSE %s END,
+                  budget_state=CASE WHEN %s='budget_exhausted' THEN 'limited' ELSE budget_state END,
+                  lease_token=NULL,lease_expires_at=NULL,finished_at=clock_timestamp(),updated_at=clock_timestamp()
+                WHERE owner_user_id=%s AND execution_id=%s AND state='running' AND lease_token=%s
+                RETURNING execution_id""",(reason,reason,intent.owner_user_id,intent.execution_id,intent.lease_token)).fetchone()
+        return row is not None
+
+    def expire(self, owner_user_id, execution_id):
+        with self._pool.connection() as conn:
+            row = conn.execute("""UPDATE server_remote_executions SET state='failed',terminal_reason='deadline_exceeded',
+                  lease_token=NULL,lease_expires_at=NULL,finished_at=clock_timestamp(),updated_at=clock_timestamp()
+                WHERE owner_user_id=%s AND execution_id=%s AND state IN ('queued','running')
+                  AND deadline_at<=clock_timestamp() RETURNING execution_id""",(owner_user_id,execution_id)).fetchone()
+        return row is not None
 
     def lookup(self, owner_user_id: str, operation: str, request_key: str) -> StoredExecution | None:
         if not _strings(owner_user_id, operation, request_key):
@@ -158,7 +207,8 @@ class PostgresRemoteExecutionStore:
                        finished_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
                    FROM server_execution_contexts c,server_papers p
                    WHERE e.owner_user_id=%s AND e.execution_id=%s AND e.state='running'
-                     AND e.lease_token=%s AND e.lease_expires_at>CURRENT_TIMESTAMP
+                     AND e.lease_token=%s AND e.lease_expires_at>clock_timestamp()
+                     AND (e.deadline_at IS NULL OR e.deadline_at>clock_timestamp())
                      AND e.context_id=%s
                      AND c.owner_user_id=e.owner_user_id AND c.context_id=e.context_id
                      AND p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
@@ -189,7 +239,7 @@ class PostgresRemoteExecutionStore:
         with self._pool.connection() as conn:
             row = conn.execute(
                 """UPDATE server_remote_executions
-                   SET state='cancelled',finished_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
+                   SET state='cancelled',terminal_reason='cancelled',finished_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
                    WHERE owner_user_id=%s AND execution_id=%s AND state='cancel_requested'
                    RETURNING execution_id""",
                 (owner_user_id, execution_id),
@@ -208,7 +258,8 @@ def validate_execution_scope(conn, intent: DispatchIntent) -> bool:
            JOIN server_papers p
              ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
            WHERE e.owner_user_id=%s AND e.execution_id=%s AND e.state='running'
-             AND e.lease_token=%s AND e.lease_expires_at>CURRENT_TIMESTAMP AND e.input_hash=%s
+             AND e.lease_token=%s AND e.lease_expires_at>clock_timestamp()
+                     AND (e.deadline_at IS NULL OR e.deadline_at>clock_timestamp()) AND e.input_hash=%s
              AND e.storage_consent_id=%s AND e.ai_consent_id=%s AND e.notice_version=%s
              AND p.deleted_at IS NULL
            FOR UPDATE OF e,p""",
@@ -247,11 +298,13 @@ def _stored(row):
         lookup,
         row["execution_id"],
         row["state"],
-        "usage_unknown" if row.get("usage_unknown") else row["budget_state"],
+        "usage_unknown" if row.get("usage_unknown") and not row.get("policy_snapshot") else row["budget_state"],
         row.get("deleted_at") is None,
         available,
         row.get("payload_json"),
         row.get("payload_sha256"),
+        row.get("terminal_reason"),
+        "unknown" if row.get("usage_unknown") else "known",
     )
 
 

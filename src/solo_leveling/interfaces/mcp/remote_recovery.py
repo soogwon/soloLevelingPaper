@@ -80,3 +80,37 @@ class AccountRecovery:
         if generation == self._generation:
             self._display = display
         return self.snapshot()
+
+
+def restored_guidance(view: ReplayView) -> dict:
+    """인증·권한 검사를 통과한 재조회 값만 표시하며 새 제출 동작을 만들지 않는다."""
+    if not isinstance(view, ReplayView):
+        raise ReplayError('REMOTE_EXECUTION_INVALID')
+    messages = {
+        'queued': '기존 작업이 대기 중입니다.',
+        'running': '기존 작업을 처리 중입니다.',
+        'completed': '기존 작업이 완료되었습니다.',
+        'failed': '기존 작업을 완료하지 못했습니다.',
+        'unknown': '기존 작업의 처리 여부를 확인 중입니다.',
+        'cancel_requested': '취소 요청을 접수했으며 확정을 기다립니다.',
+        'cancelled': '서버 실행의 취소가 확정되었습니다. 이미 전송된 요청의 정산은 남을 수 있습니다.',
+    }
+    reasons = {
+        'budget_exhausted': '처리 한도에 도달했습니다.',
+        'deadline_exceeded': '서버 처리 기한에 도달했습니다.',
+        'provider_failed': '외부 처리 결과를 확정하지 못했습니다.',
+        'scope_revoked': '현재 처리 조건을 충족하지 않습니다.',
+        'internal_failed': '처리 중 오류가 발생했습니다.',
+        'cancelled': '', None: '',
+    }
+    if view.state not in messages or view.terminal_reason not in reasons or view.usage_state not in ('known','unknown'):
+        raise ReplayError('REMOTE_EXECUTION_INVALID')
+    message = messages[view.state]
+    if view.state == 'failed':
+        message += ' ' + reasons[view.terminal_reason]
+    if view.usage_state == 'unknown' or view.budget_state == 'usage_unknown':
+        message += ' 사용량은 확인 중이며 미과금이나 환급을 의미하지 않습니다.'
+    message += ' 자동으로 다시 제출하지 않습니다.'
+    return {'execution_id':view.execution_id, 'state':view.state,
+            'terminal_reason':view.terminal_reason, 'usage_state':view.usage_state,
+            'message':message, 'action':'read_result' if view.payload is not None else 'refresh_status'}
