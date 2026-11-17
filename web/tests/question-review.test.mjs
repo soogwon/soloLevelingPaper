@@ -25,3 +25,10 @@ test('접수 응답 유실 후 조회는 같은 키로 실행 ID를 복원하고
  const v=view();await page({view:v,params:{requestKey:key}});await v.querySelector('[data-submit]').onclick();await v.querySelector('[data-refresh]').onclick();
  assert.deepEqual(calls,['GET','POST','GET']);assert.match(v.innerHTML,/same-execution/);listeners.get('pagehide')();
 });
+
+test('접수 성공 직후 상태 요약과 실행 ID가 함께 갱신된다',async t=>{
+ t.mock.method(globalThis,'fetch',async(url,opts)=>({ok:true,status:200,json:async()=>opts.method==='POST'?{state:'queued',execution_id:'accepted-id'}:{...value,storage:'current',ai_provider:'current'}}));
+ const v=view();await page({view:v,params:{requestKey:key}});await v.querySelector('[data-submit]').onclick();
+ assert.match(v.innerHTML,/실행 상태: queued · 실행 ID: accepted-id/);
+ assert.doesNotMatch(v.innerHTML,/실행 상태: 미접수/);listeners.get('pagehide')();
+});

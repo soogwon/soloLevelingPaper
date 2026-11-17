@@ -52,7 +52,10 @@ export default async function questionReview({ view, params }) {
       const result = await request(method, path + suffix, { body });
       if (closed || seq !== generation || !view.isConnected) return;
       busy = false;
-      if (suffix === '/submit') draw(`기존 요청 접수 상태: ${result.state} · 실행 ID: ${result.execution_id}`);
+      if (suffix === '/submit') {
+        value = { ...value, state: result.state, execution_id: result.execution_id };
+        draw(`기존 요청 접수 상태: ${result.state} · 실행 ID: ${result.execution_id}`);
+      }
       else { value = result; draw(); }
     } catch {
       if (closed || seq !== generation || !view.isConnected) return;
