@@ -18,6 +18,19 @@ class RemoteQuestionRunner:
         intent = self.store.claim(owner, execution_id, lease_seconds=lease_seconds)
         if intent is None:
             return 'not_claimed'
+        return self._execute_claimed(intent, policy)
+
+    def run_once(self):
+        selected = self.store.claim_next_question()
+        if selected is None:
+            return None
+        status, intent, policy = selected
+        if status != 'claimed':
+            return status
+        return self._execute_claimed(intent, policy)
+
+    def _execute_claimed(self, intent, policy):
+        lease_seconds = min(policy.timeout_seconds, max(3, policy.stage_timeout_seconds))
         stop, lost = Event(), Event()
         def heartbeat():
             while not stop.wait(max(.1, lease_seconds / 3)):
@@ -62,3 +75,30 @@ class PersistedQuestionExecutor:
         if request is None or not allowed():
             raise DispatchError('DISPATCH_NOT_AUTHORIZED')
         return self.execute(intent, policy, allowed, request)
+
+
+def run_question_queue(runner, stop, *, max_jobs, idle_seconds=5.0):
+    """중지와 처리 상한을 지키며 기존 질문만 소비한다. 오류 뒤 자동 재전송하지 않는다."""
+    from math import isfinite
+    from .processing_queue import QueueRunResult
+    if (not callable(getattr(runner,'run_once',None)) or not callable(getattr(stop,'wait',None))
+            or not callable(getattr(stop,'is_set',None)) or type(max_jobs) is not int
+            or not 1 <= max_jobs <= 10000 or type(idle_seconds) not in (int,float)
+            or not isfinite(idle_seconds) or not 0.1 <= idle_seconds <= 300):
+        raise ValueError('question_queue_config_invalid')
+    processed = 0
+    while processed < max_jobs:
+        if stop.is_set():
+            return QueueRunResult('stopped',processed)
+        try:
+            status = runner.run_once()
+        except Exception:
+            return QueueRunResult('failed',processed)
+        if status is None:
+            if stop.wait(idle_seconds):
+                return QueueRunResult('stopped',processed)
+            continue
+        processed += 1
+        if status not in ('finished','expired','blocked'):
+            return QueueRunResult('failed',processed)
+    return QueueRunResult('limit_reached',processed)
