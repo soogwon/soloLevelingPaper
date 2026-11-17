@@ -2,6 +2,7 @@
 from contextlib import nullcontext
 from types import SimpleNamespace
 from uuid import UUID, uuid4
+from urllib.parse import urlsplit
 import json
 from solo_leveling.application.evidence_qa.remote_question_input import RemoteQuestionInput
 from solo_leveling.application.evidence_qa.remote_contract import RemoteSearchFilters
@@ -16,10 +17,14 @@ AI_NOTICE='OpenAI에 질문과 선택된 원문·번역 근거를 보내 답변 
 
 
 class PostgresQuestionReviews:
-    def __init__(self,pool,*,policy,processing_config,window_key,review_seconds):
+    def __init__(self,pool,*,policy,processing_config,window_key,review_seconds,web_origin):
         if (not isinstance(policy,RemoteExecutionPolicy) or type(review_seconds) is not int
                 or not 60<=review_seconds<=86400 or not isinstance(window_key,str) or not window_key.strip()):
             raise ValueError('question_review_config_invalid')
+        url=urlsplit(web_origin)
+        if url.scheme!='https' or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ('','/'):
+            raise ValueError('question_review_origin_invalid')
+        self.web_origin=web_origin.rstrip('/')
         self.pool,self.policy,self.config=pool,policy,dict(processing_config)
         self.window,self.seconds=window_key,review_seconds
 
@@ -39,7 +44,7 @@ class PostgresQuestionReviews:
                     question_snapshot,policy_snapshot,window_key,notice_version,expires_at)
                     VALUES (%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,clock_timestamp()+make_interval(secs=>%s))""",
                     (owner,key,context,request.input_hash,request.encoded,json.dumps(self.policy.snapshot()),self.window,NOTICE,self.seconds))
-        return {'request_key':key,'review_path':f'/#/questions/{key}','status':'review_required'}
+        return {'request_key':key,'review_url':f'{self.web_origin}/#/questions/{key}','status':'review_required'}
 
     def _row(self,conn,owner,key):
         return conn.execute("""SELECT r.* FROM server_question_reviews r

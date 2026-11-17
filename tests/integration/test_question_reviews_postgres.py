@@ -16,7 +16,7 @@ def review(db,stores,pool):
     request,_,_,_,policy=setup(db,stores,pool)
     version=new_id();policy=replace(policy,version=version)
     binding,question,filters,top,config=request.unpack();config['budget_policy_version']=version
-    service=PostgresQuestionReviews(pool,policy=policy,processing_config=config,window_key='test',review_seconds=60)
+    service=PostgresQuestionReviews(pool,policy=policy,processing_config=config,window_key='test',review_seconds=60,web_origin='https://service.example')
     db("UPDATE server_dispatch_controls SET intake_enabled=true")
     for scope,owner in [('owner','alice'),('service','service')]:
         db("INSERT INTO server_dispatch_budget_limits(scope_type,scope_id,policy_version,window_key,max_input_tokens,max_output_tokens) VALUES (%s,%s,%s,'test',1000,1000)",(scope,owner,version))
