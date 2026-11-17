@@ -714,7 +714,7 @@ def test_postgres_file_access_requires_owned_version_and_returns_ready_object():
         "user-1", PAPER_ID, "version-1")
     assert result == FileAccessRecord(
         "ready", "paper.pdf", 1234, "application/pdf", "private/final.pdf")
-    assert pool.conn.calls[0][1] == (PAPER_ID, "user-1", "version-1")
+    assert pool.conn.calls[0][1] == (PAPER_ID, "user-1", "version-1", "version-1")
     assert pool.conn.calls[1][1] == ("user-1", PAPER_ID, "version-1")
 
 
