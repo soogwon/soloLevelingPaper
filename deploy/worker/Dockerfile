@@ -9,6 +9,7 @@ ENV WORKER_BASE_REFERENCE=${WORKER_RUNTIME_IMAGE} \
     HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1
 COPY src/solo_leveling/workers/image_preflight.py ./image_preflight.py
 COPY deploy/worker/model-lock.json ./model-lock.json
+COPY deploy/worker/MODEL-LICENSE.txt ./licenses/MODEL-LICENSE.txt
 RUN --network=none --mount=type=bind,from=worker_model,source=.,target=/input/e8f8c211226b894fcb81acc59f3b34ba3efd5f42,ro \
     python image_preflight.py --artifact-only --prepare-model /input/e8f8c211226b894fcb81acc59f3b34ba3efd5f42 \
     && find /opt/models /opt/worker -type d -exec chmod 555 {} + \
