@@ -81,6 +81,26 @@ jobs:
           name: worker-permissions
           path: worker-permissions.xml
           if-no-files-found: error
+      - name: 제한 웹 계정과 백업 복구 개별 검증
+        env:
+          SOLO_BACKUP_DOCKER_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          python -m pytest tests/integration/test_web_permissions_postgres.py tests/integration/test_web_backup_restore_postgres.py -v -p no:cacheprovider --junitxml=web-backup.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = ET.parse('web-backup.xml').findall('.//testcase')
+          assert len(cases) == 6, f'웹·복구 사례 수 불일치: {len(cases)}'
+          assert not any(case.find(tag) is not None for case in cases
+                         for tag in ('skipped', 'failure', 'error')), '웹·복구 리허설 미통과'
+          print('제한 웹·복구: 6 passed, 0 skipped')
+          PY
+      - name: 제한 웹 계정과 복구 결과 보관
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-backup
+          path: web-backup.xml
+          if-no-files-found: error
       - name: pgvector 공통 계약 개별 검증
         run: |
           python -m pytest tests/integration/test_pgvector_shared_contract.py -v -p no:cacheprovider --junitxml=pgvector-shared-contract.xml
