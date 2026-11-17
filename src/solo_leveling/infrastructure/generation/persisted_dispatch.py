@@ -1,6 +1,6 @@
 """원격 Responses 전송을 영속 원장과 정확한 실행 scope 검사에 연결한다."""
 from solo_leveling.application.provider_dispatch import ProviderDispatch
-from solo_leveling.interfaces.http.dispatch_ledger import PostgresDispatchLedger
+from solo_leveling.interfaces.http.dispatch_ledger import PostgresQuestionDispatchLedger
 from solo_leveling.interfaces.http.remote_executions import validate_execution_scope, PostgresRemoteExecutionStore
 from .gated_responses import GatedResponsesTransport
 from .execution_budget import ExecutionBudget, BudgetedExecutionScope
@@ -22,11 +22,11 @@ def create_persisted_responses_transport(pool, intent, policy_version, window_ke
         execution_budget = ExecutionBudget(stored_policy.max_calls,stored_policy.max_input_tokens,
                                            stored_policy.max_output_tokens,stored_policy.timeout_seconds)
 
-    class Ledger(PostgresDispatchLedger):
+    class Ledger(PostgresQuestionDispatchLedger):
         def authorize(self, request):
             # 전송마다 지역 adapter를 만들어 동시 호출 간 request를 공유하지 않는다.
             validator = validate_execution_scope if execution_budget is None else BudgetedExecutionScope(execution_budget, request)
-            return PostgresDispatchLedger(pool, policy_version, window_key, validator).authorize(request)
+            return PostgresQuestionDispatchLedger(pool, policy_version, window_key, validator).authorize(request)
 
     ledger = Ledger(pool, policy_version, window_key, validate_execution_scope)
     transport = GatedResponsesTransport(ProviderDispatch(ledger, intent), prepare, post=post)
