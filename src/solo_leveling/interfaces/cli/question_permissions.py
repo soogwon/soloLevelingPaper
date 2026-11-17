@@ -25,3 +25,20 @@ def grant_question_review_role(conn,schema,role):
         conn.execute(sql.SQL('DROP TRIGGER IF EXISTS {} ON {}.{}').format(sql.Identifier(trigger),sql.Identifier(schema),sql.Identifier(table)))
         conn.execute(sql.SQL('CREATE TRIGGER {} BEFORE UPDATE ON {}.{} FOR EACH ROW EXECUTE FUNCTION {}.server_question_lock_guard({})').format(
             sql.Identifier(trigger),sql.Identifier(schema),sql.Identifier(table),sql.Identifier(schema),sql.Literal(role)))
+
+
+def grant_question_maintenance_role(conn, schema, role):
+    """정리 전용 역할은 실행·예산 행만 갱신하고 동의·원문·공급자 원장은 수정하지 않는다."""
+    from psycopg import sql
+    conn.execute(sql.SQL('GRANT USAGE ON SCHEMA {} TO {}').format(sql.Identifier(schema),sql.Identifier(role)))
+    for table in ('server_remote_executions','server_execution_contexts','server_papers','server_remote_consents',
+                  'server_question_budget_reservations','server_dispatch_budget_limits'):
+        conn.execute(sql.SQL('GRANT SELECT ON {}.{} TO {}').format(sql.Identifier(schema),sql.Identifier(table),sql.Identifier(role)))
+    updates = {
+        'server_remote_executions':('state','terminal_reason','lease_token','lease_expires_at','finished_at','updated_at'),
+        'server_question_budget_reservations':('remaining_input_tokens','remaining_output_tokens'),
+        'server_dispatch_budget_limits':('reserved_input_tokens','reserved_output_tokens','updated_at'),
+    }
+    for table, columns in updates.items():
+        conn.execute(sql.SQL('GRANT UPDATE({}) ON {}.{} TO {}').format(sql.SQL(',').join(map(sql.Identifier,columns)),
+            sql.Identifier(schema),sql.Identifier(table),sql.Identifier(role)))

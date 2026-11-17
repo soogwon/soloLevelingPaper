@@ -164,3 +164,17 @@ def test_build_cli_defaults_to_plan_without_docker(tmp_path, monkeypatch, capsys
     module.main(['--runtime-image', 'approved@sha256:' + 'a' * 64,
                  '--model-dir', str(tmp_path), '--runtime-dir', str(tmp_path)])
     assert 'linux/amd64' in capsys.readouterr().out
+
+
+def test_question_worker_is_explicit_bounded_child(monkeypatch):
+    captured=[]
+    monkeypatch.setattr(render_service,'supervise',lambda stop,command,**kw: captured.extend(command) or 0)
+    assert render_service.main(['--mode','question-worker','--runtime','approved:factory','--max-jobs','2'])==0
+    assert captured[2:] == ['solo_leveling.interfaces.cli.question_worker','--execute','--runtime','approved:factory','--max-jobs','2']
+
+
+@pytest.mark.parametrize('args', [
+    ['--mode','question-worker'], ['--mode','question-worker','--runtime','approved:factory','--max-jobs','0'],
+    ['--mode','question-worker','--runtime','approved:factory','--config','/secret'], ['--runtime','approved:factory']])
+def test_question_config_never_runs_in_standby(args):
+    with pytest.raises(SystemExit): render_service.main(args)
