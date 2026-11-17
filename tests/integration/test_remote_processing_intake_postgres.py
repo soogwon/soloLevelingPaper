@@ -30,24 +30,27 @@ def test_deleted_paper_hides_recovery_and_same_key_replay(pool, db):
               (first.paper_id,))[0]["n"] == 1
 
 
-def admitted_source(pool, db):
+def admitted_source(pool, db, *, pdf=None):
+    from hashlib import sha256
+    size = 10 if pdf is None else len(pdf)
+    digest = "a" * 64 if pdf is None else sha256(pdf).hexdigest()
     db("""INSERT INTO server_dispatch_controls(control_id,generation,dispatch_enabled,intake_enabled)
           VALUES ('provider_dispatch',1,true,true)
           ON CONFLICT (control_id) DO UPDATE SET intake_enabled=true,dispatch_enabled=true""")
     owner = new_id()
     db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'합성 사용자')", (owner,))
     store = PostgresRemoteUploadIntentStore(pool)
-    intent = store.create(owner, new_id(), 'paper.pdf', 10, 'application/pdf', 'a' * 64)
+    intent = store.create(owner, new_id(), 'paper.pdf', size, 'application/pdf', digest)
     consents = PostgresRemoteUploadConsentStore(pool)
     storage = consents.grant(owner, intent.intent_id, 'storage', new_id())
 
     class Objects:
         def inspect_upload(self, pending):
-            return StoredObject(pending.object_key, 10, 'application/pdf', 'a' * 64, True)
+            return StoredObject(pending.object_key, size, 'application/pdf', digest, True)
         def finalize_upload(self, pending):
             # 실제 게시 adapter와 같은 owner/paper/version 경계를 보존한다.
             prefix = pending.object_key.rsplit('/', 1)[0].replace('private/tmp/', 'private/files/', 1)
-            return StoredObject(prefix + '/' + new_id() + '.pdf', 10, 'application/pdf', 'a' * 64, True)
+            return StoredObject(prefix + '/' + new_id() + '.pdf', size, 'application/pdf', digest, True)
         def delete_upload(self, pending):
             pass
 
