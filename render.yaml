@@ -4,6 +4,8 @@ services:
     runtime: docker
     plan: free
     branch: main
+    # DB 전환 검증 중에는 승인한 커밋만 수동 배포한다.
+    autoDeployTrigger: "off"
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
