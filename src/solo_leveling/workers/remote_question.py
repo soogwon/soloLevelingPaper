@@ -47,3 +47,18 @@ class RemoteQuestionRunner:
         finally:
             stop.set()
             thread.join(timeout=10)
+
+
+class PersistedQuestionExecutor:
+    """runner의 현재 lease로만 입력을 복구하여 기존 생성·원자 저장 조립체에 넘긴다."""
+
+    def __init__(self, store, execute):
+        self.store, self.execute = store, execute
+
+    def __call__(self, intent, policy, allowed):
+        if not allowed():
+            raise DispatchError('DISPATCH_NOT_AUTHORIZED')
+        request = self.store.question_input(intent)
+        if request is None or not allowed():
+            raise DispatchError('DISPATCH_NOT_AUTHORIZED')
+        return self.execute(intent, policy, allowed, request)

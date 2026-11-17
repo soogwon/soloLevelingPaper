@@ -15,6 +15,7 @@ COPY src/solo_leveling/knowledge/ ./src/solo_leveling/knowledge/
 COPY src/solo_leveling/domain/models.py src/solo_leveling/domain/evidence_qa.py ./src/solo_leveling/domain/
 COPY src/solo_leveling/application/__init__.py ./src/solo_leveling/application/
 COPY src/solo_leveling/application/remote_replay.py src/solo_leveling/application/remote_execution_policy.py src/solo_leveling/application/provider_dispatch.py ./src/solo_leveling/application/
+COPY src/solo_leveling/application/evidence_qa/remote_input.py src/solo_leveling/application/evidence_qa/remote_question_input.py ./src/solo_leveling/application/evidence_qa/
 COPY src/solo_leveling/application/evidence_qa/validators.py src/solo_leveling/application/evidence_qa/page_completion.py src/solo_leveling/application/evidence_qa/fragments.py ./src/solo_leveling/application/evidence_qa/
 COPY src/solo_leveling/interfaces/mcp/__init__.py src/solo_leveling/interfaces/mcp/remote_product.py src/solo_leveling/interfaces/mcp/remote_recovery.py ./src/solo_leveling/interfaces/mcp/
 COPY src/solo_leveling/application/evidence_qa/__init__.py src/solo_leveling/application/evidence_qa/remote_contract.py ./src/solo_leveling/application/evidence_qa/
