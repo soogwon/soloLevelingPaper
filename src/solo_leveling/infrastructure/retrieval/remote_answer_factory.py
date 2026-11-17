@@ -46,15 +46,19 @@ class PersistedRemoteAnswerService:
             raise RemoteAnswerExecutionError('REMOTE_ANSWER_PREPARATION_FAILED') from None
         try:
             # 저장 전 준비 결과를 반환하지 않고 commit이 성공한 저장 결과만 반환한다.
+            if self._validate_scope(intent) is not True:
+                raise RemoteAnswerExecutionError('REMOTE_EXECUTION_SCOPE_LOST')
             return self._writer.save(intent, prepared)
         except Exception:
             raise RemoteAnswerExecutionError('REMOTE_ANSWER_SAVE_FAILED') from None
 
 
 def create_persisted_remote_answer_service(pool, resolve_authenticated_context, embedding_runtime,
-                                          generator, processing_config, *, semantic_verification=None):
+                                          generator, processing_config, *, semantic_verification=None, check_allowed=lambda: True):
     """resolver는 현재 인증 owner를 해석하는 필수 포트다. 실제 생성기는 별도 dispatch gate가 필요하다."""
     def validate(intent):
+        if check_allowed() is not True:
+            return False
         with pool.connection() as conn:
             return validate_execution_scope(conn, intent)
 
