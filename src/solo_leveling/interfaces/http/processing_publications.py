@@ -128,7 +128,7 @@ class PostgresProcessingPublicationStore:
                      AND tr.translation_revision_id=%s
                      AND es.embedding_set_id=%s
                      AND j.job_id=%s AND j.status='running' AND j.lease_token=%s
-                     AND j.lease_expires_at>CURRENT_TIMESTAMP
+                     AND j.lease_expires_at>clock_timestamp()
                    FOR UPDATE OF v, pr, tr, es, j""",
                 (
                     owner_user_id,
@@ -197,7 +197,7 @@ class PostgresProcessingPublicationStore:
                        lease_expires_at=NULL, heartbeat_at=NULL,
                        finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
                    WHERE owner_user_id=%s AND job_id=%s AND status='running'
-                     AND lease_token=%s AND lease_expires_at>CURRENT_TIMESTAMP
+                     AND lease_token=%s AND lease_expires_at>clock_timestamp()
                    RETURNING job_id""",
                 (owner_user_id, source_job_id, source_lease_token),
             ).fetchone()

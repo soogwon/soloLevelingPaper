@@ -8,9 +8,10 @@ from uuid import UUID
 from solo_leveling.application.remote_processing import RemoteProcessingStages, validate_processing_configuration
 from solo_leveling.domain.remote_processing import (
     EmbeddingBatch, EmbeddingSpec, ProcessingError, ProcessingLimits, ProcessingResult,
-    ProcessingSource, ProcessedTranslation,
+    ProcessingSource, ProcessedTranslation, ProcessingChunk, ParsedDocument,
 )
 from solo_leveling.domain.translation import TranslationSettings
+from solo_leveling.domain.models import PaperSection
 from solo_leveling.workers.processing_authorization import _AUTH_SOURCE, _IDENTITY, _USAGE_BLOCKED, _params
 
 
@@ -158,22 +159,50 @@ class PostgresProcessingResultStaging:
             _source(source)
             with self.pool.connection() as conn:
                 authorization = self._lock(conn, source)
-                row = conn.execute('''SELECT payload_sha256,payload FROM server_processing_result_staging
-                    WHERE owner_user_id=%s AND job_id=%s AND source_lease_token=%s''',
-                    (source.owner_user_id, source.job_id, source.lease_token)).fetchone()
+                data = self.read_locked(conn, source, authorization)
                 self._live(conn, source)
-                if row is None:
-                    return None
-                data = row['payload']
-                encoded = _encode(data)
-                _require(len(encoded) <= self.max_bytes and data.get('schema_version') == 1
-                         and data.get('authorization') == authorization
-                         and data['result']['source'] == asdict(source)
-                         and data['result']['translation_settings'] == asdict(self.settings)
-                         and data['result']['embeddings']['spec'] == asdict(self.spec)
-                         and hashlib.sha256(encoded).hexdigest() == row['payload_sha256'])
                 return data
         except ProcessingStagingError:
             raise
         except Exception:
             raise ProcessingStagingError('processing_staging_unavailable') from None
+
+    def read_locked(self, conn, source, authorization):
+        """호출자가 같은 transaction에서 권한 행을 잠근 뒤 사용하는 내부 포트."""
+        row = conn.execute('''SELECT payload_sha256,payload FROM server_processing_result_staging
+            WHERE owner_user_id=%s AND job_id=%s AND source_lease_token=%s''',
+            (source.owner_user_id, source.job_id, source.lease_token)).fetchone()
+        if row is None:
+            return None
+        data = row['payload']
+        encoded = _encode(data)
+        _require(len(encoded) <= self.max_bytes and type(data.get('schema_version')) is int
+                 and data['schema_version'] == 1 and data.get('authorization') == authorization
+                 and data['result']['source'] == asdict(source)
+                 and data['result']['translation_settings'] == asdict(self.settings)
+                 and data['result']['embeddings']['spec'] == asdict(self.spec)
+                 and hashlib.sha256(encoded).hexdigest() == row['payload_sha256'])
+        return data
+
+    def restore(self, data):
+        """staging JSON을 타입 자료로 복원하고 게시 직전 전체 결과를 다시 검사한다."""
+        try:
+            raw = data['result']
+            document = raw['document']
+            embeddings = raw['embeddings']
+            result = ProcessingResult(
+                ProcessingSource(**raw['source']),
+                ParsedDocument(document['page_count'], tuple(ProcessingChunk(**c) for c in document['chunks']),
+                               tuple(PaperSection(**s) for s in document['sections'])),
+                TranslationSettings(**raw['translation_settings']),
+                tuple(ProcessedTranslation(**t) for t in raw['translations']),
+                EmbeddingBatch(EmbeddingSpec(**embeddings['spec']), tuple(embeddings['chunk_ids']),
+                               tuple(tuple(row) for row in embeddings['vectors'])),
+                tuple(raw['empty_pages']), raw['status'],
+            )
+            payload, _, _ = self._payload(result)
+            _require(set(data) == {'schema_version', 'authorization', 'result'}
+                     and _encode(payload['result']) == _encode(raw))
+            return result
+        except Exception:
+            raise ProcessingStagingError('processing_staging_invalid') from None

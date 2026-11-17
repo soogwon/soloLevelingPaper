@@ -39,6 +39,7 @@ class ClaimedProcessingResult:
     job: ProcessingJob
     result: ProcessingResult
     staged: object | None = None
+    published: object | None = None
 
 
 class JobQueue(Protocol):
@@ -157,7 +158,7 @@ class RemoteProcessingWorker:
 
     def __init__(self, jobs: JobQueue, inputs: ProcessingInputStore, objects: ObjectReader,
                  stages: ProcessingStages, *, worker_id: str, lease_seconds: int = 60,
-                 heartbeat_interval_seconds: float | None = None, stages_factory=None, result_store=None):
+                 heartbeat_interval_seconds: float | None = None, stages_factory=None, result_store=None, publisher=None):
         if not isinstance(worker_id, str) or not worker_id.strip() or type(lease_seconds) is not int or lease_seconds < 1:
             raise ValueError("remote_processing_worker_config_invalid")
         interval = lease_seconds / 3 if heartbeat_interval_seconds is None else heartbeat_interval_seconds
@@ -167,6 +168,10 @@ class RemoteProcessingWorker:
             raise ValueError("remote_processing_worker_config_invalid")
         if result_store is not None and not callable(getattr(result_store, "save", None)):
             raise ValueError("remote_processing_worker_config_invalid")
+        if publisher is not None and (result_store is None or not all(
+                callable(getattr(publisher, name, None)) for name in ("current", "publish"))):
+            raise ValueError("remote_processing_worker_config_invalid")
+        self.publisher = publisher
         self.result_store = result_store
         self.stages_factory = stages_factory
         self.jobs, self.inputs, self.objects, self.stages = jobs, inputs, objects, stages
@@ -186,10 +191,12 @@ class RemoteProcessingWorker:
         heartbeat.start()
         result = None
         staged = None
+        published = None
         failure = None
         try:
             prepared = self.inputs.load(job)
             heartbeat.check()
+            expected_pointer = None if self.publisher is None else self.publisher.current(prepared.source)
             if self.inputs.allowed(prepared.source, "parse") is not True:
                 raise RemoteProcessingInputRejected("remote_processing_input_rejected")
             downloaded = self.objects.read_object(
@@ -230,6 +237,13 @@ class RemoteProcessingWorker:
                     raise RemoteProcessingInputRejected("remote_processing_input_rejected")
                 staged = self.result_store.save(result)
                 heartbeat.check()
+                if self.publisher is not None:
+                    # 성공 전환 뒤 heartbeat가 lease 상실로 오인하지 않도록 먼저 종료한다.
+                    # 게시 transaction은 이후에도 실제 DB 시각/lease를 재검사한다.
+                    heartbeat.stop()
+                    heartbeat.check()
+                    published = self.publisher.publish(result.source, staged.payload_sha256,
+                        expected_active_publication_id=expected_pointer)
         except Exception as exc:
             failure = exc
         finally:
@@ -238,7 +252,7 @@ class RemoteProcessingWorker:
         heartbeat.check()
         if failure is not None:
             raise failure
-        return ClaimedProcessingResult(job, result, staged)
+        return ClaimedProcessingResult(job, result, staged, published)
 
 
 _SOURCE_SQL = """SELECT u.object_key,u.file_size,u.content_type,u.sha256_hex

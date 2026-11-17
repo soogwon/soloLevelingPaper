@@ -99,8 +99,11 @@ def create_processing_worker(pool, objects, *, worker_id, lease_seconds,
     staging = PostgresProcessingResultStaging(pool, limits=stage_options["limits"],
         translation_settings=stage_options["service_config"].translation_settings,
         embedding_spec=stage_options["embedding_spec"], max_result_bytes=max_staging_bytes)
+    from solo_leveling.workers.processing_publication import PostgresStagedProcessingPublisher
+
+    publisher = PostgresStagedProcessingPublisher(staging)
     authorization = PostgresProcessingAuthorization(pool)
     factory = ProcessingStagesFactory(authorization, **stage_options)
     return RemoteProcessingWorker(PostgresProcessingJobStore(pool), authorization, objects, None,
         worker_id=worker_id, lease_seconds=lease_seconds,
-        heartbeat_interval_seconds=heartbeat_interval_seconds, stages_factory=factory, result_store=staging)
+        heartbeat_interval_seconds=heartbeat_interval_seconds, stages_factory=factory, result_store=staging, publisher=publisher)
