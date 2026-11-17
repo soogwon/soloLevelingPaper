@@ -27,3 +27,12 @@ owner는 도구 인자가 아니라 매 요청 SDK 검증 토큰의 issuer/raw s
 권한 준비안은 [MCP 역할 SQL](issue-399-mcp-role.sql)에 있다. 기존 역할을 덮어쓰지 않고 NOLOGIN 역할만 만든다. 로그인 자격·Auth0 설정·실제 계정 연결은 포함하지 않는다. 적용 전 현재 PUBLIC 권한과 역할 소유권, 복구 명세를 함께 확인해야 한다.
 
 재검토 결과: 관련 ASGI·DB·인증 회귀 47개 통과. `spike:read`만 있는 요청은 403이며 OAuth 메타데이터에 `papers:read`가 표시된다. 권한 준비 SQL도 새 로컬 schema에서 실제 psql로 실행해 NOLOGIN/비특권 및 context INSERT/DELETE 권한을 확인하고 해당 로컬 생성물을 정리했다. #561 병합 후 최신 main 위로 변경을 정리했다.
+
+## staging 배포 이미지 보완
+
+- `8bd0717`의 웹 배포와 schema check는 성공했으나 기존 `REMOTE_MCP_SPIKE_ENABLED=false`로 원격 MCP는 꺼져 있었다.
+- 같은 Dockerfile에서 제품 조회를 활성화하면 `solo_leveling.interfaces.mcp` 누락으로 앱 생성이 실패함을 로컬 실제 이미지에서 재현했다.
+- 조회·복구에 필요한 모듈만 이미지에 추가하고, MCP 패키지는 로컬 stdio 서버를 지연 import하도록 분리했다.
+- 수정 이미지에서 `--network none`으로 전용 DB 풀 조립·조회 도구 3개 등록을 확인했다. DB 연결·PDF 전송·provider 호출은 하지 않았다.
+- 로컬 PostgreSQL 조회/권한 5개와 패키지 import 회귀 1개 통과. CI에 활성화된 제품 MCP 이미지 검증을 추가했다.
+- 후속 병합·이미지 재배포·MCP flag 활성화·Claude 재인증 및 실제 조회는 별도 결과로 기록한다.
