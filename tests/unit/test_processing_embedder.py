@@ -427,3 +427,25 @@ def test_plain_snapshot_keeps_same_hash_without_path_is_junction_api(fixture, mo
     assert module.processing_artifact_sha256(adapter.model_dir) == spec.artifact_sha256
     assert adapter.embed(items, spec).spec == spec
     factory.assert_called_once()
+
+
+@pytest.mark.parametrize('canonical', [False, True])
+def test_compact_mean_pooling_runtime_config_supported(fixture, canonical):
+    adapter, spec, items, model, _ = fixture
+    model.pooling = dict(embedding_dimension=2, pooling_mode='mean', include_prompt=True)
+    if canonical: spec = replace(spec, pooling=json.dumps(model.pooling, sort_keys=True))
+    assert adapter.embed(items, spec).spec == spec
+
+
+@pytest.mark.parametrize('change', [
+    dict(pooling_mode='max'), dict(pooling_mode=['mean', 'max']), dict(pooling_mode=['mean']),
+    dict(embedding_dimension=True), dict(embedding_dimension=3), dict(include_prompt='true'),
+    dict(pooling_mode_mean_tokens=True), dict(pooling_mode_max_tokens=False), dict(word_embedding_dimension=2),
+])
+def test_compact_runtime_rejects_non_mean_or_mixed_config_before_encode(fixture, change):
+    adapter, spec, items, model, _ = fixture
+    model.pooling = dict(embedding_dimension=2, pooling_mode='mean', include_prompt=True)
+    model.pooling.update(change)
+    with pytest.raises(ProcessingError, match='^PROCESSING_EMBEDDING_RUNTIME_MISMATCH$'):
+        adapter.embed(items, spec)
+    model.encoder.assert_not_called()

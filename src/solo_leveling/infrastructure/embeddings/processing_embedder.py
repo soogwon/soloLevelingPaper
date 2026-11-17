@@ -132,12 +132,24 @@ class PyTorchProcessingEmbedder:
         _require(first is not None and all(str(p.dtype) == 'torch.float32' and str(p.device) == 'cpu'
                  for p in (first, *parameters)), 'PROCESSING_EMBEDDING_RUNTIME_MISMATCH')
         pooling = model[1].get_config_dict()
-        _require(type(pooling) is dict and all(type(k) is str for k in pooling)
-                 and type(pooling.get('word_embedding_dimension')) is int
-                 and pooling.get('word_embedding_dimension') == spec.dimension
-                 and pooling.get('pooling_mode_mean_tokens') is True
-                 and all(v is False for k, v in pooling.items()
-                         if k.startswith('pooling_mode_') and k != 'pooling_mode_mean_tokens'),
+        _require(type(pooling) is dict and all(type(k) is str for k in pooling),
+                 'PROCESSING_EMBEDDING_RUNTIME_MISMATCH')
+        if 'pooling_mode' in pooling or 'embedding_dimension' in pooling:
+            # sentence-transformers 6은 단일 mode와 새 차원 키로 반환한다.
+            # 신/구 설정이 섞이면 어느 쪽도 우선하지 않고 거부한다.
+            valid = (type(pooling.get('embedding_dimension')) is int
+                     and pooling['embedding_dimension'] == spec.dimension
+                     and type(pooling.get('pooling_mode')) is str
+                     and pooling['pooling_mode'] == 'mean'
+                     and 'word_embedding_dimension' not in pooling
+                     and not any(k.startswith('pooling_mode_') for k in pooling))
+        else:
+            valid = (type(pooling.get('word_embedding_dimension')) is int
+                     and pooling['word_embedding_dimension'] == spec.dimension
+                     and pooling.get('pooling_mode_mean_tokens') is True
+                     and all(v is False for k, v in pooling.items()
+                             if k.startswith('pooling_mode_') and k != 'pooling_mode_mean_tokens'))
+        _require(valid and ('include_prompt' not in pooling or type(pooling['include_prompt']) is bool),
                  'PROCESSING_EMBEDDING_RUNTIME_MISMATCH')
         actual = json.dumps(pooling, sort_keys=True)
         _require(spec.pooling in ('mean', actual), 'PROCESSING_EMBEDDING_RUNTIME_MISMATCH')
