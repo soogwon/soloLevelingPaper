@@ -2,6 +2,7 @@
 !deploy/
 !deploy/worker/
 !deploy/worker/model-lock.json
+!deploy/worker/MODEL-LICENSE.txt
 !src/
 !src/solo_leveling/
 !src/solo_leveling/**

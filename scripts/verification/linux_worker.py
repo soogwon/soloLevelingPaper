@@ -105,37 +105,42 @@ def build_and_verify(root, base):
         run([sys.executable, str(ROOT / 'deploy/worker/build_render.py'), '--runtime-image', runtime,
              '--model-dir', str(model), '--runtime-dir', str(reports), '--execute'])
         image = 'solo-leveling-worker-render:validation'
-        assert output(['docker', 'inspect', '--format', '{{.Architecture}}', image]) == 'amd64'
-        verification = root / 'verification'
-        shutil.copytree(ROOT / 'tests/fixtures', verification / 'tests/fixtures')
-        (verification / 'tests/__init__.py').write_text('')
-        shutil.copyfile(ROOT / 'evaluation/embedding/linux_worker_smoke.py', verification / 'smoke.py')
-        limits = ['--platform', 'linux/amd64', '--network=none', '--read-only', '--cpus=2', '--memory=4g', '--memory-swap=4g',
-                  '--pids-limit=256', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--tmpfs', '/tmp:rw,nosuid,size=256m']
-        run(['docker', 'run', '--rm', *limits, '-e', 'PYTHONPATH=/app/src:/verification',
-             '-v', f'{verification}:/verification:ro', '-v', f'{reports}:/results', '--entrypoint', 'python',
-             image, '/verification/smoke.py', '--model-dir', f'/opt/models/{model.name}',
-             '--output', '/results/linux-result.json'])
-        run(['docker', 'run', '-d', '--name', 'slp-render-check', *limits, image])
-        try:
-            deadline = time.monotonic() + 60
-            while time.monotonic() < deadline:
-                if 'render_standby' in output(['docker', 'logs', 'slp-render-check']): break
-                time.sleep(1)
-            else: raise RuntimeError('Render 대기 진입 실패')
-            run(['docker', 'stop', '--time', '12', 'slp-render-check'])
-            assert output(['docker', 'inspect', '--format', '{{.State.ExitCode}}', 'slp-render-check']) == '0'
-            logs = output(['docker', 'logs', 'slp-render-check'])
-            assert 'render_stopped' in logs and 'render_verification_started' not in logs
-            (reports / 'render-standby.txt').write_text(logs + '\n')
-        finally:
-            run(['docker', 'rm', '-f', 'slp-render-check'])
+        verify_image(root, model, image)
         (reports / 'images.json').write_text(json.dumps(dict(python_base=base, runtime=runtime,
             final_image_id=output(['docker', 'inspect', '--format', '{{.Id}}', image]),
             platform='linux/amd64', external_registry_push=False, render_deployed=False), indent=2))
         print((reports / 'linux-result.json').read_text())
     finally:
         run(['docker', 'rm', '-f', 'slp-registry'])
+
+
+def verify_image(root, model, image):
+    reports = root / 'reports'
+    assert output(['docker', 'inspect', '--format', '{{.Architecture}}', image]) == 'amd64'
+    verification = root / 'verification'
+    shutil.copytree(ROOT / 'tests/fixtures', verification / 'tests/fixtures')
+    (verification / 'tests/__init__.py').write_text('')
+    shutil.copyfile(ROOT / 'evaluation/embedding/linux_worker_smoke.py', verification / 'smoke.py')
+    limits = ['--platform', 'linux/amd64', '--network=none', '--read-only', '--cpus=2', '--memory=4g', '--memory-swap=4g',
+              '--pids-limit=256', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--tmpfs', '/tmp:rw,nosuid,size=256m']
+    run(['docker', 'run', '--rm', *limits, '-e', 'PYTHONPATH=/app/src:/verification',
+         '-v', f'{verification}:/verification:ro', '-v', f'{reports}:/results', '--entrypoint', 'python',
+         image, '/verification/smoke.py', '--model-dir', f'/opt/models/{model.name}',
+         '--output', '/results/linux-result.json'])
+    run(['docker', 'run', '-d', '--name', 'slp-render-check', *limits, image])
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if 'render_standby' in output(['docker', 'logs', 'slp-render-check']): break
+            time.sleep(1)
+        else: raise RuntimeError('Render 대기 진입 실패')
+        run(['docker', 'stop', '--time', '12', 'slp-render-check'])
+        assert output(['docker', 'inspect', '--format', '{{.State.ExitCode}}', 'slp-render-check']) == '0'
+        logs = output(['docker', 'logs', 'slp-render-check'])
+        assert 'render_stopped' in logs and 'render_verification_started' not in logs
+        (reports / 'render-standby.txt').write_text(logs + '\n')
+    finally:
+        run(['docker', 'rm', '-f', 'slp-render-check'])
 
 
 if __name__ == '__main__':

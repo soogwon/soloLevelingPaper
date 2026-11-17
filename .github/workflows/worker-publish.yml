@@ -1,0 +1,40 @@
+name: 승인된 worker 비공개 이미지 게시
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: worker-private-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main' && github.repository == 'soogwon/soloLevelingPaper'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 일회성 registry 인증
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u soogwon --password-stdin
+      - name: 고정 입력 빌드·비공개 게시·digest 재검증
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONPATH: src:.
+        run: python scripts/verification/publish_worker.py --work-dir "$RUNNER_TEMP/slp-private-release" --tag "verified-$GITHUB_SHA" --publish
+      - name: 인증 정리
+        if: always()
+        run: docker logout ghcr.io
+      - name: 게시 지문과 검증 결과 보관
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-private-release
+          path: ${{ runner.temp }}/slp-private-release/reports/
+          retention-days: 30
