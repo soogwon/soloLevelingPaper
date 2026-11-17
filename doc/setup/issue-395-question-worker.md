@@ -18,7 +18,7 @@
 python -m solo_leveling.workers.render_service --mode question-worker --runtime solo_leveling.workers.question_runtime:maintenance_factory --max-jobs 100
 ```
 
-유효한 질문의 실제 실행에는 별도로 검토한 bootstrap을 지정한다. 해당 bootstrap은 전용 실행 DB 역할, 모델 fingerprint, 고정 정책/프로필/예산 window, 정확한 토큰 상한과 승인된 API 자격을 조립해야 한다. 이 PR은 운영용 실제 생성 bootstrap·권한을 배포하지 않는다.
+유효한 질문의 실제 실행에는 별도로 검토한 bootstrap을 지정한다. 해당 bootstrap은 전용 실행 DB 역할, 모델 fingerprint, 고정 정책/프로필/예산 window, 정확한 토큰 상한과 승인된 API 자격을 조립해야 한다. 후속 구현·로컬 검증과 승인 범위는 [생성 설정·권한 문서](issue-395-generation-runtime.md)를 참고한다. 실제 staging에는 아직 배포하지 않았다.
 
 상한은 종료/처리한 작업 수이며 빈 큐에서는 종료 신호까지 대기한다. 자식이 실패하거나 상한에 도달하면 Render 부모는 standby로 돌아가 자동 재시작하지 않는다. SIGTERM/SIGINT 이후 새 작업을 가져오지 않으며 강제 종료 시 미확정 공급자 사용량은 보존한다. 이미 전송 중인 HTTP 요청 자체를 원격 취소하는 계약은 아니다.
 

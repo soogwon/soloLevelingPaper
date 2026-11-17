@@ -72,7 +72,7 @@ class QuestionExecutionFactory:
                 raise DispatchError('DISPATCH_NOT_AUTHORIZED')
             return current
         service=create_persisted_remote_answer_service(self.pool,resolve,self.embedding,generator,config,
-            semantic_verification=verification,check_allowed=allowed)
+            semantic_verification=verification,check_allowed=allowed,id_factory=execution_ids(intent.execution_id))
         return service.execute(intent,question,binding.context_id,filters=filters,top_k=top_k)
 
 
@@ -80,3 +80,12 @@ def create_question_runner(pool, **options):
     store=PostgresRemoteExecutionStore(pool)
     factory=QuestionExecutionFactory(pool,**options)
     return RemoteQuestionRunner(store,PersistedQuestionExecutor(store,factory))
+
+
+def execution_ids(execution_id):
+    """동일 실행의 오프라인 본문과 실제 전송에서 근거 ID를 동일하게 만든다."""
+    from itertools import count
+    from uuid import UUID, uuid5
+    namespace = UUID(str(execution_id))
+    sequence = count()
+    return lambda: str(uuid5(namespace, f'question-evidence-v1:{next(sequence)}'))

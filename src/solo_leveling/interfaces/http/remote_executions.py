@@ -28,9 +28,12 @@ class RemoteExecutionLeaseLost(ValueError):
 
 
 class PostgresRemoteExecutionStore:
-    def __init__(self, pool, admit=None):
+    def __init__(self, pool, admit=None, *, question_policy_version=None):
         self._pool = pool
         self._admit = admit
+        if question_policy_version is not None and not _strings(question_policy_version):
+            raise ValueError("remote_execution_policy_invalid")
+        self._question_policy_version = question_policy_version
 
     def create(
         self,
@@ -167,9 +170,10 @@ class PostgresRemoteExecutionStore:
         with self._pool.connection() as conn:
             row = conn.execute("""SELECT e.* FROM server_remote_executions e
                 WHERE e.operation='ask_paper' AND e.question_snapshot IS NOT NULL
+                  AND (%s::text IS NULL OR e.policy_snapshot->>'version'=%s)
                   AND e.policy_snapshot IS NOT NULL
                   AND (e.state='queued' OR (e.state='running' AND e.lease_expires_at<=clock_timestamp()))
-                ORDER BY e.created_at,e.execution_id FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone()
+                ORDER BY e.created_at,e.execution_id FOR UPDATE SKIP LOCKED LIMIT 1""",(self._question_policy_version,self._question_policy_version)).fetchone()
             if row is None:
                 return None
             owner, execution = row['owner_user_id'], str(row['execution_id'])
@@ -197,6 +201,7 @@ class PostgresRemoteExecutionStore:
         with self._pool.connection() as conn:
             row = conn.execute("""SELECT e.* FROM server_remote_executions e
                 WHERE e.operation='ask_paper' AND e.question_snapshot IS NOT NULL
+                  AND (%s::text IS NULL OR e.policy_snapshot->>'version'=%s)
                   AND e.policy_snapshot IS NOT NULL AND e.state IN ('queued','running')
                   AND (e.deadline_at<=clock_timestamp() OR NOT EXISTS (
                     SELECT 1 FROM server_execution_contexts c JOIN server_papers p
@@ -211,7 +216,7 @@ class PostgresRemoteExecutionStore:
                       AND s.notice_version=e.notice_version AND a.notice_version=e.notice_version
                       AND s.revoked_at IS NULL AND a.revoked_at IS NULL
                   ))
-                ORDER BY e.created_at,e.execution_id FOR UPDATE OF e SKIP LOCKED LIMIT 1""").fetchone()
+                ORDER BY e.created_at,e.execution_id FOR UPDATE OF e SKIP LOCKED LIMIT 1""",(self._question_policy_version,self._question_policy_version)).fetchone()
             if row is None:
                 return None
             # 실행 행 잠금으로 전송 원장·완료 저장과 직렬화한다. 이미 배정한 전송 예산은 반환하지 않는다.
