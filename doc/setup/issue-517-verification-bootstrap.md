@@ -52,6 +52,8 @@ metadata를 검사하지만 DB/R2/API에는 접속하지 않는다. 이 성공�
 
 ## 검증 전용 secret
 
+- `SLP_VERIFY_ALLOW_EXTERNAL_API=true`, `SLP_VERIFY_LOCAL_ONLY=false`: 승인 후 명시적으로 설정. 누락/불일치 시 연결 전 거부
+- `WORKER_BASE_REFERENCE`: 이미지가 고정한 base digest. runtime 설정과 일치해야 함
 - `SLP_VERIFY_RUNTIME_CONFIG`: runtime.json의 절대 경로
 - `SLP_VERIFY_DATABASE_URL`: 검증 DB 전용 DSN. DB 이름이 대상 설정과 일치해야 함
 - `SLP_VERIFY_R2_ACCESS_KEY_ID`, `SLP_VERIFY_R2_SECRET_ACCESS_KEY`: 검증 버킷의 최소 읽기 자격

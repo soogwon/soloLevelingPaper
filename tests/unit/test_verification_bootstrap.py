@@ -35,7 +35,8 @@ def plan(tmp_path, raw=None):
 
 
 def secrets():
-    return dict(SLP_VERIFY_DATABASE_URL='postgresql://synthetic:secret@localhost/verification',
+    return dict(SLP_VERIFY_ALLOW_EXTERNAL_API='true', SLP_VERIFY_LOCAL_ONLY='false',
+        WORKER_BASE_REFERENCE=raw_config()['runtime_image'], SLP_VERIFY_DATABASE_URL='postgresql://synthetic:secret@localhost/verification',
         SLP_VERIFY_R2_ACCESS_KEY_ID='synthetic-id', SLP_VERIFY_R2_SECRET_ACCESS_KEY='synthetic-secret',
         SLP_VERIFY_OPENAI_API_KEY='synthetic-api')
 
@@ -193,3 +194,17 @@ def test_offline_command_does_not_read_secrets_or_connect(tmp_path, monkeypatch,
     assert bootstrap.main(['--config', str(verification), '--runtime-config', str(runtime)]) == 0
     factory.assert_not_called()
     assert json.loads(capsys.readouterr().out) == dict(status='bootstrap_config_valid')
+
+
+@pytest.mark.parametrize('field,value', [('SLP_VERIFY_ALLOW_EXTERNAL_API', None),
+    ('SLP_VERIFY_ALLOW_EXTERNAL_API', 'false'), ('SLP_VERIFY_LOCAL_ONLY', 'true'),
+    ('WORKER_BASE_REFERENCE', 'other@sha256:' + 'f' * 64)])
+def test_explicit_execution_flags_and_runtime_identity_required(tmp_path, field, value):
+    values = secrets()
+    values[field] = value
+    pool, client, check = Mock(), Mock(), Mock()
+    with pytest.raises(ValueError):
+        with bootstrap.build(config(), plan(tmp_path), values, pool_factory=pool, client_factory=client, check=check): pass
+    check.assert_not_called()
+    pool.assert_not_called()
+    client.assert_not_called()

@@ -152,6 +152,9 @@ class Resources:
 def build(config, plan, source, *, pool_factory=_pool, client_factory=_client, check=preflight):
     # 외부 자원은 설정·파일 검사·자격 존재 검사를 모두 마친 뒤에만 연다.
     require(plan.raw['scope_sha256'] == scope_digest(config))
+    require(source.get('SLP_VERIFY_ALLOW_EXTERNAL_API') == 'true'
+            and source.get('SLP_VERIFY_LOCAL_ONLY') == 'false'
+            and source.get('WORKER_BASE_REFERENCE') == plan.raw['runtime_image'])
     check(plan)
     names = ('SLP_VERIFY_DATABASE_URL', 'SLP_VERIFY_R2_ACCESS_KEY_ID',
              'SLP_VERIFY_R2_SECRET_ACCESS_KEY', 'SLP_VERIFY_OPENAI_API_KEY')
