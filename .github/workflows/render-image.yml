@@ -5,6 +5,7 @@ on:
       - Dockerfile
       - .dockerignore
       - deploy/render-start.sh
+      - deploy/cleanup/**
       - src/solo_leveling/domain/deletion_policy.py
       - src/solo_leveling/infrastructure/storage/remote_deletion_backend.py
       - src/solo_leveling/interfaces/cli/remote_deletion_cleanup.py
@@ -32,6 +33,8 @@ jobs:
             test ! -e tests
             test ! -e web/tests
             test -z "$(find /app -iname "*.pdf" -print -quit)"
+            python deploy/cleanup/run.py uploads
+            python deploy/cleanup/run.py deletions
             solo-leveling-server-migrate --help
             solo-leveling-remote-deletion-cleanup --help
             solo-leveling-remote-upload-cleanup --help
