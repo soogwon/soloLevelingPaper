@@ -1,0 +1,35 @@
+name: 실제 Linux worker 모델 검증
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/worker-real-linux.yml
+      - scripts/verification/linux_worker.py
+      - evaluation/embedding/linux_worker_smoke.py
+permissions:
+  contents: read
+concurrency:
+  group: worker-real-linux-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  real-linux-model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 실제 CPU 이미지 빌드와 오프라인 모델 검증
+        env:
+          PYTHONPATH: src:.
+        run: python scripts/verification/linux_worker.py --work-dir "$RUNNER_TEMP/slp-linux-validation"
+      - name: 비밀정보 없는 결과와 lock 보관
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-worker-validation
+          path: ${{ runner.temp }}/slp-linux-validation/reports/
+          retention-days: 7
