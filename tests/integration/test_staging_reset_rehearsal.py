@@ -44,7 +44,7 @@ def test_reset_preserves_login_and_rebuilds_isolated_schema():
                 assert conn.execute("SELECT count(*) FROM server_users").fetchone()[0] == 1
                 conn.execute("INSERT INTO server_users(owner_user_id, display_name) VALUES ('synthetic', '합성')")
                 tables = conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename").fetchall()
-                assert len(tables) == 43
+                assert len(tables) == 44
                 vector_oid = conn.execute("SELECT oid FROM pg_extension WHERE extname='vector'").fetchone()[0]
                 # 이 전용 DB에서 방금 만든 테이블만 명시적으로 한 번에 삭제한다.
                 conn.execute(sql.SQL("DROP TABLE {} RESTRICT").format(sql.SQL(', ').join(
