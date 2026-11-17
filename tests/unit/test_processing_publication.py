@@ -39,3 +39,40 @@ def test_invalid_publication_receipt_never_borrows_connection():
     with pytest.raises(ProcessingPublishError):
         publisher.publish(result().source, 'invalid', expected_active_publication_id=None)
     pool.connection.assert_not_called()
+
+
+@pytest.mark.parametrize('prepared', [True, False])
+def test_worker_stops_heartbeat_before_publishing_only_prepared_results(monkeypatch, prepared):
+    from dataclasses import replace
+    from types import SimpleNamespace as NS
+    import solo_leveling.workers.remote_processing as module
+    from solo_leveling.interfaces.http.object_storage import DownloadedObject
+    value = result()
+    if not prepared: value = replace(value, status='translation_incomplete')
+    source = value.source
+    heartbeat = Mock()
+    monkeypatch.setattr(module, '_LeaseHeartbeat', lambda *args, **kwargs: heartbeat)
+    jobs = Mock()
+    jobs.claim.return_value = NS(lease_token=source.lease_token)
+    inputs = Mock()
+    inputs.load.return_value = module.RemoteProcessingInput(source, 'private/files/test.pdf', 'application/pdf')
+    inputs.allowed.return_value = True
+    objects = Mock()
+    objects.read_object.return_value = DownloadedObject('private/files/test.pdf', source.pdf_size,
+        'application/pdf', source.pdf_sha256, True, b'%PDF-test')
+    stages, stage, publisher = Mock(), Mock(), Mock()
+    stages.run.return_value = value
+    stage.save.return_value = NS(payload_sha256='d' * 64)
+    publisher.current.return_value = 'previous'
+    def publish(*args, **kwargs):
+        heartbeat.stop.assert_called_once()
+        assert kwargs == {'expected_active_publication_id': 'previous'}
+        assert args == (source, 'd' * 64)
+        return 'publication'
+    publisher.publish.side_effect = publish
+    output = module.RemoteProcessingWorker(jobs, inputs, objects, stages, worker_id='synthetic',
+        result_store=stage, publisher=publisher).run_once()
+    if prepared: assert output.published == 'publication'
+    else:
+        publisher.publish.assert_not_called()
+        stage.save.assert_not_called()

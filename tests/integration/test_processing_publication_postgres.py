@@ -106,3 +106,45 @@ def test_completed_replay_requires_current_consent(pool, db):
     db('UPDATE server_remote_consents SET revoked_at=CURRENT_TIMESTAMP WHERE consent_id=%s', (intent.ai_consent_id,))
     with pytest.raises(ProcessingPublishError): publish(publisher, source, digest)
     assert publisher.current(source) == first.publication_id
+
+
+def legacy_publication(pool, source):
+    """다른 실행이 같은 판본에 게시한 상황을 기존 게시 포트로 만든다."""
+    from dataclasses import replace
+    from tests.fixtures.processing_result import result
+    from solo_leveling.workers.processing_publication import _TransactionPool
+    from solo_leveling.interfaces.http.processing_publications import PostgresProcessingPublicationStore
+    jobs = PostgresProcessingJobStore(pool)
+    queued = jobs.enqueue(source.owner_user_id, source.paper_id, source.version_id,
+                          'full_processing', str(uuid4()), 'c' * 64)
+    claimed = jobs.claim('competing-worker', lease_seconds=60)
+    assert claimed.job_id == queued.job_id
+    other = replace(source, job_id=claimed.job_id, lease_token=claimed.lease_token,
+                    parse_revision_id=str(uuid4()), translation_revision_id=str(uuid4()), embedding_set_id=str(uuid4()))
+    with pool.connection() as conn:
+        tx = _TransactionPool(conn)
+        PostgresStagedProcessingPublisher._materialize(conn, tx, result(other))
+        return PostgresProcessingPublicationStore(tx).publish(other.owner_user_id, other.paper_id, other.version_id,
+            other.parse_revision_id, other.translation_revision_id, other.embedding_set_id, other.job_id, other.lease_token)
+
+
+def test_pointer_conflict_and_replay_preserve_newer_publication(pool, db):
+    publisher, source, digest = prepared(pool, db)
+    old = legacy_publication(pool, source)
+    with pytest.raises(ProcessingPublishError, match='conflict'): publish(publisher, source, digest)
+    first = publisher.publish(source, digest, expected_active_publication_id=old.publication_id)
+    newest = legacy_publication(pool, source)
+    assert publish(publisher, source, digest) == first
+    assert publisher.current(source) == newest.publication_id
+
+
+def test_expiry_during_materialization_rolls_back(pool, db, monkeypatch):
+    publisher, source, digest = prepared(pool, db)
+    materialize = publisher._materialize
+    def expire(conn, tx, result):
+        materialize(conn, tx, result)
+        conn.execute("UPDATE server_processing_jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE job_id=%s", (source.job_id,))
+    monkeypatch.setattr(publisher, '_materialize', expire)
+    with pytest.raises(ProcessingPublishError): publish(publisher, source, digest)
+    assert_private(db, source)
+    assert publisher.current(source) is None
