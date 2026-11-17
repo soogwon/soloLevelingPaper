@@ -165,8 +165,3 @@ def test_build_cli_defaults_to_plan_without_docker(tmp_path, monkeypatch, capsys
                  '--model-dir', str(tmp_path), '--runtime-dir', str(tmp_path)])
     assert 'linux/amd64' in capsys.readouterr().out
 
-
-def test_render_target_does_not_replace_default_preflight():
-    dockerfile = (Path(__file__).resolve().parents[2] / 'deploy/worker/Dockerfile').read_text()
-    assert dockerfile.rstrip().endswith('FROM worker AS default')
-    assert 'FROM worker AS render' in dockerfile

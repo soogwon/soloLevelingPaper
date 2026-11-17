@@ -3,6 +3,7 @@
 ## 이번 범위
 
 Render용 `render` Docker target과 기본 대기 진입점, linux/amd64 로컬 빌드 계획을 추가한다.
+기존 기본 Docker target은 사전 검사 후 종료하며 Render는 --target render로만 선택한다.
 실제 서비스 생성·이미지 게시·PDF 전송·AI 호출은 하지 않는다. 합성 프로세스와 이미지 CI 통과는
 실제 모델 Linux 추론이나 종단 처리가 성공했다는 의미가 아니다.
 
