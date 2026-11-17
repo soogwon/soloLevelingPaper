@@ -142,3 +142,20 @@ def test_limited_database_role_can_pin_and_cannot_modify_other_data(db,stores,po
             conn.execute('DROP FUNCTION mcp_read_lock_guard()')
             conn.execute(sql.SQL('DROP OWNED BY {}').format(sql.Identifier(role)))
             conn.execute(sql.SQL('DROP ROLE {}').format(sql.Identifier(role)))
+
+
+def test_spike_scope_alone_cannot_read_product_data(pool):
+    class SpikeVerifier(Verifier):
+        async def verify_token(self,token):
+            value=await super().verify_token(token)
+            if value:value.scopes=['spike:read']
+            return value
+    queries=RemoteProductQueries(pool)
+    from unittest.mock import Mock
+    queries.owners.resolve_owner=Mock(side_effect=AssertionError('scope 검사 전에 DB 조회 금지'))
+    app=create_app(remote_mcp_settings=replace(SETTINGS,product_reads_enabled=True),
+                   remote_mcp_verifier=SpikeVerifier(),remote_product_queries=queries)
+    with TestClient(app,base_url=SETTINGS.resource_url[:-4]) as client:
+        assert result(client,'list_remote_papers')=={'status':'not_found'}
+        assert result(client,'get_remote_question',{'request_key':'same-key'})=={'status':'not_found'}
+    queries.owners.resolve_owner.assert_not_called()
