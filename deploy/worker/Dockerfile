@@ -46,3 +46,8 @@ RUN --network=none python /opt/worker/image_preflight.py \
     && chmod -R a-w /opt/worker
 USER 65532:65532
 CMD []
+
+# Render는 기본 대기로 시작하며 명시한 검증 작업만 한 번 실행한다.
+FROM worker AS render
+ENTRYPOINT ["python", "-m", "solo_leveling.workers.render_service"]
+CMD ["--mode", "standby"]

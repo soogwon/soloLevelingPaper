@@ -61,6 +61,12 @@ else:
     # read-only mount 없이도 non-root가 모델/manifest를 변경할 수 없어야 한다.
     run(['docker', 'run', '--rm', '--network=none', '--entrypoint', 'python',
          'slp-worker-contract', '-c', script])
+    # runtime이 없는 합성 이미지는 Render 진입점에서도 작업 시작 전에 거부한다.
+    result = subprocess.run(['docker', 'run', '--rm', '--network=none', '--read-only',
+        '--entrypoint', 'python', 'slp-worker-contract', '-m',
+        'solo_leveling.workers.render_service'], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 1 and 'render_preflight_failed' in result.stdout
+    assert 'render_verification_started' not in result.stdout
     run([*build, '--target', 'worker'], success=False)
     (model / 'config.json').write_bytes(b'[]')
     run([*build, '--target', 'artifact'], success=False)
