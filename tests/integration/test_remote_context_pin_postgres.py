@@ -16,6 +16,12 @@ def test_context_pin_preserves_old_publication_and_rejects_other_scope(db, store
     binding = remote.resolver.resolve(remote.owner, first.context)
     pinned = remote.resolver.pin(remote.owner, context, binding.paper_id, binding.server_version_id)
     assert pinned.publication_id == binding.publication_id
+    from concurrent.futures import ThreadPoolExecutor
+    concurrent_key = str(uuid4())
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(lambda _: remote.resolver.pin(
+            remote.owner, concurrent_key, binding.paper_id, binding.server_version_id), range(8)))
+    assert all(result == results[0] for result in results)
     remote.publish(100, base=first)
     assert remote.resolver.pin(remote.owner, context, binding.paper_id, binding.server_version_id) == pinned
     assert remote.resolver.pin('other', str(uuid4()), binding.paper_id, binding.server_version_id) is None
