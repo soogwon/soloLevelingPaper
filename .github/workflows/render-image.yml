@@ -11,6 +11,10 @@ on:
       - src/solo_leveling/interfaces/cli/remote_deletion_cleanup.py
       - src/solo_leveling/interfaces/cli/remote_upload_cleanup.py
       - src/solo_leveling/interfaces/http/**
+      - src/solo_leveling/interfaces/mcp/**
+      - src/solo_leveling/application/**
+      - src/solo_leveling/domain/**
+      - deploy/validation/**
       - .github/workflows/render-image.yml
 permissions:
   contents: read
@@ -40,3 +44,9 @@ jobs:
             solo-leveling-remote-upload-cleanup --help
             WEB_STATIC_ROOT=/app/web python -c "from solo_leveling.interfaces.http import create_app; create_app()"
           '
+      - name: 제품 MCP 활성화 이미지 회귀
+        run: |
+          docker run --rm --network none \
+            -e REMOTE_MCP_DATABASE_URL=postgresql://test:test@127.0.0.1/test \
+            -v "$PWD/deploy/validation:/validation:ro" \
+            slp-render-test python /validation/remote_mcp_image.py

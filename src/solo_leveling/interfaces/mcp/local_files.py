@@ -8,7 +8,7 @@ import os
 from pathlib import Path, PureWindowsPath
 
 from solo_leveling.application.evidence_qa.errors import InvalidArgumentError, LocalPdfNotFoundError
-from .errors import UnsupportedDocumentError
+from solo_leveling.infrastructure.storage.pdf_store import UnsupportedDocumentError
 from solo_leveling.infrastructure.storage.pdf_source import open_pdf_source
 from solo_leveling.infrastructure.storage.pdf_store import PdfStore
 
