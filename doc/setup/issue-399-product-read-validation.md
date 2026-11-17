@@ -25,3 +25,5 @@ owner는 도구 인자가 아니라 매 요청 SDK 검증 토큰의 issuer/raw s
 현재는 코드·로컬 검증만 수행했다. 운영 flag, DB 권한, Auth0, Render 설정은 변경하지 않았다. 질문 입력 영속화·큐·provider 조립·운영 수치·호스트 카드와 실계정 검증이 남아 있으므로 원격 MCP 전환 완료가 아니다.
 
 권한 준비안은 [MCP 역할 SQL](issue-399-mcp-role.sql)에 있다. 기존 역할을 덮어쓰지 않고 NOLOGIN 역할만 만든다. 로그인 자격·Auth0 설정·실제 계정 연결은 포함하지 않는다. 적용 전 현재 PUBLIC 권한과 역할 소유권, 복구 명세를 함께 확인해야 한다.
+
+재검토 결과: 관련 ASGI·DB·인증 회귀 47개 통과. `spike:read`만 있는 요청은 403이며 OAuth 메타데이터에 `papers:read`가 표시된다. 권한 준비 SQL도 새 로컬 schema에서 실제 psql로 실행해 NOLOGIN/비특권 및 context INSERT/DELETE 권한을 확인하고 해당 로컬 생성물을 정리했다. #561 병합 후 최신 main 위로 변경을 정리했다.
