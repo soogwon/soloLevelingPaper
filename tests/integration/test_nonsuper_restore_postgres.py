@@ -170,7 +170,7 @@ def test_nonsuper_restore_preserves_vector_and_rolls_back_failure():
                 assert conn.execute(
                     "SELECT extnamespace::regnamespace::text,oid FROM pg_extension WHERE extname='vector'"
                 ).fetchone() == ("slp_staging", vector_oid)
-                assert conn.execute("SELECT count(*) FROM pg_tables WHERE schemaname='slp_staging'").fetchone()[0] == 42
+                assert conn.execute("SELECT count(*) FROM pg_tables WHERE schemaname='slp_staging'").fetchone()[0] == len(before)
             command(*args)
             with psycopg.connect(target) as conn:
                 assert snapshot(conn) == before

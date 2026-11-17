@@ -72,6 +72,15 @@ class PostgresDispatchLedger:
                 or records[intent.ai_consent_id]["input_hash"] != intent.input_hash
             ):
                 return None
+            reservation = None
+            if self._attempt_table == 'server_provider_attempts':
+                reservation = conn.execute("SELECT * FROM server_question_budget_reservations WHERE owner_user_id=%s AND execution_id=%s FOR UPDATE",
+                    (intent.owner_user_id,intent.execution_id)).fetchone()
+                if reservation is not None and (
+                        reservation['policy_version']!=self._policy_version or reservation['window_key']!=self._window_key
+                        or reservation['remaining_input_tokens']<request.input_token_upper_bound
+                        or reservation['remaining_output_tokens']<request.max_output_tokens):
+                    return None
             limits = conn.execute(
                 """SELECT scope_type,scope_id,max_input_tokens,max_output_tokens,
                           reserved_input_tokens,reserved_output_tokens,
@@ -86,9 +95,9 @@ class PostgresDispatchLedger:
             if {row["scope_type"] for row in limits} != {"service", "owner"}:
                 return None
             if any(
-                row["reserved_input_tokens"] + row["consumed_input_tokens"] + request.input_token_upper_bound
+                row["reserved_input_tokens"] + row["consumed_input_tokens"] + (0 if reservation is not None else request.input_token_upper_bound)
                 > row["max_input_tokens"]
-                or row["reserved_output_tokens"] + row["consumed_output_tokens"] + request.max_output_tokens
+                or row["reserved_output_tokens"] + row["consumed_output_tokens"] + (0 if reservation is not None else request.max_output_tokens)
                 > row["max_output_tokens"]
                 for row in limits
             ):
@@ -122,22 +131,28 @@ class PostgresDispatchLedger:
             ).fetchone()
             if row is None:
                 return None
-            conn.execute(
-                """UPDATE server_dispatch_budget_limits
-                   SET reserved_input_tokens=reserved_input_tokens+%s,
-                       reserved_output_tokens=reserved_output_tokens+%s,
-                       updated_at=CURRENT_TIMESTAMP
-                   WHERE policy_version=%s AND window_key=%s AND (
-                       (scope_type='service' AND scope_id='service') OR
-                       (scope_type='owner' AND scope_id=%s))""",
-                (
-                    request.input_token_upper_bound,
-                    request.max_output_tokens,
-                    self._policy_version,
-                    self._window_key,
-                    intent.owner_user_id,
-                ),
-            )
+            if reservation is not None:
+                conn.execute("""UPDATE server_question_budget_reservations SET
+                    remaining_input_tokens=remaining_input_tokens-%s,remaining_output_tokens=remaining_output_tokens-%s
+                    WHERE owner_user_id=%s AND execution_id=%s""",
+                    (request.input_token_upper_bound,request.max_output_tokens,intent.owner_user_id,intent.execution_id))
+            else:
+                conn.execute(
+                    """UPDATE server_dispatch_budget_limits
+                       SET reserved_input_tokens=reserved_input_tokens+%s,
+                           reserved_output_tokens=reserved_output_tokens+%s,
+                           updated_at=CURRENT_TIMESTAMP
+                       WHERE policy_version=%s AND window_key=%s AND (
+                           (scope_type='service' AND scope_id='service') OR
+                           (scope_type='owner' AND scope_id=%s))""",
+                    (
+                        request.input_token_upper_bound,
+                        request.max_output_tokens,
+                        self._policy_version,
+                        self._window_key,
+                        intent.owner_user_id,
+                    ),
+                )
         return AttemptPermit(attempt_id, request)
 
     def observe(self, attempt_id: str, input_tokens: int, output_tokens: int) -> None:
