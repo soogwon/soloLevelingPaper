@@ -255,7 +255,10 @@ def test_web_remote_upload_consent_admission_deletion(web, db):
     storage = call(client, "POST", path + "/consents/storage", {"notice_version": NOTICE_VERSION})
     call(client, "POST", path + "/prepare")
     call(client, "POST", path + "/complete")
-    call(client, "GET", f"/v1/papers/{intent['paper_id']}/versions/{intent['version_id']}/file-access", expected=404)
+    access = call(client, "GET", f"/v1/papers/{intent['paper_id']}/versions/{intent['version_id']}/file-access")
+    assert access["status"] == "ready" and access["file_name"] == "synthetic.pdf"
+    detail = call(client, "GET", f"/v1/papers/{intent['paper_id']}")
+    assert detail["file_access"]["available"] and detail["selected_learning_record_id"] is None
     call(client, "GET", f"/v1/papers/{intent['paper_id']}/versions/{intent['version_id']}/upload-status", expected=403)
     ai = call(client, "POST", path + "/consents/ai_provider", {"notice_version": NOTICE_VERSION})
     call(

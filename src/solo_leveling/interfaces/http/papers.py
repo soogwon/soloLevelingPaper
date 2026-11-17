@@ -337,7 +337,7 @@ class PostgresPaperStore:
                     reading_status: str | None, page: int, limit: int,
                     collection_id: str | None = None, unassigned: bool = False) -> PaperPage:
         """웹 목록용 offset 페이지를 소유권 범위에서 안정적인 순서로 조회한다."""
-        filters = ["p.owner_user_id = %s"]
+        filters = ["p.owner_user_id = %s", "p.deleted_at IS NULL"]
         params: list[Any] = [owner_user_id]
         if query is not None:
             filters.append("p.title ILIKE %s ESCAPE '\\'")
@@ -357,7 +357,15 @@ class PostgresPaperStore:
             FROM server_learning_records
             WHERE owner_user_id=p.owner_user_id AND paper_id=p.paper_id
             ORDER BY last_studied_at DESC NULLS LAST, learning_record_id ASC LIMIT 1
-        ) r ON TRUE LEFT JOIN server_paper_reading_states rs ON rs.paper_id=p.paper_id
+        ) r ON TRUE LEFT JOIN LATERAL (
+            SELECT u.server_version_id, u.file_name
+            FROM server_pdf_uploads u
+            JOIN server_processing_versions v ON v.owner_user_id=u.owner_user_id
+              AND v.paper_id=u.paper_id AND v.server_version_id=u.server_version_id
+            WHERE p.origin='remote' AND u.source_kind='remote' AND u.status='ready'
+              AND u.owner_user_id=p.owner_user_id AND u.paper_id=p.paper_id
+            ORDER BY u.updated_at DESC, u.upload_id ASC LIMIT 1
+        ) remote_file ON TRUE LEFT JOIN server_paper_reading_states rs ON rs.paper_id=p.paper_id
           LEFT JOIN server_collection_papers cp
           ON cp.owner_user_id=p.owner_user_id AND cp.paper_id=p.paper_id"""
         with _connection(self._pool) as conn:
@@ -371,7 +379,11 @@ class PostgresPaperStore:
                 return PaperPage((), page, limit, total, total_pages)
             rows = conn.execute(
                 f"""SELECT p.paper_id, p.title, p.authors, p.publication_year,
-                           r.learning_record_id, r.selected_version_id, r.file_name,
+                           r.learning_record_id,
+                           CASE WHEN r.learning_record_id IS NULL THEN remote_file.server_version_id
+                                ELSE r.selected_version_id END AS selected_version_id,
+                           CASE WHEN r.learning_record_id IS NULL THEN remote_file.file_name
+                                ELSE r.file_name END AS file_name,
                            r.last_position, r.last_studied_at, rs.status AS reading_status,
                            rs.basis_version_id AS reading_basis_version_id, rs.revision AS reading_state_revision, cp.collection_id
                     FROM server_papers p {latest} WHERE {where}
@@ -654,11 +666,11 @@ class PostgresPaperStore:
         with _connection(self._pool) as conn:
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             paper = conn.execute(
-                """SELECT p.paper_id, p.title, p.authors, p.publication_year,
+                """SELECT p.paper_id, p.title, p.authors, p.publication_year, p.origin,
                           s.status AS reading_status, s.basis_version_id AS reading_basis_version_id,
                           s.revision AS reading_state_revision
                    FROM server_papers p LEFT JOIN server_paper_reading_states s ON s.paper_id=p.paper_id
-                   WHERE p.paper_id=%s AND p.owner_user_id=%s""", (paper_id, owner_user_id),
+                   WHERE p.paper_id=%s AND p.owner_user_id=%s AND p.deleted_at IS NULL""", (paper_id, owner_user_id),
             ).fetchone()
             if paper is None:
                 raise PaperNotFound
@@ -678,6 +690,20 @@ class PostgresPaperStore:
                      ORDER BY last_studied_at DESC NULLS LAST, learning_record_id ASC LIMIT 1""",
                 tuple(params),
             ).fetchone()
+            remote_file = None
+            if record is None and learning_record_id is None and paper.get("origin") == "remote":
+                # 학습 이력을 만들지 않고 소유자의 검증된 원격 판본만 선택한다.
+                remote_file = conn.execute(
+                    """SELECT u.server_version_id, u.file_name
+                       FROM server_pdf_uploads u JOIN server_processing_versions v
+                         ON v.owner_user_id=u.owner_user_id AND v.paper_id=u.paper_id
+                        AND v.server_version_id=u.server_version_id
+                       WHERE u.owner_user_id=%s AND u.paper_id=%s
+                         AND u.source_kind='remote' AND u.status='ready'
+                         AND (%s::text IS NULL OR u.server_version_id=%s)
+                       ORDER BY u.updated_at DESC,u.upload_id ASC LIMIT 1""",
+                    (owner_user_id, paper_id, version_id, version_id),
+                ).fetchone()
             summary = None
             if record is not None:
                 summary = conn.execute(
@@ -690,7 +716,7 @@ class PostgresPaperStore:
                 ).fetchone()
         if learning_record_id is not None and record is None:
             raise PaperNotFound
-        if version_id is not None and record is None:
+        if version_id is not None and record is None and remote_file is None:
             raise PaperNotFound
         if (record is not None and version_id is not None
                 and record["selected_version_id"] != version_id):
@@ -699,9 +725,10 @@ class PostgresPaperStore:
             paper_id=str(paper["paper_id"]), title=paper["title"],
             authors=tuple(paper["authors"]) if paper["authors"] is not None else None,
             publication_year=paper["publication_year"],
-            file_name=record["file_name"] if record else None,
+            file_name=record["file_name"] if record else remote_file["file_name"] if remote_file else None,
             selected_learning_record_id=str(record["learning_record_id"]) if record else None,
-            selected_version_id=record["selected_version_id"] if record else None,
+            selected_version_id=(record["selected_version_id"] if record else
+                                 remote_file["server_version_id"] if remote_file else None),
             last_position=record["last_position"] if record else None,
             last_studied_at=record["last_studied_at"] if record else None,
             reading_status=paper.get("reading_status") or "unknown",

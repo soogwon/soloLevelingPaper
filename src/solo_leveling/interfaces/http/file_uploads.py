@@ -285,12 +285,16 @@ class PostgresFileUploadStore:
             target = conn.execute(
                 """SELECT 1 FROM server_papers p
                    WHERE p.paper_id=%s AND p.owner_user_id=%s AND p.deleted_at IS NULL
-                     AND EXISTS (
+                     AND (EXISTS (
                        SELECT 1 FROM server_learning_records r
                        WHERE r.paper_id=p.paper_id AND r.owner_user_id=p.owner_user_id
                          AND r.selected_version_id=%s
-                     )""",
-                (paper_id, owner_user_id, server_version_id),
+                     ) OR (p.origin='remote' AND EXISTS (
+                       SELECT 1 FROM server_processing_versions v
+                       WHERE v.owner_user_id=p.owner_user_id AND v.paper_id=p.paper_id
+                         AND v.server_version_id=%s
+                     )))""",
+                (paper_id, owner_user_id, server_version_id, server_version_id),
             ).fetchone()
             if target is None:
                 raise UploadTargetNotFound
