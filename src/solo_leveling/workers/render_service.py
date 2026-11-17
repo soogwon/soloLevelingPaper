@@ -64,9 +64,17 @@ def supervise(stop, command=None, *, preflight=None, poll_seconds=0.2, grace_sec
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mode', choices=('standby', 'verify-once'), default='standby')
+    parser.add_argument('--mode', choices=('standby', 'verify-once', 'question-worker'), default='standby')
     parser.add_argument('--config')
+    parser.add_argument('--runtime', help='검토한 질문 서버 runtime module:factory')
+    parser.add_argument('--max-jobs', type=int, default=1)
     args = parser.parse_args(argv)
+    if args.mode == 'question-worker':
+        import re
+        if args.config or not args.runtime or not re.fullmatch(r'[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*:[a-zA-Z_]\w*', args.runtime) or not 1 <= args.max_jobs <= 10000:
+            parser.error('질문 runtime과 유효한 작업 상한이 필요합니다.')
+    elif args.runtime or args.max_jobs != 1:
+        parser.error('질문 실행 설정은 question-worker 모드에서만 받습니다.')
     if args.mode == 'verify-once' and (not args.config or not os.path.isabs(args.config)):
         parser.error('검증 설정의 절대 경로가 필요합니다.')
     if args.mode == 'standby' and args.config:
@@ -78,6 +86,9 @@ def main(argv=None):
         command = [sys.executable, '-m', 'solo_leveling.interfaces.cli.processing_verification',
                    '--config', args.config, '--execute', '--runtime',
                    'solo_leveling.workers.verification_bootstrap:factory']
+    if args.mode == 'question-worker':
+        command = [sys.executable, '-m', 'solo_leveling.interfaces.cli.question_worker',
+                   '--execute', '--runtime', args.runtime, '--max-jobs', str(args.max_jobs)]
     try:
         return supervise(stop, command, preflight=[sys.executable, '/opt/worker/image_preflight.py'])
     finally:

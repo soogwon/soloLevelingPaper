@@ -21,6 +21,9 @@ class RemoteQuestionRunner:
         return self._execute_claimed(intent, policy)
 
     def run_once(self):
+        retired = self.store.retire_invalid_question()
+        if retired is not None:
+            return retired
         selected = self.store.claim_next_question()
         if selected is None:
             return None
@@ -102,3 +105,13 @@ def run_question_queue(runner, stop, *, max_jobs, idle_seconds=5.0):
         if status not in ('finished','expired','blocked'):
             return QueueRunResult('failed',processed)
     return QueueRunResult('limit_reached',processed)
+
+
+class QuestionMaintenanceRunner:
+    """모델·API 자격 없이 만료·철회 작업만 종료하는 별도 정리 runner."""
+
+    def __init__(self, store):
+        self.store = store
+
+    def run_once(self):
+        return self.store.retire_invalid_question()

@@ -192,6 +192,36 @@ class PostgresRemoteExecutionStore:
             intent = scoped.claim(owner,execution,lease_seconds=min(policy.timeout_seconds,max(3,policy.stage_timeout_seconds)))
             return ('claimed',intent,policy) if intent else ('blocked',None,None)
 
+    def retire_invalid_question(self):
+        """유효한 질문은 claim하지 않고 만료·철회된 질문 한 건만 종료한다."""
+        with self._pool.connection() as conn:
+            row = conn.execute("""SELECT e.* FROM server_remote_executions e
+                WHERE e.operation='ask_paper' AND e.question_snapshot IS NOT NULL
+                  AND e.policy_snapshot IS NOT NULL AND e.state IN ('queued','running')
+                  AND (e.deadline_at<=clock_timestamp() OR NOT EXISTS (
+                    SELECT 1 FROM server_execution_contexts c JOIN server_papers p
+                      ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
+                    WHERE c.owner_user_id=e.owner_user_id AND c.context_id=e.context_id AND p.deleted_at IS NULL
+                  ) OR NOT EXISTS (
+                    SELECT 1 FROM server_remote_consents s JOIN server_remote_consents a
+                      ON a.owner_user_id=s.owner_user_id
+                    WHERE s.owner_user_id=e.owner_user_id AND s.consent_id=e.storage_consent_id
+                      AND a.consent_id=e.ai_consent_id AND s.purpose='storage' AND a.purpose='ai_provider'
+                      AND s.input_hash=e.input_hash AND a.input_hash=e.input_hash
+                      AND s.notice_version=e.notice_version AND a.notice_version=e.notice_version
+                      AND s.revoked_at IS NULL AND a.revoked_at IS NULL
+                  ))
+                ORDER BY e.created_at,e.execution_id FOR UPDATE OF e SKIP LOCKED LIMIT 1""").fetchone()
+            if row is None:
+                return None
+            # 실행 행 잠금으로 전송 원장·완료 저장과 직렬화한다. 이미 배정한 전송 예산은 반환하지 않는다.
+            result = conn.execute("""UPDATE server_remote_executions SET state='failed',
+                terminal_reason=CASE WHEN deadline_at<=clock_timestamp() THEN 'deadline_exceeded' ELSE 'scope_revoked' END,
+                lease_token=NULL,lease_expires_at=NULL,finished_at=clock_timestamp(),updated_at=clock_timestamp()
+                WHERE owner_user_id=%s AND execution_id=%s RETURNING terminal_reason""",
+                (row['owner_user_id'],row['execution_id'])).fetchone()
+            return 'expired' if result['terminal_reason']=='deadline_exceeded' else 'blocked'
+
     def question_input(self, intent):
         """현재 lease·동의·접근 범위를 확인한 worker만 저장 입력을 읽는다."""
         from solo_leveling.application.evidence_qa.remote_question_input import RemoteQuestionInput

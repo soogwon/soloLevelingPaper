@@ -17,9 +17,11 @@ from solo_leveling.application.provider_dispatch import DispatchError
 pytestmark=pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'),reason='격리 PostgreSQL 필요')
 
 
-def configured(db,stores,pool):
+def configured(db,stores,pool,*,timeout_seconds=None):
     request,lookup,storage,ai,policy=setup(db,stores,pool)
     version=new_id();policy=replace(policy,version=version)
+    if timeout_seconds is not None:
+        policy=replace(policy,timeout_seconds=timeout_seconds,stage_timeout_seconds=timeout_seconds)
     args=list(request.unpack());args[-1]['budget_policy_version']=version
     request=type(request).create(*args)
     db("UPDATE server_remote_consents SET input_hash=%s WHERE consent_id IN (%s,%s)",(request.input_hash,storage,ai))

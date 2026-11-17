@@ -28,7 +28,7 @@ def no_network(monkeypatch):
     monkeypatch.setattr('requests.post',Mock(side_effect=AssertionError('실제 전송 금지')))
 
 
-def prepare(db,stores,pool,*,fault=None):
+def prepare(db,stores,pool,*,fault=None,admitted=False):
     _,prepared=setup_answer(db,stores,pool)
     resolver=PostgresRemoteContextResolver(pool)
     binding=resolver.resolve('alice',prepared.binding.context_id)
@@ -57,7 +57,12 @@ def prepare(db,stores,pool,*,fault=None):
     for scope,owner in [('owner','alice'),('service','service')]:
         db("INSERT INTO server_dispatch_budget_limits(scope_type,scope_id,policy_version,window_key,max_input_tokens,max_output_tokens) VALUES (%s,%s,%s,'test',%s,1000)",(scope,owner,version,1 if fault=='budget' else 2000))
     store=PostgresRemoteExecutionStore(pool)
-    saved=store.create(lookup,storage,ai,'notice',policy=policy,question_input=request)
+    if admitted:
+        from solo_leveling.interfaces.http.remote_question_intake import PostgresQuestionIntake
+        db("UPDATE server_dispatch_controls SET intake_enabled=true")
+        saved=PostgresQuestionIntake(pool).submit('alice',lookup.request_key,request,storage,ai,'notice',policy=policy,window_key='test')
+    else:
+        saved=store.create(lookup,storage,ai,'notice',policy=policy,question_input=request)
     runner=RemoteQuestionRunner(store,PersistedQuestionExecutor(store,factory))
     return store,saved,runner,post
 
@@ -83,3 +88,21 @@ def test_failure_does_not_publish_or_retransmit(db,stores,pool,fault,calls):
     assert not db('SELECT evidence_id FROM server_processing_evidences WHERE execution_id=%s',(saved.execution_id,))
     assert runner.run('alice',saved.execution_id)=='not_claimed' and post.call_count==calls
     if fault=='network':assert row.usage_state=='unknown'
+
+
+def test_cli_queue_admission_search_answer_and_budget_settlement(db,stores,pool,monkeypatch):
+    from contextlib import contextmanager
+    from solo_leveling.interfaces.cli import question_worker
+    store,saved,runner,post=prepare(db,stores,pool,admitted=True)
+    @contextmanager
+    def factory():
+        yield runner
+    monkeypatch.setattr(question_worker.importlib,'import_module',lambda name:NS(factory=factory))
+    assert question_worker.main(['--execute','--runtime','approved:factory','--max-jobs','1'])==0
+    assert store.lookup('alice','ask_paper',saved.lookup.request_key).state=='completed'
+    assert post.call_count==1 and runner.run_once() is None
+    rows=db('''SELECT b.reserved_input_tokens,b.reserved_output_tokens,b.consumed_input_tokens,b.consumed_output_tokens
+        FROM server_dispatch_budget_limits b JOIN server_question_budget_reservations r
+        ON r.policy_version=b.policy_version AND r.window_key=b.window_key WHERE r.execution_id=%s''',(saved.execution_id,))
+    assert len(rows)==2
+    assert all(row==dict(reserved_input_tokens=0,reserved_output_tokens=0,consumed_input_tokens=50,consumed_output_tokens=25) for row in rows)
