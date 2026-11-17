@@ -163,6 +163,8 @@ from .repair_instructions import REPAIR_INSTRUCTIONS as _REPAIR_INSTRUCTIONS
 
 
 class OpenAIClaimGenerator:
+    prompt_version = 'claims-v1'
+
     def __init__(self, settings: OpenAIGenerationSettings, *, transport=None):
         self.settings = settings
         self.transport = transport

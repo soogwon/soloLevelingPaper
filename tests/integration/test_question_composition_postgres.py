@@ -1,0 +1,85 @@
+"""실제 검색·전송 원장·결과 저장 조립. 임베딩과 HTTP만 합성 대역이다."""
+# ruff: noqa: F811
+from dataclasses import replace
+from types import SimpleNamespace as NS
+from unittest.mock import Mock
+import json
+import os
+import pytest
+from tests.integration.test_remote_processing_postgres import pool,db,stores,new_id  # noqa: F401
+from tests.integration.test_remote_answer_store_postgres import setup_answer
+from tests.integration.test_remote_answer_postgres import FILTERS
+from solo_leveling.application.evidence_qa.remote_search import QueryEmbedding
+from solo_leveling.application.evidence_qa.remote_question_input import RemoteQuestionInput
+from solo_leveling.application.remote_execution_policy import RemoteExecutionPolicy
+from solo_leveling.application.remote_replay import ExecutionLookup
+from solo_leveling.interfaces.http.remote_executions import PostgresRemoteExecutionStore
+from solo_leveling.interfaces.http.remote_retrieval import PostgresRemoteContextResolver
+from solo_leveling.infrastructure.generation.openai_generator import OpenAIGenerationSettings
+from solo_leveling.infrastructure.generation.semantic_verifier import SemanticSettings
+from solo_leveling.workers.question_composition import QuestionExecutionFactory
+from solo_leveling.workers.remote_question import RemoteQuestionRunner,PersistedQuestionExecutor
+
+pytestmark=pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'),reason='격리 PostgreSQL 필요')
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    monkeypatch.setattr('requests.post',Mock(side_effect=AssertionError('실제 전송 금지')))
+
+
+def prepare(db,stores,pool,*,fault=None):
+    _,prepared=setup_answer(db,stores,pool)
+    resolver=PostgresRemoteContextResolver(pool)
+    binding=resolver.resolve('alice',prepared.binding.context_id)
+    def respond(url,**kwargs):
+        if fault=='network':raise TimeoutError('비공개 오류')
+        data=json.loads(kwargs['json']['input'][0]['content'])
+        evidence=data['evidence'][0]
+        answer={'claims':[{'text':evidence['text_ko'],'evidence_ids':[evidence['evidence_id']],
+            'supports':[{'evidence_id':evidence['evidence_id'],'quote_original':evidence['original_text']}]}]}
+        if fault=='revoked':db("UPDATE server_remote_consents SET revoked_at=clock_timestamp() WHERE consent_id=%s",(ai,))
+        return NS(status_code=200,close=Mock(),json=lambda:{'status':'completed','output':[{'type':'message','role':'assistant','status':'completed','content':[{'type':'output_text','text':json.dumps(answer)}]}],
+            'usage':{'input_tokens':50,'output_tokens':25}})
+    post=Mock(side_effect=respond)
+    factory=QuestionExecutionFactory(pool,generation=OpenAIGenerationSettings('synthetic-not-key','synthetic',5,100,True),
+        semantic=SemanticSettings(),provider_profile_id='synthetic-profile',
+        embedding_runtime=NS(embed=lambda q,b:QueryEmbedding((1.,0.),b.model_fingerprint)),
+        window_key='test',token_upper_bound=lambda model,payload:500,post=post)
+    version=new_id();policy=RemoteExecutionPolicy(version,60,10,2,2000,1000)
+    config=factory.processing_config(version)
+    if fault=='config':config['generation_model']='changed'
+    request=RemoteQuestionInput.create(binding,'합성 설명은?',FILTERS,1,config)
+    lookup=ExecutionLookup('alice','ask_paper',new_id(),request.input_hash,binding.context_id)
+    storage,ai=new_id(),new_id()
+    db("INSERT INTO server_dispatch_controls(control_id,generation,dispatch_enabled) VALUES ('provider_dispatch',1,true) ON CONFLICT(control_id) DO UPDATE SET dispatch_enabled=true")
+    db("INSERT INTO server_remote_consents(consent_id,owner_user_id,purpose,input_hash,notice_version) VALUES (%s,'alice','storage',%s,'notice'),(%s,'alice','ai_provider',%s,'notice')",(storage,request.input_hash,ai,request.input_hash))
+    for scope,owner in [('owner','alice'),('service','service')]:
+        db("INSERT INTO server_dispatch_budget_limits(scope_type,scope_id,policy_version,window_key,max_input_tokens,max_output_tokens) VALUES (%s,%s,%s,'test',%s,1000)",(scope,owner,version,1 if fault=='budget' else 2000))
+    store=PostgresRemoteExecutionStore(pool)
+    saved=store.create(lookup,storage,ai,'notice',policy=policy,question_input=request)
+    runner=RemoteQuestionRunner(store,PersistedQuestionExecutor(store,factory))
+    return store,saved,runner,post
+
+
+def test_search_dispatch_and_atomic_answer_replay(db,stores,pool):
+    store,saved,runner,post=prepare(db,stores,pool)
+    assert runner.run('alice',saved.execution_id)=='finished'
+    row=store.lookup('alice','ask_paper',saved.lookup.request_key)
+    assert row.state=='completed'
+    payload=json.loads(db('SELECT payload_json FROM server_remote_executions WHERE execution_id=%s',(saved.execution_id,))[0]['payload_json'])
+    assert payload['status']=='ok' and payload['citations']
+    assert post.call_count==1
+    assert db('SELECT status,actual_input_tokens FROM server_provider_attempts WHERE execution_id=%s',(saved.execution_id,))==[{'status':'observed','actual_input_tokens':50}]
+    assert runner.run('alice',saved.execution_id)=='not_claimed' and post.call_count==1
+
+
+@pytest.mark.parametrize('fault,calls',[('network',1),('config',0),('budget',0),('revoked',1)])
+def test_failure_does_not_publish_or_retransmit(db,stores,pool,fault,calls):
+    store,saved,runner,post=prepare(db,stores,pool,fault=fault)
+    assert runner.run('alice',saved.execution_id) in ('limited','failed')
+    row=store.lookup('alice','ask_paper',saved.lookup.request_key)
+    assert row.state=='failed' and post.call_count==calls
+    assert not db('SELECT evidence_id FROM server_processing_evidences WHERE execution_id=%s',(saved.execution_id,))
+    assert runner.run('alice',saved.execution_id)=='not_claimed' and post.call_count==calls
+    if fault=='network':assert row.usage_state=='unknown'
