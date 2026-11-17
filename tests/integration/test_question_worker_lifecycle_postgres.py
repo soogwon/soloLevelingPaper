@@ -89,7 +89,7 @@ def test_retirement_keeps_dispatched_allocation_and_never_resends(db, stores, po
     assert store.lookup('alice','ask_paper',saved.lookup.request_key).usage_state == ('unknown' if uncertain else 'known')
 
 
-def test_restricted_maintenance_returns_budget_without_provider_permissions(db, stores, pool):
+def test_restricted_maintenance_returns_budget_without_provider_permissions(db, stores, pool, monkeypatch):
     import psycopg
     from psycopg import sql
     from psycopg.conninfo import make_conninfo
@@ -106,7 +106,10 @@ def test_restricted_maintenance_returns_budget_without_provider_permissions(db, 
     limited = ConnectionPool(make_conninfo(os.environ['SOLO_TEST_POSTGRES_DSN'],user=role,password='local-question-only'),
         kwargs={'row_factory':dict_row,'options':f'-c search_path={schema}'},open=True)
     try:
-        assert QuestionMaintenanceRunner(PostgresRemoteExecutionStore(limited)).run_once() == 'blocked'
+        from solo_leveling.interfaces.cli.question_worker import main
+        monkeypatch.setenv('QUESTION_WORKER_DATABASE_URL', make_conninfo(os.environ['SOLO_TEST_POSTGRES_DSN'],user=role,password='local-question-only'))
+        monkeypatch.setenv('QUESTION_WORKER_SCHEMA', schema)
+        assert main(['--execute','--runtime','solo_leveling.workers.question_runtime:maintenance_factory','--max-jobs','1']) == 0
         assert all(r['reserved_input_tokens']==r['reserved_output_tokens']==0 for r in limits(db,policy))
         for statement in ('SELECT * FROM server_processing_chunks','SELECT * FROM server_provider_attempts',
                           'UPDATE server_remote_consents SET revoked_at=NULL', 'DELETE FROM server_remote_executions'):
@@ -117,3 +120,13 @@ def test_restricted_maintenance_returns_budget_without_provider_permissions(db, 
         with pool.connection() as conn:
             conn.execute(sql.SQL('DROP OWNED BY {}').format(sql.Identifier(role)))
             conn.execute(sql.SQL('DROP ROLE {}').format(sql.Identifier(role)))
+
+
+def test_concurrent_retirement_releases_reservation_once(db, stores, pool):
+    from concurrent.futures import ThreadPoolExecutor
+    submit, policy = configured(db, stores, pool); saved = submit(new_id())
+    db("UPDATE server_remote_consents SET revoked_at=clock_timestamp() WHERE input_hash=%s", (saved.lookup.input_hash,))
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        results=list(workers.map(lambda _: PostgresRemoteExecutionStore(pool).retire_invalid_question(),range(4)))
+    assert results.count('blocked') == 1 and results.count(None) == 3
+    assert all(r['reserved_input_tokens']==r['reserved_output_tokens']==0 for r in limits(db,policy))
