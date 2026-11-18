@@ -47,3 +47,33 @@ def register_evidence_cards(server, queries, service, call, context, binding):
                                     expected_binding: str | None = None) -> dict[str, Any]:
         """저장 인용·판본·페이지와 근거 청크의 메모 첫 페이지를 상세 카드로 연다. 더 보기는 같은 연결과 커서를 사용한다. AI 생성·쓰기 없이 조회한다."""
         return call(False, lambda owner: read(owner, context_id, evidence_id, after, 20, expected_binding))
+
+    @server.resource('ui://remote-paper/detail.html', mime_type='text/html;profile=mcp-app')
+    def remote_paper_detail_card():
+        return Path(__file__).with_name('assets').joinpath('remote-paper-detail.html').read_text(encoding='utf-8')
+
+    @server.tool(meta={'ui': {'resourceUri': 'ui://remote-paper/detail.html'}}, annotations=READ_ONLY)
+    def show_remote_paper_detail(context_id: str, section_offset: int = 0,
+                                 after: str | None = None,
+                                 expected_binding: str | None = None) -> dict[str, Any]:
+        """고정 논문 목차와 학습 맥락 전체 메모를 조회한다. 각 목록은 20개씩이며 새로고침은 처음부터 한다. 요약·키워드가 없어도 자동 생성하지 않는다. papers:read와 annotations:read가 필요하다."""
+        def operation(owner):
+            ctx = context(context_id)
+            current = binding(owner, ctx)
+            if expected_binding is not None and not hmac.compare_digest(current, expected_binding):
+                return {'connection_changed': True}
+            detail = queries.detail(ctx, section_offset)
+            if detail['status'] == 'not_found':
+                return None
+            if detail['status'] == 'invalid_argument':
+                raise ValueError('remote_detail_input_invalid')
+            if detail['status'] != 'ok':
+                raise RuntimeError('remote_detail_unavailable')
+            page = service.store.list_annotations(owner, ctx, after=after, limit=20)
+            if page is None:
+                return None
+            return {'context_id': ctx, 'binding': current, 'detail': detail['result'],
+                    'section_offset': section_offset, 'after': after,
+                    'annotation_page': {'items': [asdict(item) for item in page['items']],
+                                        'next_cursor': page['next_cursor']}}
+        return call(False, operation)

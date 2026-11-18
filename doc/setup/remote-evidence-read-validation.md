@@ -105,3 +105,11 @@ macOS Claude Desktop 5.11492.5의 일반 합성 대화에서도 텍스트 인용
 - 로컬 PostgreSQL 회귀: 새 publication 이후 기존 context 유지, 목차 21건의 20+1 페이징, 빈 목차, 타 계정·삭제 차단, 제한 DB 역할 조회, 실제 MCP 인증 경계 검증. 기본 단위 검증에 잘못된 입력·저장 metadata·오류 은닉을 포함한다.
 - staging 적용 전 MCP 전용 역할에 `server_parse_revisions` SELECT만 추가하는 승인이 필요하다. 현재 권한·배포는 변경하지 않았다. 실제 Claude 재조회·다기기 검증과 #609의 호스트 카드 실패 검증은 별도다.
 - PR 작성 전 재검토에서 부모 섹션 미존재·순환·페이지 포함 관계 검사를 보완했다. 최종 로컬 PostgreSQL/MCP 회귀 44개, `ruff check src scripts`, `git diff --check` 통과. 실제 staging 권한 변경과 AI 호출은 하지 않았다.
+
+## 논문 전체 상세 카드 후속
+
+- `show_remote_paper_detail`은 `papers:read` 및 `annotations:read`를 확인하고 목차와 학습 맥락 전체 메모를 함께 반환한다. 근거 없는 메모도 포함하며 목차와 기록은 각각 20개 단위 다음 페이지를 조회한다. 새로고침은 둘 다 첫 페이지로 돌아간다.
+- 토큰에 결합된 연결 지문을 재조회 때 검사한다. 새 입력·취소·pagehide 뒤 늦은 응답, 다른 context·publication·연결 응답은 표시하지 않는다. 서버 로그아웃 이벤트가 카드에 전달되지 않는 동안 이미 표시된 내용의 즉시 삭제까지 보장하는 것은 아니다.
+- HTML과 구조화 텍스트 모두 읽기 전용이며 요약·키워드는 기존 미지원 안내를 표시한다. 생성·수정·동의 변경은 없다.
+- 로컬 PostgreSQL/FastMCP 서버 회귀 20개, 원격 카드 JS 회귀 50개 통과. 실제 Desktop 전체 상세 카드 검증은 아직 수행하지 않았다.
+- #611 staging 배포는 migration 0045 미적용으로 시작 검사 실패. 기존 0d8cbca Live 유지와 추가 SELECT 회수를 확인했다. 재배포 전에 0045와 조회 권한 적용의 별도 승인이 필요하다.

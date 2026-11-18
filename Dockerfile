@@ -28,6 +28,7 @@ COPY src/solo_leveling/interfaces/cli/__init__.py src/solo_leveling/interfaces/c
 COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-recovery.html src/solo_leveling/interfaces/mcp/assets/remote-annotation-recovery.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-compose.html src/solo_leveling/interfaces/mcp/assets/remote-annotation-compose.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-evidence-detail.html src/solo_leveling/interfaces/mcp/assets/remote-evidence-detail.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
+COPY src/solo_leveling/interfaces/mcp/assets/remote-paper-detail.html src/solo_leveling/interfaces/mcp/assets/remote-paper-detail.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 RUN pip install --no-cache-dir ".[server]"
 
 COPY migrations/server/*.sql ./migrations/server/
