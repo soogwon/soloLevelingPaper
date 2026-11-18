@@ -8,6 +8,7 @@ from uuid import UUID
 from typing import Any
 
 from mcp.types import ToolAnnotations
+from pydantic import StrictInt
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from solo_leveling.interfaces.http.remote_mcp_auth import RemoteIdentityAccessToken
@@ -129,7 +130,7 @@ def register_annotation_tools(server, queries, service):
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                              idempotentHint=True, openWorldHint=False))
     def set_remote_reading_progress(context_id: str, request_key: str, status: str,
-                                    pdf_page: int | None, expected_revision: int) -> dict[str, Any]:
+                                    pdf_page: StrictInt | None, expected_revision: StrictInt) -> dict[str, Any]:
         """명시적으로 요청한 완료·재열기와 최근 PDF 페이지를 저장한다. 학습 시작을 대신하지 않는다.
         pdf_page null은 위치 지우기다. 같은 입력 재전송에는 같은 UUID 키를 쓰고 충돌하면 먼저 현재 상태를 조회한다.
         재전송 응답은 현재 상태와 최초 applied_revision을 구분한다. 동의·AI 호출·메모 삭제는 없다.

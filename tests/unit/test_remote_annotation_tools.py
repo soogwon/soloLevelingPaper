@@ -389,3 +389,18 @@ def test_progress_requires_write_scope_and_maps_revision_conflict(monkeypatch):
     service.learning.set_progress.side_effect = RemoteLearningConflict('비공개 내부 원인')
     result = server.tools['set_remote_reading_progress'](*args)
     assert result['status']=='conflict' and '비공개' not in str(result)
+
+
+def test_progress_mcp_rejects_boolean_revision_before_store(monkeypatch):
+    import asyncio
+    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp.exceptions import ToolError
+    monkeypatch.setattr(module, 'get_access_token', lambda: token(['annotations:write']))
+    server=FastMCP('엄격 입력 검사'); service=Mock()
+    module.register_annotation_tools(server,NS(owner=lambda:'alice'),service)
+    async def verify():
+        with pytest.raises(ToolError):
+            await server.call_tool('set_remote_reading_progress', dict(context_id=CONTEXT,
+                request_key=CONTEXT,status='reading',pdf_page=None,expected_revision=True))
+        service.learning.set_progress.assert_not_called()
+    asyncio.run(verify())
