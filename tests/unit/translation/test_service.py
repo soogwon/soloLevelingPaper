@@ -124,6 +124,85 @@ class ServiceTests(unittest.TestCase):
                             for item in result.items))
         self.assertEqual([item.text for item in result.items], list(sources))
 
+    def test_reference_section_with_multiple_citations_skips_provider(self):
+        original = (
+            'Vaswani, A. et al. (2017). Attention Is All You Need. Proceedings of NeurIPS. '
+            'Devlin, J. et al. (2019). BERT: Pre-training of Deep Bidirectional Transformers. '
+            'arXiv: 1810.04805'
+        )
+        provider = FakeTranslationProvider({})
+        result = TranslationService(provider).translate(
+            (Chunk('c', 'p1', 0, original, section_id='09-references'),), self.settings)
+
+        self.assertEqual(provider.calls, [])
+        self.assertEqual(result.items[0].status, TranslationStatus.REFERENCE_CONTENT)
+        self.assertEqual(result.items[0].text, original)
+
+    def test_reference_section_supports_venue_and_arxiv_style_entries(self):
+        sources = (
+            ('Le, Ilya Sutskever, and Oriol Vinyals. Sequence learning. '
+             'arXiv:1511.06114, 2015. Minh-Thang Luong and Hieu Pham. '
+             'Attention. arXiv:1508.04025, 2015.'),
+            ('Tom B Brown, Benjamin Mann, and Nick Ryder. Language models are few-shot '
+             'learners. arXiv, 2020. Nicolas Carion and Francisco Massa. End-to-end '
+             'object detection with transformers. In ECCV, 2020.'),
+        )
+        provider = FakeTranslationProvider({})
+        result = TranslationService(provider).translate(
+            tuple(Chunk(f'c{i}', 'p1', i, source, section_id='08-references')
+                  for i, source in enumerate(sources)),
+            self.settings,
+        )
+
+        self.assertEqual(provider.calls, [])
+        self.assertTrue(all(item.status == TranslationStatus.REFERENCE_CONTENT
+                            for item in result.items))
+
+    def test_korean_reference_section_id_is_supported(self):
+        original = (
+            'Tom B Brown and Benjamin Mann. Language models are few-shot learners. '
+            'arXiv, 2020. Nicolas Carion and Francisco Massa. End-to-end object '
+            'detection with transformers. In ECCV, 2020.'
+        )
+        provider = FakeTranslationProvider({})
+        result = TranslationService(provider).translate(
+            (Chunk('c', 'p1', 0, original, section_id='07-참고-문헌'),), self.settings)
+
+        self.assertEqual(provider.calls, [])
+        self.assertEqual(result.items[0].status, TranslationStatus.REFERENCE_CONTENT)
+
+    def test_reference_section_does_not_skip_prose_or_boundary_mix(self):
+        sources = (
+            'In 2019 the authors released code at https://example.org and discuss the result.',
+            ('Smith, J. et al. (2018). A Study. Journal of Tests. Brown, T. et al. (2020). '
+             'Another Study. Proceedings of Testing.\nAppendix A Experimental details\n'
+             'We report the complete evaluation protocol in this section.'),
+        )
+        translations = {source: '이 구간의 설명을 한국어로 번역했습니다.' for source in sources}
+        provider = FakeTranslationProvider(translations)
+        result = TranslationService(provider).translate(
+            tuple(Chunk(f'c{i}', 'p1', i, source, section_id='references')
+                  for i, source in enumerate(sources)),
+            self.settings,
+        )
+
+        self.assertEqual(len(provider.calls), 2)
+        self.assertTrue(all(item.status == TranslationStatus.TRANSLATED
+                            for item in result.items))
+
+    def test_citation_dense_text_outside_reference_section_is_translated(self):
+        original = (
+            'Vaswani, A. et al. (2017). Attention. Proceedings of NeurIPS. '
+            'Devlin, J. et al. (2019). BERT. Journal of Testing.'
+        )
+        translated = '관련 연구 두 편을 본문에서 설명합니다.'
+        provider = FakeTranslationProvider({original: translated})
+        result = TranslationService(provider).translate(
+            (Chunk('c', 'p1', 0, original, section_id='03-related-work'),), self.settings)
+
+        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(result.items[0].status, TranslationStatus.TRANSLATED)
+
     def test_partial_and_total_failure(self):
         for ids in (("c1",), ("c1", "c2")):
             provider = FakeTranslationProvider(self.provider.translations, ids)

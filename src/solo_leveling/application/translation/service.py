@@ -111,8 +111,9 @@ class TranslationService:
         results = []
         budget = RetryBudget(self.clock())
         batch_id = str(uuid4())
-        for chunk_number, request in enumerate(requests):
-            source_status = classify_translation_source(request.original_text)
+        for chunk_number, (chunk, request) in enumerate(zip(snapshots, requests)):
+            source_status = classify_translation_source(
+                request.original_text, section_id=chunk.section_id)
             if source_status is not None:
                 result = ChunkTranslationResult(request, request.original_text, status=source_status)
             else:
