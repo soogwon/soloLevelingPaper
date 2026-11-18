@@ -4,6 +4,9 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pdfplumber
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / 'skills' / 'solo-leveling-guide' / 'scripts' / 'pdf_text.py'
 
@@ -63,6 +66,7 @@ def test_two_column_page_reads_left_column_before_right(tmp_path):
     assert _load().main([str(pdf), '--out', str(tmp_path / 'out')]) == 0
     lines = (tmp_path / 'out' / 'page_001.txt').read_text(encoding='utf-8').splitlines()
     assert lines[0].startswith('A Shared Title')
+    assert lines[0] == 'A Shared Title That Spans Across The Whole Page Width Center'
     left = [i for i, line in enumerate(lines) if line.startswith('left column')]
     right = [i for i, line in enumerate(lines) if line.startswith('right column')]
     assert len(left) == len(right) == 14
@@ -104,3 +108,47 @@ def test_figure_labels_are_not_heading_candidates():
     assert not module.looks_like_heading('75 BiT ViT-L/32 40')
     assert not module.looks_like_heading('0.3 Depth Depth')
     assert not module.looks_like_heading('3 S E e m g b m e e d n d t ings')
+
+
+@pytest.mark.parametrize('middle', [False, True])
+def test_single_column_with_midpoint_between_words_is_not_split(tmp_path, middle):
+    # 가운데가 단어 사이 공백이면 기존 단어 교차 검사만으로 2단으로 오인했다.
+    ops = []
+    for i in range(14):
+        y = 680 - 16 * i
+        ops.extend([_text(220, y, f'row {i:02d} left end'), _text(308, y, 'right continuation')])
+    if middle:
+        ops.append(_text(100, 500, 'A full width caption spans the center of this document'))
+    pdf = tmp_path / 'gap.pdf'
+    pdf.write_bytes(_pdf(['\n'.join(ops)]))
+    with pdfplumber.open(pdf) as document:
+        page = document.pages[0]
+        expected = page.extract_text(x_tolerance=1.5, y_tolerance=5)
+        assert _load().page_text(page) == expected
+
+
+def test_full_width_caption_below_columns_is_not_cut(tmp_path):
+    stream = _two_column_page() + '\n' + _text(100, 300, 'Full width caption across the middle and onward to the right')
+    pdf = tmp_path / 'caption.pdf'
+    pdf.write_bytes(_pdf([stream]))
+    with pdfplumber.open(pdf) as document:
+        page = document.pages[0]
+        assert _load().page_text(page) == page.extract_text(x_tolerance=1.5, y_tolerance=5)
+
+
+def test_short_single_column_rows_keep_original_order(tmp_path):
+    pdf = tmp_path / 'short.pdf'
+    pdf.write_bytes(_pdf(['\n'.join(_text(330, 700 - 16 * i, f'Only right {i:02d}') for i in range(14))]))
+    with pdfplumber.open(pdf) as document:
+        page = document.pages[0]
+        assert _load().page_text(page) == page.extract_text(x_tolerance=1.5, y_tolerance=5)
+
+
+def test_two_columns_preserve_rotated_stamp_filter(tmp_path):
+    stamp = 'BT /F1 10 Tf 0 1 -1 0 20 300 Tm (arXiv:1234.5678) Tj ET'
+    pdf = tmp_path / 'stamp.pdf'
+    pdf.write_bytes(_pdf([_two_column_page() + '\n' + stamp]))
+    pages, arxiv_id = _load().extract_pages(pdf)
+    assert arxiv_id == '1234.5678'
+    assert 'arXiv' not in pages[0]
+    assert pages[0].index('left column line 13') < pages[0].index('right column line 00')

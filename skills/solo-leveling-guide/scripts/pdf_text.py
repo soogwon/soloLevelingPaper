@@ -27,11 +27,9 @@ NAMED = ('abstract', 'introduction', 'related work', 'background', 'experiments'
 X_TOLERANCE = 1.5
 Y_TOLERANCE = 5
 
-# 2단 편집 논문: 줄의 대부분(85% 이상)이 가운데 여백을 넘지 않으면 2단 페이지로 본다.
-# 그대로 추출하면 왼쪽·오른쪽 단이 한 줄씩 섞이므로, 폭 전체를 쓰는 위쪽(제목·저자·그림)을 먼저 읽고
-# 왼쪽 단 → 오른쪽 단 순서로 읽는다.
-TWO_COLUMN_RATIO = 0.85
-GUTTER_MARGIN = 2.0
+# 가운데에 충분한 여백과 양쪽 본문이 확인된 페이지에만 단 분리를 적용한다.
+# 표·그림 설명 등 폭 전체 줄이 본문에 섞이면 기존 추출을 유지한다.
+GUTTER_MARGIN = 9.0
 HEADER_ZONE = 0.45
 
 
@@ -47,23 +45,35 @@ def page_text(page) -> str:
     lines = _lines(page)
     if len(lines) < 10:
         return plain
-    mid = page.width / 2
+    x0, top, x1, bottom = page.bbox
+    mid = (x0 + x1) / 2
 
     def crosses(line):
-        return any(w['x0'] < mid - GUTTER_MARGIN and w['x1'] > mid + GUTTER_MARGIN for w in line)
+        return any(w['x0'] < mid + GUTTER_MARGIN and w['x1'] > mid - GUTTER_MARGIN for w in line)
 
-    if sum(not crosses(line) for line in lines) / len(lines) < TWO_COLUMN_RATIO:
-        return plain
-    # 위쪽 영역에서 가운데를 넘는 줄(제목·저자 등)의 맨 아래를 폭 전체 영역의 끝으로 잡는다.
-    split = 0.0
+    # 폭 전체 영역은 본문보다 앞선 연속 영역만 허용한다.
+    split = top
+    body_started = False
+    left_rows = right_rows = 0
     for line in lines:
-        if crosses(line) and min(w['top'] for w in line) < page.height * HEADER_ZONE:
-            split = max(split, max(w['bottom'] for w in line))
+        if crosses(line):
+            if body_started or min(w['top'] for w in line) >= top + page.height * HEADER_ZONE:
+                return plain
+            split = max(split, max(w['bottom'] for w in line) + 0.5)
+            continue
+        left = any(w['x1'] <= mid - GUTTER_MARGIN for w in line)
+        right = any(w['x0'] >= mid + GUTTER_MARGIN for w in line)
+        body_started = True
+        left_rows += left
+        right_rows += right
+    if min(left_rows, right_rows) < 5:
+        return plain
+
     parts = []
-    if split > 0:
-        parts.append(page.crop((0, 0, page.width, split)))
-    parts.append(page.crop((0, split, mid, page.height)))
-    parts.append(page.crop((mid, split, page.width, page.height)))
+    if split > top:
+        parts.append(page.crop((x0, top, x1, split)))
+    parts.append(page.crop((x0, split, mid, bottom)))
+    parts.append(page.crop((mid, split, x1, bottom)))
     texts = [p.extract_text(x_tolerance=X_TOLERANCE, y_tolerance=Y_TOLERANCE) or '' for p in parts]
     return '\n'.join(t for t in texts if t.strip())
 
