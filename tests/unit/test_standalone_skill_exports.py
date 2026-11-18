@@ -102,3 +102,15 @@ def test_sample_quiz_html_matches_generator():
     module = load_script('solo-leveling-quiz', 'quiz_export')
     sample = (ROOT / 'skills/samples/quiz-attention.html').read_text(encoding='utf-8')
     assert sample == module.build_html(_quiz())
+
+
+def test_blank_optional_text_is_treated_as_absent(tmp_path):
+    module = load_script('solo-leveling-textbook', 'build_textbook')
+    book = json.loads((ROOT / 'skills/samples/textbook-attention.json').read_text(encoding='utf-8'))
+    evidence = next(sec for ch in book['chapters'] for sec in ch['sections'] if sec['type'] == 'evidence')
+    evidence['note'] = ''
+    evidence['section'] = '   '
+    source, output = tmp_path / 'input.json', tmp_path / 'book.html'
+    source.write_text(json.dumps(book, ensure_ascii=False), encoding='utf-8')
+    assert module.main([str(source), '--out', str(output)]) == 0
+    assert output.exists()
