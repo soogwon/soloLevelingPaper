@@ -158,6 +158,20 @@ def create_app(
                 raise ValueError('question_settings_invalid')
             managed_question_store = PostgresDeviceStore.from_dsn(DatabaseSettings(dsn).dsn)
             remote_questions = PostgresQuestionReviews(managed_question_store.connection_pool,**question_settings)
+    managed_annotation_stores = []
+    from .remote_annotation_settings import load_annotation_settings
+    annotation_settings = load_annotation_settings()
+    if annotation_settings is not None:
+        if (not selected_remote_mcp.enabled or not selected_remote_mcp.product_reads_enabled
+                or remote_product_queries is None or remote_annotation_products is not None
+                or remote_mcp_annotations is not None or remote_annotation_recovery is not None):
+            raise ValueError('annotation_settings_invalid')
+        from .remote_annotation_products import RemoteAnnotationProducts
+        for dsn in (annotation_settings.web_dsn, annotation_settings.mcp_dsn):
+            managed_annotation_stores.append(PostgresDeviceStore.from_dsn(dsn))
+        remote_annotation_products, remote_mcp_annotations = (
+            RemoteAnnotationProducts(store.connection_pool, annotation_settings.service_id)
+            for store in managed_annotation_stores)
     remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries, question_service=remote_questions, annotation_service=remote_mcp_annotations)
                      if selected_remote_mcp.enabled else None)
 
@@ -173,6 +187,9 @@ def create_app(
             if managed_question_store is not None:
                 managed_question_store.open()
                 stack.callback(managed_question_store.close)
+            for store in managed_annotation_stores:
+                store.open()
+                stack.callback(store.close)
             if remote_bundle is not None:
                 await stack.enter_async_context(remote_bundle.server.session_manager.run())
             yield
