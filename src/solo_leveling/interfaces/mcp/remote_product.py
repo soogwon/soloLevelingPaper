@@ -1,6 +1,9 @@
 """인증된 원격 요청의 목록·고정 맥락·기존 실행 조회. 생성·provider 포트는 없다."""
 import time
 from uuid import UUID
+from typing import Any
+from mcp.types import ToolAnnotations
+from solo_leveling.interfaces.http.remote_evidence_read import PostgresRemoteEvidenceReader
 from mcp.server.auth.middleware.auth_context import get_access_token
 from solo_leveling.interfaces.http.remote_mcp_auth import RemoteIdentityAccessToken
 from solo_leveling.interfaces.http.remote_identities import PostgresRemoteOwnerResolver
@@ -13,6 +16,7 @@ from solo_leveling.interfaces.mcp.remote_recovery import restored_guidance
 class RemoteProductQueries:
     def __init__(self, pool):
         self.pool = pool
+        self.evidences = PostgresRemoteEvidenceReader(pool)
         self.owners = PostgresRemoteOwnerResolver(pool)
         self.contexts = PostgresRemoteContextResolver(pool)
         self.executions = PostgresRemoteExecutionStore(pool)
@@ -66,6 +70,18 @@ class RemoteProductQueries:
         except Exception:
             return {'status':'unavailable'}
 
+    def evidence(self, context_id, evidence_id):
+        try:
+            context_id, evidence_id = str(UUID(context_id)), str(UUID(evidence_id))
+        except (ValueError, TypeError, AttributeError):
+            return {'status': 'invalid_argument'}
+        try:
+            owner = self.owner()
+            row = self.evidences.get(owner, context_id, evidence_id) if owner else None
+            return {'status': 'not_found'} if row is None else {'status': 'ok', 'result': row}
+        except Exception:
+            return {'status': 'unavailable'}
+
     def execution(self, request_key):
         if not isinstance(request_key,str) or not request_key.strip() or len(request_key)>512:
             return {'status':'invalid_argument'}
@@ -98,3 +114,9 @@ def register_product_queries(server, queries):
     def get_remote_question(request_key: str) -> dict:
         """기존 질문만 조회한다. 조회 실패·미존재는 재제출 이유가 아니며 새 유료 작업을 만들지 않는다."""
         return queries.execution(request_key)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                             idempotentHint=True, openWorldHint=False))
+    def get_remote_evidence(context_id: str, evidence_id: str) -> dict[str, Any]:
+        """완료된 답변의 저장 근거만 고정 판본·게시·인용으로 다시 읽는다. 재검색·AI 호출·새 질문 접수는 하지 않는다."""
+        return queries.evidence(context_id, evidence_id)
