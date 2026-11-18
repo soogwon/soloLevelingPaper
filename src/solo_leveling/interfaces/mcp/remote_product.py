@@ -70,6 +70,83 @@ class RemoteProductQueries:
         except Exception:
             return {'status':'unavailable'}
 
+    def detail(self, context_id, section_offset=0):
+        try:
+            context_id = str(UUID(context_id))
+        except (ValueError, TypeError, AttributeError):
+            return {'status': 'invalid_argument'}
+        if type(section_offset) is not int or not 0 <= section_offset <= 100000:
+            return {'status': 'invalid_argument'}
+        try:
+            owner = self.owner()
+            binding = self.contexts.resolve(owner, context_id) if owner else None
+            if binding is None:
+                return {'status': 'not_found'}
+            with self.pool.connection() as conn:
+                row = conn.execute('''SELECT p.title,r.document_metadata
+                    FROM server_parse_revisions r
+                    JOIN server_papers p ON p.owner_user_id=r.owner_user_id AND p.paper_id=r.paper_id
+                    WHERE r.owner_user_id=%s AND r.paper_id=%s AND r.server_version_id=%s
+                      AND r.parse_revision_id=%s AND p.deleted_at IS NULL''',
+                    (owner, binding.paper_id, binding.server_version_id, binding.parse_revision_id)).fetchone()
+            if row is None:
+                return {'status': 'not_found'}
+            metadata = row['document_metadata']
+            sections = metadata.get('sections', [])
+            if not isinstance(sections, list):
+                raise ValueError('remote_sections_invalid')
+            # 다른 리비전이나 잘못된 메타데이터를 정상 목차로 반환하지 않는다.
+            fields = ('section_id', 'parse_revision_id', 'title', 'ordinal', 'level',
+                      'parent_section_id', 'start_pdf_page', 'end_pdf_page')
+            catalog = []
+            for section in sections:
+                if (not isinstance(section, dict)
+                        or section.get('parse_revision_id') != binding.parse_revision_id
+                        or not isinstance(section.get('section_id'), str)
+                        or not section['section_id'].strip()
+                        or not isinstance(section.get('title'), str)
+                        or any(type(section.get(k)) is not int for k in
+                               ('ordinal', 'level', 'start_pdf_page', 'end_pdf_page'))
+                        or section['ordinal'] < 0 or section['level'] < 1
+                        or not 1 <= section['start_pdf_page'] <= section['end_pdf_page']):
+                    raise ValueError('remote_sections_invalid')
+                catalog.append({k: section.get(k) for k in fields})
+            ids = [s['section_id'] for s in catalog]
+            if len(ids) != len(set(ids)):
+                raise ValueError('remote_sections_invalid')
+            by_id = {s['section_id']: s for s in catalog}
+            for section in catalog:
+                parent_id = section['parent_section_id']
+                if parent_id is not None:
+                    if not isinstance(parent_id, str) or parent_id not in by_id:
+                        raise ValueError('remote_sections_invalid')
+                    parent = by_id[parent_id]
+                    # 부모의 더 낮은 단계와 페이지 포함 관계로 순환도 차단한다.
+                    if (parent['level'] >= section['level']
+                            or not parent['start_pdf_page'] <= section['start_pdf_page']
+                            <= section['end_pdf_page'] <= parent['end_pdf_page']):
+                        raise ValueError('remote_sections_invalid')
+            catalog.sort(key=lambda s: (s['ordinal'], s['section_id']))
+            return {'status': 'ok', 'result': {
+                'context_id': context_id, 'paper_id': binding.paper_id,
+                'version_id': binding.server_version_id, 'publication_id': binding.publication_id,
+                'parse_revision_id': binding.parse_revision_id,
+                'translation_revision_id': binding.translation_revision_id,
+                'embedding_set_id': binding.embedding_set_id, 'title': row['title'],
+                'section_catalog': catalog[section_offset:section_offset + 20],
+                'next_section_offset': section_offset + 20 if len(catalog) > section_offset + 20 else None,
+                'summary': None, 'keywords': [], 'important_sentences': [],
+                'limitations': ['remote_summary_not_available', 'remote_keywords_not_available',
+                                'remote_important_sentences_not_available']
+                               + ([] if catalog else ['section_catalog_not_available']),
+                'annotation_lookup': {'tool': 'list_remote_annotations',
+                                      'arguments': {'context_id': context_id, 'limit': 20},
+                                      'required_scope': 'annotations:read'},
+                'page_notice': '목차 페이지는 이 고정 PDF 판본 기준입니다. 인쇄 페이지나 다른 판본의 페이지와 다를 수 있습니다.',
+                'generation_notice': '게시본에 연결된 원격 요약·키워드 저장 계약은 아직 없습니다. 조회 시 자동 생성하지 않습니다.'}}
+        except Exception:
+            return {'status': 'unavailable'}
+
     def evidence(self, context_id, evidence_id):
         try:
             context_id, evidence_id = str(UUID(context_id)), str(UUID(evidence_id))
@@ -120,3 +197,9 @@ def register_product_queries(server, queries):
     def get_remote_evidence(context_id: str, evidence_id: str) -> dict[str, Any]:
         """완료된 답변의 저장 근거만 고정 판본·게시·인용으로 다시 읽는다. 재검색·AI 호출·새 질문 접수는 하지 않는다."""
         return queries.evidence(context_id, evidence_id)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                             idempotentHint=True, openWorldHint=False))
+    def get_remote_paper_detail(context_id: str, section_offset: int = 0) -> dict[str, Any]:
+        """고정 게시본의 논문 상세·목차를 20개씩 조회한다. 요약·키워드 미지원은 빈 상태로 알리며 생성하지 않는다. 메모는 annotations:read 권한의 list_remote_annotations로 조회한다."""
+        return queries.detail(context_id, section_offset)
