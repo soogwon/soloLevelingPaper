@@ -46,3 +46,17 @@ test('페이지 종료 후 늦은 응답은 표시하지 않는다',async()=>{
  assert.equal(doc.getElementById('record').textContent,'');
  assert.equal(doc.getElementById('refresh').disabled,true);
 });
+
+test('조회 미존재와 일시 실패를 구분하며 어느 경우에도 취소를 재전송하지 않는다',async()=>{
+ for(const status of ['not_found','unavailable']) {
+  const calls=[];
+  const {doc}=setup(async r=>{calls.push(r);return {structuredContent:{status}};});
+  await doc.getElementById('refresh').onclick();
+  assert.match(doc.getElementById('status').textContent,status==='not_found'?/기록이 없거나 접근할 수 없습니다/:/결과를 확인하지 못했습니다/);
+  assert.equal(doc.getElementById('confirm').disabled,true);
+  await doc.getElementById('confirm').onclick();
+  await doc.getElementById('refresh').onclick();
+  assert.equal(calls.length,2);
+  assert.ok(calls.every(r=>r.name==='get_remote_job_cancellation'&&r.arguments.request_key===key));
+ }
+});
