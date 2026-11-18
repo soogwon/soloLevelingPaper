@@ -20,4 +20,3 @@ def build_layout_pdf(streams: list[str]) -> bytes:
     buf += b''.join(f'{o:010d} 00000 n \n'.encode() for o in offsets)
     buf += f'trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF'.encode()
     return bytes(buf)
-
