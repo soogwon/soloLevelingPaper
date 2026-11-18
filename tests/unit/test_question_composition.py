@@ -27,3 +27,16 @@ def test_invalid_configuration_never_opens_database(inputs,change):  # noqa: F81
     intent=NS(owner_user_id=inputs[0].owner_user_id,input_hash=request.input_hash)
     with pytest.raises(DispatchError):factory(intent,policy,lambda:change!='lost',request)
     pool.connection.assert_not_called()
+
+
+def test_general_runtime_requires_estimator_revision_and_filters_policy():
+    from tests.unit.test_question_contract import contract
+    from solo_leveling.workers.question_composition import create_question_runner
+    c=contract(); pool=Mock()
+    options=dict(generation=OpenAIGenerationSettings('synthetic','synthetic',30,1024,True),
+        semantic=SemanticSettings(),provider_profile_id=c.profile,embedding_runtime=Mock(),
+        window_key=c.window_key,token_upper_bound=lambda *_:4000,contract=c)
+    with pytest.raises(ValueError):create_question_runner(pool,**options)
+    runner=create_question_runner(pool,**options,estimator_revision=c.estimator_revision)
+    assert runner.store._question_policy_version==c.policy_version
+    pool.connection.assert_not_called()

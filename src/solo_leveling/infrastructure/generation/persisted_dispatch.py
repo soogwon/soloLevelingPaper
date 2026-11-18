@@ -6,7 +6,7 @@ from .gated_responses import GatedResponsesTransport
 from .execution_budget import ExecutionBudget, BudgetedExecutionScope
 
 
-def create_persisted_responses_transport(pool, intent, policy_version, window_key, prepare, *, post=None, execution_budget=None):
+def create_persisted_responses_transport(pool, intent, policy_version, window_key, prepare, *, post=None, execution_budget=None, validate_limits=None):
     """prepare는 안전한 토큰 상한·영속 전송 키를 공급한다. 임의 정책·키를 생성하지 않는다.
 
     반환 transport를 생성기와 의미 검증기에 함께 주입한다. post 대역을 생략한 실제 전송에는
@@ -26,9 +26,10 @@ def create_persisted_responses_transport(pool, intent, policy_version, window_ke
         def authorize(self, request):
             # 전송마다 지역 adapter를 만들어 동시 호출 간 request를 공유하지 않는다.
             validator = validate_execution_scope if execution_budget is None else BudgetedExecutionScope(execution_budget, request)
-            return PostgresQuestionDispatchLedger(pool, policy_version, window_key, validator).authorize(request)
+            return PostgresQuestionDispatchLedger(pool, policy_version, window_key, validator,
+                validate_limits=validate_limits).authorize(request)
 
-    ledger = Ledger(pool, policy_version, window_key, validate_execution_scope)
+    ledger = Ledger(pool, policy_version, window_key, validate_execution_scope, validate_limits=validate_limits)
     transport = GatedResponsesTransport(ProviderDispatch(ledger, intent), prepare, post=post)
     if stored_policy is None:
         return transport

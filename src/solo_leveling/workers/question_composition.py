@@ -18,12 +18,18 @@ from .remote_question import RemoteQuestionRunner, PersistedQuestionExecutor
 class QuestionExecutionFactory:
     """서버 bootstrap이 명시한 제공자 설정만 사용한다. 운영 기본값이나 자동 재시도는 없다."""
     def __init__(self, pool, *, generation, semantic, provider_profile_id, embedding_runtime,
-                 window_key, token_upper_bound, post=None):
+                 window_key, token_upper_bound, post=None, contract=None, estimator_revision=None):
         if (not isinstance(generation,OpenAIGenerationSettings) or not isinstance(semantic,SemanticSettings)
                 or not isinstance(provider_profile_id,str) or not provider_profile_id.strip()
                 or not isinstance(window_key,str) or not window_key.strip()
                 or not callable(token_upper_bound)):
             raise ValueError('remote_question_config_invalid')
+        from .question_contract import QuestionContract
+        if contract is not None and not isinstance(contract, QuestionContract):
+            raise ValueError('remote_question_contract_invalid')
+        if contract is not None and estimator_revision != contract.estimator_revision:
+            raise ValueError('remote_question_estimator_mismatch')
+        self.contract = contract
         self.pool,self.generation,self.semantic=pool,generation,semantic
         self.profile,self.embedding=provider_profile_id,embedding_runtime
         self.window,self.estimate,self.post=window_key,token_upper_bound,post
@@ -45,19 +51,26 @@ class QuestionExecutionFactory:
         if (self.generation.max_output_tokens>policy.max_output_tokens
                 or self.semantic.enabled and self.semantic.max_output_tokens>policy.max_output_tokens):
             raise DispatchError('DISPATCH_NOT_AUTHORIZED')
+        if self.contract is not None:
+            self.contract.validate_policy(policy, self.generation.model, self.window, self.profile, self.semantic.enabled)
         counters={}
         def prepare(stage,payload,digest):
             if stage not in ('generation','repair','coverage','semantic_verification') or not allowed():
                 raise DispatchError('DISPATCH_NOT_AUTHORIZED')
+            if self.contract is not None:
+                self.contract.validate_payload(stage, payload)
             upper=self.estimate(payload['model'],deepcopy(payload))
             if type(upper) is not int or upper<1:
                 raise DispatchError('DISPATCH_NOT_AUTHORIZED')
+            if self.contract is not None:
+                self.contract.validate_upper(upper)
             index=counters.get(stage,0)
             counters[stage]=index+1
             # 재시작으로 같은 논리 전송 슬롯이 다른 key가 되지 않는다.
             key=hashlib.sha256(json.dumps(['remote-question-v1',intent.execution_id,stage,index],separators=(',',':')).encode()).hexdigest()
             return PreparedProviderAttempt(key,digest,upper)
-        transport=create_persisted_responses_transport(self.pool,intent,policy.version,self.window,prepare,post=self.post)
+        transport=create_persisted_responses_transport(self.pool,intent,policy.version,self.window,prepare,post=self.post,
+            validate_limits=None if self.contract is None else self.contract.validate_limits)
         generator=OpenAIClaimGenerator(self.generation,transport=transport)
         verification=None
         if self.semantic.enabled:
@@ -77,8 +90,9 @@ class QuestionExecutionFactory:
 
 
 def create_question_runner(pool, **options):
-    store=PostgresRemoteExecutionStore(pool)
     factory=QuestionExecutionFactory(pool,**options)
+    store=PostgresRemoteExecutionStore(pool,
+        question_policy_version=None if factory.contract is None else factory.contract.policy_version)
     return RemoteQuestionRunner(store,PersistedQuestionExecutor(store,factory))
 
 

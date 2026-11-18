@@ -16,13 +16,16 @@ class PostgresDispatchLedger:
     _attempt_table = "server_provider_attempts"
     _question_reservations = False
 
-    def __init__(self, pool, policy_version: str, window_key: str, validate_scope: Callable):
+    def __init__(self, pool, policy_version: str, window_key: str, validate_scope: Callable, *, validate_limits=None):
         if not all(isinstance(value, str) and value.strip() for value in (policy_version, window_key)):
             raise ValueError("dispatch_policy_invalid")
         if not callable(validate_scope):
             raise ValueError("dispatch_scope_validator_invalid")
         if self._attempt_table not in {"server_provider_attempts", "server_processing_provider_attempts"}:
             raise ValueError("dispatch_ledger_invalid")
+        if validate_limits is not None and not callable(validate_limits):
+            raise ValueError('dispatch_limits_validator_invalid')
+        self._validate_limits = validate_limits
         self._pool = pool
         self._policy_version = policy_version
         self._window_key = window_key
@@ -94,6 +97,8 @@ class PostgresDispatchLedger:
                 (self._policy_version, self._window_key, intent.owner_user_id),
             ).fetchall()
             if {row["scope_type"] for row in limits} != {"service", "owner"}:
+                return None
+            if self._validate_limits is not None and self._validate_limits(limits) is not True:
                 return None
             if any(
                 row["reserved_input_tokens"] + row["consumed_input_tokens"] + (0 if reservation is not None else request.input_token_upper_bound)
