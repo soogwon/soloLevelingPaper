@@ -240,7 +240,18 @@ def safe_name(title: str) -> str:
     return name or 'quiz'
 
 
+
+def use_utf8_console() -> None:
+    """Windows 콘솔(cp1252 등)에서도 한글 출력이 멈추지 않게 표준 출력을 UTF-8로 맞춘다."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding='utf-8', errors='replace')
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv=None) -> int:
+    use_utf8_console()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('quiz_json', type=Path)
     parser.add_argument('--out', type=Path, default=Path('quiz_output'))

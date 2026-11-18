@@ -137,3 +137,26 @@ def test_pypdf_fallback_is_recorded(tmp_path, monkeypatch, capsys):
     assert module.main([str(source), '--out', str(output)]) == 0
     assert json.loads((output / 'paper.json').read_text(encoding='utf-8'))['extractor'] == 'pypdf'
     assert '추출 도구: pypdf' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('skill,script,args', [
+    ('solo-leveling-quiz', 'quiz_export', ['{quiz}', '--out', '{tmp}/quiz']),
+    ('solo-leveling-textbook', 'build_textbook', ['{book}', '--out', '{tmp}/book.html']),
+    ('solo-leveling-guide', 'concept_path', ['--paper-json', '{paper}', '--goal', 'understand']),
+])
+def test_scripts_print_korean_on_windows_console(tmp_path, skill, script, args):
+    """Windows 기본 콘솔(cp1252)에서도 한글 출력 때문에 실패하지 않는다."""
+    import os
+    import subprocess
+    import sys
+    paper = tmp_path / 'paper.json'
+    paper.write_text(json.dumps({'sha256': 'unknown', 'arxiv_id': '1706.03762'}), encoding='utf-8')
+    values = {'quiz': str(ROOT / 'skills/samples/quiz-attention.json'),
+              'book': str(ROOT / 'skills/samples/textbook-attention.json'),
+              'paper': str(paper), 'tmp': str(tmp_path)}
+    command = [sys.executable, str(ROOT / 'skills' / skill / 'scripts' / f'{script}.py')]
+    command += [a.format(**values) for a in args]
+    env = dict(os.environ, PYTHONIOENCODING='cp1252', PYTHONUTF8='0')
+    result = subprocess.run(command, capture_output=True, env=env)
+    assert result.returncode == 0, result.stderr.decode('utf-8', 'replace')
+    assert 'UnicodeEncodeError' not in result.stderr.decode('utf-8', 'replace')
