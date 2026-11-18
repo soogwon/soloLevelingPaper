@@ -153,3 +153,6 @@ def register_annotation_tools(server, queries, service):
 
     from .remote_annotation_cards import register_annotation_cards
     register_annotation_cards(server, service, call, context, binding)
+
+    from .remote_evidence_cards import register_evidence_cards
+    register_evidence_cards(server, queries, service, call, context, binding)
