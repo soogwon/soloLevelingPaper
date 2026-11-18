@@ -64,5 +64,5 @@ cancel_bundle = create_remote_mcp(settings, product_queries=Queries(),
     cancellation_service=PostgresProcessingCancellationStore(None))
 assert {'prepare_remote_job_cancellation', 'confirm_remote_job_cancellation',
         'get_remote_job_cancellation'} <= {tool.name for tool in asyncio.run(cancel_bundle.server.list_tools())}
-assert '원격 처리 작업 취소' in str(asyncio.run(cancel_bundle.server.read_resource('ui://remote-jobs/cancel.html')))
+assert '처리 작업 취소 확인' in str(asyncio.run(cancel_bundle.server.read_resource('ui://remote-jobs/cancel.html')))
 print('REMOTE_JOB_CANCEL_IMAGE_OK; no database or provider calls')
