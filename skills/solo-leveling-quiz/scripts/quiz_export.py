@@ -220,7 +220,8 @@ def md_to_blocks(lines: list[str]) -> list[tuple[str, str]]:
 
 
 def safe_name(title: str) -> str:
-    return re.sub(r'[\\/:*?"<>|\s]+', '-', title).strip('-')[:60] or 'quiz'
+    name = re.sub(r'[\\/:*?"<>|\s]+', '-', title).strip('-.')[:60].strip('-.')
+    return name or 'quiz'
 
 
 def main(argv=None) -> int:
