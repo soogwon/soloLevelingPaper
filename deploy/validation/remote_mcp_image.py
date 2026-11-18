@@ -40,7 +40,10 @@ annotation_bundle = create_remote_mcp(settings, product_queries=Queries(),
 annotation_names = {tool.name for tool in asyncio.run(annotation_bundle.server.list_tools())}
 assert {'start_remote_learning', 'create_remote_annotation', 'list_remote_annotations',
         'update_remote_annotation', 'delete_remote_annotation',
-        'recover_remote_annotation_request', 'confirm_remote_annotation_request'} <= annotation_names
+        'recover_remote_annotation_request', 'confirm_remote_annotation_request',
+        'list_remote_evidence_annotations', 'show_remote_evidence_detail'} <= annotation_names
 assert not any('consent' in name for name in annotation_names)
 assert {'annotations:read', 'annotations:write'} <= set(annotation_bundle.server.settings.auth.required_scopes)
 print('REMOTE_ANNOTATION_IMAGE_OK; no database or provider calls')
+
+assert '원격 근거 상세' in str(asyncio.run(annotation_bundle.server.read_resource('ui://remote-evidence/detail.html')))

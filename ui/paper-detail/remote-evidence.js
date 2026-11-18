@@ -17,13 +17,13 @@ export function mountRemoteEvidence(app, doc) {
         || (r.after ?? null) !== (expected.after ?? null)
         || e?.context_id !== r.context_id || e?.evidence_id !== r.evidence_id
         || !uuid(e?.chunk_id) || !uuid(e?.parse_revision_id)
-        || !uuid(e.version_id) || !uuid(e.publication_id) || !uuid(e.embedding_set_id)
+        || (typeof e.version_id !== 'string' || !e.version_id.trim() || e.version_id.length > 512) || !uuid(e.publication_id) || !uuid(e.embedding_set_id)
         || !/^[a-f0-9]{64}$/.test(e.original_text_sha256 ?? '')
         || !Number.isSafeInteger(e.pdf_page) || e.pdf_page < 1
-        || typeof e.quote_original !== 'string' || typeof e.quote_ko !== 'string'
+        || typeof e.quote_original !== 'string' || (e.quote_ko !== null && typeof e.quote_ko !== 'string')
         || typeof e.page_notice !== 'string' || !Array.isArray(p?.items) || p.items.length > 20
         || !(p.next_cursor === null || uuid(p.next_cursor))
-        || !p.items.every(a => uuid(a.annotation_id) && a.context_id === r.context_id
+        || !p.items.every(a => a && uuid(a.annotation_id) && a.context_id === r.context_id
           && typeof a.body === 'string' && ['note','highlight'].includes(a.kind)
           && Number.isSafeInteger(a.revision) && a.revision > 0
           && Array.isArray(a.segments) && a.segments.every(s => s && typeof s.quote_snapshot === 'string' && ['original','translation'].includes(s.target)) && a.segments.some(s => s.chunk_id === e.chunk_id
@@ -38,7 +38,7 @@ export function mountRemoteEvidence(app, doc) {
     }
     scope = {context_id:r.context_id, evidence_id:r.evidence_id, binding:r.binding};
     items = [...previous, ...p.items]; cursor = p.next_cursor; busy = false;
-    el('evidence').textContent = `원문\n${e.quote_original}\n\n번역\n${e.quote_ko}\n\nPDF 페이지: ${e.pdf_page}\n인쇄 페이지: ${e.printed_page_label ?? '없음'}\n판본: ${e.version_id}\n파싱: ${e.parse_revision_id}\n번역 리비전: ${e.translation_revision_id}\n게시: ${e.publication_id}\n${e.page_notice}`;
+    el('evidence').textContent = `원문\n${e.quote_original}\n\n번역\n${e.quote_ko ?? '저장된 번역 인용이 없습니다.'}\n\nPDF 페이지: ${e.pdf_page}\n인쇄 페이지: ${e.printed_page_label ?? '없음'}\n판본: ${e.version_id}\n파싱: ${e.parse_revision_id}\n번역 리비전: ${e.translation_revision_id}\n게시: ${e.publication_id}\n${e.page_notice}`;
     el('records').textContent = items.length ? items.map(a => `${a.kind} · revision ${a.revision}\n${a.body}\n` + a.segments.map(s => `${s.target === 'translation' ? '번역' : '원문'}: ${s.quote_snapshot}`).join('\n')).join('\n\n') : '이 근거에 연결된 기록이 없습니다.';
     el('status').textContent = '같은 고정 청크에 연결된 기록입니다. 인용문과 정확히 겹치는 구간만의 목록은 아닙니다.';
     el('more').disabled = cursor === null; el('refresh').disabled = false;

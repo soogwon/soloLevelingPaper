@@ -39,3 +39,16 @@ test('연결 변경과 중복 페이지는 이전 본문까지 지운다',async(
     assert.equal(s.doc.getElementById('records').textContent,'');assert(s.doc.getElementById('more').disabled);
   }
 });
+test('문자열 판본과 번역 인용 없음도 표시한다',()=>{
+  const s=setup(),r=reply([],null);r.structuredContent.result.evidence.version_id='v1';r.structuredContent.result.evidence.quote_ko=null;
+  s.app.ontoolinput({arguments:{context_id:ctx,evidence_id:eid}});s.app.ontoolresult(r);
+  assert.match(s.doc.getElementById('evidence').textContent,/판본: v1/);
+  assert.match(s.doc.getElementById('evidence').textContent,/저장된 번역 인용이 없습니다/);
+});
+test('null 기록과 잘못된 페이지 응답은 본문을 지운다',()=>{
+  for(const mutate of [r=>r.annotation_page.items=[null],r=>r.evidence.pdf_page=0]){
+    const s=setup(),r=reply();mutate(r.structuredContent.result);
+    s.app.ontoolinput({arguments:{context_id:ctx,evidence_id:eid}});s.app.ontoolresult(r);
+    assert.equal(s.doc.getElementById('evidence').textContent,'');
+  }
+});
