@@ -74,3 +74,11 @@ def grant_question_execution_role(conn, schema, role):
         conn.execute(sql.SQL('DROP TRIGGER IF EXISTS {} ON {}.{}').format(sql.Identifier(trigger),sql.Identifier(schema),sql.Identifier(table)))
         conn.execute(sql.SQL('CREATE TRIGGER {} BEFORE UPDATE ON {}.{} FOR EACH ROW EXECUTE FUNCTION {}.server_question_lock_guard({})').format(
             sql.Identifier(trigger),sql.Identifier(schema),sql.Identifier(table),sql.Identifier(schema),sql.Literal(role)))
+
+
+def grant_question_token_count_role(conn, schema, role):
+    """기존 질문 실행 역할에 별도 승인한 입력 계수 원장 권한만 추가한다."""
+    from psycopg import sql
+    target = sql.SQL('{}.{}').format(sql.Identifier(schema),sql.Identifier('server_question_token_counts'))
+    conn.execute(sql.SQL('GRANT SELECT, INSERT ON {} TO {}').format(target,sql.Identifier(role)))
+    conn.execute(sql.SQL('GRANT UPDATE(status,input_tokens) ON {} TO {}').format(target,sql.Identifier(role)))

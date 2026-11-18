@@ -73,7 +73,9 @@ class Pool:
     def close(self):self.closed=True
     @contextmanager
     def connection(self):
-        def execute(query):
+        def execute(query,params=None):
+            if 'has_table_privilege' in query:
+                return NS(fetchone=lambda:dict(ready=self.failure!='count_permissions'))
             if 'pg_roles' in query:
                 return NS(fetchone=lambda:dict(rolname='question',rolsuper=self.failure=='privilege',rolcreatedb=False,rolcreaterole=False,rolbypassrls=False,rolinherit=False))
             return NS(fetchone=lambda:dict(database='wrong' if self.failure=='identity' else 'verification',schema='isolated'))
@@ -124,3 +126,47 @@ def test_evidence_ids_repeat_only_within_same_execution():
     ids=[first() for _ in range(3)]
     assert ids==[second() for _ in range(3)]
     assert len(set(ids))==3 and not set(ids).intersection(other() for _ in range(3))
+
+
+def general_raw_config():
+    from solo_leveling.workers.question_contract import QuestionContract
+    from solo_leveling.workers.question_token_counter import REVISION
+    raw = raw_config(); raw.pop('requests'); raw['schema_version'] = 2
+    c = QuestionContract('synthetic','approved','approved-window',REVISION,'synthetic-price',
+                         4000,1024,50000,1,2,6048,60480,604800)
+    raw.update(contract=asdict(c), counting={'timeout_seconds':10}, provider_profile_id=c.profile)
+    return raw
+
+
+@pytest.mark.parametrize('change', ['profile','revision','timeout','unknown','missing','output'])
+def test_general_config_rejects_mismatched_contract(tmp_path, change):
+    raw=general_raw_config()
+    if change=='profile':raw['provider_profile_id']='other'
+    if change=='revision':raw['contract']['estimator_revision']='unreviewed'
+    if change=='timeout':raw['counting']['timeout_seconds']=31
+    if change=='unknown':raw['counting']['endpoint']='https://other.example'
+    if change=='missing':raw.pop('contract')
+    if change=='output':raw['generation']['max_output_tokens']=512
+    with pytest.raises(Exception):plan(tmp_path,raw)
+
+
+def test_general_bootstrap_never_counts_at_startup(tmp_path):
+    p=plan(tmp_path,general_raw_config()); pool=Pool(); count=Mock(); post=Mock()
+    with pytest.raises(ValueError):
+        with bootstrap.build(p,env(),pool_factory=lambda *_:pool,check=lambda _:None):pass
+    source=env(); source['QUESTION_WORKER_TOKEN_COUNT_ENABLED']='true'
+    with bootstrap.build(p,source,pool_factory=lambda *_:pool,check=lambda _:None,
+        embedding_factory=lambda _:Mock(),post=post,token_count_post=count) as runner:
+        assert runner.store._question_policy_version=='approved'
+    count.assert_not_called();post.assert_not_called();assert pool.closed
+
+
+def test_general_missing_count_permissions_fails_before_consuming(tmp_path):
+    p=plan(tmp_path,general_raw_config()); pool=Pool('count_permissions'); count=Mock(); post=Mock(); embedding=Mock()
+    source=env();source['QUESTION_WORKER_TOKEN_COUNT_ENABLED']='true'
+    with pytest.raises(ValueError):
+        with bootstrap.build(p,source,pool_factory=lambda *_:pool,check=lambda _:None,
+            embedding_factory=embedding,post=post,token_count_post=count):
+            pytest.fail('계수 권한 없는 실행 금지')
+    assert pool.closed
+    embedding.assert_not_called();count.assert_not_called();post.assert_not_called()
