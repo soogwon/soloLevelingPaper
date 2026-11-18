@@ -18,3 +18,17 @@
 취소는 아직 제공하지 않는다. 요청 키 원장과 상태/실행 세대 충돌 검사를 갖춘 별도 변경이 필요하다. 카드·웹 상태 비교와 실제 worker 재시작 검증도 남았다. Refs #595이며 종료하지 않는다.
 
 staging 미적용. 기존 MCP 읽기 역할에 server_processing_jobs SELECT가 추가로 필요하고, 조회에서 사용하는 기존 papers/publications/job_authorizations/upload_intents SELECT도 확인해야 한다. 실제 권한 변경과 배포는 별도 승인 후 진행한다. 이번 변경은 migration·AI 호출·R2/PDF 전송이 없다.
+
+## 2차: 취소 저장 계약
+
+`PostgresProcessingCancellationStore.cancel(owner, job_id, request_key, expected_revision)`는 인증 계층에서 결정한 owner만 받는 내부 저장 포트다. 아직 MCP/웹에 노출하지 않는다.
+
+- migration 0047의 job revision은 상태·attempt·lease token 변경에 증가한다. heartbeat만으로는 증가하지 않는다. 조회 응답에 revision을 포함한다.
+- UUID 요청 키는 owner 범위에서 직렬화한다. 같은 키·job·expected_revision 재전송은 기존 applied_revision과 현재 상태를 반환한다. 같은 키의 다른 입력은 충돌이다.
+- 논문 삭제 상태를 확인하고 논문/작업 행 잠금을 얻은 뒤 revision과 queued/running을 검사한다. 게시된 작업·종료 상태·이전 실행 세대의 취소는 거부한다.
+- 취소 상태 변경과 요청 원장은 하나의 트랜잭션이다. 원장 저장 실패 시 모두 롤백한다. worker의 늦은 성공·실패·게시가 취소를 덮지 못한다.
+- 이미 시작된 외부 HTTP 호출을 물리적으로 중지하거나 사용량을 반환하지 않는다. 비용 확정/반환은 기존 사용량 원장의 별도 절차다. 기존 게시본도 삭제하지 않는다.
+
+로컬 회귀 범위: 동시 같은 키, 재접속 재조회, 키 재사용 충돌, worker lease 회수, heartbeat, 늦은 성공/실패, owner/삭제/종료 거부, 게시와 취소 경쟁, 원장 실패 롤백. 기존 제한 worker·웹·백업/비슈퍼유저 복구도 검사한다.
+
+실제 적용 전 남은 것: 전용 취소 DB 역할과 변경 열 제한/행 잠금 보호, 취소 전용 OAuth scope, 기능 flag, MCP/웹 카드 명시적 확인 연결. 기존 조회 역할에 쓰기 권한을 자동 부여하지 않는다. migration 0047·배포도 아직 실제 staging에 적용하지 않는다.
