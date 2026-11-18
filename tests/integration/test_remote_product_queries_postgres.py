@@ -45,12 +45,15 @@ def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool):
     with TestClient(create_app(remote_mcp_settings=settings,remote_mcp_verifier=Verifier(),
                               remote_product_queries=queries),base_url=SETTINGS.resource_url[:-4]) as client:
         names={v['name'] for v in call(client,'tools/list').json()['result']['tools']}
-        assert names=={'whoami','probe_card','probe_delay','list_remote_papers','open_remote_paper','get_remote_question','get_remote_evidence'}
+        assert names=={'whoami','probe_card','probe_delay','list_remote_papers','open_remote_paper','get_remote_question','get_remote_evidence','get_remote_paper_detail'}
         listed=result(client,'list_remote_papers')
         assert listed['status']=='ok' and listed['papers'][0]['paper_id']==first.paper
         args={'paper_id':first.paper,'version_id':'v1','context_key':str(uuid4())}
         pinned=result(client,'open_remote_paper',args)
         assert pinned['publication_id']==first.publication
+        detail_args={'context_id':pinned['context_id']}
+        assert result(client,'get_remote_paper_detail',detail_args)['result']['publication_id']==first.publication
+        assert result(client,'get_remote_paper_detail',detail_args,token='account-b')=={'status':'not_found'}
         remote.publish(100,base=first)
         assert result(client,'open_remote_paper',args)==pinned
         assert result(client,'open_remote_paper',args,token='account-b')=={'status':'not_found'}
@@ -117,7 +120,7 @@ def test_limited_database_role_can_pin_and_cannot_modify_other_data(db,stores,po
     remote=PgvectorContractStore(db,stores,pool);first=remote.publish()
     role='mcp_read_'+uuid4().hex[:12]
     tables=('server_remote_identities','server_papers','server_processing_versions',
-        'server_processing_publications','server_embedding_sets','server_execution_contexts',
+        'server_processing_publications','server_embedding_sets','server_execution_contexts','server_parse_revisions',
         'server_remote_executions','server_provider_attempts')
     with pool.connection() as conn:
         schema=conn.execute('SELECT current_schema() AS s').fetchone()['s']
@@ -137,6 +140,8 @@ def test_limited_database_role_can_pin_and_cannot_modify_other_data(db,stores,po
         pinned=queries.contexts.pin(remote.owner,str(uuid4()),first.paper,'v1')
         assert pinned.publication_id==first.publication
         assert queries.contexts.resolve(remote.owner,pinned.context_id)==pinned
+        queries.owner=lambda: remote.owner
+        assert queries.detail(pinned.context_id)['result']['publication_id']==first.publication
         for statement in ('SELECT * FROM web_sessions','SELECT * FROM server_device_credentials',
             'DELETE FROM server_execution_contexts','UPDATE server_papers SET paper_id=paper_id',
             "UPDATE server_dispatch_controls SET dispatch_enabled=true"):
@@ -167,3 +172,48 @@ def test_spike_scope_alone_cannot_read_product_data(pool):
         metadata=client.get('/.well-known/oauth-protected-resource/mcp').json()
         assert 'papers:read' in metadata['scopes_supported']
     queries.owners.resolve_owner.assert_not_called()
+
+
+def test_whole_paper_detail_keeps_publication_and_pages_sections(db, stores, pool, monkeypatch):
+    import json
+    remote = PgvectorContractStore(db, stores, pool)
+    from tests.fixtures import pgvector_retrieval_contract as fixture
+    original_ready = fixture.mark_ready
+    sections = [dict(section_id=f's{i}', parse_revision_id=None,
+                     title=f'합성 절 {i}', ordinal=i, level=1, start_pdf_page=1, end_pdf_page=1)
+                for i in range(21)]
+    def with_sections(db, parse, translation, embedding):
+        saved = [dict(s, parse_revision_id=parse) for s in sections]
+        db('UPDATE server_parse_revisions SET document_metadata=%s::jsonb WHERE parse_revision_id=%s',
+           (json.dumps({'sections': list(reversed(saved))}), parse))
+        original_ready(db, parse, translation, embedding)
+    monkeypatch.setattr(fixture, 'mark_ready', with_sections)
+    first = remote.publish()
+    queries = RemoteProductQueries(pool)
+    queries.owner = lambda: remote.owner
+    pinned = queries.contexts.pin(remote.owner, str(uuid4()), first.paper, 'v1')
+    before = queries.detail(pinned.context_id)
+    assert before['status'] == 'ok'
+    detail = before['result']
+    assert detail['publication_id'] == first.publication
+    assert len(detail['section_catalog']) == 20
+    assert detail['section_catalog'][0]['section_id'] == 's0'
+    assert detail['next_section_offset'] == 20
+    last = queries.detail(pinned.context_id, 20)['result']
+    assert [s['section_id'] for s in last['section_catalog']] == ['s20']
+    assert last['next_section_offset'] is None
+    assert detail['summary'] is None and detail['keywords'] == []
+    assert detail['annotation_lookup']['arguments']['context_id'] == pinned.context_id
+    remote.publish(100, base=first)
+    assert queries.detail(pinned.context_id) == before
+    queries.owner = lambda: 'other-owner'
+    assert queries.detail(pinned.context_id) == {'status': 'not_found'}
+    queries.owner = lambda: remote.owner
+    monkeypatch.setattr(fixture, 'mark_ready', original_ready)
+    empty_paper = remote.publish(200)
+    empty = queries.detail(empty_paper.context)['result']
+    assert empty['section_catalog'] == []
+    assert 'section_catalog_not_available' in empty['limitations']
+    db('UPDATE server_papers SET deleted_at=clock_timestamp() WHERE paper_id=%s', (first.paper,))
+    assert queries.detail(pinned.context_id) == {'status': 'not_found'}
+    assert not db('SELECT attempt_id FROM server_provider_attempts')

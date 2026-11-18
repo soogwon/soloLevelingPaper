@@ -95,3 +95,13 @@ macOS Claude Desktop 5.11492.5의 일반 합성 대화에서도 텍스트 인용
 실제 HTML 실패를 확실하게 주입할 수 있는 격리 호스트/테스트 MCP에서의 사용자
 표시 검증, Windows·다기기·두 계정 종단 검증 및 논문 전체 상세 계약은 남아 있다.
 추가 OpenAI/번역/임베딩 호출·PDF 전송·staging 권한/데이터 변경은 없었다.
+
+## #590 논문 전체 상세 조회 연결 (2026-11-18)
+
+- `get_remote_paper_detail(context_id, section_offset=0)`를 추가했다. `papers:read` 인증과 owner를 확인하고 기존 context의 paper/version/publication/parse/translation/embedding set을 유지한다.
+- `server_parse_revisions.document_metadata.sections`의 저장 목차를 순서대로 20개씩 반환한다. 이후 페이지는 같은 context와 `next_section_offset`으로 조회한다. 다른 parse revision·잘못된 메타데이터는 `unavailable`로 거부한다.
+- 원격 요약·키워드·중요 문장은 아직 publication에 연결된 저장 계약이 없다. `summary=null`, 빈 목록과 제한 코드를 반환한다. 로컬 동기화 `server_summaries`를 임의 연결하지 않고, AI 생성·재검색도 하지 않는다. 요약 저장 연결은 #581 계약 이후 구현한다.
+- 메모는 `annotation_lookup`의 `list_remote_annotations` 안내로 연결한다. `annotations:read`는 별도로 검사된다. 상세 응답에 메모 첫 페이지를 합치거나 논문 전체 HTML 카드를 제공하는 것은 아직 미완료다.
+- 로컬 PostgreSQL 회귀: 새 publication 이후 기존 context 유지, 목차 21건의 20+1 페이징, 빈 목차, 타 계정·삭제 차단, 제한 DB 역할 조회, 실제 MCP 인증 경계 검증. 기본 단위 검증에 잘못된 입력·저장 metadata·오류 은닉을 포함한다.
+- staging 적용 전 MCP 전용 역할에 `server_parse_revisions` SELECT만 추가하는 승인이 필요하다. 현재 권한·배포는 변경하지 않았다. 실제 Claude 재조회·다기기 검증과 #609의 호스트 카드 실패 검증은 별도다.
+- PR 작성 전 재검토에서 부모 섹션 미존재·순환·페이지 포함 관계 검사를 보완했다. 최종 로컬 PostgreSQL/MCP 회귀 44개, `ruff check src scripts`, `git diff --check` 통과. 실제 staging 권한 변경과 AI 호출은 하지 않았다.

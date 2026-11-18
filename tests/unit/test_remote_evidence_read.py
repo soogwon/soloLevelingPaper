@@ -30,6 +30,8 @@ def test_actual_mcp_tool_is_readonly_structured():
 
     async def check():
         tools = {tool.name: tool for tool in await server.list_tools()}
+        assert tools['get_remote_paper_detail'].annotations.readOnlyHint
+        assert tools['get_remote_paper_detail'].outputSchema is not None
         assert tools['get_remote_evidence'].annotations.readOnlyHint
         assert tools['get_remote_evidence'].outputSchema is not None
         result = await server.call_tool('get_remote_evidence', {'context_id': str(uuid4()), 'evidence_id': str(uuid4())})
