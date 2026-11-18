@@ -301,3 +301,75 @@ def test_evidence_integrity_failure_is_unavailable_not_bad_input(monkeypatch):
     result = server.tools['show_remote_evidence_detail'](CONTEXT, CONTEXT)
     assert result['status'] == 'unavailable' and '민감한' not in str(result)
     service.store.list_annotations.assert_not_called()
+
+
+@pytest.mark.parametrize('failure', [FileNotFoundError, PermissionError])
+def test_evidence_text_survives_card_resource_failure(monkeypatch, failure):
+    """HTML을 읽지 못해도 텍스트로 근거·기록·다음 페이지를 조회한다."""
+    import asyncio
+    import json
+    from dataclasses import dataclass
+    from pathlib import Path
+    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp.exceptions import ResourceError
+    from solo_leveling.interfaces.mcp.remote_evidence_cards import CARD_URI
+
+    @dataclass
+    class Record:
+        annotation_id: str
+        body: str
+        revision: int = 1
+
+    current = token(['annotations:read'])
+    monkeypatch.setattr(module, 'get_access_token', lambda: current)
+    service = Mock(service_id='remote-paper')
+    service.store.list_annotations.side_effect = [
+        {'items': [Record(CONTEXT, '합성 첫 메모')], 'next_cursor': CONTEXT},
+        {'items': [Record(CONTEXT, '합성 첫 메모')], 'next_cursor': CONTEXT},
+        {'items': [Record('00000000-0000-0000-0000-000000000591', '합성 마지막 메모')], 'next_cursor': None},
+    ]
+    evidence = {'context_id': CONTEXT, 'evidence_id': CONTEXT,
+                'quote_original': 'Synthetic evidence.', 'quote_ko': '합성 근거.',
+                'version_id': 'fixed-version', 'publication_id': 'fixed-publication',
+                'pdf_page': 1, 'page_notice': '고정 판본 기준'}
+    queries = NS(owner=lambda: 'alice', evidences=Mock())
+    queries.evidences.get.return_value = evidence
+    server = FastMCP('카드 실패 합성 검증')
+    module.register_annotation_tools(server, queries, service)
+    original_read = Path.read_text
+
+    def fail_card(path, *args, **kwargs):
+        if path.name == 'remote-evidence-detail.html':
+            raise failure('합성 리소스 실패')
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'read_text', fail_card)
+
+    async def check():
+        args = {'context_id': CONTEXT, 'evidence_id': CONTEXT}
+        text, structured = await server.call_tool('show_remote_evidence_detail', args)
+        with pytest.raises(ResourceError, match='합성 리소스 실패'):
+            await server.read_resource(CARD_URI)
+        again_text, again_result = await server.call_tool('show_remote_evidence_detail', args)
+        assert json.loads(again_text[0].text) == again_result == structured
+        fallback = json.loads(text[0].text)
+        assert fallback == structured
+        assert fallback['result']['evidence'] == evidence
+        assert fallback['result']['annotation_page']['items'][0] == {
+            'annotation_id': CONTEXT, 'body': '합성 첫 메모', 'revision': 1}
+        cursor = fallback['result']['annotation_page']['next_cursor']
+        following, result = await server.call_tool('list_remote_evidence_annotations', {**args, 'after': cursor})
+        assert json.loads(following[0].text) == result
+        assert result['result']['annotation_page']['items'][0]['body'] == '합성 마지막 메모'
+        assert result['result']['annotation_page']['next_cursor'] is None
+        assert service.store.list_annotations.call_args.kwargs['after'] == cursor
+        service.create.assert_not_called()
+        service.update.assert_not_called()
+        service.delete.assert_not_called()
+        reads_before_denial = service.store.list_annotations.call_count
+        current.scopes = []
+        denied, result = await server.call_tool('show_remote_evidence_detail', args)
+        assert json.loads(denied[0].text) == result == {'status': 'not_authorized'}
+        assert service.store.list_annotations.call_count == reads_before_denial
+
+    asyncio.run(check())
