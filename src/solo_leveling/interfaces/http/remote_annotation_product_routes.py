@@ -74,6 +74,12 @@ def create_annotation_product_router(require_principal, service):
         return call(principal, response, lambda owner: service.learning.list_for_paper(
             owner, str(paper_id), str(version_id), after=str(after) if after else None, limit=limit))
 
+    @router.get('/dashboard')
+    def dashboard(principal: Principal, response: Response, after: UUID | None = None,
+                  limit: Annotated[int, Query(ge=1, le=50)] = 20):
+        return call(principal, response, lambda owner: service.learning.dashboard(
+            owner, after=str(after) if after else None, limit=limit))
+
     @router.post('/{context}/start')
     def start(context: UUID, principal: Principal, response: Response):
         return call(principal, response, lambda owner: service.learning.start(owner, str(context)))

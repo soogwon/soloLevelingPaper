@@ -74,3 +74,20 @@ def test_progress_requires_session_csrf_strict_revision_and_maps_conflict():
         assert result.status_code == 409 and 'private-detail' not in result.text
         verifier.verify.return_value = AuthenticatedPrincipal('alice', 'device', 'device')
         assert client.post(path, json=body, headers={'Authorization': 'Bearer synthetic'}).status_code == 403
+
+
+def test_dashboard_is_read_only_session_scoped_and_bounded():
+    service = Mock(); verifier = Mock()
+    verifier.verify.return_value = AuthenticatedPrincipal('alice', 'web_session')
+    service.learning.dashboard.return_value = {'items': [], 'next_cursor': None}
+    app = FastAPI()
+    app.include_router(create_annotation_product_router(create_auth_dependency(verifier, verifier), service))
+    with TestClient(app) as client:
+        path = '/v1/remote-annotation-products/contexts/dashboard'
+        assert client.get(path).status_code == 401
+        client.cookies.set(SESSION_COOKIE, 'session')
+        result = client.get(path + '?owner=other')
+        assert result.status_code == 200 and result.headers['cache-control'] == 'no-store'
+        service.learning.dashboard.assert_called_once_with('alice', after=None, limit=20)
+        assert client.get(path + '?limit=51').status_code == 422
+        service.learning.start.assert_not_called()
