@@ -34,6 +34,7 @@ from uuid import uuid4
 
 import pdfplumber
 from solo_leveling.parsing_diagnostics import RotationMetrics, emit_rotation_metrics
+from solo_leveling.infrastructure.parsing.reading_order import reading_regions
 
 from solo_leveling.infrastructure.parsing.sections import (
     LineStyle, REPEATED_MARGIN_RATIO, detect_headings, find_body_size,
@@ -134,7 +135,7 @@ def _is_upright(obj: dict) -> bool:
     return obj.get("upright", True)
 
 
-def _line_styles(page) -> list[LineStyle]:
+def _line_styles(page, *, page_height=None) -> list[LineStyle]:
     """페이지 각 줄의 글자 크기·굵기를 읽는다. 텍스트는 extract_text와 같은 줄 나누기를 쓴다."""
     styles = []
     for line in page.extract_text_lines(
@@ -144,8 +145,9 @@ def _line_styles(page) -> list[LineStyle]:
         if not chars:
             continue
         top = line.get("top")
-        top_ratio = (float(top) / float(page.height)
-                     if isinstance(top, (int, float)) and page.height else None)
+        height = page.height if page_height is None else page_height
+        top_ratio = (float(top) / float(height)
+                     if isinstance(top, (int, float)) and height else None)
         styles.append(LineStyle(
             text=line["text"],
             size=max(c["size"] for c in chars),
@@ -204,13 +206,25 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
             upright_only = page.filter(_is_upright)
             text = upright_only.extract_text(
                 x_tolerance=TEXT_X_TOLERANCE, y_tolerance=TEXT_Y_TOLERANCE) or ""
-            text = _remove_repeated_diagram_labels(text)
             text, page_number = split_page_number(upright_only, text)
+            # 확정된 쪽 번호만 분리한 뒤 읽기 순서를 판정한다. 중앙 쪽 번호가
+            # 본문 여백을 가로지른다는 이유로 정상 2단 페이지를 놓치지 않는다.
+            body_page = upright_only
+            if page_number is not None:
+                body_page = upright_only.crop((0, 0, page.width, page.height * FOOTER_ZONE_RATIO))
+            regions = reading_regions(body_page, x_tolerance=TEXT_X_TOLERANCE,
+                                      y_tolerance=TEXT_Y_TOLERANCE)
+            if len(regions) > 1:
+                texts = [region.extract_text(x_tolerance=TEXT_X_TOLERANCE,
+                                             y_tolerance=TEXT_Y_TOLERANCE) or '' for region in regions]
+                text = '\n'.join(part for part in texts if part.strip())
+            text = _remove_repeated_diagram_labels(text)
             pages.append(ExtractedPage(pdf_page=i, text=text, printed_page_label=None,
                                        page_number_candidate=page_number, rotation_metrics=metrics))
             emit_rotation_metrics(parse_id, i, metrics)
             try:
-                styles = _line_styles(upright_only)
+                styles = [style for region in regions
+                          for style in _line_styles(region, page_height=page.height)]
             except Exception:
                 styles = []
             page_styles.append(styles)
