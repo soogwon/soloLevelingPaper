@@ -113,7 +113,7 @@ migration `0042_question_token_counts.sql`은 원문 없이 owner/execution/leas
 재시작 후 reserved/unknown 계수는 자동 재전송하지 않는다. 실제 생성이 없었던 계수 실패는 유료 생성 사용량으로 정산하지 않는다.
 
 `grant_question_token_count_role`은 기존 질문 실행 역할에 새 원장의 SELECT/INSERT와 UPDATE(status,input_tokens)만 추가한다.
-기존 GRANT 함수는 계수 권한을 자동 부여하지 않는다. DELETE·profile/hash/실행 식별자 수정은 허용하지 않는다.
+기존 GRANT 함수는 계수 권한을 자동 부여하지 않는다. v2 시작 시 계수 SELECT/INSERT/정산 UPDATE 권한이 있고 DELETE·profile/hash UPDATE 권한이 없는지 확인해, 권한이 없거나 과하면 claim 전에 중단한다. DELETE·profile/hash/실행 식별자 수정은 허용하지 않는다.
 허가된 기존 논문/실행 물리 삭제 시 계수 메타데이터도 FK cascade로 제거한다. 이번 작업에서는 실제 삭제를 실행하지 않는다.
 
 ### 다음 적용 승인 범위

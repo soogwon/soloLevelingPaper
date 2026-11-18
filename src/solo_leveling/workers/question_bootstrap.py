@@ -111,6 +111,17 @@ def build(plan, source, *, pool_factory=_pool, check=check_files, embedding_fact
             require(identity=={'database':plan.raw['database_name'],'schema':plan.raw['schema_name']})
             role=conn.execute('SELECT rolname,rolsuper,rolcreatedb,rolcreaterole,rolbypassrls,rolinherit FROM pg_roles WHERE rolname=current_user').fetchone()
             require(role and role['rolname']==plan.raw['database_role'] and not any(role[k] for k in ('rolsuper','rolcreatedb','rolcreaterole','rolbypassrls','rolinherit')))
+            if plan.contract is not None:
+                table = plan.raw['schema_name'] + '.server_question_token_counts'
+                permissions = conn.execute('''SELECT
+                    has_table_privilege(current_user,%s,'SELECT') AND has_table_privilege(current_user,%s,'INSERT')
+                    AND has_column_privilege(current_user,%s,'status','UPDATE')
+                    AND has_column_privilege(current_user,%s,'input_tokens','UPDATE')
+                    AND NOT has_table_privilege(current_user,%s,'DELETE')
+                    AND NOT has_column_privilege(current_user,%s,'profile','UPDATE')
+                    AND NOT has_column_privilege(current_user,%s,'payload_sha256','UPDATE') AS ready''',
+                    (table,)*7).fetchone()
+                require(permissions and permissions['ready'] is True)
         generation=OpenAIGenerationSettings(key,**plan.raw['generation'],allow_external_api=True)
         embedding = embedding_factory(plan)
         def compose(counter):
