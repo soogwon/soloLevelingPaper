@@ -114,3 +114,26 @@ def test_blank_optional_text_is_treated_as_absent(tmp_path):
     source.write_text(json.dumps(book, ensure_ascii=False), encoding='utf-8')
     assert module.main([str(source), '--out', str(output)]) == 0
     assert output.exists()
+
+
+def test_missing_pdf_library_is_not_reported_as_broken_file(tmp_path, monkeypatch, capsys):
+    module = load_script('solo-leveling-guide', 'pdf_text')
+    source, output = tmp_path / 'paper.pdf', tmp_path / 'pages'
+    source.write_bytes(b'%PDF-test')
+    monkeypatch.setattr(module, 'pdf_backend', lambda: None)
+    monkeypatch.setattr(module, 'extract_pages', lambda _: pytest.fail('도구가 없으면 추출을 시도하지 않아야 합니다.'))
+    assert module.main([str(source), '--out', str(output)]) == 3
+    err = capsys.readouterr().err
+    assert 'pip install pdfplumber' in err and '손상' not in err
+    assert not output.exists()
+
+
+def test_pypdf_fallback_is_recorded(tmp_path, monkeypatch, capsys):
+    module = load_script('solo-leveling-guide', 'pdf_text')
+    source, output = tmp_path / 'paper.pdf', tmp_path / 'pages'
+    source.write_bytes(b'%PDF-test')
+    monkeypatch.setattr(module, 'pdf_backend', lambda: 'pypdf')
+    monkeypatch.setattr(module, 'extract_pages', lambda _: (['본문'], None))
+    assert module.main([str(source), '--out', str(output)]) == 0
+    assert json.loads((output / 'paper.json').read_text(encoding='utf-8'))['extractor'] == 'pypdf'
+    assert '추출 도구: pypdf' in capsys.readouterr().out
