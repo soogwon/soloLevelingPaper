@@ -78,7 +78,8 @@ def test_revocation_during_count_does_not_authorize_generation(db,stores,pool):
     gen.assert_not_called()
 
 
-def test_general_bootstrap_restricted_role_count_then_generate(db,stores,pool,tmp_path):
+@pytest.mark.parametrize("continuous", [False, True])
+def test_general_bootstrap_restricted_role_count_then_generate(db,stores,pool,tmp_path,continuous):
     from dataclasses import asdict
     import json
     import psycopg
@@ -108,8 +109,27 @@ def test_general_bootstrap_restricted_role_count_then_generate(db,stores,pool,tm
         with b.build(plan,dict(QUESTION_WORKER_EXECUTION_ENABLED='true',QUESTION_WORKER_TOKEN_COUNT_ENABLED='true',
             QUESTION_WORKER_DATABASE_URL=dsn,QUESTION_WORKER_OPENAI_API_KEY='synthetic'),check=lambda _:None,
             embedding_factory=lambda _:source.embedding,post=generation,token_count_post=http) as runner:
-            assert runner.run('alice',saved.execution_id)=='finished'
+            if continuous:
+                from threading import Event
+                from solo_leveling.workers.remote_question import run_question_queue
+                stop = Event()
+                class OneCompletedJob:
+                    def run_once(self):
+                        status = runner.run_once()
+                        assert status == 'finished'
+                        stop.set()
+                        return status
+                result = run_question_queue(OneCompletedJob(), stop, max_jobs=None)
+                assert result.status == 'stopped' and result.processed == 1
+            else:
+                assert runner.run('alice',saved.execution_id)=='finished'
             assert runner.run('alice',saved.execution_id)=='not_claimed'
+        # 새 pool과 runner로 다시 시작해도 완료 작업의 계수·생성을 반복하지 않는다.
+        with b.build(plan,dict(QUESTION_WORKER_EXECUTION_ENABLED='true',QUESTION_WORKER_TOKEN_COUNT_ENABLED='true',
+            QUESTION_WORKER_DATABASE_URL=dsn,QUESTION_WORKER_OPENAI_API_KEY='synthetic'),check=lambda _:None,
+            embedding_factory=lambda _:source.embedding,post=generation,token_count_post=http) as restarted:
+            assert restarted.run_once() is None
+            assert restarted.run('alice',saved.execution_id) == 'not_claimed'
         assert http.call_count==generation.call_count==1
         actual=generation.call_args.kwargs['json']
         assert http.call_args.kwargs['json']=={k:actual[k] for k in ('model','instructions','input','text')}
