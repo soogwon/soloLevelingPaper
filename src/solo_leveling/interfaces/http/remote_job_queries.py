@@ -6,7 +6,7 @@ _STATUSES = {'queued': 'queued', 'running': 'processing', 'succeeded': 'complete
              'failed': 'failed', 'cancelled': 'cancelled'}
 _SAFE_ERRORS = frozenset({'max_attempts_exhausted', 'lease_expired_not_retryable'})
 _SELECT = '''SELECT j.job_id,j.paper_id,j.server_version_id,j.job_kind,j.status,
-    j.attempt,j.error_code,j.created_at,j.updated_at,j.finished_at,p.title,u.file_name,
+    j.attempt,j.revision,j.error_code,j.created_at,j.updated_at,j.finished_at,p.title,u.file_name,
     pub.publication_id,pub.embedding_set_id
     FROM server_processing_jobs j
     JOIN server_papers p ON p.owner_user_id=j.owner_user_id AND p.paper_id=j.paper_id
@@ -28,7 +28,7 @@ def _view(row):
     result = {k: str(row[k]) if row[k] is not None else None for k in (
         'job_id', 'paper_id', 'server_version_id', 'job_kind', 'title', 'file_name',
         'publication_id', 'embedding_set_id')}
-    result.update(status=_STATUSES[row['status']], attempt=row['attempt'],
+    result.update(status=_STATUSES[row['status']], attempt=row['attempt'], revision=row['revision'],
                   error_code=(row['error_code'] if row['error_code'] in _SAFE_ERRORS
                               else 'processing_failed' if row['error_code'] else None),
                   cancellation_available=False,
