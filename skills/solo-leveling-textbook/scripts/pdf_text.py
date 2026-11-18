@@ -11,6 +11,7 @@
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
 import sys
@@ -86,6 +87,14 @@ def sha256_of(path: Path) -> str:
     return digest.hexdigest()
 
 
+def pdf_backend() -> str | None:
+    """쓸 수 있는 PDF 읽기 도구. pdfplumber를 먼저 쓰고, 없으면 pypdf를 쓴다."""
+    for name in ('pdfplumber', 'pypdf'):
+        if importlib.util.find_spec(name) is not None:
+            return name
+    return None
+
+
 def extract_pages(path: Path) -> tuple[list[str], str | None]:
     """페이지별 텍스트와, 첫 페이지 세로 글자(arXiv 도장)에서 찾은 arXiv 번호."""
     try:
@@ -143,6 +152,12 @@ def main(argv=None) -> int:
     if (args.out / 'paper.json').exists() or any(args.out.glob('page_*.txt')):
         print('기존 추출 결과가 있습니다. 다른 --out 폴더를 지정하세요.', file=sys.stderr)
         return 1
+    backend = pdf_backend()
+    if backend is None:
+        # 파일 문제가 아니라 실행 환경에 도구가 없는 경우다. 손상 파일로 안내하지 않는다.
+        print('PDF를 읽는 도구(pdfplumber 또는 pypdf)가 이 환경에 없습니다. '
+              '`pip install pdfplumber`로 설치한 뒤 같은 명령을 다시 실행하세요.', file=sys.stderr)
+        return 3
     try:
         pages, arxiv_id = extract_pages(args.pdf)
     except Exception as error:  # 손상·암호·PDF 아님. 내부 오류 대신 사용자에게 전할 문장을 낸다.
@@ -160,11 +175,14 @@ def main(argv=None) -> int:
         'page_count': len(pages),
         'chars_per_page': [len(t) for t in pages],
         'headings': headings(pages),
+        'extractor': backend,
     }
     (args.out / 'paper.json').write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding='utf-8')
     empty = [i + 1 for i, t in enumerate(pages) if len(t.strip()) < 50]
     print(f'쪽수: {len(pages)} · sha256: {info["sha256"][:16]}… · arXiv: {arxiv_id or "확인 안 됨"}')
     print(f'절 제목 후보 {len(info["headings"])}개 · 결과 폴더: {args.out}')
+    if backend != 'pdfplumber':
+        print('추출 도구: pypdf (pdfplumber가 없어 2단 읽기 순서 정리와 arXiv 도장 확인을 건너뜀)')
     if empty:
         print(f'글자가 거의 없는 쪽: {empty} (스캔본·그림 페이지일 수 있음)')
     return 0
