@@ -20,7 +20,7 @@ class Queries:
     pass
 bundle = create_remote_mcp(settings, product_queries=Queries())
 names = {tool.name for tool in asyncio.run(bundle.server.list_tools())}
-assert {'list_remote_papers', 'open_remote_paper', 'get_remote_question'} <= names
+assert {'list_remote_papers', 'open_remote_paper', 'get_remote_question', 'get_learning_path', 'get_prerequisites'} <= names
 assert 'submit_paper_question' not in names
 print('REMOTE_PRODUCT_IMAGE_OK; no database or provider calls')
 
@@ -49,3 +49,6 @@ print('REMOTE_ANNOTATION_IMAGE_OK; no database or provider calls')
 assert '원격 근거 상세' in str(asyncio.run(annotation_bundle.server.read_resource('ui://remote-evidence/detail.html')))
 
 assert '원격 논문 상세' in str(asyncio.run(annotation_bundle.server.read_resource('ui://remote-paper/detail.html')))
+
+from solo_leveling.knowledge import load_graph
+assert load_graph().revision_id

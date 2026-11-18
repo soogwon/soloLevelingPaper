@@ -145,6 +145,8 @@ def create_remote_mcp(
             raise ValueError("remote_product_queries_required")
         from solo_leveling.interfaces.mcp.remote_product import register_product_queries
         register_product_queries(server, product_queries)
+        from solo_leveling.interfaces.mcp.remote_learning_path import register_remote_learning_path
+        register_remote_learning_path(server, product_queries)
         if question_service is not None:
             from solo_leveling.interfaces.mcp.remote_questions import register_question_tools
             register_question_tools(server,product_queries,question_service)
