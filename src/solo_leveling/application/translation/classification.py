@@ -23,9 +23,43 @@ _YEAR = re.compile(r'(?:^|[\s,(])(?:18|19|20)\d{2}[a-z]?(?:[\s,).]|$)', re.I)
 _BIBLIOGRAPHIC_MARKER = re.compile(
     r'(?i)\b(?:vol\.?|volume|no\.?|number|pp?\.?|pages?|proceedings|conference|'
     r'journal|transactions|et\s+al\.)\b')
+_REFERENCE_SECTION = re.compile(
+    r'(?i)(?:^|[-_\s])(?:references?|bibliography|literature[-_\s]+cited)(?:$|[-_\s])')
+_REFERENCE_BOUNDARY = re.compile(
+    r'(?i)\b(?:appendix|supplement(?:ary)?(?:\s+material)?|acknowledg(?:e)?ments?)\b')
+_INLINE_AUTHOR = re.compile(
+    r"\b[A-Z][A-Za-z'’-]+(?:,\s*(?:[A-Z]\.){1,3}|\s+(?:and|&)\s+[A-Z][A-Za-z'’-]+)")
+_VENUE_MARKER = re.compile(
+    r'(?i)\b(?:arxiv|neurips|nips|iclr|icml|eccv|cvpr|iccv|acl|emnlp|naacl|aaai)\b')
 
 
-def classify_translation_source(text: str) -> TranslationStatus | None:
+def _reference_section_with_multiple_citations(text: str, section_id: str | None) -> bool:
+    """참고문헌 섹션의 복수 인용 묶음만 판정한다.
+
+    섹션 이름 하나만으로 본문을 건너뛰지 않는다. PDF의 2단 추출처럼 여러
+    참고문헌이 한 청크에 섞인 경우를 위해 연도와 서지 표식의 밀도를 함께 본다.
+    부록·보충자료 경계가 들어온 청크는 참고문헌 꼬리와 본문이 섞였을 수 있어
+    항상 번역기로 보낸다.
+    """
+    if not isinstance(section_id, str) or not _REFERENCE_SECTION.search(section_id.strip()):
+        return False
+    if _REFERENCE_BOUNDARY.search(text):
+        return False
+    years = len(_YEAR.findall(text))
+    numbered = len(re.findall(r'(?m)^\s*(?:\[\d{1,4}\]|\d{1,4}[.)])\s+', text))
+    identifiers = len(_IDENTIFIER.findall(text))
+    authors = len(_INLINE_AUTHOR.findall(text))
+    markers = len(_BIBLIOGRAPHIC_MARKER.findall(text))
+    venues = len(_VENUE_MARKER.findall(text))
+    # 최소 두 개의 연도와 두 개의 독립적인 서지 표식이 있어야 한다. 한 문장에
+    # 연도나 URL이 우연히 들어간 경우에는 참고문헌 섹션 안에서도 번역을 유지한다.
+    citation_signals = numbered + identifiers + authors + markers + venues
+    return years >= 2 and citation_signals >= 2
+
+
+def classify_translation_source(
+    text: str, *, section_id: str | None = None,
+) -> TranslationStatus | None:
     """번역을 건너뛸 확실한 원문만 분류하고, 일반 본문이면 ``None``을 반환한다."""
     if not isinstance(text, str) or not text.strip():
         raise ValueError('source text must be a nonempty string')
@@ -53,5 +87,7 @@ def classify_translation_source(text: str) -> TranslationStatus | None:
     # 번호·저자 표기·연도·서지 표지가 모두 있는 항목만 제외한다.
     # 인식하지 못한 서지 형식은 일반 본문처럼 번역하는 편을 택한다.
     if numbered and _AUTHOR.match(normalized[numbered.end():]) and year and marker:
+        return TranslationStatus.REFERENCE_CONTENT
+    if _reference_section_with_multiple_citations(normalized, section_id):
         return TranslationStatus.REFERENCE_CONTENT
     return None
