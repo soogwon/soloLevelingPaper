@@ -18,7 +18,7 @@ COPY src/solo_leveling/application/remote_replay.py src/solo_leveling/applicatio
 COPY src/solo_leveling/application/evidence_qa/remote_input.py src/solo_leveling/application/evidence_qa/remote_question_input.py ./src/solo_leveling/application/evidence_qa/
 COPY src/solo_leveling/application/evidence_qa/validators.py src/solo_leveling/application/evidence_qa/page_completion.py src/solo_leveling/application/evidence_qa/fragments.py ./src/solo_leveling/application/evidence_qa/
 COPY src/solo_leveling/interfaces/mcp/__init__.py src/solo_leveling/interfaces/mcp/remote_product.py src/solo_leveling/interfaces/mcp/remote_recovery.py src/solo_leveling/interfaces/mcp/remote_questions.py src/solo_leveling/interfaces/mcp/remote_annotations.py src/solo_leveling/interfaces/mcp/remote_annotation_cards.py src/solo_leveling/interfaces/mcp/remote_evidence_cards.py ./src/solo_leveling/interfaces/mcp/
-COPY src/solo_leveling/interfaces/mcp/remote_learning_path.py ./src/solo_leveling/interfaces/mcp/
+COPY src/solo_leveling/interfaces/mcp/remote_job_cancellation.py src/solo_leveling/interfaces/mcp/remote_learning_path.py ./src/solo_leveling/interfaces/mcp/
 COPY src/solo_leveling/application/evidence_qa/__init__.py src/solo_leveling/application/evidence_qa/remote_contract.py ./src/solo_leveling/application/evidence_qa/
 COPY src/solo_leveling/application/learning_path/__init__.py src/solo_leveling/application/learning_path/views.py ./src/solo_leveling/application/learning_path/
 COPY src/solo_leveling/infrastructure/__init__.py ./src/solo_leveling/infrastructure/
@@ -30,6 +30,7 @@ COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-recovery.html src
 COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-compose.html src/solo_leveling/interfaces/mcp/assets/remote-annotation-compose.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-evidence-detail.html src/solo_leveling/interfaces/mcp/assets/remote-evidence-detail.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-paper-detail.html src/solo_leveling/interfaces/mcp/assets/remote-paper-detail.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
+COPY src/solo_leveling/interfaces/mcp/assets/remote-job-cancellation.html src/solo_leveling/interfaces/mcp/assets/remote-job-cancellation.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 RUN pip install --no-cache-dir ".[server]"
 
 COPY migrations/server/*.sql ./migrations/server/
