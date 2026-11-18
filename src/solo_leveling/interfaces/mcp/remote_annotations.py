@@ -1,7 +1,12 @@
 """인증된 원격 메모 도구. 동의 부여 도구와 로컬 경로 인자는 노출하지 않는다."""
 from dataclasses import asdict, is_dataclass
 import time
+import hashlib
+import hmac
+from pathlib import Path
 from uuid import UUID
+
+from mcp.types import ToolAnnotations
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from solo_leveling.interfaces.http.remote_mcp_auth import RemoteIdentityAccessToken
@@ -48,6 +53,49 @@ def register_annotation_tools(server, queries, service):
             return {'status': 'invalid_argument'}
         except Exception:
             return {'status': 'unavailable', 'message': '기존 요청 키로 조회하세요. 자동 재제출하지 마세요.'}
+
+    def binding(owner, context_id):
+        # 인증 토큰은 반환하지 않으며 갱신·계정 변경 시 과거 카드의 확인을 차단한다.
+        token = get_access_token()
+        payload = f"annotation-card-v1:{service.service_id}:{owner}:{context_id}"
+        return hmac.new(token.token.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+    card_uri = "ui://remote-annotations/recovery.html"
+
+    @server.resource(card_uri, mime_type="text/html;profile=mcp-app")
+    def remote_annotation_recovery_card():
+        return Path(__file__).with_name('assets').joinpath('remote-annotation-recovery.html').read_text(encoding='utf-8')
+
+    @server.tool(meta={"ui": {"resourceUri": card_uri}},
+                 annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                             idempotentHint=True, openWorldHint=False))
+    def show_remote_annotation_recovery(context_id: str, request_key: str,
+                                        expected_binding: str | None = None) -> dict:
+        """기존 요청 키의 현재 결과를 카드와 텍스트로 조회한다. 신규 생성하지 않는다. 토큰 갱신 후에는 카드를 새로 열어야 한다."""
+        def operation(owner):
+            ctx = context(context_id)
+            current = binding(owner, ctx)
+            if expected_binding is not None and not hmac.compare_digest(current, expected_binding):
+                return {'connection_changed': True}
+            result = service.lookup(owner, ctx, request_key)
+            if result is None:
+                return None
+            return {'context_id': ctx, 'request_key': request_key, 'binding': current,
+                    'recovery': asdict(result)}
+        return call(False, operation)
+
+    @server.tool(meta={"ui": {"visibility": ["app"]}},
+                 annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                             idempotentHint=True, openWorldHint=False))
+    def confirm_remote_annotation_card(context_id: str, request_key: str, annotation_id: str,
+                                       revision: int, expected_binding: str) -> dict:
+        """사용자가 복구 카드의 현재 결과를 확인했을 때만 수신 확정한다. 새 기록이나 AI 호출은 만들지 않는다."""
+        def operation(owner):
+            ctx = context(context_id)
+            if not hmac.compare_digest(binding(owner, ctx), expected_binding):
+                return {'connection_changed': True}
+            return {'confirmed': service.confirm(owner, ctx, request_key, context(annotation_id), revision)}
+        return call(True, operation)
 
     def context(value):
         return str(UUID(value))

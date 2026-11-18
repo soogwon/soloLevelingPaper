@@ -25,6 +25,7 @@ COPY src/solo_leveling/infrastructure/storage/__init__.py src/solo_leveling/infr
 COPY src/solo_leveling/interfaces/__init__.py ./src/solo_leveling/interfaces/
 COPY src/solo_leveling/interfaces/http/*.py ./src/solo_leveling/interfaces/http/
 COPY src/solo_leveling/interfaces/cli/__init__.py src/solo_leveling/interfaces/cli/server_migrations.py src/solo_leveling/interfaces/cli/remote_deletion_cleanup.py src/solo_leveling/interfaces/cli/remote_upload_cleanup.py ./src/solo_leveling/interfaces/cli/
+COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-recovery.html src/solo_leveling/interfaces/mcp/assets/remote-annotation-recovery.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 RUN pip install --no-cache-dir ".[server]"
 
 COPY migrations/server/*.sql ./migrations/server/
