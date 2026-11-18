@@ -33,3 +33,6 @@ def test_published_upload_hash_is_selected_and_foreign_context_hidden(pool, db):
     assert r.read(context)['result']['steps']
     q.owner.return_value = 'another-owner'
     assert r.read(context)['error_code'] == 'NOT_FOUND'
+    q.owner.return_value = source.owner_user_id
+    db("UPDATE server_remote_upload_intents SET status='failed' WHERE owner_user_id=%s", (source.owner_user_id,))
+    assert r.read(context)['result']['graph_status'] == 'no_graph'
