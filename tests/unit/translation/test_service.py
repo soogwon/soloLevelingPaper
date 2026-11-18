@@ -158,6 +158,19 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(all(item.status == TranslationStatus.REFERENCE_CONTENT
                             for item in result.items))
 
+    def test_korean_reference_section_id_is_supported(self):
+        original = (
+            'Tom B Brown and Benjamin Mann. Language models are few-shot learners. '
+            'arXiv, 2020. Nicolas Carion and Francisco Massa. End-to-end object '
+            'detection with transformers. In ECCV, 2020.'
+        )
+        provider = FakeTranslationProvider({})
+        result = TranslationService(provider).translate(
+            (Chunk('c', 'p1', 0, original, section_id='07-참고-문헌'),), self.settings)
+
+        self.assertEqual(provider.calls, [])
+        self.assertEqual(result.items[0].status, TranslationStatus.REFERENCE_CONTENT)
+
     def test_reference_section_does_not_skip_prose_or_boundary_mix(self):
         sources = (
             'In 2019 the authors released code at https://example.org and discuss the result.',

@@ -24,7 +24,8 @@ _BIBLIOGRAPHIC_MARKER = re.compile(
     r'(?i)\b(?:vol\.?|volume|no\.?|number|pp?\.?|pages?|proceedings|conference|'
     r'journal|transactions|et\s+al\.)\b')
 _REFERENCE_SECTION = re.compile(
-    r'(?i)(?:^|[-_\s])(?:references?|bibliography|literature[-_\s]+cited)(?:$|[-_\s])')
+    r'(?i)(?:^|[-_\s])(?:references?|bibliography|literature[-_\s]+cited|'
+    r'참고[-_\s]*문헌)(?:$|[-_\s])')
 _REFERENCE_BOUNDARY = re.compile(
     r'(?i)\b(?:appendix|supplement(?:ary)?(?:\s+material)?|acknowledg(?:e)?ments?)\b')
 _INLINE_AUTHOR = re.compile(
