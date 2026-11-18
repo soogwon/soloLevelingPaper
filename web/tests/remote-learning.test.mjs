@@ -59,3 +59,82 @@ test('다른 맥락 응답은 기록·동의에 반영하지 않는다', async t
   assert.equal(count, 1); assert.doesNotMatch(v.innerHTML, /기록 ID: record/);
   listeners.get('pagehide')();
 });
+
+test('읽기 상태 응답 유실은 동일 키·입력으로만 재시도한다', async t => {
+  const bodies = []; let first = true;
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (opts.method === 'POST') {
+      bodies.push(JSON.parse(opts.body));
+      if (first) { first = false; throw Error('유실'); }
+      return response({ state: { ...record, revision: 2 }, applied_revision: 2, replayed: true });
+    }
+    return response(String(url).endsWith('/learning') ? { ...record, revision: 1 } : data(url));
+  });
+  const v = view(); await page({ view: v, params: { contextId: context } });
+  v.querySelector('[data-progress-status]').value = 'completed';
+  v.querySelector('[data-progress-page]').value = '2';
+  await v.querySelector('[data-progress-save]').onclick();
+  assert.match(v.innerHTML, /같은 요청으로 결과 확인/);
+  await v.querySelector('[data-progress-save]').onclick();
+  assert.equal(bodies.length, 1);
+  await v.querySelector('[data-refresh]').onclick();
+  await v.querySelector('[data-progress-retry]').onclick();
+  assert.equal(bodies.length, 2); assert.deepEqual(bodies[0], bodies[1]);
+  assert.equal(bodies[0].pdf_page, 2); assert.equal(bodies[0].expected_revision, 1);
+  listeners.get('pagehide')();
+});
+
+test('읽기 상태 저장 중 로그아웃하면 늦은 응답과 후속 조회를 버린다', async t => {
+  let resolve; let count = 0;
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    count++;
+    if (opts.method === 'POST') return new Promise(r => { resolve = r; });
+    return response(String(url).endsWith('/learning') ? { ...record, revision: 1 } : data(url));
+  });
+  const v = view(); await page({ view: v, params: { contextId: context } });
+  v.querySelector('[data-progress-status]').value = 'reading';
+  v.querySelector('[data-progress-page]').value = '';
+  const pending = v.querySelector('[data-progress-save]').onclick();
+  listeners.get('auth:logout')(); const before = v.innerHTML;
+  resolve(response({ state: { ...record, revision: 2 } })); await pending;
+  assert.equal(count, 4); assert.equal(v.innerHTML, before); assert.equal(v.textContent, '');
+});
+
+test('충돌 후 최신 revision을 읽고 새로운 키로 다음 변경을 저장한다', async t => {
+  const bodies = []; let revision = 1;
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (opts.method === 'POST') {
+      bodies.push(JSON.parse(opts.body));
+      if (bodies.length === 1) {
+        revision = 3;
+        return new Response(JSON.stringify({ detail: { code: 'annotation_conflict' } }), { status: 409 });
+      }
+      return response({ state: { ...record, revision: 4 } });
+    }
+    return response(String(url).endsWith('/learning') ? { ...record, revision } : data(url));
+  });
+  const v = view(); await page({ view: v, params: { contextId: context } });
+  v.querySelector('[data-progress-status]').value = 'completed';
+  v.querySelector('[data-progress-page]').value = '1';
+  await v.querySelector('[data-progress-save]').onclick();
+  assert.match(v.innerHTML, /최신 상태를 확인/);
+  await v.querySelector('[data-progress-save]').onclick();
+  assert.equal(bodies[1].expected_revision, 3);
+  assert.notEqual(bodies[0].request_key, bodies[1].request_key);
+  listeners.get('pagehide')();
+});
+
+test('저장 응답의 접근 거부는 이전 기록과 보류 키를 폐기한다', async t => {
+  let count = 0;
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    count++;
+    if (opts.method === 'POST') return new Response(JSON.stringify({ detail: { code: 'web_session_required' } }), { status: 403 });
+    return response(String(url).endsWith('/learning') ? { ...record, revision: 1 } : data(url));
+  });
+  const v = view(); await page({ view: v, params: { contextId: context } });
+  v.querySelector('[data-progress-status]').value = 'completed'; v.querySelector('[data-progress-page]').value = '1';
+  await v.querySelector('[data-progress-save]').onclick();
+  assert.match(v.textContent, /접근할 수 없습니다/);
+  await v.querySelector('[data-progress-retry]').onclick();
+  assert.equal(count, 4); assert.equal(listeners.size, 0);
+});

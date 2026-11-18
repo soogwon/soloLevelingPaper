@@ -46,3 +46,48 @@ def test_context_listing_uses_authenticated_owner_and_fixed_version():
         assert result.headers['cache-control'] == 'no-store'
         service.learning.list_for_paper.assert_called_once_with('alice', paper, version, after=None, limit=20)
         assert client.get(path.replace(version, '')).status_code == 422
+
+
+def test_progress_requires_session_csrf_strict_revision_and_maps_conflict():
+    from solo_leveling.interfaces.http.remote_learning import RemoteLearningConflict
+    service = Mock(); verifier = Mock()
+    verifier.verify.return_value = AuthenticatedPrincipal('alice', 'web_session')
+    service.learning.set_progress.return_value = {'state': {'status': 'completed'}, 'replayed': False}
+    app = FastAPI()
+    app.include_router(create_annotation_product_router(create_auth_dependency(verifier, verifier), service))
+    context = '00000000-0000-0000-0000-000000000580'
+    path = f'/v1/remote-annotation-products/contexts/{context}/progress'
+    body = {'request_key': context, 'status': 'completed', 'pdf_page': 1, 'expected_revision': 1}
+    with TestClient(app) as client:
+        assert client.post(path, json=body).status_code == 401
+        client.cookies.set(SESSION_COOKIE, 'session'); client.cookies.set(CSRF_COOKIE, 'csrf')
+        assert client.post(path, json=body).status_code == 403
+        headers = {'X-CSRF-Token': 'csrf'}
+        for changes in ({'expected_revision': True}, {'pdf_page': True}, {'owner': 'other'}, {'status': 'published'}):
+            assert client.post(path, json={**body, **changes}, headers=headers).status_code == 422
+        service.learning.set_progress.assert_not_called()
+        result = client.post(path, json=body, headers=headers)
+        assert result.status_code == 200 and result.headers['cache-control'] == 'no-store'
+        service.learning.set_progress.assert_called_once_with('alice', context, **body)
+        service.learning.set_progress.side_effect = RemoteLearningConflict('private-detail')
+        result = client.post(path, json=body, headers=headers)
+        assert result.status_code == 409 and 'private-detail' not in result.text
+        verifier.verify.return_value = AuthenticatedPrincipal('alice', 'device', 'device')
+        assert client.post(path, json=body, headers={'Authorization': 'Bearer synthetic'}).status_code == 403
+
+
+def test_dashboard_is_read_only_session_scoped_and_bounded():
+    service = Mock(); verifier = Mock()
+    verifier.verify.return_value = AuthenticatedPrincipal('alice', 'web_session')
+    service.learning.dashboard.return_value = {'items': [], 'next_cursor': None}
+    app = FastAPI()
+    app.include_router(create_annotation_product_router(create_auth_dependency(verifier, verifier), service))
+    with TestClient(app) as client:
+        path = '/v1/remote-annotation-products/contexts/dashboard'
+        assert client.get(path).status_code == 401
+        client.cookies.set(SESSION_COOKIE, 'session')
+        result = client.get(path + '?owner=other')
+        assert result.status_code == 200 and result.headers['cache-control'] == 'no-store'
+        service.learning.dashboard.assert_called_once_with('alice', after=None, limit=20)
+        assert client.get(path + '?limit=51').status_code == 422
+        service.learning.start.assert_not_called()
