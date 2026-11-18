@@ -144,7 +144,7 @@ def create_remote_mcp(
         if product_queries is None:
             raise ValueError("remote_product_queries_required")
         from solo_leveling.interfaces.mcp.remote_product import register_product_queries
-        register_product_queries(server, product_queries)
+        register_product_queries(server, product_queries, cancellation_enabled=cancellation_service is not None)
         from solo_leveling.interfaces.mcp.remote_learning_path import register_remote_learning_path
         register_remote_learning_path(server, product_queries)
         if cancellation_service is not None:

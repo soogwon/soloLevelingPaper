@@ -24,15 +24,15 @@ _SELECT = '''SELECT j.job_id,j.paper_id,j.server_version_id,j.job_kind,j.status,
     WHERE j.owner_user_id=%s AND p.deleted_at IS NULL'''
 
 
-def _view(row):
+def _view(row, cancellation_enabled=False):
     result = {k: str(row[k]) if row[k] is not None else None for k in (
         'job_id', 'paper_id', 'server_version_id', 'job_kind', 'title', 'file_name',
         'publication_id', 'embedding_set_id')}
     result.update(status=_STATUSES[row['status']], attempt=row['attempt'], revision=row['revision'],
                   error_code=(row['error_code'] if row['error_code'] in _SAFE_ERRORS
                               else 'processing_failed' if row['error_code'] else None),
-                  cancellation_available=False,
-                  cancellation_notice='취소 도구는 아직 제공하지 않습니다. 이미 발생한 외부 호출·비용은 취소로 되돌릴 수 없습니다.',
+                  cancellation_available=cancellation_enabled and row['status'] in ('queued', 'running'),
+                  cancellation_notice='취소 가능 여부와 사용자 확인은 별도 취소 준비 도구에서 다시 검사합니다. 이미 발생한 외부 호출·비용은 되돌릴 수 없습니다.',
                   learning_notice='처리 완료는 학습 완료가 아닙니다.')
     result.update({k: row[k].isoformat() if row[k] else None
                    for k in ('created_at', 'updated_at', 'finished_at')})
@@ -41,8 +41,9 @@ def _view(row):
 
 
 class RemoteJobQueries:
-    def __init__(self, pool, owner):
+    def __init__(self, pool, owner, cancellation_enabled=False):
         self.pool, self.owner = pool, owner
+        self.cancellation_enabled = cancellation_enabled
 
     def list(self, after=None, limit=20):
         try:
@@ -59,7 +60,7 @@ class RemoteJobQueries:
                 # UUID 기준 커서는 상태가 바뀌어도 중복·누락을 만들지 않는다.
                 rows = conn.execute(_SELECT + ' AND (%s::uuid IS NULL OR j.job_id>%s::uuid)'
                     + ' ORDER BY j.job_id LIMIT %s', (owner, after, after, limit + 1)).fetchall()
-            return {'status': 'ok', 'jobs': [_view(r) for r in rows[:limit]],
+            return {'status': 'ok', 'jobs': [_view(r, self.cancellation_enabled) for r in rows[:limit]],
                     'next_after': str(rows[limit - 1]['job_id']) if len(rows) > limit else None}
         except Exception:
             return {'status': 'unavailable'}
@@ -75,6 +76,6 @@ class RemoteJobQueries:
                 return {'status': 'not_found'}
             with self.pool.connection() as conn:
                 row = conn.execute(_SELECT + ' AND j.job_id=%s', (owner, job_id)).fetchone()
-            return {'status': 'ok', 'result': _view(row)} if row else {'status': 'not_found'}
+            return {'status': 'ok', 'result': _view(row, self.cancellation_enabled)} if row else {'status': 'not_found'}
         except Exception:
             return {'status': 'unavailable'}

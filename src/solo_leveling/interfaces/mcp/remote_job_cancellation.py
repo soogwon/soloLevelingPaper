@@ -53,7 +53,7 @@ def register_job_cancellation_tools(server, queries, service):
             recovered=service.lookup(owner,job,key)
             if recovered is not None:
                 return {'job_id':job,'request_key':key,'recovered':recovered,'can_cancel':False}
-            response=RemoteJobQueries(service._pool,lambda:owner).get(job)
+            response=RemoteJobQueries(service._pool,lambda:owner,True).get(job)
             if response['status']=='not_found':
                 return None
             if response['status']!='ok':

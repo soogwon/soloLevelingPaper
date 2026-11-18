@@ -18,10 +18,10 @@ pytestmark=pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'),reaso
 
 class CancelVerifier(Verifier):
     async def verify_token(self, token):
-        value=await super().verify_token('account-a' if token=='rotated' else token)
+        value=await super().verify_token('account-a' if token in ('rotated','readonly') else token)
         if value:
             value.token=token
-            if token!='account-b': value.scopes.append('jobs:cancel')
+            if token not in ('account-b','readonly'): value.scopes.append('jobs:cancel')
         return value
 
 
@@ -45,6 +45,9 @@ def test_scope_confirmation_token_rotation_and_recovery(db,stores,pool):
         assert result(client,'prepare_remote_job_cancellation',args,token='account-b')['status']=='not_authorized'
         preview=result(client,'prepare_remote_job_cancellation',args)['result']
         assert preview['can_cancel'] and preview['expected_revision']==1
+        assert preview['job']['cancellation_available'] is True
+        assert result(client,'get_remote_processing_job',{'job_id':job.job_id},token='readonly')['result']['cancellation_available'] is False
+        assert result(client,'get_remote_processing_job',{'job_id':job.job_id})['result']['cancellation_available'] is True
         assert not db('SELECT * FROM server_processing_cancel_requests')
         confirmed={**args,'expected_revision':1,'binding':preview['binding'],'confirmed':False}
         assert result(client,'confirm_remote_job_cancellation',confirmed)['status']=='invalid_argument'
@@ -53,6 +56,7 @@ def test_scope_confirmation_token_rotation_and_recovery(db,stores,pool):
         assert not db('SELECT * FROM server_processing_cancel_requests')
         done=result(client,'confirm_remote_job_cancellation',confirmed)
         assert done['result']['status']=='cancelled'
+        assert result(client,'get_remote_processing_job',{'job_id':job.job_id})['result']['cancellation_available'] is False
         assert result(client,'confirm_remote_job_cancellation',confirmed)==done
         assert result(client,'get_remote_job_cancellation',args,token='rotated')==done
         assert result(client,'get_remote_job_cancellation',args,token='account-b')['status']=='not_found'
