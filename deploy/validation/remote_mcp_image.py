@@ -52,3 +52,17 @@ assert '원격 논문 상세' in str(asyncio.run(annotation_bundle.server.read_r
 
 from solo_leveling.knowledge import load_graph
 assert load_graph().revision_id
+
+# 취소 역할·카드가 이미지에 포함됐는지 DB 접속 없이 검사한다.
+os.environ.update({
+    'REMOTE_JOB_CANCELLATIONS_ENABLED': 'true',
+    'REMOTE_JOB_CANCELLATION_DATABASE_URL': 'postgresql://cancel:synthetic@127.0.0.1/test',
+})
+assert create_app(remote_mcp_settings=settings) is not None
+from solo_leveling.interfaces.http.processing_cancellations import PostgresProcessingCancellationStore
+cancel_bundle = create_remote_mcp(settings, product_queries=Queries(),
+    cancellation_service=PostgresProcessingCancellationStore(None))
+assert {'prepare_remote_job_cancellation', 'confirm_remote_job_cancellation',
+        'get_remote_job_cancellation'} <= {tool.name for tool in asyncio.run(cancel_bundle.server.list_tools())}
+assert '원격 처리 작업 취소' in str(asyncio.run(cancel_bundle.server.read_resource('ui://remote-jobs/cancel.html')))
+print('REMOTE_JOB_CANCEL_IMAGE_OK; no database or provider calls')

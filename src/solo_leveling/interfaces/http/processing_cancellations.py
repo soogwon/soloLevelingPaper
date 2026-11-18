@@ -55,6 +55,17 @@ class PostgresProcessingCancellationStore:
                 (owner_user_id, request_key, job_id, expected_revision, changed['revision']))
             return self._result(job_id, changed, changed['revision'])
 
+    def lookup(self, owner_user_id, job_id, request_key):
+        job_id, request_key = str(UUID(job_id)), str(UUID(request_key))
+        with self._pool.connection() as conn:
+            row = conn.execute("""SELECT j.status,j.revision,r.applied_revision
+                FROM server_processing_cancel_requests r
+                JOIN server_processing_jobs j ON j.owner_user_id=r.owner_user_id AND j.job_id=r.job_id
+                JOIN server_papers p ON p.owner_user_id=j.owner_user_id AND p.paper_id=j.paper_id
+                WHERE r.owner_user_id=%s AND r.job_id=%s AND r.request_key=%s AND p.deleted_at IS NULL""",
+                (owner_user_id,job_id,request_key)).fetchone()
+        return None if row is None else self._result(job_id,row,row['applied_revision'])
+
     @staticmethod
     def _result(job_id, current, applied_revision):
         return {'job_id': job_id, 'status': current['status'], 'revision': current['revision'],

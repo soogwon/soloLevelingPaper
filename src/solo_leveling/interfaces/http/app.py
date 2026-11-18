@@ -41,6 +41,7 @@ def create_app(
     remote_annotation_recovery=None,
     remote_annotation_products=None,
     remote_mcp_annotations=None,
+    remote_job_cancellations=None,
 ) -> "FastAPI":
     """명시적 설정 또는 환경 설정으로 독립적인 API 앱을 만든다."""
 
@@ -172,7 +173,18 @@ def create_app(
         remote_annotation_products, remote_mcp_annotations = (
             RemoteAnnotationProducts(store.connection_pool, annotation_settings.service_id)
             for store in managed_annotation_stores)
-    remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries, question_service=remote_questions, annotation_service=remote_mcp_annotations)
+    managed_cancel_store = None
+    from .processing_cancel_settings import load_processing_cancel_dsn
+    cancel_dsn = load_processing_cancel_dsn()
+    if cancel_dsn is not None:
+        if remote_job_cancellations is not None or not selected_remote_mcp.enabled or not selected_remote_mcp.product_reads_enabled or remote_product_queries is None:
+            raise ValueError('processing_cancel_settings_invalid')
+        from .processing_cancellations import PostgresProcessingCancellationStore
+        managed_cancel_store = PostgresDeviceStore.from_dsn(cancel_dsn)
+        remote_job_cancellations = PostgresProcessingCancellationStore(managed_cancel_store.connection_pool)
+    if remote_job_cancellations is not None and (not selected_remote_mcp.enabled or not selected_remote_mcp.product_reads_enabled):
+        raise ValueError('processing_cancel_settings_invalid')
+    remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries, question_service=remote_questions, annotation_service=remote_mcp_annotations, cancellation_service=remote_job_cancellations)
                      if selected_remote_mcp.enabled else None)
 
     @asynccontextmanager
@@ -190,6 +202,9 @@ def create_app(
             for store in managed_annotation_stores:
                 stack.callback(store.close)
                 store.open()
+            if managed_cancel_store is not None:
+                stack.callback(managed_cancel_store.close)
+                managed_cancel_store.open()
             if remote_bundle is not None:
                 await stack.enter_async_context(remote_bundle.server.session_manager.run())
             yield

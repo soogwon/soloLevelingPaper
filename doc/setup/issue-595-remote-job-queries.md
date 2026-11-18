@@ -32,3 +32,15 @@ staging 미적용. 기존 MCP 읽기 역할에 server_processing_jobs SELECT가 
 로컬 회귀 범위: 동시 같은 키, 재접속 재조회, 키 재사용 충돌, worker lease 회수, heartbeat, 늦은 성공/실패, owner/삭제/종료 거부, 게시와 취소 경쟁, 원장 실패 롤백. 기존 제한 worker·웹·백업/비슈퍼유저 복구도 검사한다.
 
 실제 적용 전 남은 것: 전용 취소 DB 역할과 변경 열 제한/행 잠금 보호, 취소 전용 OAuth scope, 기능 flag, MCP/웹 카드 명시적 확인 연결. 기존 조회 역할에 쓰기 권한을 자동 부여하지 않는다. migration 0047·배포도 아직 실제 staging에 적용하지 않는다.
+
+## 3차: 원격 취소 확인 카드와 제한 역할
+
+`prepare_remote_job_cancellation`은 대상·revision·비용 제한을 표시할 뿐 취소하지 않는다. 사용자가 확인한 뒤 `confirm_remote_job_cancellation`을 호출한다. 현재 인증 토큰·소유자·작업·요청 키·revision에 묶인 확인값을 검사하므로 재로그인 후 이전 카드의 쓰기는 거부한다. 읽기 전용 `get_remote_job_cancellation`으로 기존 결과를 복구할 수 있다. 응답이 유실되면 카드는 쓰기를 자동 재전송하지 않는다.
+
+`papers:read`만 있는 기존 조회 연결을 유지한다. 준비·확인 도구에는 별도로 `jobs:cancel`이 필요하며 지원 권한 메타데이터에만 추가한다. 기능은 `REMOTE_JOB_CANCELLATIONS_ENABLED=false`가 기본이고, 활성화 시 `REMOTE_JOB_CANCELLATION_DATABASE_URL`에 기존 조회·웹 역할과 다른 전용 자격이 필요하다. DB·schema 연결 대상은 기존 MCP 설정과 같아야 한다.
+
+migration 0048과 `grant_processing_cancel_role`은 신규 비특권 NOINHERIT 역할에 적용한다. 여섯 테이블 조회, 취소 원장 INSERT, 작업의 취소 관련 열 UPDATE, 논문 잠금용 UPDATE만 부여한다. 보호 트리거는 작업의 queued/running→cancelled 외 전환 및 논문 실수정을 차단한다. 기존 광역 권한을 회수하는 도구가 아니므로 관리자·소유자·다른 역할을 상속하는 계정에 적용하지 않는다. 설정과 비밀 URL은 저장소에 넣지 않는다.
+
+검증: 로컬 PostgreSQL의 실제 제한 로그인으로 취소·재조회 및 상태 재활성화/성공/논문 수정/예산 쓰기 차단, 두 인증 계정의 격리, 인증 토큰 교체, 명시적 확인·멱등 재조회, 카드 응답 유실·늦은 응답·잘못된 응답을 검사한다. Docker 이미지에도 도구와 카드가 포함되어야 하며 이미지 내부에서 네트워크 없이 등록·리소스 조회를 검사한다.
+
+남은 실제 범위: migration 0047·0048, 신규 DB 역할과 자격, Auth0 `jobs:cancel`, Render 기능 flag 및 배포는 아직 미적용이다. 실제 Claude Desktop 카드 확인·취소와 웹 상태 비교·worker 종료 검증도 남았다. 별도 승인 전 staging·AI·worker를 변경하지 않는다. #595를 자동 종료하지 않는다.
