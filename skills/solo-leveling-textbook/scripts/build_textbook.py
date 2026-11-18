@@ -45,7 +45,9 @@ def rich(text: str) -> str:
 
 def text_field(obj: dict, key: str, where: str, problems: list[str], required=True):
     value = obj.get(key)
-    if value is None and not required:
+    if not required and (value is None or (isinstance(value, str) and not value.strip())):
+        # 선택 항목을 빈 문자열로 채워 보낸 경우는 없는 것으로 보고 넘어간다.
+        obj.pop(key, None)
         return None
     if not isinstance(value, str) or not value.strip():
         problems.append(f'{where}: {key}는 비어 있지 않은 문자열이어야 합니다.')
