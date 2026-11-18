@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS translation_results (
     chunk_id TEXT NOT NULL REFERENCES chunks(chunk_id),
     failure_code TEXT,
     translated_text TEXT,
+    translation_status TEXT NOT NULL DEFAULT 'translated',
     PRIMARY KEY (translation_revision_id, chunk_id)
 );
 
@@ -665,11 +666,15 @@ _SEARCH_INDEXES_COLUMNS = ('embedding_set_id', 'version_id', 'parse_revision_id'
 
 
 def _migrate_translation_results(conn: sqlite3.Connection) -> None:
-    """translated_text 컬럼을 더하고, 성공 행의 번역 본문을 chunks.text에서 채운다. 반복 실행해도 같은 결과다."""
+    """번역 본문·상태를 더하고 옛 성공/실패 행을 보존한다. 반복 실행해도 같은 결과다."""
     with conn:
         columns = {row['name'] for row in conn.execute('PRAGMA table_info(translation_results)')}
         if 'translated_text' not in columns:
             conn.execute('ALTER TABLE translation_results ADD COLUMN translated_text TEXT')
+        if 'translation_status' not in columns:
+            conn.execute("ALTER TABLE translation_results ADD COLUMN translation_status TEXT NOT NULL DEFAULT 'translated'")
+        conn.execute("UPDATE translation_results SET translation_status='translation_failed' "
+                     "WHERE failure_code IS NOT NULL")
         # 옛 사본은 그 번역 리비전이 가리키는 파싱 리비전의 청크일 때만 쓴다(다른 파싱 리비전의 사본은 이관하지 않는다).
         conn.execute(
             'UPDATE translation_results SET translated_text=(SELECT c.text FROM chunks c '

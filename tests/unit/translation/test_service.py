@@ -8,7 +8,9 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 
 from solo_leveling.domain.models import Chunk
-from solo_leveling.domain.translation import TranslationFailureCode, TranslationSettings
+from solo_leveling.domain.translation import (
+    TranslationFailureCode, TranslationSettings, TranslationStatus,
+)
 from solo_leveling.application.translation.service import TranslationService
 from solo_leveling.application.translation.ports import TranslationProviderUnavailable
 from solo_leveling.infrastructure.translation.fake_provider import FakeTranslationProvider
@@ -28,6 +30,58 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(result.settings.prompt_version, "prompt-v1")
         self.assertEqual([r.text for r in result.items], ["어텐션.", "결과."])
         self.assertTrue(all(c.text is None for c in self.chunks))
+
+    def test_korean_and_formula_sources_skip_provider_but_remain_indexable(self):
+        chunks = (
+            Chunk('ko', 'p1', 0, '이미 한국어인 본문이다.'),
+            Chunk('formula', 'p1', 1, 'x = y'),
+        )
+        provider = FakeTranslationProvider({})
+        result = TranslationService(provider).translate(chunks, self.settings)
+
+        self.assertEqual(provider.calls, [])
+        self.assertEqual([item.text for item in result.items], [c.original_text for c in chunks])
+        self.assertEqual(
+            [item.status for item in result.items],
+            [TranslationStatus.TRANSLATION_NOT_REQUIRED] * 2,
+        )
+        self.assertEqual(result.success_count, 2)
+
+    def test_explicit_bibliographic_content_skips_provider(self):
+        sources = (
+            'https://doi.org/10.5555/12345678',
+            '[12] Vaswani, A. et al. (2017). Attention Is All You Need. Proceedings of NeurIPS.',
+        )
+        provider = FakeTranslationProvider({})
+        result = TranslationService(provider).translate(
+            tuple(Chunk(f'c{i}', 'p1', i, text) for i, text in enumerate(sources)),
+            self.settings,
+        )
+
+        self.assertEqual(provider.calls, [])
+        self.assertTrue(all(item.status == TranslationStatus.REFERENCE_CONTENT
+                            for item in result.items))
+        self.assertEqual([item.text for item in result.items], list(sources))
+
+    def test_year_in_ordinary_prose_does_not_skip_translation(self):
+        original = 'In 2017 the model improved translation quality on two benchmarks.'
+        provider = FakeTranslationProvider({original: '2017년에 이 모델은 두 벤치마크의 번역 품질을 개선했다.'})
+        result = TranslationService(provider).translate(
+            (Chunk('c', 'p1', 0, original),), self.settings)
+
+        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(result.items[0].status, TranslationStatus.TRANSLATED)
+
+    def test_url_inside_ordinary_prose_does_not_skip_translation(self):
+        original = ('The supplementary implementation is available at https://example.org/code, '
+                    'and the following section explains the evaluation procedure in detail.')
+        translated = '보충 구현은 해당 주소에 있으며 다음 절에서 평가 절차를 자세히 설명한다.'
+        provider = FakeTranslationProvider({original: translated})
+        result = TranslationService(provider).translate(
+            (Chunk('c', 'p1', 0, original),), self.settings)
+
+        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(result.items[0].status, TranslationStatus.TRANSLATED)
 
     def test_partial_and_total_failure(self):
         for ids in (("c1",), ("c1", "c2")):

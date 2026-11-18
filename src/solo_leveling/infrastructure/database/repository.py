@@ -435,13 +435,15 @@ def save_translation_batch(db_path: str, batch: TranslationBatchResult) -> None:
                 rev.parse_revision_id, item.request.original_text,
             ):
                 raise ValueError('translation source does not match database')
-            prior = conn.execute('SELECT failure_code, translated_text FROM translation_results '
+            prior = conn.execute('SELECT failure_code, translated_text, translation_status FROM translation_results '
                                  'WHERE translation_revision_id=? AND chunk_id=?',
                                  (rev.translation_revision_id, row['chunk_id'])).fetchone()
             code = item.failure_code.value if item.failure_code else None
+            status = item.status.value
             # 판단은 translation_results만 본다. chunks.text는 이전 버전 호환용 사본이며 결정에 쓰지 않는다.
             prior_success = prior is not None and prior['failure_code'] is None and prior['translated_text'] is not None
             identical = (prior is not None and prior['failure_code'] == code
+                         and prior['translation_status'] == status
                          and (not item.succeeded or prior['translated_text'] == item.text))
             if identical:
                 continue
@@ -453,12 +455,14 @@ def save_translation_batch(db_path: str, batch: TranslationBatchResult) -> None:
                 conn.execute('UPDATE chunks SET text=?, translation_revision_id=? WHERE chunk_id=? '
                              'AND text IS NULL AND translation_revision_id IS NULL',
                              (item.text, rev.translation_revision_id, row['chunk_id']))
-            conn.execute('''INSERT INTO translation_results (translation_revision_id, chunk_id, failure_code, translated_text)
-                            VALUES (?, ?, ?, ?)
+            conn.execute('''INSERT INTO translation_results
+                            (translation_revision_id, chunk_id, failure_code, translated_text, translation_status)
+                            VALUES (?, ?, ?, ?, ?)
                             ON CONFLICT(translation_revision_id, chunk_id) DO UPDATE SET
-                            failure_code=excluded.failure_code, translated_text=excluded.translated_text''',
+                            failure_code=excluded.failure_code, translated_text=excluded.translated_text,
+                            translation_status=excluded.translation_status''',
                          (rev.translation_revision_id, row['chunk_id'], code,
-                          item.text if item.succeeded else None))
+                          item.text if item.succeeded else None, status))
 
 
 def get_translation_failures(db_path: str, translation_revision_id: str) -> list[dict]:
@@ -471,13 +475,15 @@ def get_translation_failures(db_path: str, translation_revision_id: str) -> list
 
 def _translation_recovery_targets(conn, translation_revision_id: str) -> list[dict]:
     rows = conn.execute(
-        '''SELECT r.chunk_id, r.failure_code, r.translated_text, c.original_text
+        '''SELECT r.chunk_id, r.failure_code, r.translated_text, r.translation_status, c.original_text
            FROM translation_results r JOIN chunks c ON c.chunk_id=r.chunk_id
            WHERE r.translation_revision_id=? ORDER BY c.chunk_index''',
         (translation_revision_id,),
     ).fetchall()
     targets = []
     for row in rows:
+        if row['translation_status'] in ('translation_not_required', 'reference_content', 'original_only'):
+            continue
         code = row['failure_code']
         if code is None and not row['translated_text']:
             code = TranslationFailureCode.EMPTY_TRANSLATION.value

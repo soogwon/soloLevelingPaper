@@ -20,6 +20,16 @@ class TranslationFailureCode(str, Enum):
     TARGET_LANGUAGE_MISMATCH = "target_language_mismatch"
 
 
+class TranslationStatus(str, Enum):
+    """청크가 검색 후보가 된 경로를 원문을 노출하지 않고 설명한다."""
+
+    TRANSLATED = "translated"
+    TRANSLATION_NOT_REQUIRED = "translation_not_required"
+    REFERENCE_CONTENT = "reference_content"
+    TRANSLATION_FAILED = "translation_failed"
+    ORIGINAL_ONLY = "original_only"
+
+
 def translation_quality_failure(
         original_text: str, translated_text: str) -> TranslationFailureCode | None:
     """한국어 번역 결과의 명백한 미번역만 보수적으로 판정한다."""
@@ -73,14 +83,25 @@ class ChunkTranslationResult:
     request: TranslationRequest
     text: str | None
     failure_code: TranslationFailureCode | None = None
+    status: TranslationStatus | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.request, TranslationRequest):
             raise ValueError("request must be TranslationRequest")
+        inferred = (TranslationStatus.TRANSLATION_FAILED if self.failure_code is not None
+                    else TranslationStatus.TRANSLATED)
+        if self.status is None:
+            object.__setattr__(self, 'status', inferred)
+        elif not isinstance(self.status, TranslationStatus):
+            raise ValueError("status must be TranslationStatus")
         if self.failure_code is None:
             require_text(self.text, "text")
         elif not isinstance(self.failure_code, TranslationFailureCode) or self.text is not None:
             raise ValueError("failure requires a failure code and text=None")
+        if self.failure_code is not None and self.status != TranslationStatus.TRANSLATION_FAILED:
+            raise ValueError("failed translation requires translation_failed status")
+        if self.failure_code is None and self.status == TranslationStatus.TRANSLATION_FAILED:
+            raise ValueError("translation_failed status requires a failure code")
 
     @property
     def succeeded(self) -> bool:

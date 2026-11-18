@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src'))
 from solo_leveling.domain.models import (
     Chunk, Paper, PaperVersion, ParseRevision, ProcessingJob, EmbeddingSet, LearningContext, Evidence,
 )
-from solo_leveling.domain.translation import TranslationSettings
+from solo_leveling.domain.translation import TranslationSettings, TranslationStatus
 from solo_leveling.application.translation.service import TranslationService
 from solo_leveling.infrastructure.translation.fake_provider import FakeTranslationProvider
 from solo_leveling.infrastructure.database import repository as repo
@@ -74,6 +74,64 @@ def test_translation_persistence_and_idempotency(setup_db):
     assert repo.get_translation_metadata(db, 'p1')['prompt_version'] == 'prompt1'
     with pytest.raises(ValueError):
         repo.get_translated_chunks(db, 'other', 't1')
+
+
+def test_nontranslated_source_status_is_persisted_and_read_as_search_text(tmp_path):
+    db = str(tmp_path / 'source-status.sqlite')
+    init_db(db)
+    repo.insert_paper(db, Paper('paper'))
+    repo.insert_version(db, PaperVersion(
+        'v1', 'paper', 'hash', '/private/paper.pdf', r'C:\private\paper.pdf'))
+    repo.insert_parse_revision(db, ParseRevision('p1', 'v1', 2))
+    chunks = [
+        Chunk('ko', 'p1', 0, '이미 한국어인 본문이다.'),
+        Chunk('ref', 'p1', 1, 'https://doi.org/10.5555/12345678'),
+    ]
+    repo.insert_chunks(db, chunks)
+    batch = TranslationService(FakeTranslationProvider({}), lambda: 't1').translate(
+        chunks, TranslationSettings('fake', 'fixture', 'prompt1'))
+
+    repo.save_translation_batch(db, batch)
+    repo.save_translation_batch(db, batch)
+
+    with closing(get_connection(db)) as conn:
+        rows = conn.execute(
+            'SELECT chunk_id, translation_status, failure_code, translated_text '
+            'FROM translation_results ORDER BY chunk_id').fetchall()
+    assert [(row['chunk_id'], row['translation_status']) for row in rows] == [
+        ('ko', TranslationStatus.TRANSLATION_NOT_REQUIRED.value),
+        ('ref', TranslationStatus.REFERENCE_CONTENT.value),
+    ]
+    assert all(row['failure_code'] is None and row['translated_text'] for row in rows)
+    assert [chunk.original_text for chunk in repo.get_translated_chunks(db, 'p1', 't1')] == [
+        chunk.original_text for chunk in chunks]
+
+
+def test_translation_status_migration_marks_existing_failures(tmp_path):
+    db = str(tmp_path / 'legacy-status.sqlite')
+    init_db(db)
+    repo.insert_paper(db, Paper('paper'))
+    repo.insert_version(db, PaperVersion(
+        'v1', 'paper', 'hash', '/private/paper.pdf', r'C:\private\paper.pdf'))
+    repo.insert_parse_revision(db, ParseRevision('p1', 'v1', 1))
+    repo.insert_chunks(db, [Chunk('c1', 'p1', 0, 'English prose needs translation.')])
+    batch = make_batch(
+        [Chunk('c1', 'p1', 0, 'English prose needs translation.')],
+        translations={'English prose needs translation.': '번역문'},
+    )
+    repo.save_translation_batch(db, batch)
+    with closing(get_connection(db)) as conn:
+        conn.execute('UPDATE translation_results SET failure_code=?, translated_text=NULL',
+                     ('provider_unavailable',))
+        conn.commit()
+        conn.execute('ALTER TABLE translation_results RENAME COLUMN translation_status TO old_translation_status')
+        conn.commit()
+
+    init_db(db)
+
+    with closing(get_connection(db)) as conn:
+        row = conn.execute('SELECT translation_status FROM translation_results').fetchone()
+    assert row['translation_status'] == TranslationStatus.TRANSLATION_FAILED.value
 
 
 def test_failure_retry_preserves_successes(setup_db):
