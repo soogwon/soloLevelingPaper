@@ -139,3 +139,40 @@ def test_recovery_resource_and_tool_metadata(monkeypatch):
         assert '원격 메모 복구 확인' in str(resource)
 
     asyncio.run(check())
+
+
+def test_card_tools_have_actual_structured_mcp_outputs(monkeypatch):
+    import asyncio
+    from dataclasses import dataclass
+    from mcp.server.fastmcp import FastMCP
+
+    @dataclass
+    class Recovery:
+        request_key: str = 'existing'
+        state: str = 'committed'
+
+    monkeypatch.setattr(module, 'get_access_token', lambda: token(['annotations:read', 'annotations:write']))
+    service = Mock(service_id='remote-paper')
+    service.lookup.return_value = Recovery()
+    service.confirm.return_value = True
+    server = FastMCP('구조화 응답 검증')
+    module.register_annotation_tools(server, NS(owner=lambda: 'alice'), service)
+
+    async def check():
+        result = await server.call_tool('show_remote_annotation_recovery',
+                                       {'context_id': CONTEXT, 'request_key': 'existing'})
+        assert isinstance(result, tuple), '텍스트만 반환하면 카드가 결과를 해석하지 못한다'
+        text, structured = result
+        assert structured['status'] == 'ok'
+        assert structured['result']['context_id'] == CONTEXT
+        assert text[0].type == 'text'
+        confirmation = await server.call_tool('confirm_remote_annotation_card', {
+            'context_id': CONTEXT, 'request_key': 'existing', 'annotation_id': CONTEXT,
+            'revision': 1, 'expected_binding': structured['result']['binding']})
+        assert isinstance(confirmation, tuple)
+        assert confirmation[1] == {'status': 'ok', 'result': {'confirmed': True}}
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        assert tools['show_remote_annotation_recovery'].outputSchema is not None
+        assert tools['confirm_remote_annotation_card'].outputSchema is not None
+
+    asyncio.run(check())

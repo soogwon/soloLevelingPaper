@@ -5,6 +5,7 @@ import hashlib
 import hmac
 from pathlib import Path
 from uuid import UUID
+from typing import Any
 
 from mcp.types import ToolAnnotations
 
@@ -70,7 +71,7 @@ def register_annotation_tools(server, queries, service):
                  annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                              idempotentHint=True, openWorldHint=False))
     def show_remote_annotation_recovery(context_id: str, request_key: str,
-                                        expected_binding: str | None = None) -> dict:
+                                        expected_binding: str | None = None) -> dict[str, Any]:
         """기존 요청 키의 현재 결과를 카드와 텍스트로 조회한다. 신규 생성하지 않는다. 토큰 갱신 후에는 카드를 새로 열어야 한다."""
         def operation(owner):
             ctx = context(context_id)
@@ -88,7 +89,7 @@ def register_annotation_tools(server, queries, service):
                  annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                              idempotentHint=True, openWorldHint=False))
     def confirm_remote_annotation_card(context_id: str, request_key: str, annotation_id: str,
-                                       revision: int, expected_binding: str) -> dict:
+                                       revision: int, expected_binding: str) -> dict[str, Any]:
         """사용자가 복구 카드의 현재 결과를 확인했을 때만 수신 확정한다. 새 기록이나 AI 호출은 만들지 않는다."""
         def operation(owner):
             ctx = context(context_id)
