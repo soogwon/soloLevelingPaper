@@ -15,7 +15,10 @@ class Server:
     def __init__(self):
         self.tools = {}
 
-    def tool(self):
+    def resource(self, *args, **kwargs):
+        return lambda fn: fn
+
+    def tool(self, **kwargs):
         def register(fn):
             self.tools[fn.__name__] = fn
             return fn
@@ -83,9 +86,56 @@ def test_real_mcp_registration_serializes_nested_records(monkeypatch):
     async def check():
         names = {tool.name for tool in await server.list_tools()}
         assert 'list_remote_annotations' in names
-        assert len(names) == 10
+        assert len(names) == 12
         result = await server.call_tool('list_remote_annotations', {'context_id': CONTEXT})
         assert '합성 메모' in str(result)
         assert 'annotation_id' in str(result)
+
+    asyncio.run(check())
+
+
+def test_card_confirmation_bound_to_authenticated_token(monkeypatch):
+    from dataclasses import dataclass
+
+    @dataclass
+    class Recovery:
+        request_key: str = 'existing'
+        state: str = 'committed'
+
+    current = token(['annotations:read', 'annotations:write'])
+    monkeypatch.setattr(module, 'get_access_token', lambda: current)
+    service = Mock(service_id='remote-paper')
+    service.lookup.return_value = Recovery()
+    service.confirm.return_value = True
+    server = Server()
+    module.register_annotation_tools(server, NS(owner=lambda: 'alice'), service)
+    show = server.tools['show_remote_annotation_recovery']
+    confirm = server.tools['confirm_remote_annotation_card']
+    result = show(CONTEXT, 'existing')['result']
+    bound = result['binding']
+    assert len(bound) == 64 and 'synthetic' not in str(result)
+    assert confirm(CONTEXT, 'existing', CONTEXT, 1, bound)['result']['confirmed']
+    service.confirm.assert_called_once_with('alice', CONTEXT, 'existing', CONTEXT, 1)
+    service.confirm.reset_mock()
+    current.token = 'renewed-synthetic'
+    assert show(CONTEXT, 'existing', bound)['result']['connection_changed']
+    assert confirm(CONTEXT, 'existing', CONTEXT, 1, bound)['result']['connection_changed']
+    service.confirm.assert_not_called()
+    assert show(CONTEXT, 'existing')['result']['binding'] != bound
+
+
+def test_recovery_resource_and_tool_metadata(monkeypatch):
+    import asyncio
+    from mcp.server.fastmcp import FastMCP
+    server = FastMCP('합성 카드')
+    module.register_annotation_tools(server, NS(owner=lambda: 'alice'), Mock())
+
+    async def check():
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        assert tools['show_remote_annotation_recovery'].meta['ui']['resourceUri'] == 'ui://remote-annotations/recovery.html'
+        assert tools['show_remote_annotation_recovery'].annotations.readOnlyHint
+        assert tools['confirm_remote_annotation_card'].meta['ui']['visibility'] == ['app']
+        resource = await server.read_resource('ui://remote-annotations/recovery.html')
+        assert '원격 메모 복구 확인' in str(resource)
 
     asyncio.run(check())
