@@ -48,3 +48,40 @@ def test_saved_response_loss_card_confirmation_is_idempotent(monkeypatch, pool, 
     assert db('SELECT count(*) n FROM server_context_annotations WHERE owner_user_id=%s', (owner,))[0]['n'] == 1
     token.token = 'changed-card-session'
     assert confirm(*args)['result']['connection_changed'] is True
+
+
+def test_paper_card_reads_unlinked_notes_in_pages(monkeypatch, pool, db, stores):
+    import asyncio
+    from mcp.server.fastmcp import FastMCP
+    from solo_leveling.interfaces.mcp.remote_product import RemoteProductQueries
+    from solo_leveling.interfaces.http.remote_annotations import RemoteAnnotationInput
+    from tests.fixtures.pgvector_retrieval_contract import PgvectorContractStore
+    remote=PgvectorContractStore(db,stores,pool)
+    published=remote.publish()
+    owner,ctx=remote.owner,published.context
+    db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'합성 사용자')",(owner,))
+    store = PostgresRemoteAnnotationStore(pool)
+    value = RemoteAnnotationInput(kind='note', body='연결 없는 합성 메모')
+    for i in range(21):
+        store.create(owner, 'remote-paper', ctx, f'paper-card-{i}', value)
+    token = RemoteIdentityAccessToken(token='synthetic-card', client_id='test',
+        scopes=['annotations:read'], expires_at=int(time.time()) + 60)
+    token._verified_identity = VerifiedRemoteIdentity('https://issuer.example/', 'alice')
+    monkeypatch.setattr(module, 'get_access_token', lambda: token)
+    queries=RemoteProductQueries(pool)
+    queries.owner=lambda: owner
+    server=FastMCP('전체 상세 합성 검증')
+    module.register_annotation_tools(server, queries, AnnotationRecoveryService(store,'remote-paper'))
+    async def verify():
+        tools={t.name:t for t in await server.list_tools()}
+        assert tools['show_remote_paper_detail'].annotations.readOnlyHint
+        first=(await server.call_tool('show_remote_paper_detail',{'context_id':ctx}))[1]['result']
+        assert len(first['annotation_page']['items'])==20
+        assert all(not a['segments'] for a in first['annotation_page']['items'])
+        second=(await server.call_tool('show_remote_paper_detail',{'context_id':ctx,
+            'after':first['annotation_page']['next_cursor'],'expected_binding':first['binding']}))[1]['result']
+        ids=[a['annotation_id'] for a in first['annotation_page']['items']+second['annotation_page']['items']]
+        assert len(set(ids))==21 and second['annotation_page']['next_cursor'] is None
+        queries.owner=lambda: 'another-owner'
+        assert (await server.call_tool('show_remote_paper_detail',{'context_id':ctx}))[1]['status']=='not_found'
+    asyncio.run(verify())

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test remote-evidence.test.mjs remote-compose.test.mjs remote-annotation-card.test.mjs remote-annotation-request.test.mjs detail.test.mjs annotation.test.mjs registration.test.mjs question.test.mjs recovery.test.mjs reparse.test.mjs server-sync.test.mjs server-deletion.test.mjs pdf-upload.test.mjs"
+    "test": "node --test remote-paper.test.mjs remote-evidence.test.mjs remote-compose.test.mjs remote-annotation-card.test.mjs remote-annotation-request.test.mjs detail.test.mjs annotation.test.mjs registration.test.mjs question.test.mjs recovery.test.mjs reparse.test.mjs server-sync.test.mjs server-deletion.test.mjs pdf-upload.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "2.0.3"
