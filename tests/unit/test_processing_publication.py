@@ -8,6 +8,7 @@ from solo_leveling.workers.processing_staging import ProcessingStagingError
 from solo_leveling.workers.processing_publication import PostgresStagedProcessingPublisher, ProcessingPublishError
 from tests.unit.test_processing_staging import store
 from tests.fixtures.processing_result import result
+from solo_leveling.domain.translation import TranslationStatus
 
 
 def test_staging_restores_exact_typed_result():
@@ -15,6 +16,34 @@ def test_staging_restores_exact_typed_result():
     payload, _, _ = staging._payload(value)
     payload['authorization'] = {}
     assert staging.restore(payload) == value
+
+
+def test_staging_restores_nontranslated_source_status():
+    from dataclasses import replace
+
+    staging, value = store(), result()
+    translation = replace(value.translations[0], status=TranslationStatus.REFERENCE_CONTENT)
+    value = replace(value, translations=(translation,))
+    payload, _, _ = staging._payload(value)
+    payload['authorization'] = {}
+
+    restored = staging.restore(payload)
+
+    assert restored == value
+    assert restored.translations[0].status == TranslationStatus.REFERENCE_CONTENT
+
+
+def test_staging_restores_legacy_v1_translation_as_translated():
+    staging, value = store(), result()
+    payload, _, _ = staging._payload(value)
+    payload['schema_version'] = 1
+    payload['authorization'] = {}
+    del payload['result']['translations'][0]['status']
+
+    restored = staging.restore(payload)
+
+    assert restored == value
+    assert restored.translations[0].status == TranslationStatus.TRANSLATED
 
 
 @pytest.mark.parametrize('change', ['extra', 'missing', 'nan', 'ordinal', 'spec', 'translation'])

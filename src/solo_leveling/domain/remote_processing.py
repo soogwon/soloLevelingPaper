@@ -3,7 +3,9 @@
 from dataclasses import dataclass
 
 from solo_leveling.domain.models import PaperSection
-from solo_leveling.domain.translation import TranslationFailureCode, TranslationSettings
+from solo_leveling.domain.translation import (
+    TranslationFailureCode, TranslationSettings, TranslationStatus,
+)
 
 
 class ProcessingError(RuntimeError):
@@ -72,6 +74,7 @@ class ProcessedTranslation:
     chunk_id: str
     text: str | None
     failure_code: TranslationFailureCode | None
+    status: TranslationStatus = TranslationStatus.TRANSLATED
 
 
 @dataclass(frozen=True, repr=False)

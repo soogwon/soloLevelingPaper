@@ -27,6 +27,7 @@ from solo_leveling.infrastructure.generation.gated_responses import GatedRespons
 from solo_leveling.infrastructure.parsing.processing_parser import ProcessingPdfParser
 from solo_leveling.infrastructure.translation.openai_provider import OpenAITranslationConfig, OpenAITranslationProvider
 from solo_leveling.infrastructure.translation.processing_translation import GatedProcessingTranslation
+from solo_leveling.domain.translation import TranslationStatus
 from tests.fixtures.pdf_builder import build_minimal_pdf, build_styled_pdf
 
 
@@ -132,6 +133,7 @@ def test_real_pdf_to_translations_and_vectors_preserves_source_without_publishin
     assert result.embeddings.chunk_ids == tuple(c.chunk_id for c in result.document.chunks)
     assert len(result.embeddings.vectors) == len(result.translations) == 2
     assert all(t.text == '합성 중계는 거점을 연결합니다.' and t.failure_code is None for t in result.translations)
+    assert all(t.status == TranslationStatus.TRANSLATED for t in result.translations)
     assert len(ledger.requests) == len(ledger.observed) == post.call_count == 2
     assert all(r.stage == 'translation' for r in ledger.requests)
     assert stages.embedder.embed.call_args.args[1] == stages.spec
@@ -140,6 +142,20 @@ def test_real_pdf_to_translations_and_vectors_preserves_source_without_publishin
     output = capsys.readouterr()
     for secret in ('synthetic-service-secret', 'The first synthetic page', '합성 중계는'):
         assert secret not in output.out + output.err + repr(result)
+
+
+def test_reference_source_skips_provider_and_preserves_status_for_remote_publication(setup):
+    stages, source, _, ledger, post, _, _ = setup
+    pdf = build_minimal_pdf(['https://doi.org/10.5555/12345678'])
+    source = replace(source, pdf_sha256=hashlib.sha256(pdf).hexdigest(), pdf_size=len(pdf))
+
+    result = stages.run(source, pdf)
+
+    assert result.status == 'prepared'
+    assert len(result.translations) == 1
+    assert result.translations[0].status == TranslationStatus.REFERENCE_CONTENT
+    assert result.translations[0].text == result.document.chunks[0].original_text
+    assert ledger.requests == [] and post.call_count == 0
 
 
 def test_real_styled_pdf_keeps_sections_and_empty_page_without_invented_labels(setup):

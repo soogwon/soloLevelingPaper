@@ -8,7 +8,7 @@ from solo_leveling.domain.remote_processing import (
     EmbeddingBatch, EmbeddingSpec, ParsedDocument, ProcessedTranslation, ProcessingChunk,
     ProcessingError, ProcessingResult, ProcessingSource,
 )
-from solo_leveling.domain.translation import TranslationSettings
+from solo_leveling.domain.translation import TranslationSettings, TranslationStatus
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,7 @@ def _prepared_shape(result: ProcessingResult) -> bool:
                 or type(chunk.chunk_id) is not str or not chunk.chunk_id.strip()
                 or chunk.parse_revision_id != result.source.parse_revision_id
                 or type(item.chunk_id) is not str or item.chunk_id != chunk.chunk_id or item.failure_code is not None
+                or not isinstance(item.status, TranslationStatus)
                 or type(item.text) is not str or not item.text.strip()):
             return False
     ids = tuple(c.chunk_id for c in chunks)

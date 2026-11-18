@@ -169,7 +169,9 @@ class RemoteProcessingStages:
                 _require((item.request.chunk_id, item.request.parse_revision_id, item.request.original_text)
                          == (chunk.chunk_id, chunk.parse_revision_id, chunk.original_text),
                          'PROCESSING_TRANSLATION_INVALID')
-            translations = tuple(ProcessedTranslation(i.request.chunk_id, i.text, i.failure_code) for i in batch.items)
+            translations = tuple(
+                ProcessedTranslation(i.request.chunk_id, i.text, i.failure_code, i.status)
+                for i in batch.items)
         except (ValueError, AttributeError, TypeError):
             raise ProcessingError('PROCESSING_TRANSLATION_INVALID') from None
         present_pages = {c.pdf_page for c in document.chunks}
