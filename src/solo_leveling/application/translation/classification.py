@@ -13,9 +13,12 @@ from solo_leveling.domain.translation import TranslationStatus
 _KOREAN = re.compile(r'[\uac00-\ud7a3]')
 _WORD = re.compile(r"[A-Za-z]{2,}")
 _IDENTIFIER = re.compile(
-    r'(?i)(?:https?://|www\.|doi\s*:|doi\.org/|arxiv\s*:|isbn\s*:|issn\s*:|'
-    r'pmid\s*:|10\.\d{4,9}/[-._;()/:A-Z0-9]+)')
+    r'(?i)(?:(?:https?://|www\.|doi\.org/)\S+|'
+    r'(?:doi\s*:\s*)?10\.\d{4,9}/[-._;()/:A-Z0-9]+|'
+    r'arxiv\s*:\s*\d{4}\.\d{4,5}(?:v\d+)?|'
+    r'(?:isbn|issn|pmid)\s*:\s*[\dX-]+)')
 _NUMBERED_REFERENCE = re.compile(r'^\s*(?:\[\d{1,4}\]|\d{1,4}[.)])\s+')
+_AUTHOR = re.compile(r'^[A-Z][A-Za-z\x27-]+,\s+[A-Z]\.')
 _YEAR = re.compile(r'(?:^|[\s,(])(?:18|19|20)\d{2}[a-z]?(?:[\s,).]|$)', re.I)
 _BIBLIOGRAPHIC_MARKER = re.compile(
     r'(?i)\b(?:vol\.?|volume|no\.?|number|pp?\.?|pages?|proceedings|conference|'
@@ -29,28 +32,26 @@ def classify_translation_source(text: str) -> TranslationStatus | None:
     normalized = ' '.join(unicodedata.normalize('NFKC', text).split())
     korean_count = len(_KOREAN.findall(normalized))
     latin_count = sum(len(word) for word in _WORD.findall(normalized))
-    # 기술 용어가 섞인 한국어는 그대로 보존하되, 짧은 한국어 주석 하나가 붙은
-    # 영어 본문 전체를 번역 완료로 오인하지 않는다.
-    if korean_count and (latin_count == 0 or korean_count >= 4 and korean_count * 5 >= latin_count):
-        return TranslationStatus.TRANSLATION_NOT_REQUIRED
+    # 한국어의 양만으로 영어 설명까지 제외하지 않는다. 혼합 원문은 번역기로
+    # 보내며, 아래 기호 비율이나 참고문헌 조건으로도 우회하지 않는다.
+    if korean_count:
+        return TranslationStatus.TRANSLATION_NOT_REQUIRED if latin_count == 0 else None
 
     words = _WORD.findall(normalized)
     visible = re.sub(r'\s+', '', normalized)
     alpha_ratio = sum(map(len, words)) / max(1, len(visible))
-    identifier = bool(_IDENTIFIER.search(normalized))
-    # URL/DOI가 포함됐다는 이유만으로 일반 본문 전체를 참고문헌으로 보지 않는다.
-    # 짧은 식별자 중심 행만 단독 조건으로 인정하고, 긴 행은 아래 서지 표지를 요구한다.
-    if identifier and len(words) <= 8:
+    # 문장에 포함된 URL이 아니라 원문 전체가 식별자인 경우만 제외한다.
+    if _IDENTIFIER.fullmatch(normalized):
         return TranslationStatus.REFERENCE_CONTENT
     # 수식·기호·짧은 식별자처럼 번역할 산문이 없는 구간이다.
     if not words or alpha_ratio < .45:
         return TranslationStatus.TRANSLATION_NOT_REQUIRED
 
-    numbered = bool(_NUMBERED_REFERENCE.search(normalized))
+    numbered = _NUMBERED_REFERENCE.match(normalized)
     year = bool(_YEAR.search(normalized))
     marker = bool(_BIBLIOGRAPHIC_MARKER.search(normalized))
-    # DOI/URL 같은 식별자는 그 자체로 충분하다. 그 밖에는 번호 또는 연도와
-    # 학술 서지 표지가 함께 있어야 하므로 일반 본문의 연도를 오분류하지 않는다.
-    if (numbered and (year or marker)) or (year and marker) or (identifier and marker):
+    # 번호·저자 표기·연도·서지 표지가 모두 있는 항목만 제외한다.
+    # 인식하지 못한 서지 형식은 일반 본문처럼 번역하는 편을 택한다.
+    if numbered and _AUTHOR.match(normalized[numbered.end():]) and year and marker:
         return TranslationStatus.REFERENCE_CONTENT
     return None

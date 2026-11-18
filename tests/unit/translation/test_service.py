@@ -93,6 +93,37 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(provider.calls), 1)
         self.assertEqual(result.items[0].status, TranslationStatus.TRANSLATED)
 
+    def test_ordinary_prose_with_reference_markers_calls_provider(self):
+        sources = (
+            'In 2017 the number of parameters increased significantly.',
+            'The code is at https://example.org.',
+            '1. In 2017 the number of parameters increased significantly.',
+            'The journal provides code at https://example.org.',
+            '참고 설명입니다: This method fails on long sequences.',
+            '이 문장은 길이가 긴 한국어 안내 설명입니다. This method fails.',
+        )
+        for original in sources:
+            with self.subTest(original=original):
+                translated = '이 구간의 설명을 한국어로 번역했습니다.'
+                provider = FakeTranslationProvider({original: translated})
+                result = TranslationService(provider).translate(
+                    (Chunk('c', 'p1', 0, original),), self.settings)
+                self.assertEqual(len(provider.calls), 1)
+                self.assertEqual(result.items[0].status, TranslationStatus.TRANSLATED)
+                self.assertEqual(result.items[0].text, translated)
+
+    def test_standalone_identifiers_remain_reference_content(self):
+        sources = ('doi: 10.5555/12345678', 'arXiv: 1706.03762',
+                   'ISBN: 978-1234567890', 'https://example.org/code')
+        provider = FakeTranslationProvider({})
+        result = TranslationService(provider).translate(
+            tuple(Chunk(f'c{i}', 'p1', i, text) for i, text in enumerate(sources)),
+            self.settings)
+        self.assertEqual(provider.calls, [])
+        self.assertTrue(all(item.status == TranslationStatus.REFERENCE_CONTENT
+                            for item in result.items))
+        self.assertEqual([item.text for item in result.items], list(sources))
+
     def test_partial_and_total_failure(self):
         for ids in (("c1",), ("c1", "c2")):
             provider = FakeTranslationProvider(self.provider.translations, ids)
