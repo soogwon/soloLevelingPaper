@@ -1,6 +1,8 @@
 """명시적 원격 학습 시작·이어하기와 고정된 게시 근거의 연결."""
 
 from uuid import UUID, uuid4
+import hashlib
+import json
 
 
 class RemoteLearningConflict(ValueError):
@@ -37,6 +39,7 @@ class PostgresRemoteLearningStore:
             'learning_record_id', 'context_id', 'paper_id', 'server_version_id',
             'publication_id', 'parse_revision_id')},
             'status': row['status'], 'revision': row['revision'], 'origin': 'remote',
+            'last_pdf_page': row.get('last_pdf_page'),
             'created_at': row['created_at'], 'updated_at': row['updated_at']}
 
     def get(self, owner, context):
@@ -77,7 +80,7 @@ class PostgresRemoteLearningStore:
             raise ValueError('remote_learning_limit_invalid')
         with self._pool.connection() as conn:
             rows = conn.execute("""SELECT c.context_id,c.paper_id,c.server_version_id,c.publication_id,
-                p.title,r.status,r.revision,r.updated_at,
+                p.title,r.status,r.revision,r.updated_at,r.last_pdf_page,
                 (SELECT count(*) FROM server_context_annotations a
                   WHERE a.owner_user_id=c.owner_user_id AND a.context_id=c.context_id
                     AND a.deleted_at IS NULL AND a.kind='note') AS note_count,
@@ -97,15 +100,16 @@ class PostgresRemoteLearningStore:
             'context_id', 'paper_id', 'server_version_id', 'publication_id')},
             'title': row['title'], 'processing_status': 'published',
             'reading_status': row['status'] or 'not_started', 'revision': row['revision'],
-            'last_learning_updated_at': row['updated_at'], 'last_position': None,
+            'last_learning_updated_at': row['updated_at'],
+            'last_position': {'pdf_page': row['last_pdf_page']} if row['last_pdf_page'] is not None else None,
             'note_count': row['note_count'], 'highlight_count': row['highlight_count'],
             'quiz_summary': None, 'reflection_summary': None,
             'web_path': '/#/remote-learning/' + str(row['context_id']) if row['status'] else None}
             for row in rows[:limit]]
         return {'items': items, 'next_cursor': items[-1]['context_id'] if len(rows) > limit else None,
-                'limitations': ['remote_position_not_available', 'remote_quiz_not_available',
+                'limitations': ['remote_quiz_not_available',
                                 'remote_reflection_not_available'],
-                'notice': '게시 완료와 학습 완료는 별개입니다. 학습 변경 시각은 마지막 열람 시각이 아닙니다. 위치·퀴즈·성찰은 아직 지원하지 않습니다.'}
+                'notice': '게시 완료와 학습 완료는 별개입니다. 학습 변경 시각은 마지막 열람 시각이 아닙니다. 위치는 고정 PDF 판본 기준이며 퀴즈·성찰은 아직 지원하지 않습니다.'}
 
     def reading_state(self, owner, context):
         page = self.dashboard(owner, context=self._scope(owner, context))
@@ -146,3 +150,48 @@ class PostgresRemoteLearningStore:
                     WHERE owner_user_id=%s AND context_id=%s AND revision=%s''',
                     (status, owner, context, expected_revision))
             return self._read(conn, owner, context)
+
+
+    def set_progress(self, owner, context, *, request_key, status, pdf_page, expected_revision):
+        """동일 키 재전송은 재적용하지 않고 현재 상태와 최초 적용 revision을 함께 반환한다."""
+        context = self._scope(owner, context)
+        request_key = str(UUID(request_key))
+        if (status not in ('reading', 'completed')
+                or type(expected_revision) is not int or expected_revision < 1
+                or (pdf_page is not None and (type(pdf_page) is not int or pdf_page < 1))):
+            raise ValueError('remote_learning_progress_invalid')
+        digest = hashlib.sha256(json.dumps([status, pdf_page, expected_revision],
+                                           separators=(',', ':')).encode()).hexdigest()
+        with self._pool.connection() as conn:
+            if self._lock(conn, owner, context) is None:
+                return None
+            current = self._read(conn, owner, context)
+            if current is None:
+                return None
+            old = conn.execute("""SELECT payload_hash,applied_revision FROM server_remote_learning_requests
+                WHERE owner_user_id=%s AND context_id=%s AND request_key=%s""",
+                (owner, context, request_key)).fetchone()
+            if old:
+                if old['payload_hash'] != digest:
+                    raise RemoteLearningConflict('remote_learning_request_conflict')
+                return {'state': current, 'applied_revision': old['applied_revision'], 'replayed': True}
+            if current['revision'] != expected_revision:
+                raise RemoteLearningConflict('remote_learning_revision_conflict')
+            if pdf_page is not None:
+                row = conn.execute("""SELECT document_metadata FROM server_parse_revisions
+                    WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s
+                      AND parse_revision_id=%s""", (owner, current['paper_id'],
+                        current['server_version_id'], current['parse_revision_id'])).fetchone()
+                count = row['document_metadata'].get('page_count') if row else None
+                if type(count) is not int or not 1 <= pdf_page <= count:
+                    raise ValueError('remote_learning_page_invalid')
+            if current['status'] != status or current['last_pdf_page'] != pdf_page:
+                conn.execute("""UPDATE server_remote_learning_records
+                    SET status=%s,last_pdf_page=%s,revision=revision+1,updated_at=CURRENT_TIMESTAMP
+                    WHERE owner_user_id=%s AND context_id=%s AND revision=%s""",
+                    (status, pdf_page, owner, context, expected_revision))
+            state = self._read(conn, owner, context)
+            conn.execute("""INSERT INTO server_remote_learning_requests
+                (owner_user_id,context_id,request_key,payload_hash,applied_revision)
+                VALUES (%s,%s,%s,%s,%s)""", (owner, context, request_key, digest, state['revision']))
+            return {'state': state, 'applied_revision': state['revision'], 'replayed': False}

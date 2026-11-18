@@ -47,3 +47,15 @@ def grant_annotation_web_role(conn, schema, role):
         sql.Identifier(schema), sql.Identifier(role)))
     conn.execute(sql.SQL('GRANT UPDATE(revoked_at) ON {}.server_annotation_consents TO {}').format(
         sql.Identifier(schema), sql.Identifier(role)))
+
+
+def grant_learning_progress_role(conn, schema, role):
+    """별도 승인된 역할에 위치·요청 키 원장 권한만 추가한다."""
+    from psycopg import sql
+    for table in ('server_parse_revisions', 'server_remote_learning_requests'):
+        conn.execute(sql.SQL('GRANT SELECT ON {}.{} TO {}').format(
+            sql.Identifier(schema), sql.Identifier(table), sql.Identifier(role)))
+    conn.execute(sql.SQL('GRANT INSERT ON {}.server_remote_learning_requests TO {}').format(
+        sql.Identifier(schema), sql.Identifier(role)))
+    conn.execute(sql.SQL('GRANT UPDATE(last_pdf_page) ON {}.server_remote_learning_records TO {}').format(
+        sql.Identifier(schema), sql.Identifier(role)))

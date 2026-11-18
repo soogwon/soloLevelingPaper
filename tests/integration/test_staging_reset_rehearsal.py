@@ -44,7 +44,8 @@ def test_reset_preserves_login_and_rebuilds_isolated_schema():
                 assert conn.execute("SELECT count(*) FROM server_users").fetchone()[0] == 1
                 conn.execute("INSERT INTO server_users(owner_user_id, display_name) VALUES ('synthetic', '합성')")
                 tables = conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename").fetchall()
-                assert len(tables) == 47
+                assert len(tables) == 48
+                assert ('server_remote_learning_requests',) in tables
                 assert ('server_annotation_consents',) in tables
                 assert ('server_remote_learning_records',) in tables
                 assert ('server_question_token_counts',) in tables
