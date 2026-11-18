@@ -3,7 +3,7 @@ from dataclasses import asdict, is_dataclass
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from .auth import AuthenticatedPrincipal
@@ -59,6 +59,12 @@ def create_annotation_product_router(require_principal, service):
         if value is None:
             raise HTTPException(404, {'code': 'annotation_not_found'}, headers=headers)
         return asdict(value) if is_dataclass(value) else value
+
+    @router.get('')
+    def contexts(paper_id: UUID, version_id: Annotated[str, Query(min_length=1, max_length=128)], principal: Principal, response: Response,
+                 after: UUID | None = None, limit: int = 20):
+        return call(principal, response, lambda owner: service.learning.list_for_paper(
+            owner, str(paper_id), str(version_id), after=str(after) if after else None, limit=limit))
 
     @router.post('/{context}/start')
     def start(context: UUID, principal: Principal, response: Response):
