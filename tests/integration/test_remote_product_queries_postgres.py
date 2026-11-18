@@ -68,7 +68,8 @@ def test_product_flag_requires_backend():
         create_app(remote_mcp_settings=replace(SETTINGS,product_reads_enabled=True),remote_mcp_verifier=Verifier())
 
 
-def test_saved_result_survives_new_app_and_owner_switch_without_execution(db,stores,pool):
+@pytest.mark.parametrize('intake,dispatch', [(True, True), (False, True), (True, False), (False, False)])
+def test_saved_result_survives_new_app_and_owner_switch_without_execution(db,stores,pool,intake,dispatch):
     from tests.integration.test_remote_answer_store_postgres import setup_answer
     from solo_leveling.application.remote_replay import ExecutionLookup
     from solo_leveling.interfaces.http.remote_answers import PostgresRemoteAnswerStore
@@ -81,6 +82,10 @@ def test_saved_result_survives_new_app_and_owner_switch_without_execution(db,sto
     queries.owners.link_identity('alice',VerifiedRemoteIdentity(SETTINGS.issuer,'account-a-replay'))
     db("INSERT INTO server_users(owner_user_id,display_name) VALUES ('bob','합성 계정') ON CONFLICT DO NOTHING")
     queries.owners.link_identity('bob',VerifiedRemoteIdentity(SETTINGS.issuer,'account-b-replay'))
+    db("""INSERT INTO server_dispatch_controls(control_id,generation,intake_enabled,dispatch_enabled)
+          VALUES ('provider_dispatch',1,%s,%s) ON CONFLICT(control_id)
+          DO UPDATE SET intake_enabled=EXCLUDED.intake_enabled,dispatch_enabled=EXCLUDED.dispatch_enabled""",
+       (intake, dispatch))
     before=db('SELECT count(*) AS count FROM server_remote_executions')
     for _ in range(2):
         app=create_app(remote_mcp_settings=replace(SETTINGS,product_reads_enabled=True),
@@ -93,6 +98,8 @@ def test_saved_result_survives_new_app_and_owner_switch_without_execution(db,sto
             assert result(client,'get_remote_question',args)==restored
     assert db('SELECT count(*) AS count FROM server_remote_executions')==before
     assert not db('SELECT attempt_id FROM server_provider_attempts')
+    assert db("SELECT intake_enabled,dispatch_enabled FROM server_dispatch_controls WHERE control_id='provider_dispatch'") == [
+        dict(intake_enabled=intake, dispatch_enabled=dispatch)]
     db("UPDATE server_papers SET deleted_at=clock_timestamp() WHERE paper_id=%s",(prepared.binding.paper_id,))
     app=create_app(remote_mcp_settings=replace(SETTINGS,product_reads_enabled=True),
                    remote_mcp_verifier=Verifier('-replay'),remote_product_queries=RemoteProductQueries(pool))
