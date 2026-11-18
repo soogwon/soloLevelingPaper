@@ -86,7 +86,7 @@ def test_real_mcp_registration_serializes_nested_records(monkeypatch):
     async def check():
         names = {tool.name for tool in await server.list_tools()}
         assert 'list_remote_annotations' in names
-        assert len(names) == 12
+        assert len(names) == 14
         result = await server.call_tool('list_remote_annotations', {'context_id': CONTEXT})
         assert '합성 메모' in str(result)
         assert 'annotation_id' in str(result)
@@ -137,6 +137,81 @@ def test_recovery_resource_and_tool_metadata(monkeypatch):
         assert tools['confirm_remote_annotation_card'].meta['ui']['visibility'] == ['app']
         resource = await server.read_resource('ui://remote-annotations/recovery.html')
         assert '원격 메모 복구 확인' in str(resource)
+
+    asyncio.run(check())
+
+
+def test_prepare_card_only_recovers_and_save_requires_current_connection(monkeypatch):
+    from dataclasses import dataclass
+
+    @dataclass
+    class Saved:
+        request_key: str = 'existing'
+
+    current = token(['annotations:read', 'annotations:write'])
+    monkeypatch.setattr(module, 'get_access_token', lambda: current)
+    service = Mock(service_id='remote-paper')
+    service.learning.get.return_value = {'context_id': CONTEXT}
+    service.recover.return_value = Saved()
+    service.create.return_value = Saved()
+    server = Server()
+    module.register_annotation_tools(server, NS(owner=lambda: 'alice'), service)
+    value = {'kind': 'note', 'body': '합성'}
+    result = server.tools['prepare_remote_annotation'](CONTEXT, value)['result']
+    assert result['value'] == value and result['existing']['request_key'] == 'existing'
+    service.create.assert_not_called()
+    bound = result['binding']
+    current.token = 'other-token'
+    assert server.tools['save_remote_annotation_card'](CONTEXT, 'existing', value, bound)['result']['connection_changed']
+    service.create.assert_not_called()
+    current.token = 'synthetic'
+    assert server.tools['save_remote_annotation_card'](CONTEXT, 'existing', value, bound)['status'] == 'ok'
+    service.create.assert_called_once()
+
+
+def test_prepare_card_missing_learning_never_recovers(monkeypatch):
+    monkeypatch.setattr(module, 'get_access_token', lambda: token(['annotations:read']))
+    service = Mock(service_id='remote-paper')
+    service.learning.get.return_value = None
+    server = Server()
+    module.register_annotation_tools(server, NS(owner=lambda: 'alice'), service)
+    assert server.tools['prepare_remote_annotation'](CONTEXT, {'kind':'note', 'body':'합성'})['status'] == 'not_found'
+    service.recover.assert_not_called()
+    service.learning.start.assert_not_called()
+
+
+def test_compose_tools_return_structured_content_in_actual_sdk(monkeypatch):
+    import asyncio
+    from dataclasses import dataclass
+    from mcp.server.fastmcp import FastMCP
+
+    @dataclass
+    class Saved:
+        request_key: str = 'existing'
+
+    monkeypatch.setattr(module, 'get_access_token', lambda: token(['annotations:read', 'annotations:write']))
+    service = Mock(service_id='remote-paper')
+    service.learning.get.return_value = {'context_id': CONTEXT}
+    service.recover.return_value = None
+    service.create.return_value = Saved()
+    server = FastMCP('작성 카드 구조화 응답 검증')
+    module.register_annotation_tools(server, NS(owner=lambda: 'alice'), service)
+
+    async def check():
+        value = {'kind': 'note', 'body': '합성 메모'}
+        prepared = await server.call_tool('prepare_remote_annotation', {'context_id': CONTEXT, 'value': value})
+        assert isinstance(prepared, tuple)
+        assert prepared[1]['result']['existing'] is None
+        service.create.assert_not_called()
+        saved = await server.call_tool('save_remote_annotation_card', {
+            'context_id': CONTEXT, 'request_key': 'existing', 'value': value,
+            'expected_binding': prepared[1]['result']['binding']})
+        assert isinstance(saved, tuple)
+        assert saved[1] == {'status': 'ok', 'result': {'request_key': 'existing'}}
+        metadata = {tool.name: tool for tool in await server.list_tools()}
+        assert metadata['prepare_remote_annotation'].outputSchema is not None
+        assert metadata['save_remote_annotation_card'].outputSchema is not None
+        assert metadata['save_remote_annotation_card'].meta['ui']['visibility'] == ['app']
 
     asyncio.run(check())
 

@@ -9,6 +9,7 @@ for (const [name, entry, templateName] of [
   ['registration', 'registration-main', 'registration-template'],
   ['paper-reparse', 'reparse-main', 'reparse-template'],
   ['translation-recovery', 'recovery-main', 'recovery-template'],
+  ['remote-annotation-compose', 'remote-compose-main', 'remote-compose-template'],
   ['remote-annotation-recovery', 'remote-annotation-main', 'remote-annotation-template'],
   ['annotation', 'annotation-main', 'annotation-template'],
   ['server-sync', 'server-sync-main', 'server-sync-template'],
