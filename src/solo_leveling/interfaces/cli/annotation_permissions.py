@@ -8,7 +8,7 @@ def grant_annotation_role(conn, schema, role):
     reads = ('server_papers', 'server_execution_contexts', 'server_processing_publications',
              'server_processing_chunks', 'server_translation_chunks',
              'server_remote_learning_records', 'server_context_annotations',
-             'server_annotation_create_requests')
+             'server_annotation_create_requests', 'server_annotation_consents')
     conn.execute(sql.SQL('GRANT USAGE ON SCHEMA {} TO {}').format(sql.Identifier(schema), sql.Identifier(role)))
     for table in reads:
         conn.execute(sql.SQL('GRANT SELECT ON {}.{} TO {}').format(
@@ -37,3 +37,13 @@ def grant_annotation_role(conn, schema, role):
                             'EXECUTE FUNCTION {}.server_question_lock_guard({})').format(
             sql.Identifier(trigger), sql.Identifier(schema), sql.Identifier(table),
             sql.Identifier(schema), sql.Literal(role)))
+
+
+def grant_annotation_web_role(conn, schema, role):
+    """웹 세션의 명시적 동의·철회만 추가 허용한다. MCP 역할에는 적용하지 않는다."""
+    from psycopg import sql
+    grant_annotation_role(conn, schema, role)
+    conn.execute(sql.SQL('GRANT INSERT ON {}.server_annotation_consents TO {}').format(
+        sql.Identifier(schema), sql.Identifier(role)))
+    conn.execute(sql.SQL('GRANT UPDATE(revoked_at) ON {}.server_annotation_consents TO {}').format(
+        sql.Identifier(schema), sql.Identifier(role)))
