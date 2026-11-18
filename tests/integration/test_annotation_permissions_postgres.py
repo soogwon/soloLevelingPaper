@@ -39,9 +39,12 @@ def test_limited_role_full_existing_ports_and_denials(pool, db, context):
         saved = store.create(owner, 'product', key, 'key', value)
         assert store.create(owner, 'product', key, 'key', value).reused
         assert store.recover_request(owner, 'product', key, value).annotation == saved.annotation
-        assert store.confirm_request(owner, 'product', key, 'key', saved.annotation.annotation_id, 1)
+        changed = store.update_annotation(owner, key, saved.annotation.annotation_id, body='수정', step=None, expected_revision=1)
+        assert store.get_annotation(owner, key, saved.annotation.annotation_id) == changed
+        assert store.list_annotations(owner, key)['items'] == [changed]
+        assert store.confirm_request(owner, 'product', key, 'key', saved.annotation.annotation_id, 2)
         assert store.lookup_request('other', 'product', key, 'key') is None
-        assert store.mark_deleted(owner, saved.annotation.annotation_id)
+        assert store.delete_annotation(owner, key, saved.annotation.annotation_id, expected_revision=2).revision == 3
         assert store.lookup_request(owner, 'product', key, 'key').state == 'deleted'
         for statement in (
             'SELECT * FROM web_sessions', 'SELECT * FROM server_device_credentials',

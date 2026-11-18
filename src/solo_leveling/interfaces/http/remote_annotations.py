@@ -110,7 +110,7 @@ class PostgresRemoteAnnotationStore:
         self._pool = pool
 
     def create(self, owner_user_id: str, service_id: str, context_id: str, request_key: str,
-               value: RemoteAnnotationInput) -> RemoteAnnotationCreateResult:
+               value: RemoteAnnotationInput, *, require_learning: bool = False) -> RemoteAnnotationCreateResult:
         if not all(isinstance(item, str) and item for item in (owner_user_id, context_id)):
             raise ValueError("remote_annotation_scope_invalid")
         if (not isinstance(service_id, str) or not isinstance(request_key, str)
@@ -170,6 +170,11 @@ class PostgresRemoteAnnotationStore:
             ).fetchone()
             if scope is None:
                 raise RemoteAnnotationReferenceError("annotation_create_not_found")
+            if require_learning and conn.execute(
+                "SELECT 1 FROM server_remote_learning_records WHERE owner_user_id=%s AND context_id=%s",
+                (owner_user_id, context_id),
+            ).fetchone() is None:
+                raise RemoteAnnotationReferenceError("annotation_learning_required")
             segments = self._validated_segments(conn, owner_user_id, scope, value.segments)
             row = conn.execute(
                 """INSERT INTO server_context_annotations
@@ -318,6 +323,70 @@ class PostgresRemoteAnnotationStore:
                 "quote_snapshot": segment.quote_snapshot,
             })
         return stored
+
+    def get_annotation(self, owner, context, annotation_id):
+        """같은 owner/context의 살아 있는 기록만 조회한다."""
+        self._recovery_scope(owner, 'lookup', context)
+        with self._pool.connection() as conn:
+            if not self._lock_recovery_parent(conn, owner, context):
+                return None
+            row = conn.execute("""SELECT * FROM server_context_annotations
+                WHERE owner_user_id=%s AND context_id=%s AND annotation_id=%s
+                  AND deleted_at IS NULL""", (owner, context, annotation_id)).fetchone()
+            return None if row is None else _stored(row)
+
+    def list_annotations(self, owner, context, *, after=None, limit=20):
+        """불변 ID를 커서로 사용하며 삭제된 기록은 목록에서 제외한다."""
+        from uuid import UUID
+        self._recovery_scope(owner, 'lookup', context)
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise ValueError('annotation_limit_invalid')
+        after = str(UUID(after)) if after is not None else None
+        with self._pool.connection() as conn:
+            if not self._lock_recovery_parent(conn, owner, context):
+                return None
+            rows = conn.execute("""SELECT * FROM server_context_annotations
+                WHERE owner_user_id=%s AND context_id=%s AND deleted_at IS NULL
+                  AND (%s::uuid IS NULL OR annotation_id>%s::uuid)
+                ORDER BY annotation_id LIMIT %s""", (owner, context, after, after, limit+1)).fetchall()
+            return {'items': [_stored(row) for row in rows[:limit]],
+                    'next_cursor': str(rows[limit-1]['annotation_id']) if len(rows)>limit else None}
+
+    def update_annotation(self, owner, context, annotation_id, *, body, step, expected_revision):
+        """위치와 출처는 고정하고 본문·단계만 현재 revision에서 수정한다."""
+        return self._change_annotation(owner, context, annotation_id, expected_revision, body, step, False)
+
+    def delete_annotation(self, owner, context, annotation_id, *, expected_revision):
+        """현재 revision의 기록을 지우고 생성 키 이력은 보존한다."""
+        return self._change_annotation(owner, context, annotation_id, expected_revision, None, None, True)
+
+    def _change_annotation(self, owner, context, annotation_id, expected_revision, body, step, delete):
+        self._recovery_scope(owner, 'change', context)
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError('annotation_revision_invalid')
+        with self._pool.connection() as conn:
+            if not self._lock_recovery_parent(conn, owner, context):
+                return None
+            current = conn.execute("""SELECT * FROM server_context_annotations
+                WHERE owner_user_id=%s AND context_id=%s AND annotation_id=%s
+                  AND deleted_at IS NULL FOR UPDATE""", (owner, context, annotation_id)).fetchone()
+            if current is None:
+                return None
+            if current['revision'] != expected_revision:
+                raise RemoteAnnotationConflict('annotation_revision_conflict')
+            if delete:
+                row = conn.execute("""UPDATE server_context_annotations SET body='',segments='[]'::jsonb,
+                    deleted_at=CURRENT_TIMESTAMP,revision=revision+1,updated_at=CURRENT_TIMESTAMP
+                    WHERE owner_user_id=%s AND annotation_id=%s RETURNING *""", (owner, annotation_id)).fetchone()
+                conn.execute("""UPDATE server_annotation_create_requests SET state='deleted'
+                    WHERE owner_user_id=%s AND annotation_id=%s""", (owner, annotation_id))
+            else:
+                validate_annotation_fields(current['kind'], body, step, len(current['segments']))
+                row = conn.execute("""UPDATE server_context_annotations SET body=%s,step=%s,
+                    revision=revision+1,updated_at=CURRENT_TIMESTAMP
+                    WHERE owner_user_id=%s AND annotation_id=%s RETURNING *""",
+                    (body, step, owner, annotation_id)).fetchone()
+            return _stored(row)
 
     def mark_deleted(self, owner_user_id: str, annotation_id: str) -> bool:
         """본문을 제거하고 생성 키 tombstone을 남긴다. 후속 삭제 route가 호출할 경계다."""
