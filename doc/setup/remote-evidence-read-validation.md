@@ -40,3 +40,29 @@ DB migration·쓰기 권한·새 자격·worker 설정·PDF/AI 호출은 필요 
   간주하지 않는다. #581 원격 요약과 출처 연결을 확인하고 명시적 빈 상태를 제공한다.
 - 근거별 메모 커서 조회·상세 카드 연결 및 별도 annotation scope 검사.
 - 실제 Claude 재로그인/다기기/두 계정 종단 검증.
+
+## 근거별 메모와 상세 카드
+
+`list_remote_evidence_annotations(context_id,evidence_id,after,limit)`와
+`show_remote_evidence_detail(context_id,evidence_id)`는 기존 근거 무결성 검사를 거친 후
+`papers:read`와 `annotations:read`를 모두 검사한다. annotation 전용 저장소에서
+같은 owner/context와 고정 chunk/parse revision, 번역이면 translation revision도
+일치하는 살아 있는 기록만 LIMIT 이전에 필터링한다. 연결 없는 맥락 메모는 제외한다.
+이는 **같은 근거 청크**의 기록이며 인용문과 정확히 겹치는 offset만의 목록은 아니다.
+불변 annotation ID 커서로 더 보기를 지원하며 새로고침은 첫 페이지부터 한다.
+페이지를 넘기는 중 생성·수정·삭제에 대한 시점 고정 스냅샷은 제공하지 않는다.
+
+상세 카드는 원문/번역 인용과 판본·페이지 안내, 메모/하이라이트 및 구간 인용을
+표시한다. SDK 구조화 응답을 사용하고 본문은 textContent로만 표시한다. 더 보기의
+연결 binding이 바뀌거나 응답이 잘못되면 이전 기록까지 지운다. 새 입력·취소·pagehide
+후 이전 비동기 응답은 무시한다. 토큰 갱신 시 새 카드를 열어야 하며 호스트의 실제
+로그아웃 이벤트를 카드에 전달한다는 보장은 없다.
+
+로컬 검증: 23개 연결 기록과 23개 미연결 기록을 섞은 커서 완주, 원문/번역 리비전
+필터, 삭제/다른 owner 차단, 실제 저장 답변→근거→메모 카드 조립을 검사한다.
+UI에서는 더 보기·새로고침·늦은 응답·연결 변경·중복 페이지·HTML 비실행을 검사한다.
+
+이 단계는 DB migration·새 권한을 추가하지 않는다. 기존 product 조회 pool과
+annotation pool을 분리해 사용한다. 실제 staging 배포 및 Claude 새 상세 카드,
+다기기·재로그인·두 계정 검증은 별도 남은 범위다. 이전 #602의 실제 조회 검증을
+새 카드의 실환경 검증으로 간주하지 않는다. #590 전체 종료 조건은 여전히 미충족이다.

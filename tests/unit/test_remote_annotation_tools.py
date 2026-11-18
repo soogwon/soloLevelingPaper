@@ -86,7 +86,7 @@ def test_real_mcp_registration_serializes_nested_records(monkeypatch):
     async def check():
         names = {tool.name for tool in await server.list_tools()}
         assert 'list_remote_annotations' in names
-        assert len(names) == 14
+        assert len(names) == 16
         result = await server.call_tool('list_remote_annotations', {'context_id': CONTEXT})
         assert '합성 메모' in str(result)
         assert 'annotation_id' in str(result)
@@ -251,3 +251,53 @@ def test_card_tools_have_actual_structured_mcp_outputs(monkeypatch):
         assert tools['confirm_remote_annotation_card'].outputSchema is not None
 
     asyncio.run(check())
+
+
+def test_evidence_card_scopes_binding_and_serialization(monkeypatch):
+    import asyncio
+    from mcp.server.fastmcp import FastMCP
+    current = token(['annotations:read'])
+    monkeypatch.setattr(module, 'get_access_token', lambda: current)
+    service = Mock(service_id='remote-paper')
+    service.store.list_annotations.return_value = {'items': [], 'next_cursor': None}
+    queries = NS(owner=lambda: 'alice', evidences=Mock())
+    queries.evidences.get.return_value = {'context_id': CONTEXT, 'evidence_id': CONTEXT}
+    server = FastMCP('근거 카드 검증')
+    module.register_annotation_tools(server, queries, service)
+    async def check():
+        args = {'context_id': CONTEXT, 'evidence_id': CONTEXT}
+        result = await server.call_tool('show_remote_evidence_detail', args)
+        assert result[1]['status'] == 'ok'
+        bound = result[1]['result']['binding']
+        queries.evidences.get.assert_called_once_with('alice', CONTEXT, CONTEXT)
+        service.store.list_annotations.assert_called_once_with('alice', CONTEXT, after=None, limit=20, evidence=queries.evidences.get.return_value)
+        queries.evidences.reset_mock(); service.store.reset_mock()
+        current.token = 'renewed'
+        changed = await server.call_tool('show_remote_evidence_detail', {**args, 'expected_binding': bound})
+        assert changed[1]['result'] == {'connection_changed': True}
+        queries.evidences.get.assert_not_called(); service.store.list_annotations.assert_not_called()
+        current.scopes = []
+        denied = await server.call_tool('list_remote_evidence_annotations', args)
+        assert denied[1]['status'] == 'not_authorized'
+        queries.evidences.get.assert_not_called()
+        current.scopes = ['annotations:read']
+        queries.evidences.get.return_value = None
+        missing = await server.call_tool('list_remote_evidence_annotations', args)
+        assert missing[1]['status'] == 'not_found'
+        service.store.list_annotations.assert_not_called()
+        tools = {t.name:t for t in await server.list_tools()}
+        assert tools['show_remote_evidence_detail'].annotations.readOnlyHint
+        assert tools['list_remote_evidence_annotations'].outputSchema
+    asyncio.run(check())
+
+
+def test_evidence_integrity_failure_is_unavailable_not_bad_input(monkeypatch):
+    monkeypatch.setattr(module, 'get_access_token', lambda: token(['annotations:read']))
+    service = Mock(service_id='remote-paper')
+    queries = NS(owner=lambda: 'alice', evidences=Mock())
+    queries.evidences.get.side_effect = ValueError('민감한 원문 오류')
+    server = Server()
+    module.register_annotation_tools(server, queries, service)
+    result = server.tools['show_remote_evidence_detail'](CONTEXT, CONTEXT)
+    assert result['status'] == 'unavailable' and '민감한' not in str(result)
+    service.store.list_annotations.assert_not_called()

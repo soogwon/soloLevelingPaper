@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 for (const [name, entry, templateName] of [
+  ['remote-evidence-detail', 'remote-evidence-main', 'remote-evidence-template'],
   ['question-card', 'question-main', 'question-template'],
   ['paper-detail', 'main', 'template'],
   ['registration', 'registration-main', 'registration-template'],
