@@ -14,6 +14,15 @@ export default async function questionReview({ view, params }) {
     events.forEach(event => window.removeEventListener(event, close));
   }
   events.forEach(event => window.addEventListener(event, close));
+  function validTransfer(v) {
+    const t = v?.transfer;
+    const count = v?.notice_version === 'question-count-and-generation-v1' ? 1 : v?.notice_version === 'remote-question-v1' ? 0 : -1;
+    return t && count >= 0 && t.input_count_max_calls === count
+      && Number.isSafeInteger(t.generation_max_calls) && t.generation_max_calls > 0
+      && t.generation_max_calls === v.policy.max_calls
+      && (count === 0 || t.generation_max_calls === 1)
+      && t.total_max_calls === count + t.generation_max_calls;
+  }
   function draw(message = '') {
     if (closed || !view.isConnected) return;
     setHTML(view, html`<h1>질문 전송 검토</h1>
@@ -23,22 +32,23 @@ export default async function questionReview({ view, params }) {
         <p>논문 판본: ${value.version_id} · 페이지: ${value.pages.join(', ') || '전체'} · 근거 최대 ${value.top_k}개</p>
         <p>섹션: ${value.sections.join(', ') || '전체'} · 페이지 엄격 제한: ${value.strict_pages ? '예' : '아니요'}</p>
         <p>생성 모델: ${value.models.generation_model} · 의미 검증: ${value.models.semantic_model}</p>
-        <p>최대 호출 ${value.policy.max_calls}회 · 입력 ${value.policy.max_input_tokens}토큰 · 출력 ${value.policy.max_output_tokens}토큰</p>
+        <p>답변 생성·검증 최대 ${value.policy.max_calls}회 · 입력 ${value.policy.max_input_tokens}토큰 · 출력 ${value.policy.max_output_tokens}토큰</p>
+        ${validTransfer(value) ? html`<p>입력 토큰 계수 최대 ${value.transfer.input_count_max_calls}회 · 답변 생성·검증 최대 ${value.transfer.generation_max_calls}회 · 외부 전송 합계 최대 ${value.transfer.total_max_calls}회</p>` : html`<p>외부 전송 횟수를 확인할 수 없습니다. 다시 조회해 주세요.</p>`}
         <p>동의·접수 가능 기한: ${value.expires_at}</p>
         ${['storage', 'ai_provider'].map(p => html`<fieldset>
           <legend>${p === 'storage' ? '질문·결과 저장' : 'OpenAI 전송'}</legend>
           <p>${p === 'storage' ? value.storage_notice : value.ai_notice}</p><p>상태: ${value[p]}</p>
-          <label><input type="checkbox" data-check="${p}" ${busy || !value.active ? 'disabled' : ''}> 위 내용을 확인하고 동의합니다.</label>
+          <label><input type="checkbox" data-check="${p}" ${busy || !value.active || !validTransfer(value) ? 'disabled' : ''}> 위 내용을 확인하고 동의합니다.</label>
           <button type="button" data-grant="${p}" disabled>동의 저장</button>
           <button type="button" data-revoke="${p}" ${busy || value[p] !== 'current' ? 'disabled' : ''}>동의 철회</button>
         </fieldset>`)}
-        <button type="button" data-submit ${busy || !value.active || value.storage !== 'current' || value.ai_provider !== 'current' ? 'disabled' : ''}>동의한 질문 접수</button>
+        <button type="button" data-submit ${busy || !value.active || !validTransfer(value) || value.storage !== 'current' || value.ai_provider !== 'current' ? 'disabled' : ''}>동의한 질문 접수</button>
         <p>철회한 동의는 이 요청에서 다시 활성화하지 않습니다. 오류나 응답 유실 시 새 키를 만들지 말고 기존 상태를 확인하세요.</p>
       </section>` : ''}
       <button type="button" data-refresh ${busy ? 'disabled' : ''}>같은 요청 다시 조회</button>`);
     view.querySelector('[data-refresh]').onclick = () => run('GET', '');
     view.querySelectorAll('[data-check]').forEach(el => { el.onchange = () => {
-      view.querySelector(`[data-grant="${el.dataset.check}"]`).disabled = !el.checked || busy || !value.active;
+      view.querySelector(`[data-grant="${el.dataset.check}"]`).disabled = !el.checked || busy || !value.active || !validTransfer(value);
     }; });
     view.querySelectorAll('[data-grant]').forEach(el => { el.onclick = () => run('POST', `/consents/${el.dataset.grant}`, { notice_version: value.notice_version }); });
     view.querySelectorAll('[data-revoke]').forEach(el => { el.onclick = () => run('POST', `/consents/${el.dataset.revoke}/revoke`); });
@@ -47,6 +57,7 @@ export default async function questionReview({ view, params }) {
   }
   async function run(method, suffix, body) {
     if (closed || busy) return;
+    if (method === 'POST' && !suffix.endsWith('/revoke') && (!value?.active || !validTransfer(value))) return;
     const seq = ++generation; busy = true; draw('확인 중입니다.');
     try {
       const result = await request(method, path + suffix, { body });

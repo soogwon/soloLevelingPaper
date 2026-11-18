@@ -126,3 +126,26 @@ migration `0042_question_token_counts.sql`은 원문 없이 owner/execution/leas
 
 A: migration·제한 역할·동시 예약·기한/동의/lease 검사. B: 같은 본문의 계수와 생성 연결·해시 고정·비용 상한.
 C: 기존 고지 차단·다음 동의 화면 연결·실제 Desktop 조회가 남았음을 구분한다. 관련 티켓은 닫지 않는다.
+
+### 일반 질문 제품 동의 고지 연결 (#396)
+
+`REMOTE_QUESTION_SETTINGS_JSON`에는 선택 필드 `notice_version`이 추가된다.
+기존 고정 payload 설정은 생략 시 `remote-question-v1`을 유지한다.
+일반 질문은 `question-count-and-generation-v1`을 명시하고 worker 계약과 같은
+`general-question-…` profile, 생성 최대 1회, `semantic_model=disabled`를 사용한다.
+잘못된 조합은 설정 로딩 시 거부한다. 웹의 `policy.max_calls=1`은 생성 호출 상한이며
+입력 계수를 포함한 전체 HTTP 횟수가 아니다.
+
+검토 응답의 `transfer`는 입력 계수 최대 1회·생성 최대 1회·외부 전송 합계 최대 2회를
+구분한다. UI는 필드 누락·고지와 횟수 불일치 시 동의·접수를 차단하고 조회·철회는 유지한다.
+고지에는 질문·선택 원문과 번역·근거 ID·지시·출력 형식이 계수 요청에도 전송됨을 설명한다.
+동의 저장 및 접수 자체는 계수나 생성 API를 호출하지 않는다.
+
+기존 검토 행은 저장된 고지와 횟수로 표시하며 새 고지로 바뀐 서비스에서는 미접수 요청의
+동의·접수를 허용하지 않는다. 기존 동의를 새 버전으로 자동 승계하지 않는다.
+이미 접수된 요청은 기존 ID 조회만 유지한다. 새 방식은 새 검토 요청에서 목적별 동의를 받는다.
+
+코드·대역 검증 범위이며 실제 브라우저 배포본 검증은 아직 하지 않았다.
+실제 적용 전 웹 설정의 고지/profile, worker v2 계약, migration0042·추가 최소 권한,
+계수 endpoint의 모델 지원·비용과 최대 2회 전송 승인을 함께 확정해야 한다.
+이번 변경은 staging 설정·배포·API 호출을 수행하지 않는다.

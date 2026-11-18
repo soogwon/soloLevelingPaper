@@ -117,3 +117,29 @@ def test_restricted_review_role_submits_without_web_secrets_or_policy_edits(db,s
         with pool.connection() as conn:
             conn.execute(sql.SQL('DROP OWNED BY {}').format(sql.Identifier(role)))
             conn.execute(sql.SQL('DROP ROLE {}').format(sql.Identifier(role)))
+
+
+def test_count_notice_is_pinned_and_legacy_consent_cannot_admit(db,stores,pool):
+    from solo_leveling.interfaces.http.remote_question_reviews import COUNT_NOTICE
+    service,old,binding=review(db,stores,pool)
+    service.grant('alice',old,'storage',NOTICE)
+    service.grant('alice',old,'ai_provider',NOTICE)
+    config={**service.config,'provider_profile_id':'general-question-'+'a'*64,'semantic_model':'disabled'}
+    general=PostgresQuestionReviews(pool,policy=replace(service.policy,max_calls=1),processing_config=config,
+        window_key=service.window,review_seconds=60,web_origin=service.web_origin,notice_version=COUNT_NOTICE)
+    assert general.view('alice',old)['transfer']['total_max_calls']==service.policy.max_calls
+    assert not general.view('alice',old)['active']
+    with pytest.raises(ValueError):general.submit('alice',old)
+    key=new_id();general.prepare('alice',key,binding.context_id,'계수 동의 합성 질문')
+    data=general.view('alice',key)
+    assert data['notice_version']==COUNT_NOTICE
+    assert data['transfer']==dict(input_count_max_calls=1,generation_max_calls=1,total_max_calls=2)
+    assert '근거 ID' in data['ai_notice'] and '최대 2회' in data['ai_notice']
+    with pytest.raises(ValueError):general.grant('alice',key,'ai_provider',NOTICE)
+    general.grant('alice',key,'storage',COUNT_NOTICE);general.grant('alice',key,'ai_provider',COUNT_NOTICE)
+    saved=general.submit('alice',key)
+    row=db('SELECT notice_version FROM server_remote_executions WHERE execution_id=%s',(saved['execution_id'],))[0]
+    assert row['notice_version']==COUNT_NOTICE
+    assert general.submit('alice',key)['execution_id']==saved['execution_id']
+    assert not db('SELECT * FROM server_question_token_counts WHERE execution_id=%s',(saved['execution_id'],))
+    assert not db('SELECT * FROM server_provider_attempts WHERE execution_id=%s',(saved['execution_id'],))
