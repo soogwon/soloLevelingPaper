@@ -35,8 +35,11 @@ def test_limited_role_full_existing_ports_and_denials(pool, db, context):
         assert learning.set_status(owner, key, status='completed', expected_revision=1)['revision'] == 2
         assert learning.start(owner, key)['learning_record_id'] == original['learning_record_id']
         store = PostgresRemoteAnnotationStore(restricted)
+        from solo_leveling.interfaces.http.remote_annotation_consents import PostgresAnnotationConsentStore, NOTICE_VERSION
+        from solo_leveling.interfaces.cli.annotation_permissions import grant_annotation_web_role
+        permission = PostgresAnnotationConsentStore(pool).grant(owner, key, NOTICE_VERSION)
         value = annotation(context)
-        saved = store.create(owner, 'product', key, 'key', value)
+        saved = store.create(owner, 'product', key, 'key', value, require_learning=True, require_storage_consent=True)
         assert store.create(owner, 'product', key, 'key', value).reused
         assert store.recover_request(owner, 'product', key, value).annotation == saved.annotation
         changed = store.update_annotation(owner, key, saved.annotation.annotation_id, body='수정', step=None, expected_revision=1)
@@ -49,6 +52,8 @@ def test_limited_role_full_existing_ports_and_denials(pool, db, context):
         for statement in (
             'SELECT * FROM web_sessions', 'SELECT * FROM server_device_credentials',
             'DELETE FROM server_context_annotations',
+            'DELETE FROM server_annotation_consents',
+            'UPDATE server_annotation_consents SET revoked_at=CURRENT_TIMESTAMP',
             'UPDATE server_papers SET paper_id=paper_id',
             'UPDATE server_execution_contexts SET context_id=context_id',
             'UPDATE server_processing_publications SET publication_id=publication_id',
@@ -60,6 +65,12 @@ def test_limited_role_full_existing_ports_and_denials(pool, db, context):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 with restricted.connection() as conn:
                     conn.execute(statement)
+        # 웹 전용 추가 권한을 명시 적용한 뒤에만 동의·철회 저장이 가능하다.
+        with pool.connection() as conn:
+            grant_annotation_web_role(conn, schema, role)
+        web_consents = PostgresAnnotationConsentStore(restricted)
+        assert not web_consents.revoke(owner, key, permission['consent_id'])['granted']
+        assert web_consents.grant(owner, key, NOTICE_VERSION)['revision'] == 2
     finally:
         restricted.close()
         with pool.connection() as conn:

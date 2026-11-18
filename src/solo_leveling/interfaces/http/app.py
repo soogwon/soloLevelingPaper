@@ -39,6 +39,8 @@ def create_app(
     remote_product_queries=None,
     remote_questions=None,
     remote_annotation_recovery=None,
+    remote_annotation_products=None,
+    remote_mcp_annotations=None,
 ) -> "FastAPI":
     """명시적 설정 또는 환경 설정으로 독립적인 API 앱을 만든다."""
 
@@ -156,7 +158,7 @@ def create_app(
                 raise ValueError('question_settings_invalid')
             managed_question_store = PostgresDeviceStore.from_dsn(DatabaseSettings(dsn).dsn)
             remote_questions = PostgresQuestionReviews(managed_question_store.connection_pool,**question_settings)
-    remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries, question_service=remote_questions)
+    remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries, question_service=remote_questions, annotation_service=remote_mcp_annotations)
                      if selected_remote_mcp.enabled else None)
 
     @asynccontextmanager
@@ -244,6 +246,11 @@ def create_app(
         require_principal, selected_remote_consent_store, selected_remote_processing_intake))
     from .remote_question_routes import create_question_review_router
     app.include_router(create_question_review_router(require_principal,remote_questions))
+    if remote_annotation_products is not None:
+        if remote_annotation_recovery is None:
+            remote_annotation_recovery = remote_annotation_products
+        from .remote_annotation_product_routes import create_annotation_product_router
+        app.include_router(create_annotation_product_router(require_principal, remote_annotation_products))
     if remote_annotation_recovery is not None:
         from .remote_annotation_recovery_routes import create_annotation_recovery_router
         app.include_router(create_annotation_recovery_router(require_principal, remote_annotation_recovery))

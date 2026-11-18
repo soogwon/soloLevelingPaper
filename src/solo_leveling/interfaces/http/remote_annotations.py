@@ -110,7 +110,7 @@ class PostgresRemoteAnnotationStore:
         self._pool = pool
 
     def create(self, owner_user_id: str, service_id: str, context_id: str, request_key: str,
-               value: RemoteAnnotationInput, *, require_learning: bool = False) -> RemoteAnnotationCreateResult:
+               value: RemoteAnnotationInput, *, require_learning: bool = False, require_storage_consent: bool = False) -> RemoteAnnotationCreateResult:
         if not all(isinstance(item, str) and item for item in (owner_user_id, context_id)):
             raise ValueError("remote_annotation_scope_invalid")
         if (not isinstance(service_id, str) or not isinstance(request_key, str)
@@ -175,6 +175,9 @@ class PostgresRemoteAnnotationStore:
                 (owner_user_id, context_id),
             ).fetchone() is None:
                 raise RemoteAnnotationReferenceError("annotation_learning_required")
+            if require_storage_consent:
+                from .remote_annotation_consents import require_annotation_consent
+                require_annotation_consent(conn, owner_user_id, context_id)
             segments = self._validated_segments(conn, owner_user_id, scope, value.segments)
             row = conn.execute(
                 """INSERT INTO server_context_annotations
@@ -352,15 +355,15 @@ class PostgresRemoteAnnotationStore:
             return {'items': [_stored(row) for row in rows[:limit]],
                     'next_cursor': str(rows[limit-1]['annotation_id']) if len(rows)>limit else None}
 
-    def update_annotation(self, owner, context, annotation_id, *, body, step, expected_revision):
+    def update_annotation(self, owner, context, annotation_id, *, body, step, expected_revision, require_storage_consent=False):
         """위치와 출처는 고정하고 본문·단계만 현재 revision에서 수정한다."""
-        return self._change_annotation(owner, context, annotation_id, expected_revision, body, step, False)
+        return self._change_annotation(owner, context, annotation_id, expected_revision, body, step, False, require_storage_consent)
 
     def delete_annotation(self, owner, context, annotation_id, *, expected_revision):
         """현재 revision의 기록을 지우고 생성 키 이력은 보존한다."""
         return self._change_annotation(owner, context, annotation_id, expected_revision, None, None, True)
 
-    def _change_annotation(self, owner, context, annotation_id, expected_revision, body, step, delete):
+    def _change_annotation(self, owner, context, annotation_id, expected_revision, body, step, delete, require_storage_consent=False):
         self._recovery_scope(owner, 'change', context)
         if type(expected_revision) is not int or expected_revision < 1:
             raise ValueError('annotation_revision_invalid')
@@ -381,6 +384,9 @@ class PostgresRemoteAnnotationStore:
                 conn.execute("""UPDATE server_annotation_create_requests SET state='deleted'
                     WHERE owner_user_id=%s AND annotation_id=%s""", (owner, annotation_id))
             else:
+                if require_storage_consent:
+                    from .remote_annotation_consents import require_annotation_consent
+                    require_annotation_consent(conn, owner, context)
                 validate_annotation_fields(current['kind'], body, step, len(current['segments']))
                 row = conn.execute("""UPDATE server_context_annotations SET body=%s,step=%s,
                     revision=revision+1,updated_at=CURRENT_TIMESTAMP
