@@ -67,3 +67,10 @@ def test_payload_size_and_policy_cannot_silently_expand():
     c=contract()
     with pytest.raises(DispatchError):replace(c,max_payload_bytes=1).validate_payload('generation',payload())
     with pytest.raises(DispatchError):c.validate_policy(RemoteExecutionPolicy('test',120,60,2,4000,1024),'synthetic','window',c.profile,False)
+
+
+def test_prompt_changes_require_new_profile(monkeypatch):
+    from solo_leveling.workers import question_contract
+    c=contract(); previous=c.profile
+    monkeypatch.setattr(question_contract, '_INSTRUCTIONS', '변경된 합성 프롬프트')
+    assert c.profile != previous

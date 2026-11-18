@@ -38,8 +38,9 @@ class QuestionContract:
 
     @property
     def profile(self):
-        # 단가·상한·계산기 변경은 기존 동의 snapshot으로 조용히 적용하지 않는다.
-        digest = hashlib.sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()
+        # 단가·상한·계산기·프롬프트 변경은 기존 동의 snapshot으로 조용히 적용하지 않는다.
+        pinned = {'contract': asdict(self), 'instructions': _INSTRUCTIONS, 'schema': _claim_schema([])}
+        digest = hashlib.sha256(json.dumps(pinned, sort_keys=True).encode()).hexdigest()
         return 'general-question-' + digest
 
     def cost(self, input_tokens, output_tokens):
