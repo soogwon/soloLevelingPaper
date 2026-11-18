@@ -27,7 +27,11 @@ def classify_translation_source(text: str) -> TranslationStatus | None:
     if not isinstance(text, str) or not text.strip():
         raise ValueError('source text must be a nonempty string')
     normalized = ' '.join(unicodedata.normalize('NFKC', text).split())
-    if _KOREAN.search(normalized):
+    korean_count = len(_KOREAN.findall(normalized))
+    latin_count = sum(len(word) for word in _WORD.findall(normalized))
+    # 기술 용어가 섞인 한국어는 그대로 보존하되, 짧은 한국어 주석 하나가 붙은
+    # 영어 본문 전체를 번역 완료로 오인하지 않는다.
+    if korean_count and (latin_count == 0 or korean_count >= 4 and korean_count * 5 >= latin_count):
         return TranslationStatus.TRANSLATION_NOT_REQUIRED
 
     words = _WORD.findall(normalized)

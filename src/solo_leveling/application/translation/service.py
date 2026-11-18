@@ -11,8 +11,7 @@ from uuid import uuid4
 from solo_leveling.domain.models import Chunk, TranslationRevision
 from solo_leveling.domain.translation import (
     ChunkTranslationResult, TranslationBatchResult, TranslationFailureCode,
-    TranslationRequest, TranslationSettings, TranslationStatus, require_text,
-    translation_quality_failure,
+    TranslationRequest, TranslationSettings, require_text, translation_quality_failure,
 )
 from .classification import classify_translation_source
 from .ports import TranslationProvider, TranslationProviderUnavailable

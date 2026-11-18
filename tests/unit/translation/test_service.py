@@ -83,6 +83,16 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(provider.calls), 1)
         self.assertEqual(result.items[0].status, TranslationStatus.TRANSLATED)
 
+    def test_short_korean_note_does_not_hide_english_prose(self):
+        original = '주의: Multi-head attention uses different representation subspaces.'
+        translated = '주의: Multi-head attention은 서로 다른 표현 부분공간을 사용한다.'
+        provider = FakeTranslationProvider({original: translated})
+        result = TranslationService(provider).translate(
+            (Chunk('c', 'p1', 0, original),), self.settings)
+
+        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(result.items[0].status, TranslationStatus.TRANSLATED)
+
     def test_partial_and_total_failure(self):
         for ids in (("c1",), ("c1", "c2")):
             provider = FakeTranslationProvider(self.provider.translations, ids)
