@@ -150,9 +150,11 @@ class PostgresStagedProcessingPublisher:
                 (*prefix, source.parse_revision_id, chunk.chunk_id, chunk.chunk_index, chunk.pdf_page,
                  chunk.original_text, chunk.section_id, chunk.printed_page_label))
             conn.execute('''INSERT INTO server_translation_chunks
-                (owner_user_id,paper_id,server_version_id,parse_revision_id,translation_revision_id,chunk_id,translated_text)
-                VALUES (%s,%s,%s,%s,%s,%s,%s)''',
-                (*prefix, source.parse_revision_id, source.translation_revision_id, chunk.chunk_id, translation.text))
+                (owner_user_id,paper_id,server_version_id,parse_revision_id,translation_revision_id,chunk_id,
+                 translated_text,translation_status)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)''',
+                (*prefix, source.parse_revision_id, source.translation_revision_id, chunk.chunk_id,
+                 translation.text, translation.status.value))
             writer.put(scope, chunk.chunk_id, vector)
         actual = conn.execute('''SELECT count(*) AS n FROM server_embedding_vectors
             WHERE owner_user_id=%s AND embedding_set_id=%s AND dimension=%s''',

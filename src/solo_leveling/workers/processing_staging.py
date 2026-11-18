@@ -10,7 +10,7 @@ from solo_leveling.domain.remote_processing import (
     EmbeddingBatch, EmbeddingSpec, ProcessingError, ProcessingLimits, ProcessingResult,
     ProcessingSource, ProcessedTranslation, ProcessingChunk, ParsedDocument,
 )
-from solo_leveling.domain.translation import TranslationSettings
+from solo_leveling.domain.translation import TranslationSettings, TranslationStatus
 from solo_leveling.domain.models import PaperSection
 from solo_leveling.workers.processing_authorization import _AUTH_SOURCE, _IDENTITY, _USAGE_BLOCKED, _params
 
@@ -71,7 +71,8 @@ class PostgresProcessingResultStaging:
             _require(type(result.translations) is tuple and len(result.translations) == len(chunks))
             for chunk, item in zip(chunks, result.translations):
                 _require(type(item) is ProcessedTranslation and item.chunk_id == chunk.chunk_id
-                         and item.failure_code is None and type(item.text) is str and item.text.strip())
+                         and item.failure_code is None and isinstance(item.status, TranslationStatus)
+                         and type(item.text) is str and item.text.strip())
             batch = result.embeddings
             _require(type(batch) is EmbeddingBatch and batch.spec == self.spec and batch.chunk_ids == ids
                      and type(batch.chunk_ids) is tuple and type(batch.vectors) is tuple
@@ -85,7 +86,7 @@ class PostgresProcessingResultStaging:
             present = {c.pdf_page for c in chunks}
             _require(type(result.empty_pages) is tuple and all(type(p) is int for p in result.empty_pages)
                      and result.empty_pages == tuple(p for p in range(1, result.document.page_count + 1) if p not in present))
-            payload = {'schema_version': 1, 'result': asdict(result)}
+            payload = {'schema_version': 2, 'result': asdict(result)}
             # jsonb는 음의 0을 보존하지 않으므로 저장 전 동일한 수치 표현으로 고정한다.
             payload['result']['embeddings']['vectors'] = [
                 [0.0 if v == 0 else float(v) for v in row] for row in batch.vectors]
@@ -143,7 +144,7 @@ class PostgresProcessingResultStaging:
                     conn.execute('''INSERT INTO server_processing_result_staging
                         (owner_user_id,paper_id,server_version_id,job_id,source_lease_token,
                          payload_version,payload_sha256,payload)
-                        VALUES (%s,%s,%s,%s,%s,1,%s,%s::jsonb)''',
+                         VALUES (%s,%s,%s,%s,%s,2,%s,%s::jsonb)''',
                         (source.owner_user_id, source.paper_id, source.version_id, source.job_id,
                          source.lease_token, digest, encoded.decode('utf-8')))
                 self._live(conn, source)
@@ -169,15 +170,16 @@ class PostgresProcessingResultStaging:
 
     def read_locked(self, conn, source, authorization):
         """호출자가 같은 transaction에서 권한 행을 잠근 뒤 사용하는 내부 포트."""
-        row = conn.execute('''SELECT payload_sha256,payload FROM server_processing_result_staging
+        row = conn.execute('''SELECT payload_version,payload_sha256,payload FROM server_processing_result_staging
             WHERE owner_user_id=%s AND job_id=%s AND source_lease_token=%s''',
             (source.owner_user_id, source.job_id, source.lease_token)).fetchone()
         if row is None:
             return None
         data = row['payload']
         encoded = _encode(data)
-        _require(len(encoded) <= self.max_bytes and type(data.get('schema_version')) is int
-                 and data['schema_version'] == 1 and data.get('authorization') == authorization
+        version = data.get('schema_version')
+        _require(len(encoded) <= self.max_bytes and type(version) is int and version in (1, 2)
+                 and row['payload_version'] == version and data.get('authorization') == authorization
                  and data['result']['source'] == asdict(source)
                  and data['result']['translation_settings'] == asdict(self.settings)
                  and data['result']['embeddings']['spec'] == asdict(self.spec)
@@ -187,7 +189,7 @@ class PostgresProcessingResultStaging:
     def restore(self, data):
         """staging JSON을 타입 자료로 복원하고 게시 직전 전체 결과를 다시 검사한다."""
         try:
-            raw = data['result']
+            version, raw = data['schema_version'], data['result']
             document = raw['document']
             embeddings = raw['embeddings']
             result = ProcessingResult(
@@ -195,14 +197,23 @@ class PostgresProcessingResultStaging:
                 ParsedDocument(document['page_count'], tuple(ProcessingChunk(**c) for c in document['chunks']),
                                tuple(PaperSection(**s) for s in document['sections'])),
                 TranslationSettings(**raw['translation_settings']),
-                tuple(ProcessedTranslation(**t) for t in raw['translations']),
+                tuple(ProcessedTranslation(
+                    t['chunk_id'], t['text'], t['failure_code'],
+                    TranslationStatus(t.get('status', TranslationStatus.TRANSLATED.value)))
+                    for t in raw['translations']),
                 EmbeddingBatch(EmbeddingSpec(**embeddings['spec']), tuple(embeddings['chunk_ids']),
                                tuple(tuple(row) for row in embeddings['vectors'])),
                 tuple(raw['empty_pages']), raw['status'],
             )
             payload, _, _ = self._payload(result)
+            expected = raw
+            if version == 1:
+                expected = dict(raw)
+                expected['translations'] = [
+                    {**item, 'status': TranslationStatus.TRANSLATED.value}
+                    for item in raw['translations']]
             _require(set(data) == {'schema_version', 'authorization', 'result'}
-                     and _encode(payload['result']) == _encode(raw))
+                     and _encode(payload['result']) == _encode(expected))
             return result
         except Exception:
             raise ProcessingStagingError('processing_staging_invalid') from None

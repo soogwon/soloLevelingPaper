@@ -16,9 +16,11 @@ def store(pool=None, max_bytes=100_000):
 def test_preserves_all_metadata_and_normalizes_negative_zero():
     payload, encoded, digest = store()._payload(result())
     data = payload['result']
+    assert payload['schema_version'] == 2
     assert data['document']['chunks'][0]['printed_page_label'] == 'i'
     assert data['document']['sections'][0]['title'] == 'Synthetic'
     assert data['translation_settings']['prompt_version'] == 'v1'
+    assert data['translations'][0]['status'] == 'translated'
     assert data['empty_pages'] == (2,)
     assert b'-0.0' not in encoded
     assert len(digest) == 64
