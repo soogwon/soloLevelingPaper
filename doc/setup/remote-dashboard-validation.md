@@ -32,3 +32,11 @@ migration 0046은 `last_pdf_page`와 맥락별 요청 키 원장을 추가한다
 - 최소 추가 권한 helper `grant_learning_progress_role`: server_parse_revisions 및 요청 원장 SELECT, 원장 INSERT, 학습 기록 last_pdf_page 컬럼 UPDATE. 원장 UPDATE/DELETE나 원문·자격·예산 권한은 주지 않는다.
 
 로컬 회귀에 엄격한 정수 입력 검사를 추가했다. bool 값을 revision이나 페이지 번호로 허용하지 않는다. 회귀 검증 항목(동시 동일 키, 재시작 후 복구, 늦은 재전송, 타 계정, 페이지 범위, 제한 계정 저장 및 원장 수정·삭제 차단, migration 순서 포함). 실제 staging 적용·기록 변경은 별도 승인 전 실행하지 않는다. 제품 카드·웹 입력 연결과 다기기 실제 검증은 계속 남는다.
+
+## 3차 웹 상세 입력 연결
+
+웹 `/#/remote-learning/{context_id}`에서 읽는 중/완료와 고정 PDF 페이지를 저장한다. `POST /v1/remote-annotation-products/contexts/{context}/progress`는 웹 세션·CSRF와 엄격한 정수 입력을 요구하고 인증 사용자만 store에 전달한다.
+
+응답 유실 시 페이지가 열린 동안 요청 키·입력을 유지하며 명시적 재시도만 허용한다. 키가 남아 있으면 새 입력 저장을 막는다. 충돌은 현재 상태를 다시 조회한 뒤 새 입력을 받는다. 로그아웃·화면 이동은 요청 키와 화면을 폐기하고 늦은 응답의 후속 조회도 차단한다. 페이지를 닫은 뒤의 요청 키 복구는 이 웹 입력 범위에서 지원하지 않으며 다시 조회해야 한다. 기존 서버 revision 검사는 계속 적용한다.
+
+웹 대역 7개, 인증·CSRF·엄격 입력·충돌 응답 API 3개 통과. 실제 브라우저·Desktop 검증, 대시보드 목록/제품 카드 연결은 아직 남아 있다. 실제 staging 및 API는 실행하지 않았다.

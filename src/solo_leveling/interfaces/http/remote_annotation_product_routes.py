@@ -1,6 +1,6 @@
 """웹 세션·CSRF 아래에서만 학습 시작과 맥락 저장 동의를 허용한다."""
 from dataclasses import asdict, is_dataclass
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, Query
@@ -26,6 +26,14 @@ class RevokeInput(BaseModel):
 class RevisionInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     revision: int = Field(strict=True, gt=0)
+
+
+class ProgressInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    request_key: UUID
+    status: Literal['reading', 'completed']
+    pdf_page: int | None = Field(strict=True, gt=0)
+    expected_revision: int = Field(strict=True, gt=0)
 
 
 class UpdateInput(RevisionInput):
@@ -73,6 +81,12 @@ def create_annotation_product_router(require_principal, service):
     @router.get('/{context}/learning')
     def learning(context: UUID, principal: Principal, response: Response):
         return call(principal, response, lambda owner: service.learning.get(owner, str(context)))
+
+    @router.post('/{context}/progress')
+    def progress(context: UUID, body: ProgressInput, principal: Principal, response: Response):
+        return call(principal, response, lambda owner: service.learning.set_progress(
+            owner, str(context), request_key=str(body.request_key), status=body.status,
+            pdf_page=body.pdf_page, expected_revision=body.expected_revision))
 
     @router.get('/{context}/consent')
     def consent(context: UUID, principal: Principal, response: Response):
