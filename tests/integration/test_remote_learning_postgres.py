@@ -147,3 +147,68 @@ def test_paper_context_list_owner_version_cursor_and_deletion(pool, db, context)
     assert found == sorted(keys)
     db('UPDATE server_papers SET deleted_at=clock_timestamp() WHERE owner_user_id=%s', (owner,))
     assert store.list_for_paper(owner, paper, version)['items'] == []
+
+
+def test_dashboard_pagination_read_states_and_no_implicit_start(pool, db, context):
+    owner, key, _ = context
+    store = PostgresRemoteLearningStore(pool)
+    keys = [key] + [str(uuid4()) for _ in range(20)]
+    for item in keys[1:]:
+        db('''INSERT INTO server_execution_contexts
+            (owner_user_id,context_id,paper_id,server_version_id,publication_id,parse_revision_id)
+            SELECT owner_user_id,%s,paper_id,server_version_id,publication_id,parse_revision_id
+            FROM server_execution_contexts WHERE owner_user_id=%s AND context_id=%s''', (item, owner, key))
+    first = store.dashboard(owner)
+    second = store.dashboard(owner, after=first['next_cursor'])
+    assert len(first['items']) == 20 and len(second['items']) == 1
+    assert second['next_cursor'] is None
+    assert {r['context_id'] for r in first['items'] + second['items']} == set(keys)
+    assert all(r['reading_status']=='not_started' and r['processing_status']=='published' for r in first['items'])
+    assert db('SELECT count(*) n FROM server_remote_learning_records WHERE owner_user_id=%s', (owner,))[0]['n'] == 0
+    store.start(owner,key)
+    assert store.reading_state(owner,key)['reading_status']=='reading'
+    store.set_status(owner,key,status='completed',expected_revision=1)
+    state = store.reading_state(owner,key)
+    assert state['reading_status']=='completed' and state['revision']==2
+    assert state['last_position'] is None and state['quiz_summary'] is None
+    assert store.reading_state('other',key) is None
+    assert store.dashboard('other')['items']==[]
+    db('UPDATE server_papers SET deleted_at=CURRENT_TIMESTAMP WHERE owner_user_id=%s', (owner,))
+    assert store.dashboard(owner)['items']==[]
+
+
+def test_dashboard_counts_exclude_deleted_records(pool, db, context):
+    owner, key, _ = context
+    store = PostgresRemoteLearningStore(pool)
+    annotations = PostgresRemoteAnnotationStore(pool)
+    from dataclasses import replace
+    annotations.create(owner,'dashboard',key,'note',annotation(context))
+    created = annotations.create(owner,'dashboard',key,'new',replace(annotation(context), kind='highlight')).annotation
+    assert store.reading_state(owner,key)['note_count']==1
+    assert store.reading_state(owner,key)['highlight_count']==1
+    annotations.delete_annotation(owner,key,created.annotation_id,expected_revision=1)
+    assert store.reading_state(owner,key)['highlight_count']==0
+
+
+def test_dashboard_real_mcp_serialization(pool, context, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from mcp.server.fastmcp import FastMCP
+    from solo_leveling.interfaces.mcp import remote_annotations as tools
+    from tests.unit.test_remote_annotation_tools import token
+    owner, key, _ = context
+    monkeypatch.setattr(tools,'get_access_token',lambda:token(['annotations:read']))
+    service = SimpleNamespace(learning=PostgresRemoteLearningStore(pool))
+    server = FastMCP('합성 대시보드')
+    tools.register_annotation_tools(server,SimpleNamespace(owner=lambda:owner),service)
+
+    async def verify():
+        registered={t.name:t for t in await server.list_tools()}
+        assert registered['get_remote_learning_dashboard'].annotations.readOnlyHint
+        reply=await server.call_tool('get_remote_learning_dashboard',{})
+        assert 'not_started' in str(reply) and key in str(reply)
+        assert service.learning.get(owner,key) is None
+        service.learning.start(owner,key)
+        reply=await server.call_tool('get_remote_reading_state',{'context_id':key})
+        assert 'reading' in str(reply) and 'last_learning_updated_at' in str(reply)
+    asyncio.run(verify())

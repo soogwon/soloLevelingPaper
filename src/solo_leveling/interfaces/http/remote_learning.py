@@ -67,6 +67,50 @@ class PostgresRemoteLearningStore:
             'status': row['status'], 'revision': row['revision']} for row in rows[:limit]]
         return {'items': items, 'next_cursor': items[-1]['context_id'] if len(rows) > limit else None}
 
+    def dashboard(self, owner, *, after=None, limit=20, context=None):
+        """고정된 원격 맥락만 조회한다. 처리 완료를 학습 완료로 변환하지 않는다."""
+        if not isinstance(owner, str) or not owner.strip():
+            raise ValueError('remote_learning_scope_invalid')
+        after = str(UUID(after)) if after is not None else None
+        context = str(UUID(context)) if context is not None else None
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise ValueError('remote_learning_limit_invalid')
+        with self._pool.connection() as conn:
+            rows = conn.execute("""SELECT c.context_id,c.paper_id,c.server_version_id,c.publication_id,
+                p.title,r.status,r.revision,r.updated_at,
+                (SELECT count(*) FROM server_context_annotations a
+                  WHERE a.owner_user_id=c.owner_user_id AND a.context_id=c.context_id
+                    AND a.deleted_at IS NULL AND a.kind='note') AS note_count,
+                (SELECT count(*) FROM server_context_annotations a
+                  WHERE a.owner_user_id=c.owner_user_id AND a.context_id=c.context_id
+                    AND a.deleted_at IS NULL AND a.kind='highlight') AS highlight_count
+                FROM server_execution_contexts c
+                JOIN server_papers p ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
+                LEFT JOIN server_remote_learning_records r
+                  ON r.owner_user_id=c.owner_user_id AND r.context_id=c.context_id
+                WHERE c.owner_user_id=%s AND p.deleted_at IS NULL
+                  AND (%s::uuid IS NULL OR c.context_id>%s::uuid)
+                  AND (%s::uuid IS NULL OR c.context_id=%s::uuid)
+                ORDER BY c.context_id LIMIT %s""",
+                (owner, after, after, context, context, limit + 1)).fetchall()
+        items = [{**{key: str(row[key]) for key in (
+            'context_id', 'paper_id', 'server_version_id', 'publication_id')},
+            'title': row['title'], 'processing_status': 'published',
+            'reading_status': row['status'] or 'not_started', 'revision': row['revision'],
+            'last_learning_updated_at': row['updated_at'], 'last_position': None,
+            'note_count': row['note_count'], 'highlight_count': row['highlight_count'],
+            'quiz_summary': None, 'reflection_summary': None,
+            'web_path': '/#/remote-learning/' + str(row['context_id']) if row['status'] else None}
+            for row in rows[:limit]]
+        return {'items': items, 'next_cursor': items[-1]['context_id'] if len(rows) > limit else None,
+                'limitations': ['remote_position_not_available', 'remote_quiz_not_available',
+                                'remote_reflection_not_available'],
+                'notice': '게시 완료와 학습 완료는 별개입니다. 학습 변경 시각은 마지막 열람 시각이 아닙니다. 위치·퀴즈·성찰은 아직 지원하지 않습니다.'}
+
+    def reading_state(self, owner, context):
+        page = self.dashboard(owner, context=self._scope(owner, context))
+        return page['items'][0] if page['items'] else None
+
     def start(self, owner, context):
         """같은 context의 명시적 시작 재전송은 기존 기록·완료 상태를 보존한다."""
         context = self._scope(owner, context)

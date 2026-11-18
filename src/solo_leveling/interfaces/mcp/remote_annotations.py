@@ -111,6 +111,20 @@ def register_annotation_tools(server, queries, service):
         """기존 학습 기록만 조회한다. 없는 기록을 만들지 않는다."""
         return call(False, lambda owner: service.learning.get(owner, context(context_id)))
 
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                             idempotentHint=True, openWorldHint=False))
+    def get_remote_learning_dashboard(after: str | None = None, limit: int = 20) -> dict[str, Any]:
+        """내 고정 원격 맥락의 읽기 상태·메모 건수를 조회한다. 게시 완료는 학습 완료가 아니다.
+        새 학습·AI 호출은 없으며 위치·퀴즈·성찰은 미지원이다. 다음 페이지는 반환 커서를 그대로 쓴다.
+        """
+        return call(False, lambda owner: service.learning.dashboard(owner, after=after, limit=limit))
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                             idempotentHint=True, openWorldHint=False))
+    def get_remote_reading_state(context_id: str) -> dict[str, Any]:
+        """고정 맥락의 읽기 상태를 조회한다. 미시작은 not_started이고 기록을 만들지 않는다."""
+        return call(False, lambda owner: service.learning.reading_state(owner, context(context_id)))
+
     @server.tool()
     def create_remote_annotation(context_id: str, request_key: str, value: dict) -> dict:
         """명시적 학습 시작과 인증 웹의 맥락 저장 동의 후 메모·하이라이트를 저장한다. 같은 키를 보관하고 응답 유실 시 재생성하지 않는다. value는 kind/body/segments/step/creation_origin이다."""
