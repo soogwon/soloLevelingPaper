@@ -45,7 +45,7 @@ def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool):
     with TestClient(create_app(remote_mcp_settings=settings,remote_mcp_verifier=Verifier(),
                               remote_product_queries=queries),base_url=SETTINGS.resource_url[:-4]) as client:
         names={v['name'] for v in call(client,'tools/list').json()['result']['tools']}
-        assert names=={'whoami','probe_card','probe_delay','list_remote_papers','open_remote_paper','get_remote_question','get_remote_evidence','get_remote_paper_detail'}
+        assert names=={'whoami','probe_card','probe_delay','list_remote_papers','open_remote_paper','get_remote_question','get_remote_evidence','get_remote_paper_detail','get_learning_path','get_prerequisites'}
         listed=result(client,'list_remote_papers')
         assert listed['status']=='ok' and listed['papers'][0]['paper_id']==first.paper
         args={'paper_id':first.paper,'version_id':'v1','context_key':str(uuid4())}
@@ -54,6 +54,11 @@ def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool):
         detail_args={'context_id':pinned['context_id']}
         assert result(client,'get_remote_paper_detail',detail_args)['result']['publication_id']==first.publication
         assert result(client,'get_remote_paper_detail',detail_args,token='account-b')=={'status':'not_found'}
+        path = result(client,'get_learning_path',detail_args)
+        assert path['result']['graph_status'] == 'no_graph'
+        assert path['result']['steps'] == []
+        assert result(client,'get_learning_path',detail_args,token='account-b')['status']=='not_found'
+        assert result(client,'get_prerequisites',{**detail_args,'concept':'attention'},token='account-b')['status']=='not_found'
         remote.publish(100,base=first)
         assert result(client,'open_remote_paper',args)==pinned
         assert result(client,'open_remote_paper',args,token='account-b')=={'status':'not_found'}
