@@ -66,3 +66,19 @@ def test_keyset_listing_has_no_duplicate_or_missing_records(pool, context):
             break
     assert len(seen) == len(set(seen)) == 51 and set(seen) == expected
     assert store.list_annotations('other', key) is None
+
+
+@pytest.mark.parametrize('target', ['original', 'translation'])
+def test_highlight_preserves_evidence_and_scope_on_update(pool, context, target):
+    from solo_leveling.interfaces.http.remote_annotations import RemoteAnnotationInput
+    owner, key, _ = context
+    store = PostgresRemoteAnnotationStore(pool)
+    source = annotation(context, target=target)
+    value = RemoteAnnotationInput('highlight', '', source.segments, creation_origin='user')
+    PostgresRemoteLearningStore(pool).start(owner, key)
+    saved = store.create(owner, 'product', key, 'highlight', value, require_learning=True).annotation
+    updated = store.update_annotation(owner, key, saved.annotation_id, body='강조 설명', step=None, expected_revision=1)
+    assert updated.kind == 'highlight' and updated.creation_origin == 'user'
+    assert updated.segments == saved.segments and updated.segments[0]['target'] == target
+    assert store.delete_annotation('other', key, saved.annotation_id, expected_revision=2) is None
+    assert store.get_annotation(owner, key, saved.annotation_id) == updated
