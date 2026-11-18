@@ -62,3 +62,30 @@ def test_read_scope_cannot_write(monkeypatch):
     assert server.tools['lookup_remote_annotation_request'](CONTEXT, 'key')['status'] == 'ok'
     assert server.tools['delete_remote_annotation'](CONTEXT, CONTEXT, 1)['status'] == 'not_authorized'
     service.store.delete_annotation.assert_not_called()
+
+
+def test_real_mcp_registration_serializes_nested_records(monkeypatch):
+    import asyncio
+    from dataclasses import dataclass
+    from mcp.server.fastmcp import FastMCP
+
+    @dataclass
+    class Record:
+        annotation_id: str
+        body: str
+
+    monkeypatch.setattr(module, 'get_access_token', lambda: token(['annotations:read']))
+    server = FastMCP('합성 검증')
+    service = Mock()
+    service.store.list_annotations.return_value = {'items': [Record(CONTEXT, '합성 메모')], 'next_cursor': None}
+    module.register_annotation_tools(server, NS(owner=lambda: 'alice'), service)
+
+    async def check():
+        names = {tool.name for tool in await server.list_tools()}
+        assert 'list_remote_annotations' in names
+        assert len(names) == 10
+        result = await server.call_tool('list_remote_annotations', {'context_id': CONTEXT})
+        assert '합성 메모' in str(result)
+        assert 'annotation_id' in str(result)
+
+    asyncio.run(check())
