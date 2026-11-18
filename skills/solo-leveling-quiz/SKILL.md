@@ -1,6 +1,6 @@
 ---
 name: solo-leveling-quiz
-description: 논문(올린 PDF 또는 대화에서 공부한 내용)으로 이해도 확인 퀴즈를 만들어 Markdown이나 PDF 파일로 내려받게 할 때 쓴다. 정의·관계·적용 수준의 객관식·주관식 문항과, 원문 근거·쪽수가 붙은 정답지를 만든다. 대화 안에서 바로 풀고 채점받는 것도 지원한다.
+description: 논문(올린 PDF 또는 대화에서 공부한 내용)으로 이해도 확인 퀴즈를 만들 때 쓴다. 브라우저에서 한 문항씩 풀고 바로 채점·해설·원문 근거를 보는 HTML 퀴즈를 기본으로 만들고, 원하면 문제지·정답지 Markdown·PDF도 만든다. 정의·관계·적용 수준의 객관식·주관식 문항을 내며, 대화 안에서 바로 푸는 것도 지원한다.
 ---
 
 # 논문 퀴즈 생성 (Solo Leveling Paper)
@@ -15,7 +15,7 @@ description: 논문(올린 PDF 또는 대화에서 공부한 내용)으로 이�
 - 범위: 논문 전체 / 특정 절·쪽 / 이 대화에서 공부한 부분 (기본: 논문 전체)
 - 문항 수 (기본 10개) 와 수준 비율 (기본 정의 4 · 관계 3 · 적용 3)
 - 유형: 객관식 / 주관식 / 섞어서 (기본: 섞어서, 객관식 위주)
-- 파일 형식: Markdown / PDF / 둘 다 (기본: Markdown), 문제지·정답지 분리 여부 (기본: 분리)
+- 형식: 풀어 보는 HTML 퀴즈 / + 인쇄용 Markdown / + 인쇄용 PDF (기본: HTML 퀴즈만)
 - 파일 없이 대화에서 바로 풀기를 원하는지
 
 ## 2. 근거 준비
@@ -53,14 +53,21 @@ python scripts/pdf_text.py "<업로드된 PDF 경로>" --out paper_text_<짧은 
 `references/quiz-format.md` 형식으로 `quiz.json`을 쓰고 스크립트를 실행한다.
 
 ```bash
-python scripts/quiz_export.py quiz.json --out quiz_output            # 문제지·정답지 Markdown
-python scripts/quiz_export.py quiz.json --out quiz_output --pdf      # PDF도 함께
-python scripts/quiz_export.py quiz.json --out quiz_output --combined # 문제와 정답을 한 파일에
+python scripts/quiz_export.py quiz.json --out quiz_output                  # 풀어 보는 HTML 퀴즈
+python scripts/quiz_export.py quiz.json --out quiz_output --md             # + 문제지·정답지 Markdown
+python scripts/quiz_export.py quiz.json --out quiz_output --pdf            # + Markdown과 PDF
+python scripts/quiz_export.py quiz.json --out quiz_output --pdf --combined # 인쇄본을 문제와 정답 한 파일로
 ```
+
+- HTML 퀴즈(`<제목>.html`)는 한 파일로 열리고 인터넷 연결 없이 동작한다. 한 문항씩 답을 고르거나 쓰고
+  "정답 확인"을 누르면 정답·해설·원문 근거가 나온다. 주관식은 모범 답안과 채점 기준을 보고 스스로
+  맞음/부분/틀림을 고른다. 끝나면 수준별 점수, 다시 볼 쪽, "틀린 문항만 다시 풀기"가 나온다.
+- 정답이 파일 안에 들어 있으므로 시험용이 아니라 자기 점검용이라고 안내한다.
 
 - 스크립트가 형식 오류를 출력하면 `quiz.json`을 고쳐 다시 실행한다. 파일은 오류가 없을 때만 만들어진다.
 - PDF를 만들었으면 열어서(이미지로 보거나 텍스트를 추출해) 깨진 글자가 없는지 확인한다.
-- 만든 파일을 사용자에게 내려받을 수 있게 전달한다. 정답지는 문제지와 따로 전달해, 풀기 전에 보지 않도록 안내한다.
+- 만든 파일을 사용자에게 내려받을 수 있게 전달한다. HTML은 내려받아 브라우저로 열면 된다고 안내한다.
+  인쇄본의 정답지는 문제지와 따로 전달해, 풀기 전에 보지 않도록 안내한다.
 
 ## 5. 대화에서 바로 풀기 (선택)
 

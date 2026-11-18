@@ -7,7 +7,7 @@ MCP 없이 Claude에 올려 쓰는 학습용 Skill 3개다. 논문 PDF 하나로
 | Skill | 하는 일 | 주요 파일 |
 |---|---|---|
 | `solo-leveling-guide` | 목적(이해·구현·훑어보기)별 읽는 순서, 요약, 키워드 설명, 읽기 전·후 질문, 원문 근거가 붙은 질의응답. 검수 논문 3편(Attention·BERT·ViT)은 개념 지도 학습 순서까지 | `scripts/pdf_text.py`, `scripts/concept_path.py`, `data/seed.json` |
-| `solo-leveling-quiz` | 정의·관계·적용 수준 퀴즈를 문제지·정답지 Markdown/PDF로 생성 | `scripts/quiz_export.py`, `fonts/`(나눔고딕, OFL) |
+| `solo-leveling-quiz` | 정의·관계·적용 수준 퀴즈를 브라우저에서 풀고 바로 채점되는 HTML로 생성(인쇄용 문제지·정답지 Markdown/PDF 선택) | `scripts/quiz_export.py`, `assets/quiz_template.html`, `fonts/`(나눔고딕, OFL) |
 | `solo-leveling-textbook` | 대화 내용을 고정 형식의 HTML 교재 한 파일로 생성 | `assets/template.html`, `scripts/build_textbook.py` |
 
 ## 결과물 샘플 (`samples/`)
@@ -18,7 +18,7 @@ MCP 없이 Claude에 올려 쓰는 학습용 Skill 3개다. 논문 PDF 하나로
 | 파일 | 내용 |
 |---|---|
 | `guide-attention-understand.md` | `solo-leveling-guide` 대화 흐름 예시 (목적 질문 → 학습 순서 → 읽기 전 질문 → 1단계 → 질의응답 → 요약) |
-| `quiz-attention-문제지.pdf`, `quiz-attention-정답지.pdf` (+ `.md`, 입력 `quiz-attention.json`) | `solo-leveling-quiz` 기본값(10문항, 정의 4 · 관계 3 · 적용 3) 결과 |
+| `quiz-attention.html`(풀어 보는 퀴즈), `quiz-attention-문제지.pdf`, `quiz-attention-정답지.pdf` (+ `.md`, 입력 `quiz-attention.json`) | `solo-leveling-quiz` 기본값(10문항, 정의 4 · 관계 3 · 적용 3) 결과 |
 | `textbook-attention.html` (입력 `textbook-attention.json`) | `solo-leveling-textbook` 결과. 브라우저로 열어 본다 |
 
 실제 대화에서 Claude의 문장은 매번 조금씩 다르지만, 흐름·형식·근거 규칙은 샘플과 같다.

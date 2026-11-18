@@ -90,11 +90,15 @@ python scripts/concept_path.py --paper-json paper_text_<짧은 논문 이름>/pa
 ## 8. 마무리
 
 복습 단계에서 읽은 후 질문 4개를 보여 주고, 읽기 전 답이 있으면 전후 비교표로 나란히 보여 준다.
-마지막에 다음 중 필요한 것을 한 줄로 제안한다.
+마지막에 오늘 공부를 어떻게 정리할지 고르게 한다. 선택 질문 도구가 있으면 그것으로, 없으면 번호 목록으로 묻는다.
 
-- 이해도 확인 퀴즈 파일 만들기 → `solo-leveling-quiz` Skill
-- 오늘 공부한 내용을 HTML 교재로 만들기 → `solo-leveling-textbook` Skill
-- 기록을 남기고 다음에 이어 하기 → Solo Leveling Paper MCP
+1. 퀴즈로 확인하기 — 브라우저에서 풀고 바로 채점되는 HTML 퀴즈 → `solo-leveling-quiz` Skill
+2. HTML 교재로 정리하기 — 오늘 공부한 내용을 다시 읽을 수 있는 교재 → `solo-leveling-textbook` Skill
+3. 둘 다 — 교재를 먼저 만들고, 같은 범위로 퀴즈를 만든다
+4. 이번엔 넘어가기
+
+고른 Skill의 순서를 그대로 따른다. 이미 풀어 둔 `<결과 폴더>`와 대화에서 공부한 범위를 그대로 넘겨,
+같은 질문을 다시 하지 않는다. 기록을 남기고 다음에 이어 하고 싶다면 Solo Leveling Paper MCP를 안내한다.
 
 ## 반드시 지킬 것
 

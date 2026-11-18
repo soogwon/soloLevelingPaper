@@ -67,3 +67,38 @@ def test_pdf_extraction_new_directory(tmp_path, monkeypatch):
     assert module.main([str(source), '--out', str(output)]) == 0
     assert (output / 'page_001.txt').read_text(encoding='utf-8') == '새 논문 본문'
     assert json.loads((output / 'paper.json').read_text(encoding='utf-8'))['page_count'] == 1
+
+
+def _quiz():
+    return json.loads((ROOT / 'skills/samples/quiz-attention.json').read_text(encoding='utf-8'))
+
+
+def test_quiz_html_is_default_and_markdown_is_optional(tmp_path):
+    module = load_script('solo-leveling-quiz', 'quiz_export')
+    source = tmp_path / 'quiz.json'
+    source.write_text(json.dumps(_quiz(), ensure_ascii=False), encoding='utf-8')
+    assert module.main([str(source), '--out', str(tmp_path / 'a')]) == 0
+    assert [p.suffix for p in (tmp_path / 'a').iterdir()] == ['.html']
+    assert module.main([str(source), '--out', str(tmp_path / 'b'), '--md']) == 0
+    assert sorted(p.suffix for p in (tmp_path / 'b').iterdir()) == ['.html', '.md', '.md']
+
+
+def test_quiz_html_keeps_text_inside_data_block(tmp_path):
+    module = load_script('solo-leveling-quiz', 'quiz_export')
+    quiz = _quiz()
+    quiz['title'] = '</script><script>alert(1)</script> & <b>퀴즈</b>'
+    quiz['questions'][0]['prompt'] = '<!-- </script> 닫기 시도'
+    page = module.build_html(quiz)
+    assert page.count('</script>') == 2  # 데이터 블록과 실행 스크립트를 닫는 것만
+    assert '<b>' not in page and '<!--' not in page
+    start = page.index('id="quiz-data">') + len('id="quiz-data">')
+    data = json.loads(page[start:page.index('</script>', start)])
+    assert data['title'] == quiz['title']
+    assert data['questions'][0]['prompt'] == quiz['questions'][0]['prompt']
+    assert '__QUIZ_DATA__' not in page and '__TITLE__' not in page
+
+
+def test_sample_quiz_html_matches_generator():
+    module = load_script('solo-leveling-quiz', 'quiz_export')
+    sample = (ROOT / 'skills/samples/quiz-attention.html').read_text(encoding='utf-8')
+    assert sample == module.build_html(_quiz())
