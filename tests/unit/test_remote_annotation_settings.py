@@ -89,3 +89,4 @@ def test_second_pool_open_failure_closes_first(monkeypatch):
         with TestClient(app):
             pass
     first.close.assert_called_once()
+    second.close.assert_called_once()

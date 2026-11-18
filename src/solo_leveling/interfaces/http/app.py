@@ -188,8 +188,8 @@ def create_app(
                 managed_question_store.open()
                 stack.callback(managed_question_store.close)
             for store in managed_annotation_stores:
-                store.open()
                 stack.callback(store.close)
+                store.open()
             if remote_bundle is not None:
                 await stack.enter_async_context(remote_bundle.server.session_manager.run())
             yield
