@@ -13,6 +13,7 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from solo_leveling.interfaces.http.remote_mcp_auth import RemoteIdentityAccessToken
 from solo_leveling.interfaces.http.remote_annotation_recovery_routes import RecoveryInput
 from solo_leveling.interfaces.http.remote_annotation_consents import AnnotationStorageConsentRequired
+from solo_leveling.interfaces.http.remote_learning import RemoteLearningConflict
 from solo_leveling.interfaces.http.remote_annotations import (
     RemoteAnnotationConflict, RemoteAnnotationDeleted, RemoteAnnotationReferenceError,
     RemoteAnnotationRecoveryAmbiguous,
@@ -44,7 +45,7 @@ def register_annotation_tools(server, queries, service):
             return {'status': 'consent_required', 'message': '인증된 웹에서 이 학습 맥락의 메모 저장 동의를 확인하세요.'}
         except RemoteAnnotationRecoveryAmbiguous:
             return {'status': 'ambiguous', 'message': '복구 후보를 자동 선택하거나 새 키로 재생성하지 마세요.'}
-        except RemoteAnnotationConflict:
+        except (RemoteAnnotationConflict, RemoteLearningConflict):
             return {'status': 'conflict', 'message': '현재 기록과 revision을 다시 조회하세요.'}
         except RemoteAnnotationDeleted:
             return {'status': 'deleted', 'message': '삭제된 기록을 새 키로 재생성하지 마세요.'}
@@ -115,7 +116,7 @@ def register_annotation_tools(server, queries, service):
                                              idempotentHint=True, openWorldHint=False))
     def get_remote_learning_dashboard(after: str | None = None, limit: int = 20) -> dict[str, Any]:
         """내 고정 원격 맥락의 읽기 상태·메모 건수를 조회한다. 게시 완료는 학습 완료가 아니다.
-        새 학습·AI 호출은 없으며 위치·퀴즈·성찰은 미지원이다. 다음 페이지는 반환 커서를 그대로 쓴다.
+        새 학습·AI 호출은 없으며 위치는 고정 PDF 판본 기준이며 퀴즈·성찰은 미지원이다. 다음 페이지는 반환 커서를 그대로 쓴다.
         """
         return call(False, lambda owner: service.learning.dashboard(owner, after=after, limit=limit))
 
@@ -124,6 +125,17 @@ def register_annotation_tools(server, queries, service):
     def get_remote_reading_state(context_id: str) -> dict[str, Any]:
         """고정 맥락의 읽기 상태를 조회한다. 미시작은 not_started이고 기록을 만들지 않는다."""
         return call(False, lambda owner: service.learning.reading_state(owner, context(context_id)))
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                             idempotentHint=True, openWorldHint=False))
+    def set_remote_reading_progress(context_id: str, request_key: str, status: str,
+                                    pdf_page: int | None, expected_revision: int) -> dict[str, Any]:
+        """명시적으로 요청한 완료·재열기와 최근 PDF 페이지를 저장한다. 학습 시작을 대신하지 않는다.
+        pdf_page null은 위치 지우기다. 같은 입력 재전송에는 같은 UUID 키를 쓰고 충돌하면 먼저 현재 상태를 조회한다.
+        재전송 응답은 현재 상태와 최초 applied_revision을 구분한다. 동의·AI 호출·메모 삭제는 없다.
+        """
+        return call(True, lambda owner: service.learning.set_progress(owner, context(context_id),
+            request_key=request_key, status=status, pdf_page=pdf_page, expected_revision=expected_revision))
 
     @server.tool()
     def create_remote_annotation(context_id: str, request_key: str, value: dict) -> dict:

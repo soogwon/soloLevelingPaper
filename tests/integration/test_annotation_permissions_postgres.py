@@ -30,6 +30,9 @@ def test_limited_role_full_existing_ports_and_denials(pool, db, context):
         kwargs={'row_factory': dict_row, 'options': f'-c search_path={schema}'}, open=True)
     try:
         owner, key, _ = context
+        from solo_leveling.interfaces.cli.annotation_permissions import grant_learning_progress_role
+        with pool.connection() as conn:
+            grant_learning_progress_role(conn, schema, role)
         learning = PostgresRemoteLearningStore(restricted)
         original = learning.start(owner, key)
         assert learning.list_for_paper(owner, original['paper_id'], original['server_version_id'])['items'][0]['context_id'] == key
@@ -50,7 +53,13 @@ def test_limited_role_full_existing_ports_and_denials(pool, db, context):
         assert store.lookup_request('other', 'product', key, 'key') is None
         assert store.delete_annotation(owner, key, saved.annotation.annotation_id, expected_revision=2).revision == 3
         assert store.lookup_request(owner, 'product', key, 'key').state == 'deleted'
+        progress = learning.set_progress(owner, key, request_key=str(uuid4()), status='reading',
+                                         pdf_page=None, expected_revision=2)
+        assert progress['state']['status']=='reading'
         for statement in (
+            'UPDATE server_remote_learning_requests SET payload_hash=payload_hash',
+            'DELETE FROM server_remote_learning_requests',
+
             'SELECT * FROM web_sessions', 'SELECT * FROM server_device_credentials',
             'DELETE FROM server_context_annotations',
             'DELETE FROM server_annotation_consents',
