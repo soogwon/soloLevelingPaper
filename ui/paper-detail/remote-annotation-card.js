@@ -23,7 +23,7 @@ export function mountRemoteAnnotation(app, doc) {
     if (recovery.state === 'deleted') {
       el('status').textContent = '삭제된 기록입니다. 본문을 표시하거나 재생성하지 않습니다.'; return;
     }
-    if (!a.segments.every(s => ['original','translation'].includes(s.target) && typeof s.quote_snapshot === 'string')) return;
+    if (!a.segments.every(s => s && ['original','translation'].includes(s.target) && typeof s.quote_snapshot === 'string')) return;
     record = a;
     el('record').textContent = `${a.kind} · ${a.annotation_id} · revision ${a.revision}\n${a.body}\n`
       + a.segments.map(s => `${s.target === 'translation' ? '번역' : '원문'}: ${s.quote_snapshot}`).join('\n');
@@ -58,7 +58,7 @@ export function mountRemoteAnnotation(app, doc) {
     if (!incoming) return;
     const result = reply?.structuredContent?.result;
     if (result?.context_id !== incoming.context_id || result?.request_key !== incoming.request_key) {
-      clear('요청과 결과가 일치하지 않습니다. 채팅에서 다시 조회하세요.'); return;
+      incoming = null; clear('요청과 결과가 일치하지 않습니다. 채팅에서 다시 조회하세요.'); return;
     }
     incoming = null; render(reply);
   };

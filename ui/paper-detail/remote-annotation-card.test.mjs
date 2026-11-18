@@ -50,3 +50,8 @@ test('재조회 연결이 바뀌면 이전 본문을 지우고 확인하지 않�
 test('취소 뒤 호스트 결과가 도착해도 카드를 다시 활성화하지 않는다',()=>{
  const t=setup(()=>{});t.app.ontoolinput({arguments:{context_id:ctx,request_key:'existing'}});t.app.ontoolcancelled();t.app.ontoolresult(response());assert.equal(t.button('confirm').disabled,true);
 });
+
+test('잘못된 구간 응답은 예외 없이 확인을 차단한다',()=>{
+ const t=setup(()=>{});const r=response();r.structuredContent.result.recovery.annotation.segments=[null];
+ assert.doesNotThrow(()=>t.show(r));assert.equal(t.button('confirm').disabled,true);
+});
