@@ -105,7 +105,8 @@ def create_remote_mcp(
             resource_server_url=AnyHttpUrl(settings.resource_url),
             required_scopes=list(dict.fromkeys([settings.required_scope] +
                 (["papers:read"] if settings.product_reads_enabled else []) +
-                (["questions:write"] if question_service is not None else []))),
+                (["questions:write"] if question_service is not None else []) +
+                (["annotations:read", "annotations:write"] if annotation_service is not None else []))),
             validate_token_resource=True,
         ),
         transport_security=TransportSecuritySettings(
