@@ -40,3 +40,14 @@ test('로그아웃 뒤 목록 응답은 표시하지 않는다', async t => {
   resolve(response({ items: [item(1)], next_cursor: null })); await pending;
   assert.equal(v.textContent, ''); assert.equal(v.innerHTML, before);
 });
+
+test('세션 만료 후 이전 목록을 폐기하고 추가 조회를 차단한다', async t => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => ++calls === 1 ? response({ items: [item(1)], next_cursor: null })
+    : new Response(JSON.stringify({ detail: { code: 'authentication_required' } }), { status: 401 }));
+  const v = view(); await page({ view: v });
+  await v.querySelector('[data-refresh]').onclick();
+  assert.match(v.textContent, /접근할 수 없습니다/);
+  await v.querySelector('[data-refresh]').onclick();
+  assert.equal(calls, 2); assert.equal(listeners.size, 0);
+});

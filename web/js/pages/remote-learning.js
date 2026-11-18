@@ -15,6 +15,11 @@ export default async function remoteLearning({ view, params }) {
     events.forEach(event => window.removeEventListener(event, close));
   }
   events.forEach(event => window.addEventListener(event, close));
+  function accessDenied(error, missing = false) {
+    if (![401, 403, ...(missing ? [404] : [])].includes(error.status)) return false;
+    close(); view.textContent = '기록에 접근할 수 없습니다. 로그인과 학습 맥락을 확인한 뒤 화면을 다시 열어 주세요.';
+    return true;
+  }
   function current(seq) { return !closed && view.isConnected && generation === seq; }
   function draw(message = '') {
     if (closed || !view.isConnected) return;
@@ -92,6 +97,7 @@ export default async function remoteLearning({ view, params }) {
       cursor = page.next_cursor; busy = false; draw();
     } catch (error) {
       if (!current(seq)) return;
+      if (accessDenied(error, Boolean(learning))) return;
       busy = false;
       // 실패 응답을 학습 미시작으로 단정하지 않고 사용자가 명시적으로 시작하도록 안내한다.
       draw(error.status === 404 ? '기록이 없거나 접근할 수 없습니다. 학습 맥락을 확인해 주세요.' : '조회 실패. 저장·수정을 재전송하기 전에 다시 조회해 주세요.');
@@ -118,6 +124,7 @@ export default async function remoteLearning({ view, params }) {
       pendingProgress = null; learning = result.state; busy = false; await refresh(false);
     } catch (error) {
       if (!current(seq)) return;
+      if (accessDenied(error, true)) return;
       busy = false;
       if (error.status === 409 || error.status === 422) {
         pendingProgress = null; await refresh(false);
@@ -132,8 +139,9 @@ export default async function remoteLearning({ view, params }) {
       await request(method, base + suffix, { body });
       if (!current(seq)) return;
       busy = false; await refresh(false);
-    } catch {
+    } catch (error) {
       if (!current(seq)) return;
+      if (accessDenied(error, true)) return;
       busy = false; draw('완료를 확인하지 못했습니다. 자동 재전송하지 않으며 먼저 다시 조회해 주세요.');
     }
   }

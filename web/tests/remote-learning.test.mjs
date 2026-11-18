@@ -123,3 +123,18 @@ test('충돌 후 최신 revision을 읽고 새로운 키로 다음 변경을 저
   assert.notEqual(bodies[0].request_key, bodies[1].request_key);
   listeners.get('pagehide')();
 });
+
+test('저장 응답의 접근 거부는 이전 기록과 보류 키를 폐기한다', async t => {
+  let count = 0;
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    count++;
+    if (opts.method === 'POST') return new Response(JSON.stringify({ detail: { code: 'web_session_required' } }), { status: 403 });
+    return response(String(url).endsWith('/learning') ? { ...record, revision: 1 } : data(url));
+  });
+  const v = view(); await page({ view: v, params: { contextId: context } });
+  v.querySelector('[data-progress-status]').value = 'completed'; v.querySelector('[data-progress-page]').value = '1';
+  await v.querySelector('[data-progress-save]').onclick();
+  assert.match(v.textContent, /접근할 수 없습니다/);
+  await v.querySelector('[data-progress-retry]').onclick();
+  assert.equal(count, 4); assert.equal(listeners.size, 0);
+});

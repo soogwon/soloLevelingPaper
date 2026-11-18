@@ -45,8 +45,11 @@ export default async function remoteDashboard({ view }) {
             || (i.last_position !== null && (!Number.isSafeInteger(i.last_position?.pdf_page) || i.last_position.pdf_page < 1)))) throw Error('shape');
       items = more ? [...new Map([...items, ...page.items].map(i => [i.context_id, i])).values()] : page.items;
       cursor = page.next_cursor; busy = false; draw();
-    } catch {
+    } catch (error) {
       if (!current(seq)) return;
+      if ([401, 403].includes(error.status)) {
+        close(); view.textContent = '학습 현황에 접근할 수 없습니다. 로그인 후 화면을 다시 열어 주세요.'; return;
+      }
       busy = false; draw('조회에 실패했습니다. 새로고침으로 다시 확인해 주세요.');
     }
   }
