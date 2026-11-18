@@ -13,7 +13,7 @@ from .remote_executions import PostgresRemoteExecutionStore,RemoteExecutionConfl
 
 NOTICE='remote-question-v1'
 COUNT_NOTICE='question-count-and-generation-v1'
-COUNT_AI_NOTICE='OpenAI에 질문, 선택된 원문·번역 근거, 근거 ID, 답변 지시와 출력 형식을 입력 토큰 계수에 최대 1회, 답변 생성에 최대 1회 전송합니다. 외부 전송은 합계 최대 2회이며 계수만으로 답변을 생성하지 않습니다. 생성에는 서비스 예산을 사용하며 비용이 발생합니다. 계수의 실제 비용·모델 지원은 운영 활성화 전에 별도로 확인합니다. 전송 결과가 불명확하면 자동 재전송하지 않습니다.'
+COUNT_AI_NOTICE='OpenAI에 질문, 선택된 원문·번역 근거, 근거 ID, 답변 지시와 출력 형식을 입력 토큰 계수에 최대 1회, 답변 생성에 최대 1회 전송합니다. 외부 전송은 합계 최대 2회이며 계수만으로 답변을 생성하지 않습니다. 서비스 예산을 사용하며 비용이 발생할 수 있습니다. 전송 결과가 불명확하면 자동 재전송하지 않습니다.'
 
 def validate_notice(notice, policy, config):
     general = str(config.get('provider_profile_id', '')).startswith('general-question-')

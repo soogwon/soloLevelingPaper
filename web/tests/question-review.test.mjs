@@ -54,3 +54,16 @@ test('새 고지를 확인한 동의 저장에는 해당 고지 버전만 전송
  assert.deepEqual(JSON.parse(calls[1].body),{notice_version:'question-count-and-generation-v1'});
  listeners.get('pagehide')();
 });
+
+
+test('전송 횟수 누락 시 동의·접수는 차단하고 조회와 철회는 유지한다',async t=>{
+ const calls=[];const data={...value,transfer:null,storage:'current',ai_provider:'current'};
+ t.mock.method(globalThis,'fetch',async(url,opts)=>{calls.push([String(url),opts.method]);return {ok:true,status:200,json:async()=>data};});
+ const v=view(), grant={dataset:{grant:'ai_provider'}}, revoke={dataset:{revoke:'ai_provider'}};
+ v.querySelectorAll=s=>s==='[data-grant]'?[grant]:s==='[data-revoke]'?[revoke]:[];
+ await page({view:v,params:{requestKey:key}});await grant.onclick();await v.querySelector('[data-submit]').onclick();
+ assert.equal(calls.length,1);assert.match(v.innerHTML,/외부 전송 횟수를 확인할 수 없습니다/);
+ await revoke.onclick();await v.querySelector('[data-refresh]').onclick();
+ assert.deepEqual(calls.map(x=>x[1]),['GET','POST','GET']);assert.match(calls[1][0],/ai_provider\/revoke$/);
+ listeners.get('pagehide')();
+});
