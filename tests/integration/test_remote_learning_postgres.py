@@ -121,3 +121,29 @@ def test_cleanup_backend_removes_remote_learning(pool, db, context):
     PostgresObjectDeletionBackend(pool, None).delete_derived(owner, row['paper_id'])
     assert db('SELECT count(*) n FROM server_remote_learning_records WHERE owner_user_id=%s', (owner,))[0]['n'] == 0
     assert store.start(owner, key) is None
+
+
+def test_paper_context_list_owner_version_cursor_and_deletion(pool, db, context):
+    owner, key, _ = context
+    store = PostgresRemoteLearningStore(pool)
+    first = store.start(owner, key)
+    paper, version = first['paper_id'], first['server_version_id']
+    assert store.list_for_paper('other', paper, version)['items'] == []
+    assert store.list_for_paper(owner, paper, str(uuid4()))['items'] == []
+    keys = [key]
+    for _ in range(2):
+        new_key = str(uuid4()); keys.append(new_key)
+        db('''INSERT INTO server_execution_contexts
+            (owner_user_id,context_id,paper_id,server_version_id,publication_id,parse_revision_id)
+            SELECT owner_user_id,%s,paper_id,server_version_id,publication_id,parse_revision_id
+            FROM server_execution_contexts WHERE owner_user_id=%s AND context_id=%s''', (new_key, owner, key))
+        store.start(owner, new_key)
+    found = []; cursor = None
+    while True:
+        page = store.list_for_paper(owner, paper, version, after=cursor, limit=1)
+        found.extend(r['context_id'] for r in page['items'])
+        cursor = page['next_cursor']
+        if cursor is None: break
+    assert found == sorted(keys)
+    db('UPDATE server_papers SET deleted_at=clock_timestamp() WHERE owner_user_id=%s', (owner,))
+    assert store.list_for_paper(owner, paper, version)['items'] == []

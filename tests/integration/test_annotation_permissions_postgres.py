@@ -32,6 +32,7 @@ def test_limited_role_full_existing_ports_and_denials(pool, db, context):
         owner, key, _ = context
         learning = PostgresRemoteLearningStore(restricted)
         original = learning.start(owner, key)
+        assert learning.list_for_paper(owner, original['paper_id'], original['server_version_id'])['items'][0]['context_id'] == key
         assert learning.set_status(owner, key, status='completed', expected_revision=1)['revision'] == 2
         assert learning.start(owner, key)['learning_record_id'] == original['learning_record_id']
         store = PostgresRemoteAnnotationStore(restricted)

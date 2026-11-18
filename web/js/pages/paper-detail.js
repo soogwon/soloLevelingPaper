@@ -1,4 +1,5 @@
 // 3. 논문 상세 페이지 — GET /v1/papers/{id}, GET /v1/annotations, GET /v1/annotations/{id}, POST /v1/resume-requests
+import { remotePaperNotes } from '../lib/remote-paper-notes.js';
 import { CONFIG } from '../config.js';
 import { api } from '../api/index.js';
 import { html, setHTML } from '../lib/html.js';
@@ -55,7 +56,12 @@ function actionButton({ label, primary, available, message, action, iconHtml }) 
 }
 
 export default async function paperDetailPage({ view, params, query }) {
+  let closed = false;
+  const events = ['auth:logout', 'auth:expired', 'hashchange', 'pagehide'];
+  const close = () => { closed = true; view.textContent = ''; events.forEach(e => window.removeEventListener(e, close)); };
+  events.forEach(e => window.addEventListener(e, close));
   const paper = await api.getPaper(params.paperId, { learningRecordId: query.record, versionId: query.version });
+  if (closed || !view.isConnected) return;
   const title = paperTitle(paper);
   document.title = `${title} · Solo Leveling`;
   const versionId = paper.selected_version_id;
@@ -95,7 +101,7 @@ export default async function paperDetailPage({ view, params, query }) {
       </section>
 
       <section class="card panel panel-side" aria-labelledby="memo-h">
-        <h2 class="panel-title" id="memo-h">메모·하이라이트 <small data-slot="memo-count"></small></h2>
+        <h2 class="panel-title" id="memo-h">로컬 동기화 메모·하이라이트 <small data-slot="memo-count"></small></h2>
         <div class="pills" role="group" aria-label="기록 종류">
           ${TABS.map(([v, l]) => html`<button type="button" class="pill sm" data-kind="${v}" aria-pressed="${String(v === '')}">${l}</button>`)}
         </div>
@@ -103,7 +109,10 @@ export default async function paperDetailPage({ view, params, query }) {
         <div class="stack" data-slot="memos" tabindex="-1"></div>
         <div data-slot="memo-pager"></div>
       </section>
-    </div>`);
+    </div>
+    <section class="card panel" data-slot="remote-notes"></section>`);
+
+  const remoteReady = CONFIG.USE_MOCK ? Promise.resolve() : remotePaperNotes(view.querySelector('[data-slot="remote-notes"]'), paper.paper_id, versionId);
 
   // ---------- 메모·하이라이트 (페이지 번호 방식) ----------
   const memoState = { kind: '', page: pageFromQuery(query.mpage), seq: 0, focus: null };
@@ -132,7 +141,7 @@ export default async function paperDetailPage({ view, params, query }) {
         paper_id: paper.paper_id, version_id: versionId, kind: memoState.kind, sort: 'newest',
         page, limit: MEMO_PAGE_SIZE,
       });
-      if (seq !== memoState.seq) return;
+      if (closed || !view.isConnected || seq !== memoState.seq) return;
       if (res.items.length === 0 && page > 1 && res.total_count > 0) { loadMemos(res.total_pages, { moveFocus }); return; }
 
       // 위에 따로 강조해 둔 기록은 목록에서 한 번 더 보여주지 않는다.
@@ -150,7 +159,7 @@ export default async function paperDetailPage({ view, params, query }) {
         memosEl.focus({ preventScroll: true });
       }
     } catch (error) {
-      if (seq !== memoState.seq) return;
+      if (closed || !view.isConnected || seq !== memoState.seq) return;
       setHTML(memosEl, errorBlock(error, 'reload-memos'));
       setHTML(memoPagerEl, '');
     }
@@ -161,6 +170,7 @@ export default async function paperDetailPage({ view, params, query }) {
     if (!query.annotation) return;
     try {
       const a = await api.getAnnotation(query.annotation);
+      if (closed || !view.isConnected) return;
       if (a.paper?.paper_id !== paper.paper_id) return;
       memoState.focus = a;
       setHTML(focusEl, compactAnnotationCard(a, { focused: true }));
@@ -168,6 +178,7 @@ export default async function paperDetailPage({ view, params, query }) {
       card.scrollIntoView({ block: 'center', behavior: 'smooth' });
       card.focus({ preventScroll: true });
     } catch {
+      if (closed || !view.isConnected) return;
       setHTML(focusEl, html`<p class="inline-error">선택한 기록을 찾을 수 없어요.</p>`);
     }
   }
@@ -273,5 +284,7 @@ export default async function paperDetailPage({ view, params, query }) {
   // 강조할 기록을 먼저 확인한 뒤 목록을 불러와야 같은 기록이 두 번 보이지 않는다.
   // 목록에서 넘어온 기록 ID는 주소에 고정해 새로고침·뒤로가기 후에도 같은 기록과 페이지를 본다.
   await loadFocus();
+  if (closed || !view.isConnected) return;
   await loadMemos(memoState.page);
+  await remoteReady;
 }

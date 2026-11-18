@@ -27,3 +27,22 @@ def test_csrf_device_and_extra_fields_cannot_grant():
         verifier.verify.return_value = AuthenticatedPrincipal('alice', 'device', 'device')
         assert client.post(path, json=body, headers={'Authorization': 'Bearer synthetic'}).status_code == 403
         assert service.consents.grant.call_count == 1
+
+
+def test_context_listing_uses_authenticated_owner_and_fixed_version():
+    service = Mock(); verifier = Mock()
+    verifier.verify.return_value = AuthenticatedPrincipal('alice', 'web_session')
+    service.learning.list_for_paper.return_value = {'items': [], 'next_cursor': None}
+    app = FastAPI()
+    app.include_router(create_annotation_product_router(create_auth_dependency(verifier, verifier), service))
+    paper = '00000000-0000-0000-0000-000000000580'
+    version = '00000000-0000-0000-0000-000000000581'
+    path = f'/v1/remote-annotation-products/contexts?paper_id={paper}&version_id={version}&owner=other'
+    with TestClient(app) as client:
+        assert client.get(path).status_code == 401
+        client.cookies.set(SESSION_COOKIE, 'session')
+        result = client.get(path)
+        assert result.status_code == 200
+        assert result.headers['cache-control'] == 'no-store'
+        service.learning.list_for_paper.assert_called_once_with('alice', paper, version, after=None, limit=20)
+        assert client.get(path.replace(version, '')).status_code == 422

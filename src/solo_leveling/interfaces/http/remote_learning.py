@@ -45,6 +45,28 @@ class PostgresRemoteLearningStore:
         with self._pool.connection() as conn:
             return self._read(conn, owner, context)
 
+    def list_for_paper(self, owner, paper, version, *, after=None, limit=20):
+        """명시적으로 시작한 현재 판본의 맥락만 읽고 새 기록은 만들지 않는다."""
+        paper = self._scope(owner, paper)
+        if not isinstance(version, str) or not version.strip() or len(version) > 128:
+            raise ValueError('remote_learning_version_invalid')
+        after = str(UUID(after)) if after is not None else None
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise ValueError('remote_learning_limit_invalid')
+        with self._pool.connection() as conn:
+            rows = conn.execute('''SELECT r.context_id, r.learning_record_id,
+                r.paper_id, r.server_version_id, r.publication_id, r.status, r.revision
+                FROM server_remote_learning_records r
+                JOIN server_papers p ON p.paper_id=r.paper_id AND p.owner_user_id=r.owner_user_id
+                WHERE r.owner_user_id=%s AND r.paper_id=%s AND r.server_version_id=%s
+                  AND p.deleted_at IS NULL AND (%s::uuid IS NULL OR r.context_id>%s::uuid)
+                ORDER BY r.context_id LIMIT %s''',
+                (owner, paper, version, after, after, limit + 1)).fetchall()
+        items = [{**{key: str(row[key]) for key in ('context_id', 'learning_record_id',
+            'paper_id', 'server_version_id', 'publication_id')},
+            'status': row['status'], 'revision': row['revision']} for row in rows[:limit]]
+        return {'items': items, 'next_cursor': items[-1]['context_id'] if len(rows) > limit else None}
+
     def start(self, owner, context):
         """같은 context의 명시적 시작 재전송은 기존 기록·완료 상태를 보존한다."""
         context = self._scope(owner, context)
