@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+:root {
+  --bg: #fbfaf7; --surface: #ffffff; --ink: #1d232b; --muted: #5d6673; --line: #e3e0d8;
+  --accent: #1f6f78; --accent-soft: #e4f1f1; --evidence: #f6f1e4; --evidence-line: #c9a64a;
+  --good: #2f7d4f; --good-soft: #e5f3ea; --bad: #b4443b; --bad-soft: #f8e7e5; --part: #a26b12; --part-soft: #f8efdc;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15181c; --surface: #1c2026; --ink: #e8e6e1; --muted: #a2a9b3; --line: #2e343c;
+    --accent: #6cc3cb; --accent-soft: #1e3335; --evidence: #2a2619; --evidence-line: #b8963e;
+    --good: #6fc18f; --good-soft: #1b2e23; --bad: #e0857c; --bad-soft: #351f1d; --part: #e0b25c; --part-soft: #33291a;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.7 "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+  word-break: keep-all; overflow-wrap: anywhere;
+}
+main { max-width: 720px; margin: 0 auto; padding: 40px 20px 80px; }
+.eyebrow { color: var(--accent); font-size: 13px; font-weight: 600; letter-spacing: .06em; }
+h1 { font-size: 28px; line-height: 1.35; margin: 6px 0 10px; }
+.paper, .note { color: var(--muted); margin: 0 0 6px; font-size: 15px; }
+.progress { display: flex; align-items: center; gap: 12px; margin: 24px 0 18px; font-size: 14px; color: var(--muted); }
+.bar { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .25s; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 26px 24px; }
+.tags { display: flex; gap: 6px; margin-bottom: 10px; }
+.tag { font-size: 12px; padding: 2px 9px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.prompt { font-size: 18px; font-weight: 600; margin: 0 0 18px; }
+.choices { display: grid; gap: 10px; }
+.choice {
+  display: flex; gap: 10px; align-items: flex-start; text-align: left; width: 100%;
+  padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent;
+  color: inherit; font: inherit; cursor: pointer;
+}
+.choice:hover:not(:disabled) { border-color: var(--accent); }
+.choice.picked { border-color: var(--accent); background: var(--accent-soft); }
+.choice.right { border-color: var(--good); background: var(--good-soft); }
+.choice.wrong { border-color: var(--bad); background: var(--bad-soft); }
+.choice:disabled { cursor: default; }
+.mark { font-weight: 700; color: var(--accent); }
+textarea {
+  width: 100%; min-height: 96px; padding: 12px; border: 1.5px solid var(--line); border-radius: 10px;
+  background: transparent; color: inherit; font: inherit; resize: vertical;
+}
+textarea:focus, .choice:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+button.btn {
+  padding: 10px 18px; border-radius: 10px; border: 1.5px solid var(--accent); background: var(--accent);
+  color: var(--surface); font: inherit; font-weight: 600; cursor: pointer;
+}
+button.btn.ghost { background: transparent; color: var(--accent); }
+button.btn:disabled { opacity: .45; cursor: default; }
+.feedback { margin-top: 18px; padding: 14px 16px; border-radius: 10px; }
+.feedback.right { background: var(--good-soft); }
+.feedback.wrong { background: var(--bad-soft); }
+.feedback.part, .feedback.self { background: var(--part-soft); }
+.verdict { font-weight: 700; margin: 0 0 6px; }
+.feedback.right .verdict { color: var(--good); }
+.feedback.wrong .verdict { color: var(--bad); }
+.feedback.part .verdict, .feedback.self .verdict { color: var(--part); }
+.feedback p { margin: 6px 0; }
+.label { font-size: 13px; color: var(--muted); font-weight: 600; }
+blockquote.evidence {
+  margin: 8px 0 0; padding: 8px 12px; background: var(--evidence); border-left: 3px solid var(--evidence-line);
+  border-radius: 0 8px 8px 0; font-size: 14px;
+}
+blockquote.evidence b { color: var(--muted); font-weight: 600; margin-right: 6px; }
+.score { font-size: 42px; font-weight: 700; color: var(--accent); margin: 4px 0; }
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 15px; }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+th { color: var(--muted); font-weight: 600; font-size: 13px; }
+ul.review { padding-left: 18px; }
+ul.review li { margin-bottom: 10px; }
+.hint { color: var(--muted); font-size: 13px; margin-top: 10px; }
+noscript { display: block; padding: 16px; border: 1px solid var(--line); border-radius: 10px; }
+@media print { .actions, .progress { display: none; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">SOLO LEVELING PAPER · 이해도 퀴즈</div>
+  <h1 id="title"></h1>
+  <p class="paper" id="paper"></p>
+  <p class="note" id="note" hidden></p>
+  <div class="progress" id="progress"><span id="count"></span><div class="bar"><i id="fill"></i></div></div>
+  <section class="card" id="stage" aria-live="polite"></section>
+  <noscript>이 퀴즈는 브라우저에서 자바스크립트가 켜져 있어야 풀 수 있습니다.</noscript>
+</main>
+<script type="application/json" id="quiz-data">__QUIZ_DATA__</script>
+<script>
+(function () {
+  'use strict';
+  var quiz = JSON.parse(document.getElementById('quiz-data').textContent);
+  var MARKS = ['①', '②', '③', '④', '⑤'];
+  var LEVELS = ['정의', '관계', '적용'];
+  var stage = document.getElementById('stage');
+  var all = quiz.questions.map(function (q, i) { return i; });
+  var order = all.slice();
+  var pos = 0;
+  var results = {};  // 문항 번호 → 1(맞음) / 0.5(부분) / 0(틀림)
+
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  document.title = quiz.title;
+  document.getElementById('title').textContent = quiz.title;
+  document.getElementById('paper').textContent = '논문: ' + quiz.paper + (quiz.goal ? ' · 학습 목적: ' + quiz.goal : '');
+  if (quiz.note) {
+    var note = document.getElementById('note');
+    note.textContent = quiz.note;
+    note.hidden = false;
+  }
+
+  function updateProgress() {
+    var done = Math.min(pos, order.length);
+    document.getElementById('count').textContent = done + ' / ' + order.length;
+    document.getElementById('fill').style.width = (order.length ? done / order.length * 100 : 0) + '%';
+  }
+
+  function evidenceBlock(q) {
+    var wrap = el('div');
+    wrap.appendChild(el('div', 'label', '논문 근거'));
+    q.evidence.forEach(function (e) {
+      var quote = el('blockquote', 'evidence');
+      quote.appendChild(el('b', '', 'p.' + e.page));
+      quote.appendChild(document.createTextNode('"' + e.quote + '"'));
+      wrap.appendChild(quote);
+    });
+    return wrap;
+  }
+
+  function feedback(kind, verdict, q, extra) {
+    var box = el('div', 'feedback ' + kind);
+    box.appendChild(el('p', 'verdict', verdict));
+    (extra || []).forEach(function (node) { box.appendChild(node); });
+    var exp = el('p');
+    exp.appendChild(el('span', 'label', '해설 '));
+    exp.appendChild(document.createTextNode(q.explanation));
+    box.appendChild(exp);
+    box.appendChild(evidenceBlock(q));
+    return box;
+  }
+
+  function nextButton() {
+    var last = pos === order.length - 1;
+    var btn = el('button', 'btn', last ? '결과 보기' : '다음 문항 →');
+    btn.type = 'button';
+    btn.addEventListener('click', function () { pos += 1; render(); });
+    return btn;
+  }
+
+  function renderQuestion() {
+    var index = order[pos];
+    var q = quiz.questions[index];
+    stage.textContent = '';
+    var tags = el('div', 'tags');
+    tags.appendChild(el('span', 'tag', (index + 1) + '번'));
+    tags.appendChild(el('span', 'tag', q.level));
+    tags.appendChild(el('span', 'tag', q.type === 'multiple_choice' ? '객관식' : '주관식'));
+    stage.appendChild(tags);
+    stage.appendChild(el('p', 'prompt', q.prompt));
+    var actions = el('div', 'actions');
+    var check = el('button', 'btn', '정답 확인');
+    check.type = 'button';
+    check.disabled = true;
+
+    if (q.type === 'multiple_choice') {
+      var picked = null;
+      var list = el('div', 'choices');
+      var buttons = q.choices.map(function (c, i) {
+        var b = el('button', 'choice');
+        b.type = 'button';
+        b.appendChild(el('span', 'mark', MARKS[i]));
+        b.appendChild(el('span', '', c));
+        b.addEventListener('click', function () {
+          picked = i;
+          buttons.forEach(function (x) { x.classList.remove('picked'); });
+          b.classList.add('picked');
+          check.disabled = false;
+        });
+        list.appendChild(b);
+        return b;
+      });
+      stage.appendChild(list);
+      check.addEventListener('click', function () {
+        var ok = picked === q.correct_index;
+        results[index] = ok ? 1 : 0;
+        buttons.forEach(function (b, i) {
+          b.disabled = true;
+          b.classList.remove('picked');
+          if (i === q.correct_index) b.classList.add('right');
+          else if (i === picked) b.classList.add('wrong');
+        });
+        actions.textContent = '';
+        var answer = el('p');
+        answer.appendChild(el('span', 'label', '정답 '));
+        answer.appendChild(document.createTextNode(MARKS[q.correct_index] + ' ' + q.choices[q.correct_index]));
+        stage.insertBefore(feedback(ok ? 'right' : 'wrong', ok ? '정답이에요!' : '아쉬워요, 오답이에요.', q, ok ? [] : [answer]), actions);
+        actions.appendChild(nextButton());
+        actions.querySelector('button').focus();
+      });
+    } else {
+      var box = el('textarea');
+      box.setAttribute('aria-label', '답 쓰기');
+      box.placeholder = '답을 써 보세요. 쓰고 나서 정답 확인을 누르면 모범 답안과 채점 기준이 나와요.';
+      box.addEventListener('input', function () { check.disabled = !box.value.trim(); });
+      stage.appendChild(box);
+      check.addEventListener('click', function () {
+        box.readOnly = true;
+        actions.textContent = '';
+        var model = el('p');
+        model.appendChild(el('span', 'label', '모범 답안 '));
+        model.appendChild(document.createTextNode(q.answer));
+        var criteria = el('p');
+        criteria.appendChild(el('span', 'label', '채점 기준 '));
+        criteria.appendChild(document.createTextNode(q.grading_criteria));
+        var fb = feedback('self', '채점 기준과 비교해서 직접 채점해 주세요.', q, [model, criteria]);
+        stage.insertBefore(fb, actions);
+        [['맞았어요', 1, 'right'], ['부분 정답', 0.5, 'part'], ['틀렸어요', 0, 'wrong']].forEach(function (g) {
+          var b = el('button', 'btn ghost', g[0]);
+          b.type = 'button';
+          b.addEventListener('click', function () {
+            results[index] = g[1];
+            fb.className = 'feedback ' + g[2];
+            fb.querySelector('.verdict').textContent = '내 채점: ' + g[0];
+            actions.textContent = '';
+            actions.appendChild(nextButton());
+            actions.querySelector('button').focus();
+          });
+          actions.appendChild(b);
+        });
+      });
+    }
+    actions.appendChild(check);
+    stage.appendChild(actions);
+    stage.appendChild(el('p', 'hint', '정답은 확인 버튼을 누른 뒤에만 보여요.'));
+  }
+
+  function renderResult() {
+    stage.textContent = '';
+    var got = 0;
+    order.forEach(function (i) { got += results[i] || 0; });
+    stage.appendChild(el('div', 'label', order.length === all.length ? '전체 결과' : '다시 푼 문항 결과'));
+    stage.appendChild(el('div', 'score', got + ' / ' + order.length));
+
+    var table = el('table');
+    var head = el('tr');
+    ['수준', '문항', '점수'].forEach(function (h) { head.appendChild(el('th', '', h)); });
+    table.appendChild(head);
+    LEVELS.forEach(function (level) {
+      var items = order.filter(function (i) { return quiz.questions[i].level === level; });
+      if (!items.length) return;
+      var sum = items.reduce(function (s, i) { return s + (results[i] || 0); }, 0);
+      var row = el('tr');
+      row.appendChild(el('td', '', level));
+      row.appendChild(el('td', '', items.length + '개'));
+      row.appendChild(el('td', '', sum + ' / ' + items.length));
+      table.appendChild(row);
+    });
+    stage.appendChild(table);
+
+    var missed = order.filter(function (i) { return (results[i] || 0) < 1; });
+    if (missed.length) {
+      stage.appendChild(el('div', 'label', '다시 볼 곳'));
+      var ul = el('ul', 'review');
+      missed.forEach(function (i) {
+        var q = quiz.questions[i];
+        var pages = q.evidence.map(function (e) { return 'p.' + e.page; })
+          .filter(function (v, k, arr) { return arr.indexOf(v) === k; }).join(', ');
+        var short = q.prompt.length > 70 ? q.prompt.slice(0, 70) + '…' : q.prompt;
+        ul.appendChild(el('li', '', (i + 1) + '번 [' + q.level + '] ' + short + ' → 논문 ' + pages));
+      });
+      stage.appendChild(ul);
+    } else {
+      stage.appendChild(el('p', '', '모두 맞혔어요. 잘했어요!'));
+    }
+
+    var actions = el('div', 'actions');
+    if (missed.length) {
+      var retry = el('button', 'btn', '틀린 문항만 다시 풀기');
+      retry.type = 'button';
+      retry.addEventListener('click', function () { order = missed; pos = 0; render(); });
+      actions.appendChild(retry);
+    }
+    var again = el('button', 'btn ghost', '처음부터 다시');
+    again.type = 'button';
+    again.addEventListener('click', function () { order = all.slice(); pos = 0; results = {}; render(); });
+    actions.appendChild(again);
+    stage.appendChild(actions);
+  }
+
+  function render() {
+    updateProgress();
+    if (pos < order.length) renderQuestion(); else renderResult();
+    window.scrollTo(0, 0);
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>

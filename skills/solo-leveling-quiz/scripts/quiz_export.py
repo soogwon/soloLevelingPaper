@@ -1,17 +1,19 @@
-"""퀴즈 JSON을 검사하고 문제지·정답지를 Markdown(기본)과 PDF(선택)로 만든다.
+"""퀴즈 JSON을 검사하고 풀어 볼 수 있는 HTML 퀴즈(기본), 문제지·정답지 Markdown·PDF(선택)를 만든다.
 
 사용법:
-    python quiz_export.py quiz.json --out quiz_output [--pdf] [--combined]
+    python quiz_export.py quiz.json --out quiz_output [--md] [--pdf] [--combined]
 
 만드는 파일:
-    {이름}-문제지.md, {이름}-정답지.md   (--combined면 {이름}.md 하나에 문제 뒤 정답)
-    --pdf를 주면 같은 이름의 .pdf도 만든다 (동봉한 나눔고딕 글꼴 사용).
+    {이름}.html                          브라우저에서 한 문항씩 풀고 바로 채점되는 퀴즈 (항상)
+    --md면 {이름}-문제지.md, {이름}-정답지.md (--combined면 {이름}-문제와정답.md 하나)
+    --pdf면 Markdown과 같은 이름의 .pdf도 만든다 (동봉한 나눔고딕 글꼴 사용).
 
 입력 형식은 references/quiz-format.md를 따른다. 형식 오류가 있으면 파일을 만들지 않고
 문제를 모두 출력한 뒤 종료 코드 1을 돌려준다.
 """
 
 import argparse
+import html
 import json
 import re
 import sys
@@ -133,6 +135,20 @@ def answer_lines(quiz: dict) -> list[str]:
 
 
 FONT_DIR = Path(__file__).resolve().parent.parent / 'fonts'
+TEMPLATE = Path(__file__).resolve().parent.parent / 'assets' / 'quiz_template.html'
+HTML_FIELDS = ('level', 'type', 'prompt', 'choices', 'correct_index', 'answer',
+               'grading_criteria', 'explanation', 'evidence')
+
+
+def build_html(quiz: dict) -> str:
+    """검사를 통과한 퀴즈를 템플릿에 넣는다. 모든 글은 브라우저에서 textContent로만 넣는다."""
+    data = {key: quiz[key] for key in ('title', 'paper', 'goal', 'note') if quiz.get(key)}
+    data['questions'] = [{k: q[k] for k in HTML_FIELDS if k in q} for q in quiz['questions']]
+    payload = json.dumps(data, ensure_ascii=False)
+    # <script> 안에 넣으므로 </script>나 <!-- 로 블록이 끝나지 않게 막는다.
+    payload = payload.replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
+    page = TEMPLATE.read_text(encoding='utf-8')
+    return page.replace('__TITLE__', html.escape(quiz['title'])).replace('__QUIZ_DATA__', payload)
 
 
 def register_fonts(pdfmetrics, UnicodeCIDFont) -> tuple[str, str]:
@@ -228,8 +244,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('quiz_json', type=Path)
     parser.add_argument('--out', type=Path, default=Path('quiz_output'))
-    parser.add_argument('--pdf', action='store_true', help='PDF도 만든다')
-    parser.add_argument('--combined', action='store_true', help='문제와 정답을 한 파일에')
+    parser.add_argument('--md', action='store_true', help='문제지·정답지 Markdown도 만든다')
+    parser.add_argument('--pdf', action='store_true', help='Markdown과 PDF도 만든다')
+    parser.add_argument('--combined', action='store_true', help='Markdown·PDF를 문제와 정답 한 파일로')
     args = parser.parse_args(argv)
 
     quiz = json.loads(args.quiz_json.read_text(encoding='utf-8'))
@@ -242,8 +259,13 @@ def main(argv=None) -> int:
 
     args.out.mkdir(parents=True, exist_ok=True)
     name = safe_name(quiz['title'])
+    page = args.out / f'{name}.html'
+    page.write_text(build_html(quiz), encoding='utf-8')
+    print(f'만듦: {page}')
+    if not (args.md or args.pdf):
+        return 0
     if args.combined:
-        docs = {f'{name}.md': header_lines(quiz, '문제와 정답') + question_lines(quiz)
+        docs = {f'{name}-문제와정답.md': header_lines(quiz, '문제와 정답') + question_lines(quiz)
                 + ['---', '', '## 정답과 해설', ''] + answer_lines(quiz)}
     else:
         docs = {f'{name}-문제지.md': header_lines(quiz, '문제지') + question_lines(quiz),
