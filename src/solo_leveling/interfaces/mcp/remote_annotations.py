@@ -149,3 +149,6 @@ def register_annotation_tools(server, queries, service):
     def confirm_remote_annotation_request(context_id: str, request_key: str, annotation_id: str, revision: int) -> dict:
         """제품이 동일 맥락·ID·revision의 응답 수신을 검증한 후 확정한다. false면 현재 결과를 재조회한다."""
         return call(True, lambda owner: {'confirmed': service.confirm(owner, context(context_id), request_key, context(annotation_id), revision)})
+
+    from .remote_annotation_cards import register_annotation_cards
+    register_annotation_cards(server, service, call, context, binding)

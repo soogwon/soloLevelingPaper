@@ -17,7 +17,7 @@ COPY src/solo_leveling/application/__init__.py ./src/solo_leveling/application/
 COPY src/solo_leveling/application/remote_replay.py src/solo_leveling/application/remote_execution_policy.py src/solo_leveling/application/provider_dispatch.py ./src/solo_leveling/application/
 COPY src/solo_leveling/application/evidence_qa/remote_input.py src/solo_leveling/application/evidence_qa/remote_question_input.py ./src/solo_leveling/application/evidence_qa/
 COPY src/solo_leveling/application/evidence_qa/validators.py src/solo_leveling/application/evidence_qa/page_completion.py src/solo_leveling/application/evidence_qa/fragments.py ./src/solo_leveling/application/evidence_qa/
-COPY src/solo_leveling/interfaces/mcp/__init__.py src/solo_leveling/interfaces/mcp/remote_product.py src/solo_leveling/interfaces/mcp/remote_recovery.py src/solo_leveling/interfaces/mcp/remote_questions.py src/solo_leveling/interfaces/mcp/remote_annotations.py ./src/solo_leveling/interfaces/mcp/
+COPY src/solo_leveling/interfaces/mcp/__init__.py src/solo_leveling/interfaces/mcp/remote_product.py src/solo_leveling/interfaces/mcp/remote_recovery.py src/solo_leveling/interfaces/mcp/remote_questions.py src/solo_leveling/interfaces/mcp/remote_annotations.py src/solo_leveling/interfaces/mcp/remote_annotation_cards.py ./src/solo_leveling/interfaces/mcp/
 COPY src/solo_leveling/application/evidence_qa/__init__.py src/solo_leveling/application/evidence_qa/remote_contract.py ./src/solo_leveling/application/evidence_qa/
 COPY src/solo_leveling/application/learning_path/__init__.py src/solo_leveling/application/learning_path/views.py ./src/solo_leveling/application/learning_path/
 COPY src/solo_leveling/infrastructure/__init__.py ./src/solo_leveling/infrastructure/
@@ -26,6 +26,7 @@ COPY src/solo_leveling/interfaces/__init__.py ./src/solo_leveling/interfaces/
 COPY src/solo_leveling/interfaces/http/*.py ./src/solo_leveling/interfaces/http/
 COPY src/solo_leveling/interfaces/cli/__init__.py src/solo_leveling/interfaces/cli/server_migrations.py src/solo_leveling/interfaces/cli/remote_deletion_cleanup.py src/solo_leveling/interfaces/cli/remote_upload_cleanup.py ./src/solo_leveling/interfaces/cli/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-recovery.html src/solo_leveling/interfaces/mcp/assets/remote-annotation-recovery.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
+COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-compose.html src/solo_leveling/interfaces/mcp/assets/remote-annotation-compose.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 RUN pip install --no-cache-dir ".[server]"
 
 COPY migrations/server/*.sql ./migrations/server/
