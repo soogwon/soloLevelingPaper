@@ -3,7 +3,7 @@
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
 from uuid import uuid4
 
@@ -22,6 +22,10 @@ _REQUEST_KEY = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 class RemoteAnnotationConflict(ValueError):
     """같은 범위의 request_key가 다른 생성 입력에 사용됐다."""
+
+
+class RemoteAnnotationRecoveryAmbiguous(ValueError):
+    """같은 입력의 미확정 요청이 여러 개여서 자동 선택할 수 없다."""
 
 
 class RemoteAnnotationDeleted(ValueError):
@@ -68,6 +72,14 @@ class RemoteAnnotationCreateResult:
     request_key: str
     annotation: StoredRemoteAnnotation
     reused: bool
+
+
+@dataclass(frozen=True)
+class RemoteAnnotationRecoveryResult:
+    request_key: str
+    annotation: StoredRemoteAnnotation
+    state: str
+    recovery: str
 
 
 def annotation_input_fingerprint(value: RemoteAnnotationInput) -> str:
@@ -175,6 +187,100 @@ class PostgresRemoteAnnotationStore:
                  digest, annotation_id),
             )
         return RemoteAnnotationCreateResult(request_key, _stored(row), False)
+
+    @staticmethod
+    def _recovery_scope(owner, service, context, request_key=None):
+        if (not all(isinstance(item, str) and item for item in (owner, context))
+                or not isinstance(service, str) or not _SERVICE_ID.fullmatch(service)
+                or request_key is not None and (not isinstance(request_key, str)
+                    or not _REQUEST_KEY.fullmatch(request_key))):
+            raise ValueError("remote_annotation_scope_invalid")
+
+    @staticmethod
+    def _lock_recovery_parent(conn, owner, context):
+        # 생성·삭제와 같은 부모 우선 순서로 현재 상태와 수신 확인을 직렬화한다.
+        return conn.execute(
+            """SELECT p.paper_id FROM server_papers p
+               JOIN server_execution_contexts c
+                 ON c.owner_user_id=p.owner_user_id AND c.paper_id=p.paper_id
+               WHERE c.owner_user_id=%s AND c.context_id=%s AND p.deleted_at IS NULL
+               FOR UPDATE OF p""", (owner, context),
+        ).fetchone() is not None
+
+    @staticmethod
+    def _recovery_rows(conn, owner, service, context, *, request_key=None, digest=None):
+        if request_key is not None:
+            condition = " AND r.request_key=%s LIMIT 1"
+            params = (request_key,)
+        else:
+            condition = " AND r.fingerprint_version=%s AND r.input_sha256=%s AND r.client_confirmed_at IS NULL LIMIT 2"
+            params = (FINGERPRINT_VERSION, digest)
+        return conn.execute(
+            """SELECT r.request_key,r.state,r.input_sha256,r.fingerprint_version,
+                      r.client_confirmed_at,a.*
+               FROM server_annotation_create_requests r
+               JOIN server_context_annotations a
+                 ON a.owner_user_id=r.owner_user_id AND a.annotation_id=r.annotation_id
+                   AND a.context_id=r.context_id
+               WHERE r.owner_user_id=%s AND r.service_id=%s AND r.context_id=%s""" + condition,
+            (owner, service, context, *params),
+        ).fetchall()
+
+    def lookup_request(self, owner, service, context, request_key):
+        """인증 adapter가 확정한 범위의 정확한 키만 조회하며 새 메모를 만들지 않는다."""
+        self._recovery_scope(owner, service, context, request_key)
+        if request_key is None:
+            raise ValueError('remote_annotation_scope_invalid')
+        with self._pool.connection() as conn:
+            if not self._lock_recovery_parent(conn, owner, context):
+                return None
+            rows = self._recovery_rows(conn, owner, service, context, request_key=request_key)
+            row = rows[0] if rows else None
+            return self._recovery_result(row, 'exact') if row else None
+
+    def recover_request(self, owner, service, context, value):
+        """전체 최초 입력 지문이 같은 미확정 요청 한 개만 반환한다. 부분 본문 검색은 금지한다."""
+        self._recovery_scope(owner, service, context)
+        if not isinstance(value, RemoteAnnotationInput):
+            raise ValueError('remote_annotation_input_invalid')
+        digest = annotation_input_fingerprint(value)
+        with self._pool.connection() as conn:
+            if not self._lock_recovery_parent(conn, owner, context):
+                return None
+            rows = self._recovery_rows(conn, owner, service, context, digest=digest)
+            if len(rows) > 1:
+                raise RemoteAnnotationRecoveryAmbiguous('annotation_recovery_ambiguous')
+            return self._recovery_result(rows[0], 'unique_unconfirmed') if rows else None
+
+    @staticmethod
+    def _recovery_result(row, recovery):
+        state = 'deleted' if row['state'] == 'deleted' or row['deleted_at'] is not None else 'committed'
+        annotation = _stored(row)
+        if state == 'deleted':
+            annotation = replace(annotation, body='', segments=())
+        return RemoteAnnotationRecoveryResult(row['request_key'], annotation, state, recovery)
+
+    def confirm_request(self, owner, service, context, request_key, annotation_id, revision):
+        """검증한 응답의 ID·현재 revision이 일치할 때만 멱등 확인한다."""
+        self._recovery_scope(owner, service, context, request_key)
+        if (request_key is None or not isinstance(annotation_id, str) or not annotation_id
+                or type(revision) is not int or revision < 1):
+            raise ValueError('remote_annotation_confirmation_invalid')
+        with self._pool.connection() as conn:
+            if not self._lock_recovery_parent(conn, owner, context):
+                return False
+            row = conn.execute(
+                """UPDATE server_annotation_create_requests r
+                   SET client_confirmed_at=COALESCE(r.client_confirmed_at,CURRENT_TIMESTAMP)
+                   FROM server_context_annotations a
+                   WHERE r.owner_user_id=%s AND r.service_id=%s AND r.context_id=%s
+                     AND r.request_key=%s AND r.annotation_id=%s
+                     AND a.owner_user_id=r.owner_user_id AND a.annotation_id=r.annotation_id
+                     AND a.context_id=r.context_id AND a.revision=%s
+                   RETURNING r.request_key""",
+                (owner, service, context, request_key, annotation_id, revision),
+            ).fetchone()
+            return row is not None
 
     @staticmethod
     def _validated_segments(conn, owner_user_id: str, scope, segments: Sequence[SegmentInput]) -> list[dict]:
