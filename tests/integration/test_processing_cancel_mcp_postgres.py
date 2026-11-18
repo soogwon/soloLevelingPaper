@@ -63,6 +63,12 @@ def test_scope_confirmation_token_rotation_and_recovery(db,stores,pool):
         assert result(client,'prepare_remote_job_cancellation',args)['result']['recovered']==done['result']
         assert result(client,'get_remote_job_cancellation',{**args,'request_key':str(uuid4())})['status']=='not_found'
         assert len(db('SELECT * FROM server_processing_cancel_requests'))==1
+        for terminal_status in ('succeeded', 'failed', 'cancelled'):
+            db("UPDATE server_processing_jobs SET status=%s WHERE job_id=%s",(terminal_status,job.job_id))
+            ended=result(client,'prepare_remote_job_cancellation',{**args,'request_key':str(uuid4())})['result']
+            assert ended['can_cancel'] is False
+            assert '종료된 작업' in ended['notice']
+            assert '확인 버튼' not in ended['notice']
 
 
 def test_limited_role_can_only_cancel_and_append_receipt(db,stores,pool):

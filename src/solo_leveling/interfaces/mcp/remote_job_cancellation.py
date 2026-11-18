@@ -59,11 +59,13 @@ def register_job_cancellation_tools(server, queries, service):
             if response['status']!='ok':
                 raise RuntimeError('job_unavailable')
             current=response['result']
+            can_cancel=current['status'] in ('queued','processing')
             return {'job_id':job,'request_key':key,'job':current,
-                    'can_cancel':current['status'] in ('queued','processing'),
+                    'can_cancel':can_cancel,
                     'expected_revision':current['revision'],
                     'binding':signature(owner,token,job,key,current['revision']),
-                    'notice':'이 작업의 새 실행과 게시를 중단합니다. 이미 시작된 외부 호출·발생 비용은 되돌리지 않습니다. 취소하려면 확인 버튼을 직접 누르세요.'}
+                    'notice':('이 작업의 새 실행과 게시를 중단합니다. 이미 시작된 외부 호출·발생 비용은 되돌리지 않습니다. 취소하려면 확인 버튼을 직접 누르세요.'
+                              if can_cancel else '이미 종료된 작업이라 취소할 수 없습니다. 기존 게시 결과와 학습 기록은 유지됩니다.')}
         return call(True,operation)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False,destructiveHint=True,idempotentHint=True,openWorldHint=False))
