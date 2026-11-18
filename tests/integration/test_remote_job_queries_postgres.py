@@ -57,3 +57,21 @@ def test_old_job_keeps_its_own_publication_after_new_publish(db, stores, pool):
     assert before['result']['status'] == 'completed'
     remote.publish(100, base=first)
     assert query.get(str(job)) == before
+
+
+def test_running_cancelled_and_late_worker_completion_stay_consistent(db, stores, pool):
+    from solo_leveling.interfaces.http.processing_jobs import ProcessingJobLeaseLost
+    owner = 'lifecycle-' + uuid4().hex
+    paper = make_paper(db, owner)
+    job = stores[0].enqueue(owner, paper, 'v1', 'full_processing', str(uuid4()), HASH)
+    running = stores[0].claim('local-test-worker')
+    assert running.job_id == job.job_id
+    query = RemoteJobQueries(pool, lambda: owner)
+    response = query.get(job.job_id)['result']
+    assert response['status'] == 'processing' and response['attempt'] == 1
+    assert running.lease_token not in str(response)
+    stores[0].cancel(owner, job.job_id)
+    assert query.get(job.job_id)['result']['status'] == 'cancelled'
+    with pytest.raises(ProcessingJobLeaseLost):
+        stores[0].succeed(owner, job.job_id, running.lease_token)
+    assert query.get(job.job_id)['result']['status'] == 'cancelled'
