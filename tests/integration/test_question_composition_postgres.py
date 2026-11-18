@@ -28,7 +28,7 @@ def no_network(monkeypatch):
     monkeypatch.setattr('requests.post',Mock(side_effect=AssertionError('실제 전송 금지')))
 
 
-def prepare(db,stores,pool,*,fault=None,admitted=False,general=False):
+def prepare(db,stores,pool,*,fault=None,admitted=False,general=False,counting=False):
     _,prepared=setup_answer(db,stores,pool)
     resolver=PostgresRemoteContextResolver(pool)
     binding=resolver.resolve('alice',prepared.binding.context_id)
@@ -46,13 +46,13 @@ def prepare(db,stores,pool,*,fault=None,admitted=False,general=False):
     contract = None
     if general:
         from solo_leveling.workers.question_contract import QuestionContract
-        contract = QuestionContract('synthetic',version,'test','synthetic-counter','synthetic-price',
+        contract = QuestionContract('synthetic',version,'test','responses-input-tokens-v1' if counting else 'synthetic-counter','synthetic-price',
             2000,100,50000,1,2,2200,4000,4000)
     factory=QuestionExecutionFactory(pool,generation=OpenAIGenerationSettings('synthetic-not-key','synthetic',5,100,True),
         semantic=SemanticSettings(),provider_profile_id=contract.profile if contract else 'synthetic-profile',
         embedding_runtime=NS(embed=lambda q,b:QueryEmbedding((1.,0.),b.model_fingerprint)),
         window_key='test',token_upper_bound=lambda model,payload:500,post=post,
-        contract=contract,estimator_revision='synthetic-counter' if contract else None)
+        contract=contract,estimator_revision=contract.estimator_revision if contract else None)
     policy=RemoteExecutionPolicy(version,60,10,1 if general else 2,2000,100 if general else 1000)
     config=factory.processing_config(version)
     if fault=='config':config['generation_model']='changed'

@@ -68,3 +68,61 @@ python -m solo_leveling.workers.render_service --mode question-worker --runtime 
 3. 승인할 합성 질문/선택 원문·번역/모델·정확한 payload 해시·최대 호출/입출력 토큰·비용을 제시. 미리보기 접근 범위도 명시한다. 이 문서는 실제 외부 전송 승인이 아니다.
 4. worker 1건 실행 후 standby 복원. 실패·unknown이면 재시도/임의 환불 없이 기록한다. 문제 시 실행 flag를 끄고 새 자격/권한을 회수하며 미확정 원장은 유지한다.
 5. Desktop 답변·인용·재조회, 실제 예산 정산과 두 사용자 격리를 추가 확인한다. #395/#396/#399는 아직 닫지 않는다.
+
+## 일반 질문 bootstrap v2와 입력 토큰 계수 (2026-11-18)
+
+이번 추가는 코드·합성 HTTP·로컬 임시 PostgreSQL 검증이다. 실제 staging migration/권한,
+Render 설정, 입력 계수·생성 API 호출은 하지 않았다. 기존 v1 고정 payload 방식은 유지한다.
+
+### 계산 방식과 외부 전송 경계
+
+[OpenAI 입력 토큰 계수 안내](https://developers.openai.com/api/docs/guides/token-counting)는
+메시지 경계와 schema 토큰까지 포함하는 서버 계수와 일반 텍스트 로컬 토크나이저를 구분한다.
+따라서 임의 글자 수나 로컬 토큰 수에 여유분을 더해 운영 비용의 확정 상한으로 사용하지 않는다.
+v2는 `/v1/responses/input_tokens` 결과를 같은 실행의 고정 생성 본문 SHA256·profile에 묶는다.
+계수에는 생성 본문과 같은 model/instructions/input/text를 보내고 생성 전용 store/max_output_tokens는 보내지 않는다.
+PDF·계정 정보·DB 자격은 본문에 추가하지 않는다. 질문·선택 원문/번역 근거 자체는 외부로 전송된다.
+
+이 경로는 **계수 최대 1회 + 생성 최대 1회**로 총 HTTP 최대 2회다. 이전 생성 1회 승인을 계수 승인으로 재사용하지 않는다.
+계수는 생성 호출/유료 토큰 원장과 별도 예약하며, 실제 계수 비용·해당 모델 지원은 활성화 전에 공식 안내와 계정에서 재확인한다.
+실측 전이므로 대역 성공을 실제 제공자의 계수와 생성 사용량 일치 검증으로 간주하지 않는다.
+
+### v2 설정
+
+공통 DB/모델/runtime 경로는 v1과 같다. `schema_version=2`에서 `requests` 대신 아래 두 필드가 필요하다.
+
+- `contract`: `QuestionContract`의 모든 필드. model/policy_version/window_key/estimator_revision/price_revision,
+  max_input_tokens/max_output_tokens/max_payload_bytes, 입력·출력 토큰당 USD nanos, 질문/사용자/서비스 USD nanos 상한.
+- `counting`: `{"timeout_seconds": 정수}`만 허용. 1~30초이면서 질문 stage timeout 이하여야 한다.
+- `estimator_revision`은 `responses-input-tokens-v1`로 고정하고 provider_profile_id는 contract.profile과 일치해야 한다.
+- 모델·정책·입출력 상한·profile 불일치, v1/v2 필드 혼용을 시작 전에 거부한다.
+- `QUESTION_WORKER_EXECUTION_ENABLED=true`와 별도로 `QUESTION_WORKER_TOKEN_COUNT_ENABLED=true`가 필요하다.
+  설정 검사와 bootstrap 시작 자체는 계수나 생성을 호출하지 않는다. 기본값은 비활성이다.
+
+### 동의·원장·권한
+
+계수는 새 `question-count-and-generation-v1` 고지가 있는 두 목적의 동의만 허용한다.
+기존 웹 고지는 자동 변경하지 않았다. 새 고지/전송 시점/계수 포함 호출 수를 제품 동의 화면에 연결하고 재동의해야 한다.
+현재 고지로 생성된 작업은 v2 계수 전에 차단된다.
+
+migration `0042_question_token_counts.sql`은 원문 없이 owner/execution/lease/profile/payload hash/status/input token count만 기록한다.
+전송 전에 실행·기한·lease·논문 삭제·현재 동의·dispatch 중지·접수 예산·잠긴 owner/service 상한을 검사하고 예약을 commit한다.
+외부 호출 중 DB 잠금을 유지하지 않으며, 응답 후 다시 검사한다. 생성 직전에는 기존 영속 전송 gate가 다시 검사한다.
+예약 후 응답 유실·형식 오류·상한 초과는 재시도하지 않는다. 같은 실행의 같은 본문·profile에 대한 관측된 계수는
+동의/기한이 유효할 때 재사용하며 다른 본문은 거부한다. 동시 계수는 한 요청만 보내고, 중복 요청은 최초 예약을 덮어쓰지 않는다.
+재시작 후 reserved/unknown 계수는 자동 재전송하지 않는다. 실제 생성이 없었던 계수 실패는 유료 생성 사용량으로 정산하지 않는다.
+
+`grant_question_token_count_role`은 기존 질문 실행 역할에 새 원장의 SELECT/INSERT와 UPDATE(status,input_tokens)만 추가한다.
+기존 GRANT 함수는 계수 권한을 자동 부여하지 않는다. DELETE·profile/hash/실행 식별자 수정은 허용하지 않는다.
+허가된 기존 논문/실행 물리 삭제 시 계수 메타데이터도 FK cascade로 제거한다. 이번 작업에서는 실제 삭제를 실행하지 않는다.
+
+### 다음 적용 승인 범위
+
+1. 제품 동의 화면에 계수와 생성의 외부 전송 시점·본문·최대 요청 수를 표시하고 새 고지/재동의를 연결하는 코드 작업.
+2. 검토한 이미지 digest 게시/교체, staging migration 0042와 기존 전용 역할의 계수 원장 권한 추가.
+3. 새 v2 contract/profile/정책/window와 예산, 별도 계수 활성화 flag. 기존 고지/작업/사용량은 수정하지 않는다.
+4. 승인한 합성 질문·근거를 계수 1회와 생성 1회 보내는 범위 및 생성 비용 상한을 별도로 승인받는다. 이번 호출 수는 0회다.
+5. 문제 시 v1/이전 이미지·standby·두 실행 flag=false로 복원하고 계수/생성 원장은 보존한다.
+
+A: migration·제한 역할·동시 예약·기한/동의/lease 검사. B: 같은 본문의 계수와 생성 연결·해시 고정·비용 상한.
+C: 기존 고지 차단·다음 동의 화면 연결·실제 Desktop 조회가 남았음을 구분한다. 관련 티켓은 닫지 않는다.

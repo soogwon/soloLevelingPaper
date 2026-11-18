@@ -1,4 +1,4 @@
-"""승인한 고정 질문 생성 설정과 전용 DB를 연결한다. 사전 검사는 외부 호출이 없다."""
+"""승인한 질문 생성 설정과 전용 DB를 연결한다. 사전 검사는 외부 호출이 없다."""
 from contextlib import contextmanager
 from dataclasses import dataclass
 import json
@@ -15,6 +15,8 @@ from solo_leveling.infrastructure.generation.semantic_verifier import SemanticSe
 from solo_leveling.workers.question_composition import QuestionExecutionFactory
 from solo_leveling.workers.remote_question import RemoteQuestionRunner, PersistedQuestionExecutor
 from solo_leveling.interfaces.http.remote_executions import PostgresRemoteExecutionStore
+from .question_contract import QuestionContract
+from .question_token_counter import PersistedTokenCounter, REVISION
 from .verification_bootstrap import read_json, ApprovedPayloadBounds, preflight, _pool
 
 
@@ -28,14 +30,16 @@ class Plan:
     raw: dict
     policy: RemoteExecutionPolicy
     spec: EmbeddingSpec
+    contract: QuestionContract | None = None
 
 
 def load_plan(path):
     raw = read_json(path)
-    require(type(raw) is dict and set(raw) == {
+    require(type(raw) is dict and type(raw.get('schema_version')) is int and raw['schema_version'] in (1, 2))
+    extra = {'requests'} if raw['schema_version'] == 1 else {'contract', 'counting'}
+    require(set(raw) == {
         'schema_version','database_name','schema_name','database_role','policy','generation','provider_profile_id','window_key',
-        'runtime_image','runtime_lock_path','model_lock_path','model_dir','embedding_spec','requests'})
-    require(type(raw['schema_version']) is int and raw['schema_version']==1)
+        'runtime_image','runtime_lock_path','model_lock_path','model_dir','embedding_spec'} | extra)
     for key in ('database_name','schema_name','database_role'):
         require(type(raw[key]) is str and re.fullmatch(r'[a-z_][a-z0-9_]{0,62}',raw[key]))
     for key in ('provider_profile_id','window_key'):
@@ -48,9 +52,19 @@ def load_plan(path):
     require(type(generation) is dict and set(generation)=={'model','timeout_seconds','max_output_tokens'})
     settings = OpenAIGenerationSettings('configuration-only',**generation)
     require(settings.timeout_seconds<=policy.stage_timeout_seconds and settings.max_output_tokens<=policy.max_output_tokens)
-    bounds = ApprovedPayloadBounds(settings.model,settings.max_output_tokens,raw['requests'])
-    require(bounds.max_requests<=policy.max_calls and bounds.max_input<=policy.max_input_tokens
-            and bounds.max_output<=policy.max_output_tokens)
+    contract = None
+    if raw['schema_version'] == 1:
+        bounds = ApprovedPayloadBounds(settings.model,settings.max_output_tokens,raw['requests'])
+        require(bounds.max_requests<=policy.max_calls and bounds.max_input<=policy.max_input_tokens
+                and bounds.max_output<=policy.max_output_tokens)
+    else:
+        contract = QuestionContract(**raw['contract'])
+        contract.validate_policy(policy,settings.model,raw['window_key'],raw['provider_profile_id'],False)
+        require(settings.max_output_tokens == contract.max_output_tokens and contract.estimator_revision == REVISION)
+        counting = raw['counting']
+        require(type(counting) is dict and set(counting) == {'timeout_seconds'}
+                and type(counting['timeout_seconds']) is int
+                and 1 <= counting['timeout_seconds'] <= min(30,policy.stage_timeout_seconds))
     from solo_leveling.application.evidence_qa.remote_search import canonical_fingerprint
     canonical_fingerprint(json.dumps(raw['embedding_spec']))
     spec = EmbeddingSpec(**raw['embedding_spec'])
@@ -58,7 +72,7 @@ def load_plan(path):
             and re.fullmatch('[0-9a-f]{64}',spec.artifact_sha256))
     require(spec.normalization=='l2' and spec.model_id==spec.tokenizer_id
             and spec.model_revision==spec.tokenizer_revision==Path(raw['model_dir']).name)
-    return Plan(raw,policy,spec)
+    return Plan(raw,policy,spec,contract)
 
 
 def check_files(plan):
@@ -73,9 +87,11 @@ def _embedding(plan):
 
 
 @contextmanager
-def build(plan, source, *, pool_factory=_pool, check=check_files, embedding_factory=_embedding, post=None):
+def build(plan, source, *, pool_factory=_pool, check=check_files, embedding_factory=_embedding, post=None, token_count_post=None):
     # 일반 OPENAI_API_KEY나 웹 DATABASE_URL로 조용히 대체하지 않는다.
     require(source.get('QUESTION_WORKER_EXECUTION_ENABLED')=='true')
+    if plan.contract is not None:
+        require(source.get('QUESTION_WORKER_TOKEN_COUNT_ENABLED') == 'true')
     check(plan)
     dsn, key = source.get('QUESTION_WORKER_DATABASE_URL'),source.get('QUESTION_WORKER_OPENAI_API_KEY')
     require(type(dsn) is str and type(key) is str and bool(key.strip()))
@@ -96,12 +112,18 @@ def build(plan, source, *, pool_factory=_pool, check=check_files, embedding_fact
             role=conn.execute('SELECT rolname,rolsuper,rolcreatedb,rolcreaterole,rolbypassrls,rolinherit FROM pg_roles WHERE rolname=current_user').fetchone()
             require(role and role['rolname']==plan.raw['database_role'] and not any(role[k] for k in ('rolsuper','rolcreatedb','rolcreaterole','rolbypassrls','rolinherit')))
         generation=OpenAIGenerationSettings(key,**plan.raw['generation'],allow_external_api=True)
-        factory=QuestionExecutionFactory(pool,generation=generation,semantic=SemanticSettings(),
-            provider_profile_id=plan.raw['provider_profile_id'],window_key=plan.raw['window_key'],
-            embedding_runtime=embedding_factory(plan),token_upper_bound=ApprovedPayloadBounds(
-                generation.model,generation.max_output_tokens,plan.raw['requests']),post=post)
+        embedding = embedding_factory(plan)
+        def compose(counter):
+            return QuestionExecutionFactory(pool,generation=generation,semantic=SemanticSettings(),
+                provider_profile_id=plan.raw['provider_profile_id'],window_key=plan.raw['window_key'],
+                embedding_runtime=embedding,token_upper_bound=counter,post=post,contract=plan.contract,
+                estimator_revision=None if plan.contract is None else plan.contract.estimator_revision)
+        fixed = None if plan.contract else compose(ApprovedPayloadBounds(
+            generation.model,generation.max_output_tokens,plan.raw['requests']))
         def execute(intent,policy,allowed,request):
             require(policy==plan.policy)
+            factory = fixed if fixed is not None else compose(PersistedTokenCounter(pool,intent,plan.contract,allowed,
+                api_key=key,enabled=True,timeout_seconds=plan.raw['counting']['timeout_seconds'],post=token_count_post))
             return factory(intent,policy,allowed,request)
         store=PostgresRemoteExecutionStore(pool,question_policy_version=plan.policy.version)
         yield RemoteQuestionRunner(store,PersistedQuestionExecutor(store,execute))
