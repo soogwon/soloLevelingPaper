@@ -228,3 +228,30 @@ open({str(done)!r}, 'w').write('완료')
         thread.join(5)
     assert not thread.is_alive() and result == [0]
     assert done.read_text() == '완료'
+
+
+@pytest.mark.parametrize('exit_code', [0, 1])
+def test_continuous_exit_repeats_fixed_alert_without_restart(tmp_path, capsys, exit_code):
+    marker = tmp_path / 'calls'
+    class Stop:
+        alerts = 0
+        def is_set(self): return False
+        def wait(self, seconds):
+            if seconds == 1:
+                self.alerts += 1
+                return self.alerts == 2
+            time.sleep(seconds)
+            return False
+    stop = Stop()
+    command = [sys.executable, '-c',
+        f'open({str(marker)!r},"a").write("once"); print("SECRET"); raise SystemExit({exit_code})']
+    assert render_service.supervise(stop, command, monitor_continuous=True, alert_seconds=1, poll_seconds=0.01) == 0
+    output = capsys.readouterr().out
+    assert output.count('render_question_consumer_stopped') == 2
+    assert 'SECRET' not in output and marker.read_text() == 'once'
+
+
+def test_requested_shutdown_does_not_report_consumer_failure(capsys):
+    stop = threading.Event(); stop.set()
+    assert render_service.supervise(stop, ['unused'], monitor_continuous=True) == 0
+    assert 'render_question_consumer_stopped' not in capsys.readouterr().out

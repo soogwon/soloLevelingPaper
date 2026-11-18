@@ -28,7 +28,7 @@ def no_network(monkeypatch):
     monkeypatch.setattr('requests.post',Mock(side_effect=AssertionError('실제 전송 금지')))
 
 
-def prepare(db,stores,pool,*,fault=None,admitted=False):
+def prepare(db,stores,pool,*,fault=None,admitted=False,general=False):
     _,prepared=setup_answer(db,stores,pool)
     resolver=PostgresRemoteContextResolver(pool)
     binding=resolver.resolve('alice',prepared.binding.context_id)
@@ -42,11 +42,18 @@ def prepare(db,stores,pool,*,fault=None,admitted=False):
         return NS(status_code=200,close=Mock(),json=lambda:{'status':'completed','output':[{'type':'message','role':'assistant','status':'completed','content':[{'type':'output_text','text':json.dumps(answer)}]}],
             'usage':{'input_tokens':50,'output_tokens':25}})
     post=Mock(side_effect=respond)
+    version=new_id()
+    contract = None
+    if general:
+        from solo_leveling.workers.question_contract import QuestionContract
+        contract = QuestionContract('synthetic',version,'test','synthetic-counter','synthetic-price',
+            2000,100,50000,1,2,2200,4000,4000)
     factory=QuestionExecutionFactory(pool,generation=OpenAIGenerationSettings('synthetic-not-key','synthetic',5,100,True),
-        semantic=SemanticSettings(),provider_profile_id='synthetic-profile',
+        semantic=SemanticSettings(),provider_profile_id=contract.profile if contract else 'synthetic-profile',
         embedding_runtime=NS(embed=lambda q,b:QueryEmbedding((1.,0.),b.model_fingerprint)),
-        window_key='test',token_upper_bound=lambda model,payload:500,post=post)
-    version=new_id();policy=RemoteExecutionPolicy(version,60,10,2,2000,1000)
+        window_key='test',token_upper_bound=lambda model,payload:500,post=post,
+        contract=contract,estimator_revision='synthetic-counter' if contract else None)
+    policy=RemoteExecutionPolicy(version,60,10,1 if general else 2,2000,100 if general else 1000)
     config=factory.processing_config(version)
     if fault=='config':config['generation_model']='changed'
     request=RemoteQuestionInput.create(binding,'합성 설명은?',FILTERS,1,config)
@@ -106,3 +113,28 @@ def test_cli_queue_admission_search_answer_and_budget_settlement(db,stores,pool,
         ON r.policy_version=b.policy_version AND r.window_key=b.window_key WHERE r.execution_id=%s''',(saved.execution_id,))
     assert len(rows)==2
     assert all(row==dict(reserved_input_tokens=0,reserved_output_tokens=0,consumed_input_tokens=50,consumed_output_tokens=25) for row in rows)
+
+
+@pytest.mark.parametrize('scope', [None, 'owner', 'service'])
+def test_general_contract_checks_locked_budget_limits_before_http(db, stores, pool, scope):
+    store, saved, runner, post = prepare(db, stores, pool, general=True, admitted=True)
+    if scope:
+        db("UPDATE server_dispatch_budget_limits SET max_input_tokens=max_input_tokens+1 WHERE policy_version=%s AND scope_type=%s",
+           (store.policy('alice', saved.execution_id).version, scope))
+    status = runner.run('alice', saved.execution_id)
+    assert status == ('failed' if scope else 'finished')
+    assert post.call_count == (0 if scope else 1)
+    assert runner.run('alice', saved.execution_id) == 'not_claimed'
+    if scope:
+        assert not db('SELECT attempt_id FROM server_provider_attempts WHERE execution_id=%s', (saved.execution_id,))
+    else:
+        assert store.lookup('alice', 'ask_paper', saved.lookup.request_key).state == 'completed'
+
+
+def test_general_unknown_does_not_refund_or_retry(db, stores, pool):
+    store, saved, runner, post = prepare(db, stores, pool, general=True, admitted=True, fault='network')
+    assert runner.run('alice', saved.execution_id) == 'failed'
+    assert runner.run('alice', saved.execution_id) == 'not_claimed'
+    assert post.call_count == 1
+    assert db('SELECT status,reserved_input_tokens,reserved_output_tokens FROM server_provider_attempts WHERE execution_id=%s',
+        (saved.execution_id,)) == [dict(status='unknown', reserved_input_tokens=500, reserved_output_tokens=100)]

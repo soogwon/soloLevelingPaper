@@ -12,8 +12,11 @@ def emit(status):
     print(json.dumps({'status': status}), flush=True)
 
 
-def supervise(stop, command=None, *, preflight=None, poll_seconds=0.2, grace_seconds=5):
+def supervise(stop, command=None, *, preflight=None, poll_seconds=0.2, grace_seconds=5, monitor_continuous=False, alert_seconds=60):
+    if type(alert_seconds) not in (int, float) or not 1 <= alert_seconds <= 3600:
+        raise ValueError('render_alert_interval_invalid')
     child = None
+    consumer_stopped = False
     try:
         if preflight is not None:
             child = subprocess.Popen(preflight, stdout=subprocess.DEVNULL,
@@ -35,7 +38,15 @@ def supervise(stop, command=None, *, preflight=None, poll_seconds=0.2, grace_sec
             # 완료 후 재시작하지 않는다. DB의 attempt 제한도 그대로 유지된다.
             emit('render_verification_finished' if child.returncode == 0 else 'render_verification_failed')
             child = None
+            consumer_stopped = monitor_continuous
         emit('render_standby')
+        if consumer_stopped:
+            # 종료 코드가 0이어도 상시 소비가 멈췄으면 경고한다. 원문과 자식 출력은 전송하지 않는다.
+            while not stop.is_set():
+                emit('render_question_consumer_stopped')
+                if stop.wait(alert_seconds):
+                    break
+            return 0
         stop.wait()
         return 0
     except Exception:
@@ -98,7 +109,8 @@ def main(argv=None):
         command += ['--continuous'] if args.continuous else ['--max-jobs', str(max_jobs)]
     try:
         return supervise(stop, command, preflight=[sys.executable, '/opt/worker/image_preflight.py'],
-                         grace_seconds=args.shutdown_grace_seconds)
+                         grace_seconds=args.shutdown_grace_seconds,
+                         monitor_continuous=args.mode == 'question-worker' and args.continuous)
     finally:
         for sig, handler in previous.items(): signal.signal(sig, handler)
 
