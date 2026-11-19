@@ -130,3 +130,28 @@ def test_expired_lease_after_attempt_does_not_resend(pool, db, stores):
     assert runner.run('alice', saved.execution_id) == 'not_claimed'
     assert post.call_count == 1
     assert not db('SELECT quiz_id FROM server_remote_quizzes WHERE context_id=%s', (request.unpack()[0].context_id,))
+
+
+def test_crash_after_dispatch_and_expired_lease_never_resends(pool, db, stores):
+    class SyntheticCrash(BaseException):
+        pass
+    saved, request, _, post, _, execute = setup(pool, db, stores)
+    post.side_effect = SyntheticCrash()
+    with pytest.raises(SyntheticCrash):
+        RemoteQuizRunner(pool, execute).run('alice', saved.execution_id)
+    db("UPDATE server_remote_executions SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE execution_id=%s", (saved.execution_id,))
+    assert RemoteQuizRunner(pool, execute).run('alice', saved.execution_id) == 'blocked'
+    assert post.call_count == 1
+    assert not db('SELECT quiz_id FROM server_remote_quizzes WHERE context_id=%s', (request.unpack()[0].context_id,))
+
+
+def test_policy_mismatch_never_dispatches(pool, db, stores):
+    saved, _, _, post, _, execute = setup(pool, db, stores)
+    execute.settings = OpenAIGenerationSettings('synthetic', model='different', max_output_tokens=100, allow_external_api=True)
+    assert RemoteQuizRunner(pool, execute).run('alice', saved.execution_id) == 'failed'
+    post.assert_not_called()
+
+
+def test_no_default_semantic_verifier():
+    with pytest.raises(ValueError):
+        PersistedQuizExecutor(None, settings=None, token_upper_bound=lambda *_:100, window_key='test', validate_semantics=None)
