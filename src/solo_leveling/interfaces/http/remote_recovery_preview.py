@@ -42,6 +42,7 @@ class RemoteRecoveryPreview:
             recovery = operation == 'translation_recovery'
             return {'status': 'ok', 'result': {
                 'context_id': context_id, 'operation': operation,
+                'review_web_path': f'/#/reprocessing/{context_id}/{operation}',
                 'paper_id': binding.paper_id, 'version_id': binding.server_version_id,
                 'publication_id': binding.publication_id,
                 'parse_revision_id': binding.parse_revision_id,
