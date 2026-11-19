@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>저장 키워드·중요 문장 이관</title>
+<style>
+body { font: 14px system-ui, sans-serif; margin: 1rem; color-scheme: light dark; }
+fieldset { margin: 1rem 0; } label { display: block; margin: .5rem 0; }
+button { margin: .25rem; } pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+</style>
+</head>
+<body>
+<h1>저장 키워드·중요 문장 이관</h1>
+<p id="destination"></p>
+<p>미리보기는 선택 항목의 출처 해시와 페이지를 연결된 서버로 전송합니다. 제출하면 선택한 표시문·원문 인용·출처 및 판본 정보가 원격 학습 맥락에 저장됩니다.</p>
+<fieldset id="choices" disabled><legend>이관할 항목 (최대 20개)</legend><div id="items"></div></fieldset>
+<button id="preview" disabled>미리보기</button>
+<section id="review" hidden aria-label="전송 검토">
+<pre id="review-text"></pre>
+<label><input id="agree" type="checkbox"> 표시된 항목과 대상 판본을 확인했습니다.</label>
+<button id="submit" disabled>선택 항목 제출</button><button id="cancel">검토 취소</button>
+</section>
+<p id="status" role="status"></p>
+<!-- APP_SCRIPT -->
+</body>
+</html>

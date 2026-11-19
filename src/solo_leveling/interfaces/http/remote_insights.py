@@ -51,6 +51,21 @@ class InsightImport(BaseModel):
     items: Annotated[list[InsightItem], Field(min_length=1, max_length=20)]
 
 
+class InsightSourceReference(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    original_sha256: Digest
+    translated_sha256: Digest | None = None
+    pdf_page: Annotated[StrictInt, Field(ge=1)]
+
+
+class InsightMappingRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    local_version_id: Identifier
+    pdf_sha256: Digest
+    section_scoped: StrictBool
+    sources: Annotated[list[InsightSourceReference], Field(min_length=1, max_length=20)]
+
+
 class InsightConflict(ValueError):
     pass
 
@@ -91,6 +106,45 @@ class PostgresRemoteInsightImports:
     def __init__(self, pool):
         self.pool = pool
 
+    def _binding(self, conn, owner, device, context, version, pdf_sha256):
+        matches = conn.execute(
+            "SELECT * FROM server_lock_insight_import(%s,%s,%s,%s,%s)",
+            (owner, device, context, version, pdf_sha256)).fetchall()
+        return matches[0] if len(matches) == 1 else None
+
+    def map_sources(self, owner, device, context, request: InsightMappingRequest):
+        with self.pool.connection() as conn, conn.transaction():
+            bound = self._binding(conn, owner, device, context, request.local_version_id, request.pdf_sha256)
+            if bound is None:
+                return None
+            pages = sorted({source.pdf_page for source in request.sources})
+            rows = conn.execute("""SELECT c.chunk_id,c.original_text,c.pdf_page,c.section_id,t.translated_text
+                FROM server_processing_chunks c LEFT JOIN server_translation_chunks t
+                  ON t.owner_user_id=c.owner_user_id AND t.chunk_id=c.chunk_id
+                  AND t.translation_revision_id=%s AND t.translation_status='translated'
+                WHERE c.owner_user_id=%s AND c.paper_id=%s AND c.server_version_id=%s
+                  AND c.parse_revision_id=%s AND c.pdf_page=ANY(%s)""",
+                (bound['translation_revision_id'], owner, bound['paper_id'], bound['server_version_id'],
+                 bound['parse_revision_id'], pages)).fetchall()
+            candidates = {}
+            for row in rows:
+                key = (row['pdf_page'], digest(row['original_text']))
+                candidates.setdefault(key, []).append(row)
+            mapped = []
+            for source in request.sources:
+                matches = [row for row in candidates.get((source.pdf_page, source.original_sha256), [])
+                           if source.translated_sha256 is None or
+                           (row['translated_text'] and digest(row['translated_text']) == source.translated_sha256)]
+                if len(matches) != 1:
+                    raise InsightConflict('insight_source_mismatch')
+                mapped.append(matches[0])
+            sections = {row['section_id'] for row in mapped}
+            if request.section_scoped and (len(sections) != 1 or None in sections or '' in sections):
+                raise InsightConflict('insight_source_mismatch')
+            return {**{key: str(value) for key, value in bound.items()},
+                    'section_id': next(iter(sections)) if request.section_scoped else None,
+                    'remote_chunk_ids': [str(row['chunk_id']) for row in mapped]}
+
     def save(self, owner, device, context, request: InsightImport, *, preview=False):
         if ((not preview and not request.confirmed) or request.stored_at.utcoffset() is None
                 or len({item.insight_id for item in request.items}) != len(request.items)):
@@ -102,11 +156,9 @@ class PostgresRemoteInsightImports:
             # 서로 다른 collection도 같은 맥락의 요청 키를 교차 소비할 수 없다.
             conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
                          (json.dumps(['remote-insights', owner, str(context)]),))
-            matches = conn.execute("SELECT * FROM server_lock_insight_import(%s,%s,%s,%s,%s)",
-                                   (owner, device, context, request.local_version_id, request.pdf_sha256)).fetchall()
-            if len(matches) != 1:
+            bound = self._binding(conn, owner, device, context, request.local_version_id, request.pdf_sha256)
+            if bound is None:
                 return None
-            bound = matches[0]
             if any(str(bound[key]) != source[key] for key in (
                     'publication_id', 'parse_revision_id', 'translation_revision_id', 'embedding_set_id')):
                 raise InsightConflict('insight_binding_changed')

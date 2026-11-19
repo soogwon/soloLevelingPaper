@@ -17,6 +17,7 @@ for (const [name, entry, templateName] of [
   ['remote-annotation-recovery', 'remote-annotation-main', 'remote-annotation-template'],
   ['annotation', 'annotation-main', 'annotation-template'],
   ['server-sync', 'server-sync-main', 'server-sync-template'],
+  ['insight-import', 'insight-import-main', 'insight-import-template'],
   ['server-deletion', 'server-deletion-main', 'server-deletion-template'],
   ['pdf-upload', 'pdf-upload-main', 'pdf-upload-template'],
 ]) {
