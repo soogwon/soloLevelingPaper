@@ -6,9 +6,9 @@ from .remote_executions import RemoteExecutionConflict
 
 
 def create_summary_review_router(require_principal:Any,service):
-    from fastapi import APIRouter,Depends,HTTPException,Response
+    from fastapi import APIRouter,Depends,HTTPException,Response,Query
     from pydantic import BaseModel,ConfigDict,Field
-    router=APIRouter(prefix='/v1/remote-summaries/reviews')
+    router=APIRouter(prefix='/v1/remote-summaries')
     Principal=Annotated[AuthenticatedPrincipal,Depends(require_principal)]
     class Grant(BaseModel):
         model_config=ConfigDict(extra='forbid')
@@ -22,18 +22,25 @@ def create_summary_review_router(require_principal:Any,service):
         except Exception:raise HTTPException(503,detail={'code':'summary_unavailable'}) from None
         if value is None:raise HTTPException(404,detail={'code':'summary_not_found'})
         return value
-    @router.get('/{key}')
+    @router.get('/reviews/{key}')
     def view(key:UUID,principal:Principal,response:Response):return call(principal,response,'view',str(key))
-    @router.post('/{key}/consents/{purpose}')
+    @router.post('/reviews/{key}/consents/{purpose}')
     def grant(key:UUID,purpose:Literal['storage','ai_provider'],body:Grant,principal:Principal,response:Response):
         return call(principal,response,'grant',str(key),purpose,body.notice_version)
-    @router.post('/{key}/consents/{purpose}/revoke')
+    @router.post('/reviews/{key}/consents/{purpose}/revoke')
     def revoke(key:UUID,purpose:Literal['storage','ai_provider'],principal:Principal,response:Response):
         return call(principal,response,'revoke',str(key),purpose)
-    @router.post('/{key}/submit')
+    @router.post('/reviews/{key}/submit')
     def submit(key:UUID,principal:Principal,response:Response):return call(principal,response,'submit',str(key))
-    @router.get('/{key}/result')
+    @router.get('/reviews/{key}/result')
     def result(key:UUID,principal:Principal,response:Response):return call(principal,response,'result',str(key))
-    @router.post('/{key}/cancel')
+    @router.post('/reviews/{key}/cancel')
     def cancel(key:UUID,principal:Principal,response:Response):return call(principal,response,'cancel',str(key))
+    @router.get('/papers/{paper}/contexts')
+    def contexts(paper:UUID,version_id:Annotated[str,Query(min_length=1,max_length=128)],
+                 principal:Principal,response:Response,after:UUID|None=None):
+        return call(principal,response,'contexts',str(paper),version_id,str(after) if after else None)
+    @router.get('/contexts/{context}/latest')
+    def latest(context:UUID,principal:Principal,response:Response):
+        return call(principal,response,'latest',str(context))
     return router

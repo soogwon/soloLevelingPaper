@@ -129,3 +129,22 @@ class PostgresSummaryResults:
             if row is None:
                 return None
             return PostgresSummaryResults(SimpleNamespace(connection=lambda:nullcontext(conn))).get(owner,context,str(row['request_key']))
+
+    def contexts(self, owner, paper, version, after=None):
+        paper = str(UUID(paper))
+        after = str(UUID(after)) if after is not None else None
+        if not isinstance(version, str) or not version.strip() or len(version) > 128:
+            raise ValueError('summary_version_invalid')
+        with self.pool.connection() as conn:
+            rows = conn.execute("""SELECT c.context_id,c.paper_id,c.server_version_id,c.publication_id
+                FROM server_execution_contexts c JOIN server_papers p
+                  ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
+                WHERE c.owner_user_id=%s AND c.paper_id=%s AND c.server_version_id=%s
+                  AND p.deleted_at IS NULL AND (%s::uuid IS NULL OR c.context_id>%s::uuid)
+                  AND EXISTS(SELECT 1 FROM server_remote_executions e JOIN server_summary_inputs s
+                    ON s.owner_user_id=e.owner_user_id AND s.execution_id=e.execution_id
+                    WHERE e.owner_user_id=c.owner_user_id AND e.context_id=c.context_id
+                      AND e.operation=%s AND e.state='completed')
+                ORDER BY c.context_id LIMIT 21""",(owner,paper,version,after,after,OPERATION)).fetchall()
+        items = [{key:str(row[key]) for key in ('context_id','paper_id','server_version_id','publication_id')} for row in rows[:20]]
+        return dict(items=items,next_cursor=items[-1]['context_id'] if len(rows)>20 else None)
