@@ -55,13 +55,15 @@ export default async function papersPage({ view, query }) {
   };
 
   setHTML(view, html`
-    <div class="page-head">
-      <div>
+    <div class="page-head papers-head">
+      <div class="papers-head-copy">
         <h1 class="page-title">논문 아카이브</h1>
-        <a class="btn" href="#/uploads">새 PDF 등록 준비</a>
-        <a class="btn" href="#/remote-learning">원격 학습 현황</a>
         <p class="page-desc">Claude에서 학습한 논문과 마지막으로 읽던 위치를 다시 확인하세요.</p>
         <p class="hint">읽기 상태는 사용자의 학습 상태이며 PDF 업로드·처리 상태와는 별개예요. 새 PDF의 처리 진행은 ‘새 PDF 등록 준비’에서 확인하세요.</p>
+      </div>
+      <div class="actions papers-head-actions" aria-label="논문 아카이브 작업">
+        <a class="btn" href="#/uploads">새 PDF 등록 준비</a>
+        <a class="btn" href="#/remote-learning">원격 학습 현황</a>
       </div>
     </div>
     ${state.q ? html`<p class="notice">‘${state.q}’ 제목 검색 결과 <a href="#/papers">검색 지우기</a></p>` : ''}
