@@ -11,3 +11,7 @@ migration 0056은 역할별 동의 보호 함수를 추가한다. 신규 기능�
 검증: 권한 종단·migration·백업/비슈퍼유저 복구 29개 통과, 강화한 역할 검사 후 권한 종단 재통과. AI 호출·실제 staging 변경 없음.
 
 실제 적용 전에 승인할 범위: migration 0054/0056의 현재 상태 확인, 새 성찰 웹/MCP 역할 생성·최소 권한/접속 검사, 별도 자격 입력, Auth0 reflections:read/write 검증 계정 연결, 기능 flag·웹 배포, 합성 기록 저장/수정/삭제 검증. 서비스 설정 조립과 실행 스크립트/실패 복구 리허설이 준비된 뒤 별도 승인을 받는다. 기존 계정/기록/동의는 변경하지 않는다.
+
+## 서비스 조립
+
+`REMOTE_REFLECTIONS_ENABLED=true`, `REMOTE_REFLECTION_WEB_DATABASE_URL`, `REMOTE_REFLECTION_MCP_DATABASE_URL`을 모두 명시해야 조립한다. 기본값은 비활성이고 일반 DATABASE_URL로 대체하지 않는다. 두 URL은 같은 DB·검색 경로의 서로 다른 역할이어야 한다. 웹 API는 웹 풀, MCP 도구는 MCP 풀을 사용하며 시작 실패에도 두 풀을 정리한다. 오류와 repr에 자격을 노출하지 않는다. 설정/조립과 기존 메모·성찰 경계 대역 33개 통과.
