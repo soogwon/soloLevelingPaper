@@ -73,7 +73,7 @@ def build(plan,source,*,pool_factory=_pool,post=None,publish=False):
             require(Path(config['model_dir']).is_absolute())
             spec=EmbeddingSpec(**config['embedding_spec']);policy=TokenWindowPolicy(**config['fragment_policy'])
             def embedder(embedding,allowed):
-                return PyTorchProcessingEmbedder(Path(config['model_dir']),allowed,batch_size=config['batch_size'],
+                return PyTorchProcessingEmbedder(model_dir=Path(config['model_dir']),check_allowed=allowed,batch_size=config['batch_size'],
                     fragment_policy=policy,embedding_set_id=embedding)
             yield ReprocessingPublisher(PostgresReprocessingReviews(pool,config=plan['config']),
                 ReprocessingApproval(**plan['approval']),spec,embedder,execution_enabled=True)
