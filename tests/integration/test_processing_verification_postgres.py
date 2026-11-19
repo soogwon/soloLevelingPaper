@@ -95,3 +95,89 @@ def test_single_runner_reaches_real_staging_and_publication_without_external_cal
     assert objects.calls == 1
     assert db('SELECT status FROM server_processing_jobs WHERE job_id=%s', (job.job_id,))[0]['status'] == 'succeeded'
     assert db('SELECT count(*) AS n FROM server_processing_publications WHERE source_job_id=%s', (job.job_id,))[0]['n'] == 1
+
+
+def test_partial_translation_recovery_reuses_success_and_publishes(pool, db, monkeypatch):
+    from types import SimpleNamespace as NS
+
+    from solo_leveling.application.translation.service import TranslationService
+    from solo_leveling.domain.models import Chunk
+    from solo_leveling.domain.remote_processing import EmbeddingBatch, ProcessedTranslation
+    from solo_leveling.interfaces.http.object_storage import DownloadedObject
+    from solo_leveling.interfaces.http.remote_processing_intake import PostgresRemoteProcessingIntake
+    from solo_leveling.interfaces.http.remote_upload_consents import NOTICE_VERSION
+    import solo_leveling.workers.processing_composition as composition
+    from solo_leveling.workers.verification import run_once
+    from tests.fixtures.processing_result import LIMITS, SETTINGS, SPEC, result
+    from tests.integration.test_remote_processing_intake_postgres import admitted_source
+
+    owner, intent, storage, ai = admitted_source(pool, db)
+    job = PostgresRemoteProcessingIntake(pool).admit(owner, intent, new_id(), storage, ai, NOTICE_VERSION)
+    identity = db('SELECT current_database() AS db, current_schema() AS schema')[0]
+    target = db('SELECT * FROM server_processing_jobs WHERE job_id=%s', (job.job_id,))[0]
+    config = VerificationConfig(identity['db'], identity['schema'], owner, job.job_id,
+        str(target['paper_id']), target['server_version_id'], target['payload_hash'],
+        'verification-worker', 60, 100_000)
+    calls = []
+
+    class Objects:
+        def read_object(self, key, *, expected_size):
+            return DownloadedObject(key, expected_size, 'application/pdf', 'a' * 64, True, b'%PDF-test!')
+
+    def stages(_authorization, *, reuse_translations=None, **_options):
+        def bind(source, _check):
+            def process(current, _body):
+                base = result(current)
+                first = replace(base.document.chunks[0], section_id=None,
+                                original_text='The first paragraph describes the proposed attention mechanism.')
+                second = replace(first, chunk_id=new_id(), chunk_index=1,
+                                 original_text='The second paragraph describes the evaluation methodology.')
+                chunks = (first, second)
+                reusable = reuse_translations(current, chunks) if reuse_translations else None
+
+                class Provider:
+                    def translate(self, request, settings):
+                        index = next(chunk.chunk_index for chunk in chunks if chunk.chunk_id == request.chunk_id)
+                        calls.append(index)
+                        if index == 1 and reusable is None:
+                            return ''
+                        return '첫 번째 번역을 보존합니다.' if index == 0 else '두 번째 번역을 복구했습니다.'
+
+                batch = TranslationService(Provider()).translate(
+                    tuple(Chunk(c.chunk_id, c.parse_revision_id, c.chunk_index, c.original_text,
+                                pdf_page=c.pdf_page) for c in chunks),
+                    SETTINGS, reusable=reusable,
+                )
+                translations = tuple(ProcessedTranslation(item.request.chunk_id, item.text,
+                    item.failure_code, item.status) for item in batch.items)
+                embeddings = None if any(not item.indexable for item in batch.items) else EmbeddingBatch(
+                    SPEC, tuple(c.chunk_id for c in chunks), ((1.0, 0.0), (0.0, 1.0)))
+                return replace(base, document=replace(base.document, chunks=chunks, sections=()),
+                               translations=translations, embeddings=embeddings,
+                               status='prepared' if embeddings else 'translation_incomplete')
+
+            return NS(run=process)
+
+        return bind
+
+    monkeypatch.setattr(composition, 'ProcessingStagesFactory', stages)
+    resources = NS(pool=pool, objects=Objects(), stage_options=dict(limits=LIMITS,
+        service_config=NS(translation_settings=SETTINGS), embedding_spec=SPEC))
+    assert run_once(config, resources) == 'translation_checkpoint_saved'
+    assert calls == [0, 1]
+    saved = db('SELECT payload FROM server_processing_result_staging WHERE job_id=%s AND payload_version=4',
+               (job.job_id,))[0]['payload']['chunks']
+    assert saved[0]['text'] == '첫 번째 번역을 보존합니다.'
+    assert saved[1]['text'] is None and saved[1]['failure_code'] == 'empty_translation'
+    assert db('SELECT status,attempt FROM server_processing_jobs WHERE job_id=%s', (job.job_id,)) == [
+        dict(status='failed', attempt=1)]
+    assert run_once(config, resources) == 'not_claimed'
+
+    recovery = replace(config, recover_translation=True)
+    assert run_once(recovery, resources) == 'published'
+    assert calls == [0, 1, 1]
+    assert run_once(recovery, resources) == 'not_claimed'
+    assert db('SELECT status,attempt FROM server_processing_jobs WHERE job_id=%s', (job.job_id,)) == [
+        dict(status='succeeded', attempt=2)]
+    assert db('SELECT count(*) AS n FROM server_processing_publications WHERE source_job_id=%s',
+              (job.job_id,))[0]['n'] == 1

@@ -88,7 +88,7 @@ class TranslationService:
 
     def translate(
         self, chunks: Sequence[Chunk], settings: TranslationSettings,
-        *, on_progress: Callable[[int, int], None] | None = None,
+        *, on_progress: Callable[[int, int], None] | None = None, reusable=None,
     ) -> TranslationBatchResult:
         if not isinstance(settings, TranslationSettings):
             raise ValueError("settings must be TranslationSettings")
@@ -102,6 +102,11 @@ class TranslationService:
         requests = tuple(TranslationRequest(
             c.chunk_id, c.parse_revision_id, c.original_text, settings.target_language,
         ) for c in snapshots)
+        reusable = {} if reusable is None else dict(reusable)
+        requests_by_id = {request.chunk_id: request for request in requests}
+        if any(not isinstance(item, ChunkTranslationResult) or not item.indexable
+               or item.request != requests_by_id.get(chunk_id) for chunk_id, item in reusable.items()):
+            raise ValueError("translation_checkpoint_invalid")
         parse_id = requests[0].parse_revision_id
         if any(r.parse_revision_id != parse_id for r in requests):
             raise ValueError("all chunks must belong to one parse revision")
@@ -118,7 +123,9 @@ class TranslationService:
         for chunk_number, (chunk, request) in enumerate(zip(snapshots, requests)):
             source_status = classify_translation_source(
                 request.original_text, section_id=chunk.section_id)
-            if source_status is not None:
+            if request.chunk_id in reusable:
+                result = reusable[request.chunk_id]
+            elif source_status is not None:
                 result = ChunkTranslationResult(request, request.original_text, status=source_status)
             else:
                 chunk_started = self.clock()

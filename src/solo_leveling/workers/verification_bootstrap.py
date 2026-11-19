@@ -27,7 +27,10 @@ def require(ok):
 
 
 def scope_digest(config):
-    return hashlib.sha256(json.dumps(asdict(config), sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    scope = asdict(config)
+    if scope.get('recover_translation') is False:
+        scope.pop('recover_translation')
+    return hashlib.sha256(json.dumps(scope, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
 def read_json(path):

@@ -9,13 +9,14 @@ from solo_leveling.infrastructure.translation.openai_provider import OpenAITrans
 
 
 class GatedProcessingTranslation:
-    def __init__(self, service: TranslationService, *, prepare_attempt):
+    def __init__(self, service: TranslationService, *, prepare_attempt, reuse_translations=None):
         if not isinstance(service, TranslationService) or not callable(prepare_attempt):
             raise ProcessingError('PROCESSING_CONFIG_INVALID')
         self.service = service
         # source + 청크/리비전 + 시도 순번을 영속 key/상한에 결합하는 신뢰 포트.
         # payload 본문만으로 서로 다른 청크의 전송 키를 추측하지 않는다.
         self.prepare_attempt = prepare_attempt
+        self.reuse_translations = reuse_translations
         self._provider()
 
     def _provider(self):
@@ -68,4 +69,9 @@ class GatedProcessingTranslation:
         inputs = tuple(Chunk(c.chunk_id, c.parse_revision_id, c.chunk_index, c.original_text,
                              printed_page_label=c.printed_page_label, pdf_page=c.pdf_page,
                              section_id=c.section_id) for c in chunks)
-        return scoped.translate(inputs, settings)
+        if self.reuse_translations is None:
+            return scoped.translate(inputs, settings)
+        reusable = self.reuse_translations(source, chunks)
+        if reusable is None:
+            raise ProcessingError('PROCESSING_CHECKPOINT_MISSING')
+        return scoped.translate(inputs, settings, reusable=reusable)

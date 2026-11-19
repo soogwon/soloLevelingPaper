@@ -232,6 +232,12 @@ class RemoteProcessingWorker:
             heartbeat.check()
             if not isinstance(result, ProcessingResult) or result.source != prepared.source:
                 raise RuntimeError("remote_processing_result_invalid")
+            if self.result_store is not None and result.status == "translation_incomplete":
+                heartbeat.stop()
+                heartbeat.check()
+                if check_allowed(result.source, "result") is not True:
+                    raise RemoteProcessingInputRejected("remote_processing_input_rejected")
+                staged = self.result_store.save(result)
             if self.result_store is not None and result.status == "prepared":
                 if check_allowed(result.source, "result") is not True:
                     raise RemoteProcessingInputRejected("remote_processing_input_rejected")
