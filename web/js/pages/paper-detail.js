@@ -1,4 +1,5 @@
 // 3. 논문 상세 페이지 — GET /v1/papers/{id}, GET /v1/annotations, GET /v1/annotations/{id}, POST /v1/resume-requests
+import { remotePaperSummary } from '../lib/remote-paper-summary.js';
 import { remotePaperJobs } from '../lib/remote-paper-jobs.js';
 import { remotePaperNotes } from '../lib/remote-paper-notes.js';
 import { CONFIG } from '../config.js';
@@ -95,7 +96,7 @@ export default async function paperDetailPage({ view, params, query }) {
     <div class="split">
       <section class="card panel panel-main" aria-labelledby="sum-h">
         <div class="panel-head">
-          <h2 class="panel-title" id="sum-h">저장된 요약</h2>
+          <h2 class="panel-title" id="sum-h">로컬 동기화 요약</h2>
           ${paper.summary ? html`<span class="note-tags">${paper.summary.author_type === 'user' ? html`<span class="badge b-gray">내 요약</span>` : html`<span class="badge b-ok">MCP 생성</span>`}<span class="hint">${formatDate(paper.summary.created_at)} 저장</span></span>` : ''}
         </div>
         ${summarySection(paper.summary)}
@@ -111,9 +112,11 @@ export default async function paperDetailPage({ view, params, query }) {
         <div data-slot="memo-pager"></div>
       </section>
     </div>
+    <section class="card panel" data-slot="remote-summary"></section>
     <section class="card panel" data-slot="remote-jobs"></section>
     <section class="card panel" data-slot="remote-notes"></section>`);
 
+  const summaryReady = CONFIG.USE_MOCK ? Promise.resolve() : remotePaperSummary(view.querySelector('[data-slot="remote-summary"]'), paper.paper_id, versionId);
   const jobsReady = CONFIG.USE_MOCK ? Promise.resolve() : remotePaperJobs(view.querySelector('[data-slot="remote-jobs"]'), paper.paper_id, versionId);
   const remoteReady = CONFIG.USE_MOCK ? Promise.resolve() : remotePaperNotes(view.querySelector('[data-slot="remote-notes"]'), paper.paper_id, versionId);
 
@@ -289,5 +292,5 @@ export default async function paperDetailPage({ view, params, query }) {
   await loadFocus();
   if (closed || !view.isConnected) return;
   await loadMemos(memoState.page);
-  await Promise.all([remoteReady, jobsReady]);
+  await Promise.all([remoteReady, jobsReady, summaryReady]);
 }

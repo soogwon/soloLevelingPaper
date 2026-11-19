@@ -171,3 +171,7 @@ class PostgresSummaryReviews:
             return dict(request_key=str(row['request_key']), execution_id=execution.execution_id,
                         state=state or execution.state,
                         message='미전송 예산은 반환하며 이미 전송한 호출의 비용은 취소되지 않습니다.')
+
+    def contexts(self, owner, paper, version, after=None):
+        from .remote_summary_results import PostgresSummaryResults
+        return PostgresSummaryResults(self.pool).contexts(owner,paper,version,after)
