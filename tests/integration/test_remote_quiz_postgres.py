@@ -1,0 +1,89 @@
+"""검수 합성 퀴즈의 정답 비노출과 제출 멱등성을 실제 로컬 DB로 확인한다."""
+# ruff: noqa: F811
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from uuid import uuid4
+import os
+import pytest
+from tests.integration.test_remote_processing_postgres import pool,db,stores  # noqa: F401
+from tests.integration.test_remote_answer_store_postgres import setup_answer
+from solo_leveling.interfaces.http.remote_answers import PostgresRemoteAnswerStore
+from solo_leveling.interfaces.http.remote_quiz import PostgresRemoteQuiz,NOTICE
+from solo_leveling.interfaces.http.remote_executions import RemoteExecutionConflict
+from solo_leveling.domain.quiz import QuizQuestion
+
+pytestmark=pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'),reason='격리 PostgreSQL 필요')
+
+
+def setup(pool,db,stores):
+    intent,prepared=setup_answer(db,stores,pool)
+    PostgresRemoteAnswerStore(pool).save(intent,prepared)
+    context=prepared.binding.context_id; quiz=str(uuid4())
+    questions=(QuizQuestion('multiple_choice','합성 문항',(prepared.evidence[0].evidence_id,),('가','나'),0),)
+    service=PostgresRemoteQuiz(pool)
+    view=service.store_reviewed('alice',context,quiz,'preview',questions)
+    consent=str(uuid4())
+    db('''INSERT INTO server_remote_consents(consent_id,owner_user_id,purpose,input_hash,notice_version)
+        VALUES (%s,'alice','storage',%s,%s)''',(consent,view['storage_input_hash'],NOTICE))
+    return service,context,quiz,questions,consent
+
+
+def test_quiz_hides_answers_and_concurrent_submit_is_one_attempt(pool,db,stores):
+    service,context,quiz,_,consent=setup(pool,db,stores)
+    view=service.get('alice',context,quiz)
+    assert set(view['questions'][0])=={'position','question_type','prompt','choices'}
+    key=str(uuid4())
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        rows=list(workers.map(lambda _:service.submit('alice',context,quiz,key,{0:0},consent),range(4)))
+    assert all(r==rows[0] for r in rows)
+    assert rows[0]['score']==1
+    assert service.scores('alice',context)[0]['attempts']==1
+    assert PostgresRemoteQuiz(pool).attempt('alice',context,rows[0]['attempt_id'])==rows[0]
+    with pytest.raises(RemoteExecutionConflict):service.submit('alice',context,quiz,key,{0:1},consent)
+    second=service.submit('alice',context,quiz,str(uuid4()),{0:1},consent)
+    assert second['score']==0 and second['results'][0]['correct_answer']=='가'
+    assert service.scores('alice',context)[0]['latest_score']==0
+    assert service.scores('alice',context)[0]['best_score']==1
+    first_page=service.history('alice',context,limit=1)
+    second_page=service.history('alice',context,limit=1,cursor=first_page['next_cursor'])
+    assert {first_page['items'][0]['attempt_id'],second_page['items'][0]['attempt_id']}=={rows[0]['attempt_id'],second['attempt_id']}
+    assert second_page['next_cursor'] is None
+
+
+def test_fixed_quiz_cannot_be_replaced_and_foreign_access_is_hidden(pool,db,stores):
+    service,context,quiz,questions,consent=setup(pool,db,stores)
+    with pytest.raises(RemoteExecutionConflict):
+        service.store_reviewed('alice',context,quiz,'preview',(replace(questions[0],correct_index=1),))
+    assert service.get('bob',context,quiz) is None
+    assert service.submit('bob',context,quiz,str(uuid4()),{0:0},consent) is None
+    assert service.history('bob',context) is None
+    assert service.scores('bob',context) is None
+    with pytest.raises(ValueError,match='evidence_invalid'):
+        service.store_reviewed('alice',context,str(uuid4()),'preview',(replace(questions[0],evidence_ids=(str(uuid4()),)),))
+
+
+def test_revoked_consent_blocks_new_attempt_but_restores_old(pool,db,stores):
+    service,context,quiz,_,consent=setup(pool,db,stores)
+    key=str(uuid4());saved=service.submit('alice',context,quiz,key,{0:0},consent)
+    db('UPDATE server_remote_consents SET revoked_at=clock_timestamp() WHERE consent_id=%s',(consent,))
+    assert service.submit('alice',context,quiz,key,{0:0},consent)==saved
+    with pytest.raises(ValueError,match='consent_required'):
+        service.submit('alice',context,quiz,str(uuid4()),{0:0},consent)
+
+
+def test_direct_quiz_mutation_is_denied_and_short_answer_uses_local_grader(pool,db,stores):
+    import psycopg
+    service,context,quiz,questions,_=setup(pool,db,stores)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db("UPDATE server_remote_quizzes SET snapshot='{}' WHERE quiz_id=%s",(quiz,))
+    other=str(uuid4())
+    q=QuizQuestion('short_answer','합성 단답형',questions[0].evidence_ids,answer='Attention',grading_criteria='정규화 일치')
+    view=service.store_reviewed('alice',context,other,'review',(q,))
+    assert 'grading_criteria' not in view['questions'][0]
+    consent=str(uuid4())
+    db('''INSERT INTO server_remote_consents(consent_id,owner_user_id,purpose,input_hash,notice_version)
+        VALUES (%s,'alice','storage',%s,%s)''',(consent,view['storage_input_hash'],NOTICE))
+    saved=service.submit('alice',context,other,str(uuid4()),{0:' attention! '},consent)
+    assert saved['score']==1
+    wrong=service.submit('alice',context,other,str(uuid4()),{0:'설명 문장'},consent)
+    assert wrong['score']==0
