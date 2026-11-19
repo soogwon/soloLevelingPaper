@@ -85,4 +85,9 @@ def test_publish_build_does_not_require_provider_or_r2_credentials():
     pool=SimpleNamespace(open=lambda **_:None,close=lambda:closed.append(True),connection=connection)
     with build(plan,{'REPROCESSING_WORKER_EXECUTION_ENABLED':'true','REPROCESSING_WORKER_DATABASE_URL':'postgresql://worker:synthetic@localhost/db'},pool_factory=lambda *_:pool,publish=True) as runner:
         assert isinstance(runner,ReprocessingPublisher)
+        allowed = lambda: True
+        embedder = runner.embedder_factory('synthetic-index', allowed)
+        assert embedder.model_dir.as_posix() == '/synthetic/model'
+        assert embedder.check_allowed is allowed
+        assert embedder.embedding_set_id == 'synthetic-index'
     assert closed==[True]
