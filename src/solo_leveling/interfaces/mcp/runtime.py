@@ -211,12 +211,15 @@ def build_runtime_server(values: Mapping[str, str]):
                         report('RUNTIME_SHUTDOWN_DEFERRED')
 
         annotations = AnnotationService(str(paths.db_path))
+        insight_import = None
         server_sync = None
         server_deletion = None
         pdf_upload = None
         resume = None
         if settings.server_api_url is not None:
             server_client = AuthenticatedServerClient.from_keyring(settings.server_api_url)
+            from solo_leveling.application.server_sync.paper_insights import PaperInsightImportService
+            insight_import = PaperInsightImportService(str(paths.db_path), server_client)
             server_sync = PaperMetadataSyncService(str(paths.db_path), server_client)
             from solo_leveling.application.server_sync.deletion import ServerPaperDeletionService
             server_deletion = ServerPaperDeletionService(str(paths.db_path), server_client)
@@ -243,6 +246,7 @@ def build_runtime_server(values: Mapping[str, str]):
             quiz=gate.wrap(QuizContractAdapter(StoredQuizService(
                 str(paths.db_path), QuizService(
                     str(paths.db_path), OpenAIQuizGenerator(settings.generation))))),
+            insight_import=gate.wrap(insight_import) if insight_import is not None else None,
             server_sync=gate.wrap(server_sync) if server_sync is not None else None,
             server_deletion=gate.wrap(server_deletion) if server_deletion is not None else None,
             pdf_upload=gate.wrap(pdf_upload) if pdf_upload is not None else None,

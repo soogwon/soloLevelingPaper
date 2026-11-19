@@ -119,3 +119,34 @@ def test_source_and_permissions_fail_without_writes(pool, db, fixture):
         conn.execute('RESET ROLE')
         conn.execute(sql.SQL('DROP OWNED BY {}').format(role))
         conn.execute(sql.SQL('DROP ROLE {}').format(role))
+
+
+def test_device_source_mapping_is_read_only_and_checks_owner_and_exact_hash(pool, db, fixture):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from solo_leveling.interfaces.http.auth import AuthenticatedPrincipal
+    from solo_leveling.interfaces.http.remote_insight_routes import create_insight_import_router
+
+    x = fixture
+    principal = AuthenticatedPrincipal(x.owner, 'device', str(x.device))
+    app = FastAPI()
+    app.include_router(create_insight_import_router(lambda: principal, PostgresRemoteInsightImports(pool)))
+    path = f'/v1/remote-insights/contexts/{x.context}/imports/map-sources'
+    body = dict(local_version_id=x.request.local_version_id, pdf_sha256=x.request.pdf_sha256,
+                section_scoped=True, sources=[source.model_dump(include={
+                    'original_sha256', 'translated_sha256', 'pdf_page'}) for source in x.request.items])
+    with TestClient(app) as client:
+        response = client.post(path, json=body)
+        assert response.status_code == 200
+        assert response.json()['remote_chunk_ids'] == [str(item.remote_chunk_id) for item in x.request.items]
+        assert response.json()['section_id'] == x.request.section_id
+        assert response.json()['publication_id'] == str(x.request.publication_id)
+        assert response.headers['cache-control'] == 'no-store'
+        wrong = dict(body, sources=[dict(body['sources'][1], translated_sha256='b' * 64)])
+        assert client.post(path, json=wrong).status_code == 409
+        principal = AuthenticatedPrincipal('another-owner', 'device', str(x.device))
+        assert client.post(path, json=body).status_code == 404
+        principal = AuthenticatedPrincipal(x.owner, 'web_session')
+        assert client.post(path, json=body).status_code == 403
+    assert db('SELECT revision FROM server_remote_insight_collections WHERE context_id=%s', (x.context,)) == []

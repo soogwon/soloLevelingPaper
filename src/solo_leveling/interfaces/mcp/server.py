@@ -100,6 +100,9 @@ UNKNOWN은 실패나 미접수 확정이 아닙니다. 새 키로 자동 접수�
 FULL/PARTIAL 완료 뒤에도 새 context 선택은 사용자에게 별도로 확인하세요.
 사용자가 선택한 경우에만 select_recovery_context를 호출하세요. 응답 유실 시 같은 selection_key와
 입력을 재사용하고, 성공하면 반환된 context_id로 후속 질문을 진행하세요.
+저장된 키워드·중요 문장의 원격 이관은 open_paper_insight_import 카드에서만 확인·제출합니다.
+로컬 학습 맥락과 정확한 대상 원격 학습 맥락 ID를 확인할 수 없으면 추정하지 마세요.
+
 외부 웹 표시를 위한 논문 동기화는 prepare_paper_server_sync 안내 카드에서 사용자가 승인한
 경우에만 시작합니다. 계정 연결이나 논문 등록을 동기화 동의로 해석하지 마세요.
 서버 논문 삭제는 사용자가 명시적으로 요청한 경우에만 prepare_server_paper_deletion 카드를
@@ -150,6 +153,7 @@ class MCPServices:
     question_keys: QuestionKeys | None = None
     recovery: object | None = None
     reparse: object | None = None
+    insight_import: object | None = None
     server_sync: object | None = None
     server_deletion: object | None = None
     pdf_upload: object | None = None
@@ -514,6 +518,9 @@ def create_server(services: MCPServices, *, lifespan=None) -> FastMCP:
         register_reflection(server, services.reflection)
     if services.quiz is not None:
         register_quiz(server, services.quiz)
+    if services.insight_import is not None:
+        from .insight_import_tools import register_insight_import
+        register_insight_import(server, services.insight_import, services.confirmations)
     if services.server_sync is not None:
         register_server_sync(server, services.server_sync, confirmations=services.confirmations)
     if services.server_deletion is not None:
