@@ -1,0 +1,55 @@
+/* MCP 설치 가이드 전용 — 공통 모양은 style.css, 상단 메뉴·하단 막대는 skills.css를 쓴다 */
+
+.choose-card .plan-actions { align-self: flex-start; }
+.btn-sm { min-height: 40px; padding: 0 16px; font-size: 14px; align-self: flex-start; }
+
+/* 탭 */
+.tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.tab { appearance: none; border: 0; background: none; font: inherit; font-size: 16px; font-weight: 700; color: var(--muted); padding: 12px 6px; margin-right: 16px; min-height: 48px; border-bottom: 3px solid transparent; margin-bottom: -1px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+.tab:hover { color: var(--text); }
+.tab[aria-selected="true"] { color: var(--accent-hover); border-bottom-color: var(--accent); }
+.tab-sub { font-size: 12px; font-weight: 500; padding: 2px 8px; border-radius: 999px; background: var(--ok-soft); color: var(--ok-ink); }
+.panel { display: flex; flex-direction: column; gap: 24px; scroll-margin-top: 24px; }
+.panel[hidden] { display: none; }
+
+/* 주소 상자 */
+.url-box { background: var(--accent-soft); border-radius: 16px; padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; }
+.url-label { font-size: 13px; font-weight: 700; color: var(--accent-hover); }
+.code-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.code-row code { font-family: var(--mono); font-size: 15px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; overflow-wrap: anywhere; min-width: 0; flex: 1 1 320px; }
+
+/* 단계 */
+.guide-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 16px; }
+.g-step { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.g-head { display: flex; align-items: center; gap: 12px; }
+.g-no { flex: none; width: 32px; height: 32px; border-radius: 50%; background: var(--text); color: #fff; font-family: var(--mono); font-size: 14px; display: flex; align-items: center; justify-content: center; }
+.g-head h3 { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
+.g-step > p, .g-step li { font-size: 15px; line-height: 1.7; color: var(--text-2); }
+.sub-steps, .ready { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.g-step code, .faq code { font-family: var(--mono); font-size: 0.86em; background: var(--gray-soft); color: var(--gray-ink); padding: 1px 6px; border-radius: 5px; overflow-wrap: anywhere; }
+.tip { font-size: 14px !important; color: var(--muted) !important; background: var(--bg); border-radius: 10px; padding: 10px 12px; }
+.warn-tip { background: var(--quote); color: var(--hl-ink) !important; }
+.say-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.file-path { font-family: var(--mono); font-size: 13px !important; color: var(--muted) !important; overflow-wrap: anywhere; }
+
+/* 코드 블록 */
+.code-block { position: relative; background: #16161D; border-radius: 12px; }
+.code-block pre { margin: 0; padding: 16px 16px 16px 16px; padding-right: 76px; overflow-x: auto; }
+.code-block code { font-family: var(--mono); font-size: 13.5px; line-height: 1.7; color: #E6E6F0; white-space: pre; background: none; padding: 0; border-radius: 0; }
+.code-block .copy { position: absolute; top: 10px; right: 10px; background: #2B2B3A; color: #fff; border-color: #3A3A4C; }
+.copy { appearance: none; font: inherit; font-size: 13px; font-weight: 700; min-height: 36px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line-input); background: var(--surface); color: var(--text); cursor: pointer; }
+.copy:hover { border-color: var(--accent); }
+
+/* 운영체제 선택 */
+.os-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.os-label { font-size: 14px; font-weight: 700; color: var(--text-2); margin-right: 4px; }
+.os-btn { appearance: none; font: inherit; font-size: 14px; font-weight: 500; min-height: 40px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line-input); background: var(--surface); color: var(--text-2); cursor: pointer; }
+.os-btn[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: #fff; }
+.os-only { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.os-only[hidden] { display: none; }
+
+@media (max-width: 600px) {
+  .g-step { padding: 18px; }
+  .tab { font-size: 15px; margin-right: 8px; }
+  .code-block code { font-size: 12.5px; }
+}
