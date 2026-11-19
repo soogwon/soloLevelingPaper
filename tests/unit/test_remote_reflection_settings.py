@@ -101,7 +101,7 @@ def test_web_consent_uses_web_pool_not_mcp_pool(monkeypatch):
         captured.append((self.pool,owner,context));return {'storage':'missing'}
     monkeypatch.setattr(PostgresRemoteReflection,'consent',consent)
     app=create_app(device_store=NS(),remote_mcp_settings=NS(enabled=True,product_reads_enabled=True),
-        remote_product_queries=NS(),token_verifier=NS(verify=lambda _:AuthenticatedPrincipal('alice','web_session',None)))
+        remote_product_queries=NS(pool=NS()),token_verifier=NS(verify=lambda _:AuthenticatedPrincipal('alice','web_session',None)))
     with TestClient(app) as client:
         result=client.get('/v1/remote-reflections/00000000-0000-0000-0000-000000000592/consent',headers={'Authorization':'Bearer synthetic'})
     assert result.status_code==200 and captured[0][0] is stores[0].connection_pool
