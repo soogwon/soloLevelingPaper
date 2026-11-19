@@ -93,7 +93,7 @@ def test_explicit_purpose_consents_required():
 
 
 @pytest.mark.parametrize('changes', [dict(owner_user_id='other'), dict(context_id='other'),
-    dict(input_hash='other'), dict(purpose='ai_provider'), dict(purpose='storage'),
+    dict(input_hash='other'), dict(purpose=[]), dict(purpose='ai_provider'), dict(purpose='storage'),
     dict(notice_version='remote-question-v1'), dict(revoked=True), dict(revoked=0),
     dict(expires_at=NOW), dict(expires_at=NOW.replace(tzinfo=None))])
 def test_foreign_revoked_expired_or_question_consent_rejected(changes):

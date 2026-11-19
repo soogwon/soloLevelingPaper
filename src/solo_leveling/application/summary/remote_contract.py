@@ -162,6 +162,8 @@ def require_summary_consents(request, consents, *, now):
                  and consent.context_id == binding.context_id
                  and consent.input_hash == request.input_hash
                  and consent.notice_version == NOTICE_VERSION
+                 and type(consent.purpose) is str
+                 and consent.purpose in ('summary_storage', 'summary_ai')
                  and consent.revoked is False
                  and isinstance(consent.expires_at, datetime)
                  and consent.expires_at.tzinfo is not None
