@@ -28,7 +28,7 @@ BEGIN
    RAISE EXCEPTION 'restore_table_manifest_mismatch';
  END IF;
  IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-     WHERE n.nspname='slp_staging' AND (p.proname || '(' || oidvectortypes(p.proargtypes) || ')') NOT IN ('mcp_read_lock_guard()', 'server_embedding_fragment_identity()', 'server_embedding_fragment_ready()', 'server_guard_execution_policy()', 'server_guard_summary_input()', 'server_guard_processing_staging()', 'server_processing_guard_embedding_vectors()', 'server_processing_guard_parse_rows()', 'server_processing_guard_revision_generation()', 'server_processing_guard_translation_rows()', 'server_processing_cancel_guard()', 'server_processing_job_revision()', 'server_processing_require_lease(text, uuid, uuid)', 'server_question_lock_guard()', 'server_quiz_snapshot_immutable()', 'server_release_question_budget()', 'server_reject_tombstoned_execution()', 'server_reject_tombstoned_paper()', 'server_remote_learning_fixed_binding()', 'web_readonly_guard()', 'worker_rehearsal_readonly_guard()')
+     WHERE n.nspname='slp_staging' AND (p.proname || '(' || oidvectortypes(p.proargtypes) || ')') NOT IN ('mcp_read_lock_guard()', 'server_embedding_fragment_identity()', 'server_embedding_fragment_ready()', 'server_guard_execution_policy()', 'server_guard_summary_input()', 'server_guard_processing_staging()', 'server_processing_guard_embedding_vectors()', 'server_processing_guard_parse_rows()', 'server_processing_guard_revision_generation()', 'server_processing_guard_translation_rows()', 'server_processing_cancel_guard()', 'server_processing_job_revision()', 'server_processing_require_lease(text, uuid, uuid)', 'server_question_lock_guard()', 'server_quiz_snapshot_immutable()', 'server_learning_consent_role_guard()', 'server_release_question_budget()', 'server_reject_tombstoned_execution()', 'server_reject_tombstoned_paper()', 'server_remote_learning_fixed_binding()', 'web_readonly_guard()', 'worker_rehearsal_readonly_guard()')
      AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid='pg_proc'::regclass AND d.objid=p.oid AND d.deptype='e')) THEN
    RAISE EXCEPTION 'restore_function_manifest_mismatch';
  END IF;
@@ -114,6 +114,7 @@ DROP FUNCTION IF EXISTS slp_staging.server_remote_learning_fixed_binding() RESTR
 DROP FUNCTION IF EXISTS slp_staging.web_readonly_guard() RESTRICT;
 DROP FUNCTION IF EXISTS slp_staging.worker_rehearsal_readonly_guard() RESTRICT;
 DROP FUNCTION IF EXISTS slp_staging.server_quiz_snapshot_immutable() RESTRICT;
+DROP FUNCTION IF EXISTS slp_staging.server_learning_consent_role_guard() RESTRICT;
 RESET ROLE;
 ALTER EXTENSION vector SET SCHEMA public;
 -- 이어지는 restore-app.sql이 public에 원래 앱 객체와 데이터를 복원한다.
