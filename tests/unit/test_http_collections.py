@@ -126,6 +126,8 @@ def test_collection_paper_response_matches_external_site_published_shape():
     assert result.items[0].published.model_dump() == {
         "year": 2024, "month": None, "day": None, "precision": "year"
     }
+    assert result.items[0].title == "Paper"
+    assert result.items[0].file_name == "paper.pdf"
 
 
 def test_add_paper_creates_membership_and_counts_target_collection():
