@@ -377,3 +377,28 @@ dialog.dialog::backdrop { background: rgba(22, 22, 29, 0.45); }
 .kg-detail-label { font-size: 13px; font-weight: 600; color: var(--text-2); margin-top: 12px !important; }
 .kg-detail-list { margin: 4px 0 0; padding-left: 18px; font-size: 14px; }
 .kg-detail-list .link-btn { min-height: 24px; font-size: 14px; }
+
+.processing-jobs > summary {
+  cursor: pointer;
+  justify-content: space-between;
+  list-style: none;
+}
+.processing-jobs > summary::-webkit-details-marker { display: none; }
+.processing-jobs > summary::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+  margin-inline-end: 4px;
+}
+.processing-jobs[open] > summary::after { transform: rotate(225deg); }
+.processing-jobs-body { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding-top: 14px; }
+.processing-jobs-body > :not(button) { flex-basis: 100%; }
+.processing-jobs-body p { margin: 0; }
+.processing-jobs-body [role="status"]:empty { display: none; }
+.processing-job-title { margin: 0; font-size: 15px; }
+.processing-job-id { overflow-wrap: anywhere; }
+.learning-start-panel textarea { display: block; width: 100%; margin-top: 8px; }
+.learning-start-panel > .btn { align-self: flex-start; }

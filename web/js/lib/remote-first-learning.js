@@ -4,6 +4,11 @@ import { copyText } from './ui.js';
 import { consentMessages, createUploadConsents } from './upload-consents.js';
 
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
+export function hasFirstLearningSource(paper) {
+  return uuid(paper.paper_id) && uuid(paper.selected_version_id)
+    && paper.file_access?.reason === 'file_ready';
+}
+
 const jobLabels = {
   queued: '처리 대기 중', running: '처리 중', succeeded: '처리는 완료됐고 게시 상태를 확인 중이에요.',
   failed: '처리에 실패했어요.', cancelled: '처리가 취소됐어요.',
@@ -31,12 +36,12 @@ export async function remoteFirstLearning(view, paper, version, client = api) {
       && consent.values.storage?.state === 'current' && consent.values.ai_provider?.state === 'current';
     const prompt = `연결된 Solo Leveling 원격 MCP에서 논문 ID ${paper}, PDF 판본 ID ${version}을 열고 이 판본으로 원격 학습을 시작해 줘. open_remote_paper로 연 학습 맥락에 start_remote_learning을 호출해 줘.`;
     setHTML(view, html`
-      <h2>Claude에서 학습 시작</h2>
+      <h2 class="panel-title">학습 처리</h2>
       <p role="status">${message || (job ? jobLabels[job.status] : '')}</p>
       ${source?.active_publication_id ? html`
         <p>이 판본의 학습 자료가 게시됐어요. Claude에서 연결된 Solo Leveling MCP에 아래 요청을 보내세요.</p>
         <label>Claude에 보낼 요청<textarea readonly rows="4">${prompt}</textarea></label>
-        <button type="button" data-copy-learning>Claude 요청 복사</button>
+        <button type="button" class="btn btn-primary" data-copy-learning>Claude 요청 복사</button>
       ` : source ? html`
         ${!job ? html`
           <p>등록된 PDF를 사용합니다. 별도 접수 후 worker가 PDF를 처리하고 학습 자료를 게시해요.</p>
@@ -44,15 +49,15 @@ export async function remoteFirstLearning(view, paper, version, client = api) {
             <p>${consentMessages[consent.busy ? 'busy' : consent.status]}</p>
             ${consent.values.storage?.state !== 'current' ? html`<p>현재 PDF 보관 동의가 필요해요.</p><p>${consent.notice.storage}</p>
               <label><input type="checkbox" data-storage-check ${busy || !consent.canGrant.storage ? 'disabled' : ''}> PDF 보관에 동의해요.</label>
-              <button type="button" data-storage-grant disabled>보관 동의 저장</button>` : ''}
+              <button type="button" class="btn" data-storage-grant disabled>보관 동의 저장</button>` : ''}
             ${consent.canGrant.ai_provider ? html`<label><input type="checkbox" data-ai-check ${approved ? 'checked' : ''}> 위 고지를 읽고 AI 전송에 동의해요.</label>
-              <button type="button" data-ai-grant ${!approved || busy ? 'disabled' : ''}>AI 전송 동의 저장</button>` : ''}
+              <button type="button" class="btn" data-ai-grant ${!approved || busy ? 'disabled' : ''}>AI 전송 동의 저장</button>` : ''}
             ${consent.values.ai_provider?.state === 'current' ? html`<p>AI 전송에 동의했어요.</p>` : ''}
           ` : ''}
-          <button type="button" data-admit ${!eligible || busy || consent.busy ? 'disabled' : ''}>${pendingRequest ? '같은 접수 요청 확인' : '학습 처리 접수'}</button>
+          <button type="button" class="btn btn-primary" data-admit ${!eligible || busy || consent.busy ? 'disabled' : ''}>${pendingRequest ? '같은 접수 요청 확인' : '학습 처리 접수'}</button>
         ` : html`<p>작업 ID: ${job.job_id}</p>`}
       ` : ''}
-      <button type="button" data-check ${busy || consent.busy ? 'disabled' : ''}>처리·게시 상태 다시 조회</button>`);
+      <button type="button" class="btn" data-check ${busy || consent.busy ? 'disabled' : ''}>처리·게시 상태 다시 조회</button>`);
     const copy = view.querySelector('[data-copy-learning]');
     if (copy) copy.onclick = async () => {
       const copied = await copyText(prompt);

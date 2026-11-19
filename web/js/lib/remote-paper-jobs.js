@@ -15,7 +15,7 @@ function statusLabel(job) {
 export async function remotePaperJobs(view, paper, version) {
   if (!view || !uuid(paper)) return;
   if (typeof version !== 'string' || !version.trim() || version.length > 128) {
-    setHTML(view, html`<h2>처리 작업</h2><p>원문 판본을 선택하면 처리 작업을 조회할 수 있습니다.</p>`); return;
+    setHTML(view, html`<p>원문 판본을 선택하면 처리 작업을 조회할 수 있습니다.</p>`); return;
   }
   let closed = false, busy = false, items = [], next = null, seq = 0;
   const events = ['auth:logout', 'auth:expired', 'hashchange', 'pagehide'];
@@ -24,14 +24,14 @@ export async function remotePaperJobs(view, paper, version) {
   const current = n => !closed && view.isConnected && n === seq;
   function draw(message = '') {
     if (closed || !view.isConnected) return;
-    setHTML(view, html`<h2>처리 작업</h2><p>선택한 원문 판본: ${version}</p>
+    setHTML(view, html`<p>선택한 원문 판본: ${version}</p>
       <p>처리 완료는 학습 완료가 아닙니다. 취소해도 기존 게시 결과와 학습 기록은 유지되며, 이미 발생한 외부 호출·비용은 되돌리지 않습니다.</p>
       <p role="status">${message}</p>
-      ${items.map(j => html`<section><h3>${statusLabel(j)}</h3><p>작업 ${j.job_id}${j.revision == null ? '' : ` · revision ${j.revision}`}</p>
+      ${items.map(j => html`<section class="note-card"><h3 class="processing-job-title">${statusLabel(j)}</h3><p class="meta processing-job-id">작업 ${j.job_id}${j.revision == null ? '' : ` · revision ${j.revision}`}</p>
         ${recovery(j) ? html`<p>${j.job_kind === 'reparse' ? 'PDF 재파싱' : '번역 복구'}</p><a href="${j.web_path}">기존 검토 화면 열기</a>` : ''}
         <p>${j.file_name || j.title || '제목 없음'}</p>${j.error_code ? html`<p>오류 코드: ${j.error_code}</p>` : ''}</section>`)}
-      ${next ? html`<button data-jobs-more ${busy ? 'disabled' : ''}>처리 작업 더 보기</button>` : ''}
-      <button data-jobs-refresh ${busy ? 'disabled' : ''}>처리 상태 다시 조회</button>`);
+      ${next ? html`<button type="button" class="btn" data-jobs-more ${busy ? 'disabled' : ''}>처리 작업 더 보기</button>` : ''}
+      <button type="button" class="btn" data-jobs-refresh ${busy ? 'disabled' : ''}>처리 상태 다시 조회</button>`);
     const more = view.querySelector('[data-jobs-more]'); if (more) more.onclick = () => load(true);
     view.querySelector('[data-jobs-refresh]').onclick = () => load(false);
   }
