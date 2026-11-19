@@ -1,4 +1,6 @@
 from contextlib import contextmanager
+from dataclasses import replace
+import json
 
 import pytest
 
@@ -40,7 +42,7 @@ class Pool:
 
 
 BINDING = RemoteSearchBinding(
-    "owner", "context", "paper", "version", "publication", "parse", "translation", "set", "fp"
+    "owner", "context", "paper", "version", "publication", "parse", "translation", "set", '{"model":"synthetic"}'
 )
 ROW = {
     "chunk_id": "chunk",
@@ -62,7 +64,7 @@ def test_reads_exact_chunk_from_fixed_ready_publication_and_vector_set():
     sql, params = pool.conn.calls[0]
     assert "p.deleted_at IS NULL" in sql
     assert "pr.status='ready'" in sql and "tr.status='ready'" in sql and "es.status='ready'" in sql
-    assert "JOIN server_embedding_vectors" in sql
+    assert "EXISTS (SELECT 1 FROM server_embedding_vectors" in sql
     assert "FOR SHARE OF p,pub,pr,tr,es" in sql
     assert params[:9] == (
         "owner",
@@ -114,3 +116,26 @@ def test_database_error_is_redacted_and_never_falls_back_to_latest():
 
     with pytest.raises(RemoteRetrievalContractError, match="^REMOTE_SOURCE_UNAVAILABLE$"):
         PostgresRemoteSourceReader(pool).read_chunks(BINDING, ("chunk",))
+
+
+def test_fragment_lookup_uses_parent_membership_without_duplicating_rows():
+    binding = replace(BINDING, model_fingerprint=json.dumps({
+        "model": "synthetic",
+        "split_policy": {"version": "token-window-v1", "payload_tokens": 112, "overlap_tokens": 24},
+    }))
+    pool = Pool((ROW,))
+    rows = PostgresRemoteSourceReader(pool).read_chunks(binding, ("chunk",))
+    assert len(rows) == 1 and rows[0].binding == binding
+    sql, _ = pool.conn.calls[0]
+    assert "EXISTS (SELECT 1 FROM server_embedding_fragments" in sql
+    assert "ev.embedding_set_id=pub.embedding_set_id" in sql
+    assert "ev.chunk_id=c.chunk_id" in sql
+
+
+def test_malformed_fingerprint_fails_before_database():
+    pool = Pool((ROW,))
+    with pytest.raises(RemoteRetrievalContractError, match="^REMOTE_SOURCE_UNAVAILABLE$"):
+        PostgresRemoteSourceReader(pool).read_chunks(
+            replace(BINDING, model_fingerprint="invalid"), ("chunk",)
+        )
+    assert pool.conn.calls == []
