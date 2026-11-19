@@ -20,7 +20,7 @@ from solo_leveling.application.evidence_qa.remote_contract import RemoteSearchFi
 pytestmark = pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'), reason='격리 PostgreSQL 필요')
 
 
-def seed(db, stores, pool, *, owner='fragment-owner', paper=None):
+def seed(db, stores, pool, *, owner='fragment-owner', paper=None, count=248):
     paper = paper or make_paper(db, owner)
     job = claimed_job(stores[0], owner, paper)
     revision = make_revision_set(db, owner, paper, job, chunks=2, ready=False)
@@ -29,13 +29,13 @@ def seed(db, stores, pool, *, owner='fragment-owner', paper=None):
     db('UPDATE server_embedding_sets SET model_fingerprint=%s::jsonb WHERE embedding_set_id=%s',
        (json.dumps(fp), embedding))
     scope = EmbeddingWriteScope(owner, paper, 'v1', parse, translation, embedding, 2)
-    fragments = [split_token_windows(Tokenizer(), '248', parent_chunk_id=c,
+    fragments = [split_token_windows(Tokenizer(), str(count), parent_chunk_id=c,
                  embedding_set_id=embedding, max_length=128) for c in ids]
     writer = PostgresEmbeddingFragmentWriter(pool)
     for index, group in enumerate(fragments):
         db('UPDATE server_processing_chunks SET pdf_page=%s WHERE chunk_id=%s', (index+1, ids[index]))
         for fragment in group:
-            writer.put(scope, fragment, 248, (1.,0.) if index == 0 else (0.8,0.6))
+            writer.put(scope, fragment, count, (1.,0.) if index == 0 else (0.8,0.6))
     return owner, paper, job, revision, scope, fragments
 
 
@@ -117,6 +117,19 @@ def test_expired_worker_cannot_add_fragment(db, stores, pool):
         PostgresEmbeddingFragmentWriter(pool).put(state[4], state[5][0][0], 248, (1.,0.))
     db("UPDATE server_processing_jobs SET lease_expires_at=CURRENT_TIMESTAMP+interval '1 hour' WHERE job_id=%s",
        (state[2].job_id,))
+
+
+def test_same_fragment_count_cannot_hide_middle_gap_with_redundant_tail(db,stores,pool):
+    import psycopg
+    state = seed(db,stores,pool,count=200)
+    fragment = state[5][0][1]
+    db('DELETE FROM server_embedding_fragments WHERE embedding_set_id=%s AND embedding_fragment_id=%s',
+       (state[4].embedding_set_id,fragment.embedding_fragment_id))
+    tail = replace(fragment,embedding_fragment_id='0'*64,token_start=176,token_end=200,
+                   token_ids=tuple(range(176,200)))
+    PostgresEmbeddingFragmentWriter(pool).put(state[4],tail,200,(1.,0.))
+    with pytest.raises(psycopg.errors.CheckViolation,match='mapping_incomplete'):
+        mark_ready(db,*state[3][:3])
 
 
 def test_paper_deletion_removes_fragments_and_old_binding_returns_nothing(db, stores, pool):

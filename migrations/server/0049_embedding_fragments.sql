@@ -85,6 +85,7 @@ BEGIN
          WHERE owner_user_id=NEW.owner_user_id AND embedding_set_id=NEW.embedding_set_id
          GROUP BY chunk_id
         HAVING min(token_start) <> 0 OR max(token_end) <> max(parent_token_count)
+           OR max(token_start) <> (count(*) - 1) * stride
            OR min(parent_token_count) <> max(parent_token_count)
            OR count(*) <> 1 + (greatest(max(parent_token_count) - payload, 0) + stride - 1) / stride
            OR bool_or(token_start % stride <> 0
