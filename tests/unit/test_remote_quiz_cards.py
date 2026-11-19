@@ -44,8 +44,8 @@ def test_real_fastmcp_card_resources_and_hidden_write_tool(monkeypatch):
     server=FastMCP('합성 퀴즈 카드');module.register_remote_quiz(server,NS(owner=lambda:'alice'),Mock())
     async def run():
         tools={tool.name:tool for tool in await server.list_tools()}
-        assert tools['show_remote_quiz'].meta['ui']['resourceUri']=='ui://remote-quiz/attempt-v2.html'
+        assert tools['show_remote_quiz'].meta['ui']['resourceUri']=='ui://remote-quiz/attempt-v3.html'
         assert tools['submit_remote_quiz_card'].meta['ui']['visibility']==['app']
         resources=await server.list_resources()
-        assert any(str(r.uri)=='ui://remote-quiz/attempt-v2.html' for r in resources)
+        assert any(str(r.uri)=='ui://remote-quiz/attempt-v3.html' for r in resources)
     asyncio.run(run())
