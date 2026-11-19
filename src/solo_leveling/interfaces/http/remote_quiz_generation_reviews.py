@@ -66,6 +66,15 @@ class PostgresQuizGenerationReviews:
                 or any(row['input_snapshot'][k] != v for k,v in self.settings.items())):
             raise ValueError('quiz_generation_review_expired_or_changed')
 
+    def _execution(self, conn, owner, row):
+        store = PostgresRemoteExecutionStore(SimpleNamespace(connection=lambda: nullcontext(conn)))
+        execution = store.lookup(owner, OPERATION, str(row['request_key']))
+        if execution is not None and (
+                execution.lookup.context_id != str(row['context_id'])
+                or execution.lookup.input_hash != row['input_hash'] or not execution.access_allowed):
+            raise RemoteExecutionConflict('quiz_generation_review_conflict')
+        return execution
+
     def view(self, owner, key):
         with self.pool.connection() as conn:
             row = self._row(conn,owner,key)
@@ -81,7 +90,7 @@ class PostgresQuizGenerationReviews:
                 active = True
             except ValueError:
                 active = False
-            execution = PostgresRemoteExecutionStore(SimpleNamespace(connection=lambda: nullcontext(conn))).lookup(owner, OPERATION, str(row['request_key']))
+            execution = self._execution(conn, owner, row)
             return dict(**notice,request_key=str(row['request_key']),policy=row['policy_snapshot'],
                         execution_id=execution.execution_id if execution else None,
                         state=execution.state if execution else None,
@@ -98,6 +107,7 @@ class PostgresQuizGenerationReviews:
             row = self._row(conn,owner,key)
             if row is None:
                 return None
+            self._execution(conn, owner, row)
             self._active(conn, row)
             if input_hash != row['input_hash']:
                 raise ValueError('quiz_generation_review_changed')
@@ -129,7 +139,7 @@ class PostgresQuizGenerationReviews:
             if row is None:
                 return None
             scoped = SimpleNamespace(connection=lambda: nullcontext(conn))
-            old = PostgresRemoteExecutionStore(scoped).lookup(owner,OPERATION,key)
+            old = self._execution(conn, owner, row)
             if old is not None:
                 return dict(execution_id=old.execution_id,state=old.state,request_key=key)
             self._active(conn, row)
@@ -149,7 +159,7 @@ class PostgresQuizGenerationReviews:
             if row is None:
                 return None
             store = PostgresRemoteExecutionStore(SimpleNamespace(connection=lambda: nullcontext(conn)))
-            execution = store.lookup(owner, OPERATION, str(row['request_key']))
+            execution = self._execution(conn, owner, row)
             if execution is None:
                 return dict(request_key=str(row['request_key']), state='not_submitted')
             state = store.request_cancel(owner, execution.execution_id)

@@ -188,3 +188,29 @@ def test_waiting_for_review_lock_does_not_use_stale_expiry(pool,db,stores,monkey
             conn.execute('SELECT pg_sleep(0.25)')
         with pytest.raises(ValueError,match='expired'):future.result(timeout=5)
     assert service.view('alice',key)['storage']=='missing'
+
+
+@pytest.mark.parametrize('change',['context','input'])
+def test_existing_execution_with_same_key_cannot_be_misbound_or_cancelled(pool,db,stores,change):
+    from solo_leveling.interfaces.http.remote_quiz_intake import PostgresQuizIntake
+    service,key,request=review(pool,db,stores)
+    if change=='context':
+        other,storage,ai,policy=setup(db,stores,pool)
+        settings={k:other.unpack()[2][k] for k in service.settings}
+    else:
+        from dataclasses import replace
+        from solo_leveling.application.quiz.remote_contract import RemoteQuizGenerationInput
+        binding,sources,config=request.unpack()
+        config={k:v for k,v in config.items() if k not in ('schema_version','notice_version','operation','binding','sources','max_calls')}
+        config['question_count']=2
+        other=RemoteQuizGenerationInput.create(binding,sources,**config)
+        settings=service.settings;policy=replace(service.policy)
+        storage,ai=str(uuid4()),str(uuid4())
+        for cid,purpose in [(storage,'storage'),(ai,'ai_provider')]:
+            db("INSERT INTO server_remote_consents(consent_id,owner_user_id,purpose,input_hash,notice_version) VALUES (%s,'alice',%s,%s,'remote-quiz-generation-v1')",(cid,purpose,other.input_hash))
+    saved=PostgresQuizIntake(pool,settings=settings).submit('alice',key,other,storage,ai,policy=policy,window_key='test')
+    assert saved is not None
+    with pytest.raises(RemoteExecutionConflict):grant(service,key,request,'storage')
+    for action in (service.view,service.submit,service.cancel):
+        with pytest.raises(RemoteExecutionConflict):action('alice',key)
+    assert db('SELECT state FROM server_remote_executions WHERE execution_id=%s',(saved.execution_id,))[0]['state']=='queued'
