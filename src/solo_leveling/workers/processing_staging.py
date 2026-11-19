@@ -10,7 +10,9 @@ from solo_leveling.domain.remote_processing import (
     EmbeddingBatch, EmbeddingFragment, EmbeddingSpec, ProcessingError, ProcessingLimits, ProcessingResult,
     ProcessingSource, ProcessedTranslation, ProcessingChunk, ParsedDocument,
 )
-from solo_leveling.domain.translation import TranslationSettings, TranslationStatus
+from solo_leveling.domain.translation import (
+    TranslationSettings, TranslationStatus, TranslationFailureCode, TranslationRequest, ChunkTranslationResult,
+)
 from solo_leveling.domain.models import PaperSection
 from solo_leveling.workers.processing_authorization import _AUTH_SOURCE, _IDENTITY, _USAGE_BLOCKED, _params
 
@@ -71,8 +73,11 @@ class PostgresProcessingResultStaging:
             _require(type(result.translations) is tuple and len(result.translations) == len(chunks))
             for chunk, item in zip(chunks, result.translations):
                 _require(type(item) is ProcessedTranslation and item.chunk_id == chunk.chunk_id
-                         and item.failure_code is None and isinstance(item.status, TranslationStatus)
+                         and isinstance(item.status, TranslationStatus)
                          and type(item.text) is str and item.text.strip())
+                checked = ChunkTranslationResult(TranslationRequest(chunk.chunk_id,chunk.parse_revision_id,
+                    chunk.original_text),item.text,item.failure_code,item.status)
+                _require(checked.indexable)
             batch = result.embeddings
             from solo_leveling.application.embedding_fragments import validate_embedding_mapping
             validate_embedding_mapping(batch, ids, source.embedding_set_id)
@@ -204,7 +209,7 @@ class PostgresProcessingResultStaging:
                                tuple(PaperSection(**s) for s in document['sections'])),
                 TranslationSettings(**raw['translation_settings']),
                 tuple(ProcessedTranslation(
-                    t['chunk_id'], t['text'], t['failure_code'],
+                    t['chunk_id'], t['text'], None if t['failure_code'] is None else TranslationFailureCode(t['failure_code']),
                     TranslationStatus(t.get('status', TranslationStatus.TRANSLATED.value)))
                     for t in raw['translations']),
                 EmbeddingBatch(EmbeddingSpec(**embeddings['spec']), tuple(embeddings['chunk_ids']),

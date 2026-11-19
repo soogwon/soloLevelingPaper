@@ -85,13 +85,17 @@ class Plan:
 def load_plan(config, path):
     raw = read_json(path)
     require(type(raw) is dict)
-    fragmented = type(raw.get('schema_version')) is int and raw['schema_version'] == 2
+    fragmented = type(raw.get('schema_version')) is int and raw['schema_version'] in (2,3)
+    quality_recovery = type(raw.get('schema_version')) is int and raw['schema_version'] == 3
     require(set(raw) == {'schema_version', 'scope_sha256', 'runtime_image',
         'runtime_lock_path', 'model_lock_path', 'model_dir', 'embedding_spec', 'limits', 'translation',
         'batch_size', 'policy_version', 'window_key', 'r2', 'requests'}
-        | ({'embedding_split_policy'} if fragmented else set()))
-    require(type(raw['schema_version']) is int and raw['schema_version'] in (1, 2)
+        | ({'embedding_split_policy'} if fragmented else set())
+        | ({'translation_recovery_policy'} if quality_recovery else set()))
+    require(type(raw['schema_version']) is int and raw['schema_version'] in (1, 2, 3)
             and raw['scope_sha256'] == scope_digest(config))
+    if quality_recovery:
+        require(raw['translation_recovery_policy'] == 'layout-aware-v1')
     if fragmented:
         from solo_leveling.infrastructure.embeddings.token_windows import TokenWindowPolicy
         policy = raw['embedding_split_policy']
@@ -192,6 +196,7 @@ def build(config, plan, source, *, pool_factory=_pool, client_factory=_client, c
         policy = raw['embedding_split_policy']
         options['fragment_policy'] = TokenWindowPolicy(
             policy['payload_tokens'], policy['overlap_tokens'], policy['version'])
+    options['quality_retry_once'] = raw.get('translation_recovery_policy') == 'layout-aware-v1'
     with ExitStack() as stack:
         pool = pool_factory(dsn, config.schema_name)
         stack.callback(pool.close)

@@ -12,6 +12,7 @@ from tests.integration.test_worker_permissions_postgres import restricted
 from tests.unit.test_embedding_token_windows import Tokenizer
 from solo_leveling.infrastructure.embeddings.token_windows import split_token_windows, TokenWindowPolicy
 from solo_leveling.domain.remote_processing import EmbeddingBatch, EmbeddingFragment
+from solo_leveling.domain.translation import TranslationStatus,TranslationFailureCode
 from solo_leveling.workers.processing_staging import ProcessingStagingError
 from solo_leveling.workers.processing_publication import PostgresStagedProcessingPublisher
 from solo_leveling.interfaces.http.remote_retrieval import PostgresRemoteContextResolver
@@ -74,3 +75,30 @@ def test_invalid_mapping_never_reaches_staging(pool, db, fault):
         batch = replace(batch,fragments=tuple(fragments))
     with pytest.raises(ProcessingStagingError): store.save(replace(value,embeddings=batch))
     assert db('SELECT count(*) AS n FROM server_processing_result_staging WHERE job_id=%s', (value.source.job_id,))[0]['n'] == 0
+
+
+def test_original_only_keeps_failure_reason_and_is_searchable(pool,db):
+    from solo_leveling.interfaces.http.remote_sources import PostgresRemoteSourceReader
+    store,value = setup(pool,db)
+    value = fragmented(value)
+    original = value.document.chunks[0].original_text
+    value = replace(value,translations=(replace(value.translations[0],text=original,
+        status=TranslationStatus.ORIGINAL_ONLY,failure_code=TranslationFailureCode.UNCHANGED_TRANSLATION),))
+    receipt = store.save(value)
+    assert store.restore(store.load(value.source)) == value
+    published = PostgresStagedProcessingPublisher(store).publish(value.source,receipt.payload_sha256,
+                                                                expected_active_publication_id=None)
+    source = value.source
+    row = db('SELECT translation_status,translation_failure_code FROM server_translation_chunks WHERE translation_revision_id=%s',
+             (source.translation_revision_id,))[0]
+    assert row == dict(translation_status='original_only',translation_failure_code='unchanged_translation')
+    context = str(uuid4())
+    db('''INSERT INTO server_execution_contexts
+        (context_id,owner_user_id,paper_id,server_version_id,publication_id,parse_revision_id)
+        VALUES (%s,%s,%s,%s,%s,%s)''',(context,source.owner_user_id,source.paper_id,source.version_id,
+                                     published.publication_id,source.parse_revision_id))
+    binding = PostgresRemoteContextResolver(pool).resolve(source.owner_user_id,context)
+    hits = PostgresRemoteScopedSearch(pool,lambda *_:(1.,0.)).search('합성',binding,RemoteSearchFilters(),5)
+    rows = PostgresRemoteSourceReader(pool).read_chunks(binding,tuple(h.chunk_id for h in hits))
+    assert len(rows) == 1 and rows[0].to_chunk().text is None
+    assert rows[0].to_chunk().original_text == original

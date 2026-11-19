@@ -11,7 +11,7 @@ from uuid import uuid4
 from solo_leveling.domain.models import Chunk, TranslationRevision
 from solo_leveling.domain.translation import (
     ChunkTranslationResult, TranslationBatchResult, TranslationFailureCode,
-    TranslationRequest, TranslationSettings, require_text, translation_quality_failure,
+    TranslationRequest, TranslationSettings, TranslationStatus, require_text, translation_quality_failure,
 )
 from .classification import classify_translation_source
 from .ports import TranslationProvider, TranslationProviderUnavailable
@@ -26,6 +26,7 @@ class TranslationService:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         random_value: Callable[[], float] = random.random,
+        quality_retry_once: bool = False,
     ) -> None:
         self.provider = provider
         self.revision_id_factory = revision_id_factory or (lambda: str(uuid4()))
@@ -33,13 +34,16 @@ class TranslationService:
             raise ValueError('올바른 번역 재시도 정책이 필요합니다.')
         self.retry_policy = retry_policy if retry_policy is not None else TranslationRetryPolicy()
         self.sleep, self.clock, self.random_value = sleep, clock, random_value
+        if type(quality_retry_once) is not bool or quality_retry_once and self.retry_policy.max_attempts != 1:
+            raise ValueError('quality recovery requires a single provider attempt per pass')
+        self.quality_retry_once = quality_retry_once
 
     def with_revision_id(self, revision_id: str) -> 'TranslationService':
         """기존 리비전 재사용 시 재시도 설정과 테스트용 의존성을 보존한다."""
         require_text(revision_id, 'translation_revision_id')
         return TranslationService(self.provider, lambda: revision_id,
             retry_policy=self.retry_policy, sleep=self.sleep, clock=self.clock,
-            random_value=self.random_value)
+            random_value=self.random_value, quality_retry_once=self.quality_retry_once)
 
     def _translate_one(self, request: TranslationRequest, settings: TranslationSettings,
                        budget: RetryBudget, batch_id: str, chunk_number: int) -> str:
@@ -117,6 +121,7 @@ class TranslationService:
             if source_status is not None:
                 result = ChunkTranslationResult(request, request.original_text, status=source_status)
             else:
+                chunk_started = self.clock()
                 try:
                     text = self._translate_one(request, settings, budget, batch_id, chunk_number)
                 except TranslationProviderUnavailable:
@@ -127,7 +132,35 @@ class TranslationService:
                         raise TypeError("translation provider must return str")
                     failure = (translation_quality_failure(request.original_text, text)
                                if text.strip() else TranslationFailureCode.EMPTY_TRANSLATION)
-                    result = ChunkTranslationResult(request, None if failure else text, failure)
+                    now = self.clock()
+                    expired = (now - chunk_started >= self.retry_policy.chunk_retry_window_seconds
+                               or now - budget.started >= self.retry_policy.batch_retry_window_seconds)
+                    if failure and self.quality_retry_once and expired:
+                        result = ChunkTranslationResult(request,request.original_text,failure,TranslationStatus.ORIGINAL_ONLY)
+                    elif failure and self.quality_retry_once:
+                        # 원문을 추측해서 재배열하지 않는다. 안전한 진단만 기록하고 지침을 강화한다.
+                        diagnostic = {'event':'translation_quality_recovery','chunk_number':chunk_number,
+                            'attempt':2,'code':failure.value,
+                            'line_breaks':request.original_text.count('\n'),
+                            'hyphenated_line_break':'-\n' in request.original_text}
+                        try:
+                            print(json.dumps(diagnostic),file=sys.stderr,flush=True)
+                        except (OSError,ValueError):
+                            pass
+                        try:
+                            text = self._translate_one(replace(request,recovery_policy='layout-aware-v1'),
+                                                       settings,budget,batch_id,chunk_number)
+                        except TranslationProviderUnavailable:
+                            result = ChunkTranslationResult(request,None,TranslationFailureCode.PROVIDER_UNAVAILABLE)
+                        else:
+                            if not isinstance(text,str):
+                                raise TypeError('translation provider must return str')
+                            failure = (translation_quality_failure(request.original_text,text) if text.strip()
+                                       else TranslationFailureCode.EMPTY_TRANSLATION)
+                            result = (ChunkTranslationResult(request,request.original_text,failure,TranslationStatus.ORIGINAL_ONLY)
+                                      if failure else ChunkTranslationResult(request,text))
+                    else:
+                        result = ChunkTranslationResult(request, None if failure else text, failure)
             results.append(result)
             if on_progress is not None:
                 on_progress(chunk_number + 1, len(requests))

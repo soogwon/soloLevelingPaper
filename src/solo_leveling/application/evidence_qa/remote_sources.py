@@ -23,6 +23,7 @@ class RemoteSourceChunk:
     original_text: str
     translation_text: str | None
     printed_page_label: str | None = None
+    translation_status: str = 'translated'
 
     def to_chunk(self):
         if (not isinstance(self.binding, RemoteSearchBinding) or type(self.ordinal) is not int or self.ordinal < 0
@@ -33,7 +34,8 @@ class RemoteSourceChunk:
                     (not isinstance(self.translation_text, str) or not self.translation_text.strip())):
             raise RemoteRetrievalContractError('REMOTE_SOURCE_INVALID')
         return Chunk(self.chunk_id, self.binding.parse_revision_id, self.ordinal, self.original_text,
-                     text=self.translation_text, translation_revision_id=self.binding.translation_revision_id,
+                     text=None if self.translation_status == 'original_only' else self.translation_text,
+                     translation_revision_id=self.binding.translation_revision_id,
                      printed_page_label=self.printed_page_label, pdf_page=self.pdf_page, section_id=self.section_id)
 
 

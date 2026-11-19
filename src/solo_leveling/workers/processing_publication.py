@@ -127,6 +127,9 @@ class PostgresStagedProcessingPublisher:
             fingerprint['split_policy'] = result.embeddings.split_policy
         metadata = dict(page_count=result.document.page_count, empty_pages=result.empty_pages,
                         sections=[asdict(s) for s in result.document.sections])
+        metadata['translation_status_counts'] = {
+            status:sum(t.status.value == status for t in result.translations)
+            for status in sorted({t.status.value for t in result.translations})}
         conn.execute('''INSERT INTO server_parse_revisions
             (owner_user_id,paper_id,server_version_id,parse_revision_id,status,chunk_count,
              source_job_id,source_lease_token,document_metadata)
@@ -155,10 +158,11 @@ class PostgresStagedProcessingPublisher:
                  chunk.original_text, chunk.section_id, chunk.printed_page_label))
             conn.execute('''INSERT INTO server_translation_chunks
                 (owner_user_id,paper_id,server_version_id,parse_revision_id,translation_revision_id,chunk_id,
-                 translated_text,translation_status)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)''',
+                 translated_text,translation_status,translation_failure_code)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
                 (*prefix, source.parse_revision_id, source.translation_revision_id, chunk.chunk_id,
-                 translation.text, translation.status.value))
+                 translation.text, translation.status.value,
+                 None if translation.failure_code is None else translation.failure_code.value))
             if not result.embeddings.fragments:
                 writer.put(scope, chunk.chunk_id, result.embeddings.vectors[index])
         table = 'server_embedding_vectors'

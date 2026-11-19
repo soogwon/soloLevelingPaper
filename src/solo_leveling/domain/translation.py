@@ -70,12 +70,15 @@ class TranslationRequest:
     parse_revision_id: str
     original_text: str
     target_language: str = "ko"
+    recovery_policy: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("chunk_id", "parse_revision_id", "original_text"):
             require_text(getattr(self, name), name)
         if self.target_language != "ko":
             raise ValueError("only Korean translation is supported in M1")
+        if self.recovery_policy not in (None, 'layout-aware-v1'):
+            raise ValueError('translation_recovery_policy_invalid')
 
 
 @dataclass(frozen=True)
@@ -94,6 +97,13 @@ class ChunkTranslationResult:
             object.__setattr__(self, 'status', inferred)
         elif not isinstance(self.status, TranslationStatus):
             raise ValueError("status must be TranslationStatus")
+        if self.status == TranslationStatus.ORIGINAL_ONLY:
+            if (not isinstance(self.failure_code,TranslationFailureCode)
+                    or self.text != self.request.original_text or self.failure_code not in (
+                    TranslationFailureCode.EMPTY_TRANSLATION, TranslationFailureCode.UNCHANGED_TRANSLATION,
+                    TranslationFailureCode.TARGET_LANGUAGE_MISMATCH)):
+                raise ValueError('original_only requires original text and a settled quality failure')
+            return
         if self.failure_code is None:
             require_text(self.text, "text")
         elif not isinstance(self.failure_code, TranslationFailureCode) or self.text is not None:
@@ -106,6 +116,10 @@ class ChunkTranslationResult:
     @property
     def succeeded(self) -> bool:
         return self.failure_code is None
+
+    @property
+    def indexable(self) -> bool:
+        return self.succeeded or self.status == TranslationStatus.ORIGINAL_ONLY
 
 
 @dataclass(frozen=True)

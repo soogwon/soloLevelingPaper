@@ -93,6 +93,10 @@ class OpenAITranslationProvider:
                                 'strict': True, 'schema': _SCHEMA}},
             'max_output_tokens': self.config.max_output_tokens, 'store': False,
         }
+        if request.recovery_policy == 'layout-aware-v1':
+            payload['instructions'] += ('\n번역 품질 재검사입니다. PDF의 줄바꿈·하이픈·표·열 경계를 주의해서 읽고 '
+                '명확한 본문은 한국어로 번역하세요. 원문에 없는 연결이나 읽기 순서를 추측하지 말고 '
+                '참고문헌·식별자·고유명사는 보존하세요. 설명 없이 지정된 JSON 형식만 반환하세요.')
         if self.transport is not None:
             # 동의/예산·unknown 오류를 재시도 가능한 번역 provider 오류로 바꾸지 않는다.
             from solo_leveling.infrastructure.generation.openai_generator import OpenAIGenerationSettings

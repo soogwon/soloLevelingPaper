@@ -54,6 +54,19 @@ def test_fragment_plan_is_explicit_and_reaches_worker_options(tmp_path):
     with pytest.raises(ValueError): plan(tmp_path, raw)
 
 
+def test_quality_recovery_requires_explicit_version_and_policy(tmp_path):
+    from solo_leveling.domain.embedding_windows import TokenWindowPolicy
+    raw = raw_config()
+    raw.update(schema_version=3,embedding_split_policy=TokenWindowPolicy().fingerprint(),
+               translation_recovery_policy='layout-aware-v1')
+    with bootstrap.build(config(),plan(tmp_path,raw),secrets(),pool_factory=lambda *args:Pool(),
+                         client_factory=lambda *args:Mock(),check=lambda _:None) as resources:
+        assert resources.stage_options['quality_retry_once'] is True
+        assert resources.stage_options['retry_policy'].max_attempts == 1
+    raw['translation_recovery_policy'] = 'unbounded'
+    with pytest.raises(ValueError): plan(tmp_path,raw)
+
+
 @pytest.mark.parametrize('policy', [None, {}, {'version':'unknown'},
     {'version':'token-window-v1','payload_tokens':112,'overlap_tokens':24,'stride_tokens':89}])
 def test_fragment_plan_rejects_invalid_policy_before_resources(tmp_path, policy):

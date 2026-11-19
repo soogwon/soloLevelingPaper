@@ -234,7 +234,9 @@ class PyTorchProcessingEmbedder:
                      and any(p.is_file() for p in folder.glob('*.safetensors')),
                      'PROCESSING_EMBEDDING_ARTIFACT_MISMATCH')
             _require(type(items) is tuple and bool(items)
-                     and all(type(item) is ProcessedTranslation and item.failure_code is None
+                     and all(type(item) is ProcessedTranslation
+                             and (item.failure_code is None or item.status.value == 'original_only'
+                                  and item.failure_code.value in ('empty_translation','unchanged_translation','target_language_mismatch'))
                              and type(item.chunk_id) is str and bool(item.chunk_id.strip())
                              and type(item.text) is str and bool(item.text.strip()) for item in items))
             ids = tuple(item.chunk_id for item in items)

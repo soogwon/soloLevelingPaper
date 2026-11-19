@@ -44,6 +44,40 @@ def test_server_composition_runs_parser_translation_and_fixed_model(composed):
     factory.authorization.ledger.assert_called_once_with(source, check, policy_version='policy', window_key='window')
 
 
+def test_quality_recovery_uses_distinct_persistent_slots_and_original_fallback(composed):
+    from tests.unit.test_remote_processing_stages import envelope
+    factory, source, pdf, ledger, post, response, _, _, check = composed
+    factory.quality_retry_once = True
+    factory.retry_policy = replace(factory.retry_policy,max_attempts=1)
+    response.json.return_value = envelope('This untranslated synthetic response remains English.')
+    result = factory(source,check).run(source,pdf)
+    assert result.status == 'prepared' and post.call_count == 4
+    assert all(t.status.value == 'original_only' and t.failure_code is not None for t in result.translations)
+    assert [t.text for t in result.translations] == [c.original_text for c in result.document.chunks]
+    keys = [r.dispatch_key for r in ledger.requests]
+    assert len(set(keys)) == 4 and len(ledger.observed) == 4
+    assert all(r.intent.execution_id == source.job_id for r in ledger.requests)
+    assert '번역 품질 재검사' not in post.call_args_list[0].kwargs['json']['instructions']
+    assert '번역 품질 재검사' in post.call_args_list[1].kwargs['json']['instructions']
+    factory(source,check).run(source,pdf)
+    assert [r.dispatch_key for r in ledger.requests[4:]] == keys
+
+
+def test_quality_retry_cannot_bypass_second_attempt_budget_rejection(composed):
+    from tests.unit.test_remote_processing_stages import envelope
+    factory, source, pdf, ledger, post, response, model_factory, _, check = composed
+    factory.quality_retry_once = True
+    factory.retry_policy = replace(factory.retry_policy,max_attempts=1)
+    response.json.return_value = envelope('This response is not translated.')
+    def first(*args,**kwargs):
+        ledger.allowed = False
+        return response
+    post.side_effect = first
+    with pytest.raises(DispatchError): factory(source,check).run(source,pdf)
+    assert post.call_count == 1
+    model_factory.assert_not_called()
+
+
 @pytest.mark.parametrize('mode', ['timeout', 'unknown', 'denied'])
 def test_composition_never_loads_model_after_provider_uncertainty_or_denial(composed, mode):
     factory, source, pdf, ledger, post, response, model_factory, _, check = composed
