@@ -114,9 +114,11 @@ class PostgresCollectionStore:
             pages = (total + limit - 1) // limit
             rows = [] if page > pages else conn.execute(
                 """SELECT c.collection_id, c.name, c.created_at, c.updated_at,
-                          count(cp.paper_id) AS paper_count
+                          count(p.paper_id) AS paper_count
                    FROM server_collections c LEFT JOIN server_collection_papers cp
                      ON cp.collection_id=c.collection_id AND cp.owner_user_id=c.owner_user_id
+                   LEFT JOIN server_papers p ON p.owner_user_id=cp.owner_user_id AND p.paper_id=cp.paper_id
+                     AND p.deleted_at IS NULL
                    WHERE c.owner_user_id=%s
                    GROUP BY c.collection_id
                    ORDER BY c.created_at DESC, c.collection_id DESC LIMIT %s OFFSET %s""",
@@ -167,9 +169,11 @@ class PostgresCollectionStore:
         with _connection(self._pool) as conn:
             row = conn.execute(
                 """SELECT c.collection_id, c.name, c.created_at, c.updated_at,
-                          count(cp.paper_id) AS paper_count
+                          count(p.paper_id) AS paper_count
                    FROM server_collections c LEFT JOIN server_collection_papers cp
                      ON cp.collection_id=c.collection_id AND cp.owner_user_id=c.owner_user_id
+                   LEFT JOIN server_papers p ON p.owner_user_id=cp.owner_user_id AND p.paper_id=cp.paper_id
+                     AND p.deleted_at IS NULL
                    WHERE c.owner_user_id=%s AND c.collection_id=%s GROUP BY c.collection_id""",
                 (owner_user_id, collection_id),
             ).fetchone()
@@ -189,7 +193,9 @@ class PostgresCollectionStore:
                        WHERE c.owner_user_id=%s AND c.collection_id=%s
                        RETURNING c.collection_id, c.name, c.created_at, c.updated_at,
                          (SELECT count(*) FROM server_collection_papers cp
-                          WHERE cp.owner_user_id=c.owner_user_id AND cp.collection_id=c.collection_id) AS paper_count""",
+                          JOIN server_papers p ON p.owner_user_id=cp.owner_user_id AND p.paper_id=cp.paper_id
+                          WHERE cp.owner_user_id=c.owner_user_id AND cp.collection_id=c.collection_id
+                            AND p.deleted_at IS NULL) AS paper_count""",
                     (name, normalized_name, owner_user_id, collection_id),
                 ).fetchone()
             except UniqueViolation:
@@ -218,19 +224,32 @@ class PostgresCollectionStore:
             if exists is None:
                 raise CollectionNotFound
             total = int(conn.execute(
-                """SELECT count(*) AS total_count FROM server_collection_papers
-                   WHERE owner_user_id=%s AND collection_id=%s""",
+                """SELECT count(*) AS total_count FROM server_collection_papers cp
+                   JOIN server_papers p ON p.owner_user_id=cp.owner_user_id AND p.paper_id=cp.paper_id
+                   WHERE cp.owner_user_id=%s AND cp.collection_id=%s AND p.deleted_at IS NULL""",
                 (owner_user_id, collection_id),
             ).fetchone()["total_count"])
             pages = (total + limit - 1) // limit
             rows = [] if page > pages else conn.execute(
                 """SELECT p.paper_id, p.title, p.authors, p.publication_year, cp.added_at,
-                          (SELECT r.file_name FROM server_learning_records r
-                           WHERE r.owner_user_id=p.owner_user_id AND r.paper_id=p.paper_id
-                           ORDER BY r.last_studied_at DESC NULLS LAST, r.learning_record_id ASC LIMIT 1) AS file_name
+                          CASE WHEN r.learning_record_id IS NULL THEN remote_file.file_name
+                               ELSE r.file_name END AS file_name
                    FROM server_collection_papers cp JOIN server_papers p
                      ON p.paper_id=cp.paper_id AND p.owner_user_id=cp.owner_user_id
-                   WHERE cp.owner_user_id=%s AND cp.collection_id=%s
+                   LEFT JOIN LATERAL (
+                       SELECT learning_record_id, file_name FROM server_learning_records
+                       WHERE owner_user_id=p.owner_user_id AND paper_id=p.paper_id
+                       ORDER BY last_studied_at DESC NULLS LAST, learning_record_id ASC LIMIT 1
+                   ) r ON TRUE
+                   LEFT JOIN LATERAL (
+                       SELECT u.file_name FROM server_pdf_uploads u
+                       JOIN server_processing_versions v ON v.owner_user_id=u.owner_user_id
+                         AND v.paper_id=u.paper_id AND v.server_version_id=u.server_version_id
+                       WHERE p.origin='remote' AND u.source_kind='remote' AND u.status='ready'
+                         AND u.owner_user_id=p.owner_user_id AND u.paper_id=p.paper_id
+                       ORDER BY u.updated_at DESC, u.upload_id ASC LIMIT 1
+                   ) remote_file ON TRUE
+                   WHERE cp.owner_user_id=%s AND cp.collection_id=%s AND p.deleted_at IS NULL
                    ORDER BY cp.added_at DESC, cp.paper_id DESC LIMIT %s OFFSET %s""",
                 (owner_user_id, collection_id, limit, (page - 1) * limit),
             ).fetchall()
@@ -271,8 +290,9 @@ class PostgresCollectionStore:
                 else:
                     raise CollectionPaperNotFound
             count = conn.execute(
-                """SELECT count(*) AS paper_count FROM server_collection_papers
-                   WHERE owner_user_id=%s AND collection_id=%s""",
+                """SELECT count(*) AS paper_count FROM server_collection_papers cp
+                   JOIN server_papers p ON p.owner_user_id=cp.owner_user_id AND p.paper_id=cp.paper_id
+                   WHERE cp.owner_user_id=%s AND cp.collection_id=%s AND p.deleted_at IS NULL""",
                 (owner_user_id, collection_id),
             ).fetchone()["paper_count"]
         return CollectionMembership(str(row["collection_id"]), str(row["paper_id"]), int(count))
@@ -294,8 +314,9 @@ class PostgresCollectionStore:
             if row is None:
                 raise CollectionPaperNotFound
             count = conn.execute(
-                """SELECT count(*) AS paper_count FROM server_collection_papers
-                   WHERE owner_user_id=%s AND collection_id=%s""",
+                """SELECT count(*) AS paper_count FROM server_collection_papers cp
+                   JOIN server_papers p ON p.owner_user_id=cp.owner_user_id AND p.paper_id=cp.paper_id
+                   WHERE cp.owner_user_id=%s AND cp.collection_id=%s AND p.deleted_at IS NULL""",
                 (owner_user_id, collection_id),
             ).fetchone()["paper_count"]
         return CollectionMembership(collection_id, paper_id, int(count))

@@ -312,6 +312,37 @@ def test_web_remote_upload_consent_admission_deletion(web, db):
     assert access["status"] == "ready" and access["file_name"] == "synthetic.pdf"
     detail = call(client, "GET", f"/v1/papers/{intent['paper_id']}")
     assert detail["file_access"]["available"] and detail["selected_learning_record_id"] is None
+    paper_id = intent["paper_id"]
+    collection = call(client, "POST", "/v1/collections", {"name": new_id()}, 201)["collection_id"]
+    collection_path = f"/v1/collections/{collection}"
+    call(client, "PUT", f"{collection_path}/papers/{paper_id}")
+    for status, sha in (("pending", "b" * 64), ("failed", "c" * 64)):
+        other_version = new_id()
+        db(
+            "INSERT INTO server_processing_versions(owner_user_id, paper_id, server_version_id) "
+            "SELECT owner_user_id, paper_id, %s FROM server_papers WHERE paper_id=%s",
+            (other_version, paper_id),
+        )
+        db(
+            """INSERT INTO server_pdf_uploads(
+                   upload_id, owner_user_id, paper_id, server_version_id, local_version_id, file_name,
+                   file_size, content_type, sha256_hex, object_key, status, expires_at, source_kind
+               )
+               SELECT %s, owner_user_id, paper_id, %s, local_version_id, %s,
+                      file_size, content_type, %s, %s, %s, CURRENT_TIMESTAMP - INTERVAL '1 hour', source_kind
+               FROM server_pdf_uploads WHERE paper_id=%s AND status='ready'""",
+            (new_id(), other_version, f"{status}.pdf", sha, f"private/tmp/{new_id()}", status, paper_id),
+        )
+    member_page = call(client, "GET", f"{collection_path}/papers")
+    archive_entry = next(item for item in call(client, "GET", "/v1/papers")["items"]
+                         if item["paper_id"] == paper_id)
+    member, = member_page["items"]
+    assert member["title"] is archive_entry["title"] is None
+    assert member["file_name"] == archive_entry["file_name"] == "synthetic.pdf"
+    assert member_page["total_count"] == 1
+    client.cookies.set("slp_session", other.token)
+    call(client, "GET", f"{collection_path}/papers", expected=404)
+    client.cookies.set("slp_session", original_session)
     call(client, "GET", f"/v1/papers/{intent['paper_id']}/versions/{intent['version_id']}/upload-status", expected=403)
     ai = call(client, "POST", path + "/consents/ai_provider", {"notice_version": NOTICE_VERSION})
     call(
@@ -325,6 +356,12 @@ def test_web_remote_upload_consent_admission_deletion(web, db):
     deletion = f"/v1/papers/{intent['paper_id']}/deletion-requests/{new_id()}"
     call(client, "PUT", deletion, {"confirmed": True, "notice_version": "server-paper-deletion-v1"})
     call(client, "GET", deletion)
+    member_page = call(client, "GET", f"{collection_path}/papers")
+    assert member_page["items"] == []
+    assert member_page["total_count"] == member_page["total_pages"] == 0
+    assert call(client, "GET", collection_path)["paper_count"] == 0
+    collections = call(client, "GET", "/v1/collections")["items"]
+    assert next(item for item in collections if item["collection_id"] == collection)["paper_count"] == 0
 
 
 def test_web_role_cannot_change_worker_outputs_budget_or_schema(web_pool):
