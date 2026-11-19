@@ -65,3 +65,33 @@ C: 합성 검증과 실제 성공 표시 구분, 상태 로그, 이후 웹/근�
 
 공식 안내: https://render.com/docs/background-workers , https://render.com/docs/deploying-an-image
 #517은 실제 종단 검증 전까지 열어둔다.
+
+## 퀴즈 단발 실행과 시작 명령 (#593)
+
+Render Existing Image의 Docker Command는 이미지의 CMD를 교체한다.
+이 이미지의 ENTRYPOINT는 이미 `python -m solo_leveling.workers.render_service`다.
+따라서 `env ... python -c ...` 또는 `python -m ...`를 Docker Command에 넣지 않는다.
+실패한 긴 명령은 ENTRYPOINT의 잘못된 인자가 되어 종료 코드 2로 재현됐다.
+
+퀴즈 실행 시 Docker Command에는 아래 **인자만** 지정한다.
+
+```text
+--mode quiz-worker --max-jobs 1 --shutdown-grace-seconds 30
+```
+
+환경 변수 `QUIZ_WORKER_CONFIG`(검토한 설정 파일의 절대 경로),
+`QUIZ_WORKER_DATABASE_URL`, `QUIZ_WORKER_OPENAI_API_KEY`,
+`QUIZ_WORKER_EXECUTION_ENABLED=true`가 별도로 필요하다.
+verify-full 연결은 이미지의 CA 경로를 `PGSSLROOTCERT`로 지정한다.
+새 역할·설정 파일·기능 실행은 해당 환경의 승인을 받은 뒤 적용한다.
+
+사전 검사 후 고정 퀴즈 CLI를 자식으로 한 번 실행하며, 성공·실패 모두
+재시도 없이 `render_standby`로 돌아간다. SIGTERM은 자식 프로세스 그룹에 전달되고
+종료 유예 뒤에도 남으면 강제 종료·회수한다. 자식 원문 출력은 로그에 포함하지 않는다.
+호스트가 프로세스 전체를 재시작하는 것은 별개이므로 영속 원장의 호출 제한도 유지한다.
+검증 후 Docker Command를 비우고 실행 플래그를 false로 복원한다.
+
+먼저 API 없는 대역으로 시작·완료·실패·standby·SIGTERM을 검증하고,
+실제 실행에서는 worker 준비 전에 작업을 접수해 120초 기한을 소진하지 않도록 한다.
+Live 표시는 생성 성공을 의미하지 않으므로 실행·provider attempt·사용량 원장을 확인한다.
+실제 재생성은 별도 승인 없이 자동으로 재시도하지 않는다.
