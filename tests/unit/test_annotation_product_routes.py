@@ -48,6 +48,23 @@ def test_context_listing_uses_authenticated_owner_and_fixed_version():
         assert client.get(path.replace(version, '')).status_code == 422
 
 
+def test_annotation_listing_filters_kind_with_authenticated_owner():
+    service = Mock(); verifier = Mock()
+    verifier.verify.return_value = AuthenticatedPrincipal('alice', 'web_session')
+    service.store.list_annotations.return_value = {
+        'items': [], 'next_cursor': None, 'total_count': 0}
+    app = FastAPI()
+    app.include_router(create_annotation_product_router(create_auth_dependency(verifier, verifier), service))
+    context = '00000000-0000-0000-0000-000000000580'
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, 'session')
+        result = client.get(f'/v1/remote-annotation-products/contexts/{context}/annotations?kind=note&limit=3')
+        assert result.status_code == 200
+        service.store.list_annotations.assert_called_once_with(
+            'alice', context, after=None, limit=3, kind='note', include_total=True)
+        assert client.get(f'/v1/remote-annotation-products/contexts/{context}/annotations?kind=other').status_code == 422
+
+
 def test_progress_requires_session_csrf_strict_revision_and_maps_conflict():
     from solo_leveling.interfaces.http.remote_learning import RemoteLearningConflict
     service = Mock(); verifier = Mock()

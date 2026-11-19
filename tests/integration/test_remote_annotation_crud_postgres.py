@@ -68,6 +68,23 @@ def test_keyset_listing_has_no_duplicate_or_missing_records(pool, context):
     assert store.list_annotations('other', key) is None
 
 
+def test_listing_filters_kind_and_reports_total(pool, context):
+    from dataclasses import replace
+    owner, key, _ = context
+    store = PostgresRemoteAnnotationStore(pool)
+    store.create(owner, 'product', key, 'note-1', annotation(context))
+    store.create(owner, 'product', key, 'note-2', annotation(context))
+    store.create(owner, 'product', key, 'highlight-1',
+                 replace(annotation(context), kind='highlight', body=''))
+    notes = store.list_annotations(owner, key, kind='note', limit=1, include_total=True)
+    assert notes['total_count'] == 2 and len(notes['items']) == 1
+    assert notes['items'][0].kind == 'note' and notes['next_cursor'] is not None
+    highlights = store.list_annotations(owner, key, kind='highlight', include_total=True)
+    assert highlights['total_count'] == 1 and highlights['items'][0].kind == 'highlight'
+    assert store.list_annotations(owner, key, include_total=True)['total_count'] == 3
+    assert set(store.list_annotations(owner, key)) == {'items', 'next_cursor'}
+
+
 @pytest.mark.parametrize('target', ['original', 'translation'])
 def test_highlight_preserves_evidence_and_scope_on_update(pool, context, target):
     from solo_leveling.interfaces.http.remote_annotations import RemoteAnnotationInput

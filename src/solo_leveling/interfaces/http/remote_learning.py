@@ -49,25 +49,51 @@ class PostgresRemoteLearningStore:
             return self._read(conn, owner, context)
 
     def list_for_paper(self, owner, paper, version, *, after=None, limit=20):
-        """명시적으로 시작한 현재 판본의 맥락만 읽고 새 기록은 만들지 않는다."""
+        """현재 판본의 학습 맥락을 최근 진행 저장순으로 읽는다.
+
+        커서는 해당 범위에 속한 context ID다. 커서 행의 ``updated_at``을 다시
+        읽어 복합 정렬을 이어가므로 같은 시각에도 누락·중복이 없다.
+        """
         paper = self._scope(owner, paper)
+        if after is not None:
+            after = self._scope(owner, after)
         if not isinstance(version, str) or not version.strip() or len(version) > 128:
             raise ValueError('remote_learning_version_invalid')
         after = str(UUID(after)) if after is not None else None
         if type(limit) is not int or not 1 <= limit <= 50:
             raise ValueError('remote_learning_limit_invalid')
         with self._pool.connection() as conn:
+            cursor = None
+            if after is not None:
+                cursor = conn.execute('''SELECT r.context_id,r.updated_at
+                    FROM server_remote_learning_records r
+                    JOIN server_papers p ON p.paper_id=r.paper_id AND p.owner_user_id=r.owner_user_id
+                    WHERE r.owner_user_id=%s AND r.paper_id=%s AND r.server_version_id=%s
+                      AND r.context_id=%s AND p.deleted_at IS NULL''',
+                    (owner, paper, version, after)).fetchone()
+                if cursor is None:
+                    return {'items': [], 'next_cursor': None}
+            continuation = ''
+            params = [owner, paper, version]
+            if cursor is not None:
+                continuation = ''' AND (r.updated_at<%s OR
+                    (r.updated_at=%s AND r.context_id>%s))'''
+                params.extend([cursor['updated_at'], cursor['updated_at'], after])
+            params.append(limit + 1)
             rows = conn.execute('''SELECT r.context_id, r.learning_record_id,
-                r.paper_id, r.server_version_id, r.publication_id, r.status, r.revision
+                r.paper_id, r.server_version_id, r.publication_id, r.status, r.revision,
+                r.last_pdf_page, r.updated_at
                 FROM server_remote_learning_records r
                 JOIN server_papers p ON p.paper_id=r.paper_id AND p.owner_user_id=r.owner_user_id
                 WHERE r.owner_user_id=%s AND r.paper_id=%s AND r.server_version_id=%s
-                  AND p.deleted_at IS NULL AND (%s::uuid IS NULL OR r.context_id>%s::uuid)
-                ORDER BY r.context_id LIMIT %s''',
-                (owner, paper, version, after, after, limit + 1)).fetchall()
+                  AND p.deleted_at IS NULL''' + continuation +
+                ''' ORDER BY r.updated_at DESC,r.context_id LIMIT %s''', params).fetchall()
         items = [{**{key: str(row[key]) for key in ('context_id', 'learning_record_id',
             'paper_id', 'server_version_id', 'publication_id')},
-            'status': row['status'], 'revision': row['revision']} for row in rows[:limit]]
+            'status': row['status'], 'revision': row['revision'],
+            'last_position': ({'pdf_page': row['last_pdf_page']}
+                              if row['last_pdf_page'] is not None else None),
+            'updated_at': row['updated_at']} for row in rows[:limit]]
         return {'items': items, 'next_cursor': items[-1]['context_id'] if len(rows) > limit else None}
 
     def dashboard(self, owner, *, after=None, limit=20, context=None):

@@ -338,19 +338,25 @@ class PostgresRemoteAnnotationStore:
                   AND deleted_at IS NULL""", (owner, context, annotation_id)).fetchone()
             return None if row is None else _stored(row)
 
-    def list_annotations(self, owner, context, *, after=None, limit=20, evidence=None):
+    def list_annotations(self, owner, context, *, after=None, limit=20, evidence=None,
+                         kind=None, include_total=False):
         """불변 ID를 커서로 사용하며 삭제된 기록은 목록에서 제외한다."""
         from uuid import UUID
         self._recovery_scope(owner, 'lookup', context)
         if type(limit) is not int or not 1 <= limit <= 50:
             raise ValueError('annotation_limit_invalid')
+        if kind not in (None, 'note', 'highlight'):
+            raise ValueError('annotation_kind_invalid')
         after = str(UUID(after)) if after is not None else None
         with self._pool.connection() as conn:
             if not self._lock_recovery_parent(conn, owner, context):
                 return None
             # 근거 필터를 LIMIT 이전에 적용해 빈 페이지와 누락을 막는다.
             evidence_filter = ''
+            kind_filter = ' AND kind=%s' if kind is not None else ''
             params = [owner, context, after, after]
+            if kind is not None:
+                params.append(kind)
             if evidence is not None:
                 if evidence['context_id'] != context:
                     raise ValueError('annotation_evidence_context_invalid')
@@ -360,12 +366,22 @@ class PostgresRemoteAnnotationStore:
                       OR (s->>'target'='translation' AND s->>'translation_revision_id'=%s)))"""
                 params += [evidence['chunk_id'], evidence['parse_revision_id'], evidence['translation_revision_id']]
             params.append(limit+1)
-            rows = conn.execute("""SELECT * FROM server_context_annotations
+            where = """ FROM server_context_annotations
                 WHERE owner_user_id=%s AND context_id=%s AND deleted_at IS NULL
-                  AND (%s::uuid IS NULL OR annotation_id>%s::uuid)
-                """ + evidence_filter + " ORDER BY annotation_id LIMIT %s", params).fetchall()
-            return {'items': [_stored(row) for row in rows[:limit]],
-                    'next_cursor': str(rows[limit-1]['annotation_id']) if len(rows)>limit else None}
+                  AND (%s::uuid IS NULL OR annotation_id>%s::uuid)""" + kind_filter + evidence_filter
+            rows = conn.execute("SELECT *" + where + " ORDER BY annotation_id LIMIT %s", params).fetchall()
+            result = {'items': [_stored(row) for row in rows[:limit]],
+                      'next_cursor': str(rows[limit-1]['annotation_id']) if len(rows)>limit else None}
+            if include_total:
+                count_params = [owner, context]
+                count_kind = ' AND kind=%s' if kind is not None else ''
+                if kind is not None:
+                    count_params.append(kind)
+                result['total_count'] = conn.execute("""SELECT count(*) AS n
+                    FROM server_context_annotations
+                    WHERE owner_user_id=%s AND context_id=%s AND deleted_at IS NULL""" + count_kind,
+                    count_params).fetchone()['n']
+            return result
 
     def update_annotation(self, owner, context, annotation_id, *, body, step, expected_revision, require_storage_consent=False):
         """위치와 출처는 고정하고 본문·단계만 현재 revision에서 수정한다."""

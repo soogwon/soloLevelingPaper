@@ -111,9 +111,11 @@ def create_annotation_product_router(require_principal, service):
         return call(principal, response, lambda owner: service.create(owner, str(context), key, body.domain()))
 
     @router.get('/{context}/annotations')
-    def listing(context: UUID, principal: Principal, response: Response, after: UUID | None = None, limit: int = 20):
+    def listing(context: UUID, principal: Principal, response: Response, after: UUID | None = None,
+                limit: int = 20, kind: Literal['note', 'highlight'] | None = None):
         return call(principal, response, lambda owner: service.store.list_annotations(
-            owner, str(context), after=str(after) if after else None, limit=limit))
+            owner, str(context), after=str(after) if after else None, limit=limit,
+            kind=kind, include_total=True))
 
     @router.get('/{context}/annotations/{annotation_id}')
     def get(context: UUID, annotation_id: UUID, principal: Principal, response: Response):

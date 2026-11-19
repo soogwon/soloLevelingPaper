@@ -138,13 +138,26 @@ def test_paper_context_list_owner_version_cursor_and_deletion(pool, db, context)
             SELECT owner_user_id,%s,paper_id,server_version_id,publication_id,parse_revision_id
             FROM server_execution_contexts WHERE owner_user_id=%s AND context_id=%s''', (new_key, owner, key))
         store.start(owner, new_key)
+    # 대표 맥락은 UUID 크기가 아니라 마지막 진행 저장 시각으로 정한다.
+    ordered = [keys[1], keys[2], keys[0]]
+    for seconds, item in enumerate(reversed(ordered), start=1):
+        db('''UPDATE server_remote_learning_records
+            SET updated_at=TIMESTAMPTZ '2026-11-20 00:00:00+00' + %s * INTERVAL '1 second',
+                last_pdf_page=%s
+            WHERE owner_user_id=%s AND context_id=%s''', (seconds, seconds, owner, item))
     found = []; cursor = None
+    pages = []
     while True:
         page = store.list_for_paper(owner, paper, version, after=cursor, limit=1)
+        pages.extend(page['items'])
         found.extend(r['context_id'] for r in page['items'])
         cursor = page['next_cursor']
         if cursor is None: break
-    assert found == sorted(keys)
+    assert found == ordered
+    assert pages[0]['updated_at'] > pages[1]['updated_at'] > pages[2]['updated_at']
+    assert pages[0]['last_position'] == {'pdf_page': 3}
+    assert store.list_for_paper(owner, paper, version, after=str(uuid4())) == {
+        'items': [], 'next_cursor': None}
     db('UPDATE server_papers SET deleted_at=clock_timestamp() WHERE owner_user_id=%s', (owner,))
     assert store.list_for_paper(owner, paper, version)['items'] == []
 

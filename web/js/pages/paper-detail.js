@@ -1,25 +1,16 @@
 // 3. 논문 상세 페이지 — GET /v1/papers/{id}, GET /v1/annotations, GET /v1/annotations/{id}, POST /v1/resume-requests
-import { remotePaperSummary } from '../lib/remote-paper-summary.js';
 import { remotePaperJobs } from '../lib/remote-paper-jobs.js';
-import { remotePaperNotes } from '../lib/remote-paper-notes.js';
+import { remotePaperDetail } from '../lib/remote-paper-detail.js';
 import { CONFIG } from '../config.js';
 import { api } from '../api/index.js';
 import { html, setHTML } from '../lib/html.js';
-import { replaceQuery } from '../router.js';
 import {
-  icons, statusBadge, loadingBlock, emptyBlock, errorBlock, pagination, errorMessage,
+  icons, statusBadge, emptyBlock, errorMessage,
   openDialog, toast, copyText, newRequestKey,
 } from '../lib/ui.js';
-import { pageFromQuery } from './papers.js';
-
-// 상세 오른쪽 패널은 좁아서 메모·하이라이트를 한 페이지에 3개씩 보여준다.
-const MEMO_PAGE_SIZE = 3;
-import { compactAnnotationCard } from '../lib/annotation.js';
 import {
-  formatAuthorsYear, formatPosition, formatDate, formatDateTime, formatTime, paperTitle, SUMMARY_KINDS,
+  formatAuthorsYear, formatPosition, formatTime, paperTitle, SUMMARY_KINDS,
 } from '../lib/format.js';
-
-const TABS = [['', '전체'], ['note', '메모'], ['highlight', '하이라이트']];
 
 export function summarySection(summary) {
   if (!summary || !summary.items?.length) {
@@ -85,109 +76,28 @@ export default async function paperDetailPage({ view, params, query }) {
       </div>
     </div>
 
-    <section class="card" aria-label="마지막 학습">
-      <dl class="facts">
-        <div class="fact"><dt>마지막 학습 위치</dt><dd>${formatPosition(paper.last_position) ?? '학습 위치가 저장되지 않았어요'}</dd></div>
-        <div class="fact"><dt>마지막 학습</dt><dd>${paper.last_studied_at ? formatDateTime(paper.last_studied_at) : '기록 없음'}</dd></div>
-        ${paper.version?.created_at ? html`<div class="fact"><dt>원문 버전</dt><dd class="normal">${formatDate(paper.version.created_at)} 등록본</dd></div>` : ''}
-      </dl>
-    </section>
+    <section class="card" aria-label="마지막 학습" data-slot="remote-progress"></section>
 
     <div class="split">
-      <section class="card panel panel-main" aria-labelledby="sum-h">
-        <div class="panel-head">
-          <h2 class="panel-title" id="sum-h">로컬 동기화 요약</h2>
-          ${paper.summary ? html`<span class="note-tags">${paper.summary.author_type === 'user' ? html`<span class="badge b-gray">내 요약</span>` : html`<span class="badge b-ok">MCP 생성</span>`}<span class="hint">${formatDate(paper.summary.created_at)} 저장</span></span>` : ''}
-        </div>
-        ${summarySection(paper.summary)}
-      </section>
-
-      <section class="card panel panel-side" aria-labelledby="memo-h">
-        <h2 class="panel-title" id="memo-h">로컬 동기화 메모·하이라이트 <small data-slot="memo-count"></small></h2>
-        <div class="pills" role="group" aria-label="기록 종류">
-          ${TABS.map(([v, l]) => html`<button type="button" class="pill sm" data-kind="${v}" aria-pressed="${String(v === '')}">${l}</button>`)}
-        </div>
-        <div data-slot="focus"></div>
-        <div class="stack" data-slot="memos" tabindex="-1"></div>
-        <div data-slot="memo-pager"></div>
-      </section>
+      <section class="card panel panel-main" data-slot="remote-summary"></section>
+      <section class="card panel panel-side" data-slot="remote-notes"></section>
     </div>
-    <section class="card panel" data-slot="remote-summary"></section>
     <section class="card panel" data-slot="remote-jobs"></section>
-    <section class="card panel" data-slot="remote-notes"></section>`);
+  `);
 
-  const summaryReady = CONFIG.USE_MOCK ? Promise.resolve() : remotePaperSummary(view.querySelector('[data-slot="remote-summary"]'), paper.paper_id, versionId);
+  const detailViews = {
+    progress: view.querySelector('[data-slot="remote-progress"]'),
+    summary: view.querySelector('[data-slot="remote-summary"]'),
+    notes: view.querySelector('[data-slot="remote-notes"]'),
+  };
+  if (CONFIG.USE_MOCK) {
+    setHTML(detailViews.progress, emptyBlock('예시 모드에서는 원격 학습 기록을 제공하지 않아요', '실제 계정으로 로그인하면 원격 학습 위치와 기록이 여기에 보여요.'));
+    setHTML(detailViews.summary, html`<h2 class="panel-title">요약</h2>${emptyBlock('예시 모드에서는 원격 요약을 제공하지 않아요')}`);
+    setHTML(detailViews.notes, html`<h2 class="panel-title">메모·하이라이트 <small>0개</small></h2>${emptyBlock('예시 모드에서는 원격 기록을 제공하지 않아요')}`);
+  }
+  const detailReady = CONFIG.USE_MOCK ? Promise.resolve()
+    : remotePaperDetail(detailViews, paper.paper_id, versionId);
   const jobsReady = CONFIG.USE_MOCK ? Promise.resolve() : remotePaperJobs(view.querySelector('[data-slot="remote-jobs"]'), paper.paper_id, versionId);
-  const remoteReady = CONFIG.USE_MOCK ? Promise.resolve() : remotePaperNotes(view.querySelector('[data-slot="remote-notes"]'), paper.paper_id, versionId);
-
-  // ---------- 메모·하이라이트 (페이지 번호 방식) ----------
-  const memoState = { kind: '', page: pageFromQuery(query.mpage), seq: 0, focus: null };
-  const memoPanel = view.querySelector('.panel-side');
-  const memosEl = view.querySelector('[data-slot="memos"]');
-  const memoPagerEl = view.querySelector('[data-slot="memo-pager"]');
-  const memoCountEl = view.querySelector('[data-slot="memo-count"]');
-  const focusEl = view.querySelector('[data-slot="focus"]');
-
-  function syncUrl() {
-    replaceQuery({
-      record: recordId,
-      version: versionId,
-      annotation: memoState.focus?.annotation_id ?? query.annotation,
-      mpage: memoState.page > 1 ? memoState.page : '',
-    });
-  }
-
-  async function loadMemos(page, { moveFocus = false } = {}) {
-    const seq = ++memoState.seq;
-    memoState.page = page;
-    syncUrl();
-    setHTML(memosEl, loadingBlock());
-    try {
-      const res = await api.listAnnotations({
-        paper_id: paper.paper_id, version_id: versionId, kind: memoState.kind, sort: 'newest',
-        page, limit: MEMO_PAGE_SIZE,
-      });
-      if (closed || !view.isConnected || seq !== memoState.seq) return;
-      if (res.items.length === 0 && page > 1 && res.total_count > 0) { loadMemos(res.total_pages, { moveFocus }); return; }
-
-      // 위에 따로 강조해 둔 기록은 목록에서 한 번 더 보여주지 않는다.
-      const focusId = memoState.focus?.annotation_id;
-      const items = res.items.filter((a) => a.annotation_id !== focusId);
-      if (res.items.length === 0) {
-        setHTML(memosEl, emptyBlock(memoState.kind ? '이 종류의 기록이 없어요' : '아직 남긴 기록이 없어요', 'Claude에서 메모나 하이라이트를 저장하면 여기에 보여요.'));
-      } else {
-        setHTML(memosEl, html`${items.map((a) => compactAnnotationCard(a))}`);
-      }
-      memoCountEl.textContent = `${res.total_count}개`;
-      setHTML(memoPagerEl, pagination({ page: res.page, totalPages: res.total_pages, totalCount: res.total_count, pageSize: res.page_size, label: '메모·하이라이트 페이지' }));
-      if (moveFocus) {
-        memoPanel.scrollIntoView({ block: 'start', behavior: 'smooth' });
-        memosEl.focus({ preventScroll: true });
-      }
-    } catch (error) {
-      if (closed || !view.isConnected || seq !== memoState.seq) return;
-      setHTML(memosEl, errorBlock(error, 'reload-memos'));
-      setHTML(memoPagerEl, '');
-    }
-  }
-
-  // 메모 페이지에서 넘어온 기록: 첫 목록에 없어도 개별 조회로 보여주고 강조한다 (요청서 3.4, 4.7).
-  async function loadFocus() {
-    if (!query.annotation) return;
-    try {
-      const a = await api.getAnnotation(query.annotation);
-      if (closed || !view.isConnected) return;
-      if (a.paper?.paper_id !== paper.paper_id) return;
-      memoState.focus = a;
-      setHTML(focusEl, compactAnnotationCard(a, { focused: true }));
-      const card = focusEl.querySelector('.note-card');
-      card.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      card.focus({ preventScroll: true });
-    } catch {
-      if (closed || !view.isConnected) return;
-      setHTML(focusEl, html`<p class="inline-error">선택한 기록을 찾을 수 없어요.</p>`);
-    }
-  }
 
   // ---------- 버튼 ----------
   async function openPdf(button) {
@@ -227,7 +137,6 @@ export default async function paperDetailPage({ view, params, query }) {
         paper_id: paper.paper_id,
         version_id: versionId,
         learning_record_id: recordId,
-        annotation_id: memoState.focus?.annotation_id ?? undefined,
       }, newRequestKey());
     } catch (error) {
       toast(errorMessage(error));
@@ -260,19 +169,9 @@ export default async function paperDetailPage({ view, params, query }) {
   }
 
   view.addEventListener('click', (e) => {
-    const tab = e.target.closest('[data-kind]');
-    if (tab) {
-      memoState.kind = tab.dataset.kind;
-      view.querySelectorAll('[data-kind]').forEach((b) => b.setAttribute('aria-pressed', String(b === tab)));
-      loadMemos(1);
-      return;
-    }
-    const pageBtn = e.target.closest('[data-page]');
-    if (pageBtn && !pageBtn.disabled) { loadMemos(Number(pageBtn.dataset.page), { moveFocus: true }); return; }
     const el = e.target.closest('[data-action]');
     if (!el) return;
     switch (el.dataset.action) {
-      case 'reload-memos': loadMemos(memoState.page); break;
       case 'open-pdf': openPdf(el); break;
       case 'resume': openResume(el); break;
       case 'toggle-evidence': {
@@ -287,10 +186,5 @@ export default async function paperDetailPage({ view, params, query }) {
     }
   });
 
-  // 강조할 기록을 먼저 확인한 뒤 목록을 불러와야 같은 기록이 두 번 보이지 않는다.
-  // 목록에서 넘어온 기록 ID는 주소에 고정해 새로고침·뒤로가기 후에도 같은 기록과 페이지를 본다.
-  await loadFocus();
-  if (closed || !view.isConnected) return;
-  await loadMemos(memoState.page);
-  await Promise.all([remoteReady, jobsReady, summaryReady]);
+  await Promise.all([detailReady, jobsReady]);
 }
