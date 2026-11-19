@@ -15,3 +15,17 @@ migration 0056은 역할별 동의 보호 함수를 추가한다. 신규 기능�
 ## 서비스 조립
 
 `REMOTE_REFLECTIONS_ENABLED=true`, `REMOTE_REFLECTION_WEB_DATABASE_URL`, `REMOTE_REFLECTION_MCP_DATABASE_URL`을 모두 명시해야 조립한다. 기본값은 비활성이고 일반 DATABASE_URL로 대체하지 않는다. 두 URL은 같은 DB·검색 경로의 서로 다른 역할이어야 한다. 웹 API는 웹 풀, MCP 도구는 MCP 풀을 사용하며 시작 실패에도 두 풀을 정리한다. 오류와 repr에 자격을 노출하지 않는다. 설정/조립과 기존 메모·성찰 경계 대역 33개 통과.
+
+## staging 이미지 기동 실패와 보완
+
+2026-11-19 승인된 ab2dadd 배포에서 schema 검사는 통과했으나 이미지에
+`solo_leveling.domain.reflection`이 없어 기동하지 못했다. 기존 e12961b 웹은
+Live를 유지했다. 성찰 flag는 false로 저장하고 검증 계정의 성찰 허용 표시를
+회수했다. Auth0 scope 정의와 클라이언트 허용 목록은 보존했으므로 전체 설정
+원복으로 표현하지 않는다. 새 합성 답변 저장과 AI 호출은 실행하지 않았다.
+
+Docker 허용 목록에 성찰 도메인과 MCP 모듈만 추가했다. 실제 설치 이미지에서
+네트워크를 끄고 제품 조회·메모·취소·성찰 기능 조립을 함께 실행하여 네 가지
+성공 표식을 확인했다. 성찰 동의 웹 경로와 5개 MCP 도구 등록도 검사한다.
+이 검증은 DB 접속·인증 토큰·실제 저장 검증을 대체하지 않는다. 보완 이미지의
+staging 재배포와 검증 계정 재허용, 재인증·합성 CRUD·동의 철회는 남아 있다.

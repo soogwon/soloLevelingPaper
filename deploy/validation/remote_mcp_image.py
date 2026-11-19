@@ -66,3 +66,20 @@ assert {'prepare_remote_job_cancellation', 'confirm_remote_job_cancellation',
         'get_remote_job_cancellation'} <= {tool.name for tool in asyncio.run(cancel_bundle.server.list_tools())}
 assert '처리 작업 취소 확인' in str(asyncio.run(cancel_bundle.server.read_resource('ui://remote-jobs/cancel.html')))
 print('REMOTE_JOB_CANCEL_IMAGE_OK; no database or provider calls')
+
+# 실제 배포처럼 성찰 기능을 켜서 도메인·MCP 모듈 누락을 검출한다.
+os.environ.update({
+    'REMOTE_REFLECTIONS_ENABLED': 'true',
+    'REMOTE_REFLECTION_WEB_DATABASE_URL': 'postgresql://reflection_web:synthetic@127.0.0.1/test',
+    'REMOTE_REFLECTION_MCP_DATABASE_URL': 'postgresql://reflection_mcp:synthetic@127.0.0.1/test',
+})
+reflection_app = create_app(remote_mcp_settings=settings)
+assert any(getattr(route, 'path', '').startswith('/v1/remote-reflections/')
+           for route in reflection_app.routes)
+from solo_leveling.interfaces.http.remote_reflection import PostgresRemoteReflection
+reflection_bundle = create_remote_mcp(settings, product_queries=Queries(),
+    reflection_service=PostgresRemoteReflection(None))
+assert {'get_reading_questions', 'get_reading_comparison', 'get_reading_storage_consent',
+        'save_reading_answer', 'delete_reading_answer'} <= {
+    tool.name for tool in asyncio.run(reflection_bundle.server.list_tools())}
+print('REMOTE_REFLECTION_IMAGE_OK; no database or provider calls')

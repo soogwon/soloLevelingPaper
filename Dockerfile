@@ -10,6 +10,8 @@ RUN addgroup --system app && adduser --system --ingroup app app
 COPY pyproject.toml LICENSE ./
 COPY src/solo_leveling/__init__.py ./src/solo_leveling/
 COPY src/solo_leveling/domain/__init__.py src/solo_leveling/domain/annotation.py src/solo_leveling/domain/learning_progress.py src/solo_leveling/domain/knowledge_graph.py ./src/solo_leveling/domain/
+COPY src/solo_leveling/domain/reflection.py ./src/solo_leveling/domain/
+COPY src/solo_leveling/interfaces/mcp/remote_reflection.py ./src/solo_leveling/interfaces/mcp/
 COPY src/solo_leveling/domain/deletion_policy.py ./src/solo_leveling/domain/
 COPY src/solo_leveling/knowledge/ ./src/solo_leveling/knowledge/
 COPY src/solo_leveling/domain/models.py src/solo_leveling/domain/evidence_qa.py ./src/solo_leveling/domain/
