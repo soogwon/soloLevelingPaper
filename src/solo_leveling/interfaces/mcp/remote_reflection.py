@@ -1,11 +1,21 @@
 """원격 성찰은 저장 답변만 사용하며 동의는 웹에서 별도로 받는다."""
+import hashlib
+import hmac
+from importlib.resources import files
 import time
+from uuid import UUID
+
+from mcp.types import ToolAnnotations
 from mcp.server.auth.middleware.auth_context import get_access_token
 from solo_leveling.interfaces.http.remote_mcp_auth import RemoteIdentityAccessToken
 from solo_leveling.interfaces.http.remote_executions import RemoteExecutionConflict
 
 
-def register_remote_reflection(server,queries,service):
+URI = 'ui://remote-reflection/reading.html'
+READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+
+
+def register_remote_reflection(server, queries, service, *, web_origin=None):
     def call(scope,method,*args,**kwargs):
         token=get_access_token()
         if (not isinstance(token,RemoteIdentityAccessToken) or token.verified_identity() is None
@@ -15,7 +25,7 @@ def register_remote_reflection(server,queries,service):
         if owner is None:
             return {'status':'not_authorized'}
         try:
-            result=getattr(service,method)(owner,*args,**kwargs)
+            result=method(owner) if callable(method) else getattr(service,method)(owner,*args,**kwargs)
             return {'status':'not_found'} if result is None else {'status':'ok','result':result}
         except RemoteExecutionConflict:
             return {'status':'conflict','message':'최신 질문·답변 revision을 다시 조회하세요. 자동 덮어쓰기는 하지 않습니다.'}
@@ -51,3 +61,46 @@ def register_remote_reflection(server,queries,service):
     def delete_reading_answer(context_id:str,template_id:str,expected_revision:int)->dict:
         """사용자가 선택한 답변과 과거 요청 이력 본문을 삭제한다. 충돌 시 최신 revision을 다시 조회한다."""
         return call('reflections:write','delete_answer',context_id,template_id,expected_revision)
+
+
+    def card_binding(owner, context_id):
+        return hmac.new(get_access_token().token.encode(), f'reflection-card:{owner}:{context_id}'.encode(),
+                        hashlib.sha256).hexdigest()
+
+    @server.resource(URI, mime_type='text/html;profile=mcp-app')
+    def reflection_card() -> str:
+        return files('solo_leveling.interfaces.mcp').joinpath('assets/remote-reflection.html').read_text(encoding='utf-8')
+
+    @server.tool(meta={'ui': {'resourceUri': URI}}, annotations=READ)
+    def show_remote_reading_reflection(context_id: str, expected_binding: str | None = None) -> dict:
+        """고정 학습 맥락의 읽기 전후 질문, 저장 답변과 비교 카드를 엽니다."""
+        def load(owner):
+            context = str(UUID(context_id))
+            binding = card_binding(owner, context)
+            if expected_binding is not None and not hmac.compare_digest(binding, expected_binding):
+                raise ValueError('reflection_card_connection_changed')
+            view = service.questions(owner, context)
+            if view is None:
+                return None
+            consent = service.consent(owner, context)
+            if consent is None or consent['question_revision'] != view['question_revision']:
+                raise RemoteExecutionConflict('reflection_question_changed')
+            return {**view, 'card_binding': binding, 'consent': consent,
+                    'consent_url': f'{web_origin}/#/reflections/{context}/consent' if web_origin else None}
+        return call('reflections:read', load)
+
+    @server.tool(meta={'ui': {'visibility': ['app']}},
+                 annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                             idempotentHint=True, openWorldHint=False))
+    def save_remote_reflection_card(context_id: str, expected_binding: str, request_key: str,
+                                    question_revision: str, template_id: str, body: str, status: str,
+                                    expected_revision: int, storage_consent_id: str) -> dict:
+        """사용자가 카드에서 확인한 답변을 고정 맥락과 동일 요청 키로 저장합니다."""
+        def save(owner):
+            context = str(UUID(context_id))
+            if not hmac.compare_digest(card_binding(owner, context), expected_binding):
+                raise ValueError('reflection_card_connection_changed')
+            return service.save(owner, context, request_key, question_revision=question_revision,
+                                template_id=template_id, body=body, status=status,
+                                expected_revision=expected_revision, storage_consent_id=storage_consent_id)
+        return call('reflections:write', save)

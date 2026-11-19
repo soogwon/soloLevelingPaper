@@ -6,6 +6,7 @@ import path from 'node:path';
 for (const [name, entry, templateName] of [
   ['remote-reading-progress', 'remote-reading-main', 'remote-reading-template'],
   ['remote-job-cancellation', 'remote-job-cancel-main', 'remote-job-cancel-template'],
+  ['remote-reflection', 'remote-reflection-main', 'remote-reflection-template'],
   ['remote-pdf-registration', 'remote-pdf-registration-main', 'remote-pdf-registration-template'],
   ['remote-paper-detail', 'remote-paper-main', 'remote-paper-template'],
   ['remote-evidence-detail', 'remote-evidence-main', 'remote-evidence-template'],

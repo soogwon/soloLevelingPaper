@@ -38,6 +38,7 @@ COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-recovery.html src
 COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-compose.html src/solo_leveling/interfaces/mcp/assets/remote-annotation-compose.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-evidence-detail.html src/solo_leveling/interfaces/mcp/assets/remote-evidence-detail.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-pdf-registration.html src/solo_leveling/interfaces/mcp/assets/remote-pdf-registration.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
+COPY src/solo_leveling/interfaces/mcp/assets/remote-reflection.html src/solo_leveling/interfaces/mcp/assets/remote-reflection.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-paper-detail.html src/solo_leveling/interfaces/mcp/assets/remote-paper-detail.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-reading-progress.html src/solo_leveling/interfaces/mcp/assets/remote-reading-progress.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-job-cancellation.html src/solo_leveling/interfaces/mcp/assets/remote-job-cancellation.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/

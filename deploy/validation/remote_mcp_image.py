@@ -86,6 +86,7 @@ reflection_bundle = create_remote_mcp(settings, product_queries=Queries(),
 assert {'get_reading_questions', 'get_reading_comparison', 'get_reading_storage_consent',
         'save_reading_answer', 'delete_reading_answer'} <= {
     tool.name for tool in asyncio.run(reflection_bundle.server.list_tools())}
+assert '읽기 전후 성찰' in str(asyncio.run(reflection_bundle.server.read_resource('ui://remote-reflection/reading.html')))
 print('REMOTE_REFLECTION_IMAGE_OK; no database or provider calls')
 
 # 퀴즈 검토 링크·상태 도구만 조립하며 실제 저장소나 생성기는 연결하지 않는다.
