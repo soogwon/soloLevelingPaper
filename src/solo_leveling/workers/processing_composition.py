@@ -23,7 +23,7 @@ class ProcessingStagesFactory:
 
     def __init__(self, authorization, *, service_config, model_dir, embedding_spec,
                  limits, retry_policy, policy_version, window_key, token_upper_bound,
-                 batch_size, post=None, model_factory=None):
+                 batch_size, post=None, model_factory=None, fragment_policy=None):
         if (not isinstance(service_config, OpenAITranslationConfig)
                 or not callable(token_upper_bound)
                 or not service_config.allow_external_api or service_config.local_only):
@@ -34,6 +34,7 @@ class ProcessingStagesFactory:
         self.policy_version, self.window_key = policy_version, window_key
         self.token_upper_bound, self.batch_size = token_upper_bound, batch_size
         self.post, self.model_factory = post, model_factory
+        self.fragment_policy = fragment_policy
 
     def __call__(self, source, check_allowed):
         if check_allowed(source, 'parse') is not True:
@@ -81,7 +82,8 @@ class ProcessingStagesFactory:
         )
         options = {} if self.model_factory is None else {'model_factory': self.model_factory}
         embedder = PyTorchProcessingEmbedder(model_dir=self.model_dir,
-            check_allowed=lambda: check_allowed(source, 'embedding'), batch_size=self.batch_size, **options)
+            check_allowed=lambda: check_allowed(source, 'embedding'), batch_size=self.batch_size,
+            fragment_policy=self.fragment_policy, embedding_set_id=source.embedding_set_id, **options)
         return RemoteProcessingStages(Parser(), translator, embedder, limits=self.limits,
             translation_settings=config.translation_settings, embedding_spec=self.spec,
             check_allowed=check_allowed)

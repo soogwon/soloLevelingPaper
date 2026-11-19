@@ -7,7 +7,7 @@ from uuid import UUID
 
 from solo_leveling.application.remote_processing import RemoteProcessingStages, validate_processing_configuration
 from solo_leveling.domain.remote_processing import (
-    EmbeddingBatch, EmbeddingSpec, ProcessingError, ProcessingLimits, ProcessingResult,
+    EmbeddingBatch, EmbeddingFragment, EmbeddingSpec, ProcessingError, ProcessingLimits, ProcessingResult,
     ProcessingSource, ProcessedTranslation, ProcessingChunk, ParsedDocument,
 )
 from solo_leveling.domain.translation import TranslationSettings, TranslationStatus
@@ -74,9 +74,11 @@ class PostgresProcessingResultStaging:
                          and item.failure_code is None and isinstance(item.status, TranslationStatus)
                          and type(item.text) is str and item.text.strip())
             batch = result.embeddings
+            from solo_leveling.application.embedding_fragments import validate_embedding_mapping
+            validate_embedding_mapping(batch, ids, source.embedding_set_id)
             _require(type(batch) is EmbeddingBatch and batch.spec == self.spec and batch.chunk_ids == ids
                      and type(batch.chunk_ids) is tuple and type(batch.vectors) is tuple
-                     and len(batch.vectors) == len(chunks) and type(self.spec.dimension) is int
+                     and type(self.spec.dimension) is int
                      and 1 <= self.spec.dimension <= 4096 and self.spec.normalization == 'l2'
                      and self.spec.distance == 'cosine' and self.spec.precision == 'float32')
             for row in batch.vectors:
@@ -86,7 +88,11 @@ class PostgresProcessingResultStaging:
             present = {c.pdf_page for c in chunks}
             _require(type(result.empty_pages) is tuple and all(type(p) is int for p in result.empty_pages)
                      and result.empty_pages == tuple(p for p in range(1, result.document.page_count + 1) if p not in present))
-            payload = {'schema_version': 2, 'result': asdict(result)}
+            payload = {'schema_version': 3 if batch.fragments else 2, 'result': asdict(result)}
+            if not batch.fragments:
+                # 이전 payload의 바이트 지문을 그대로 유지한다.
+                payload['result']['embeddings'].pop('fragments')
+                payload['result']['embeddings'].pop('split_policy')
             # jsonb는 음의 0을 보존하지 않으므로 저장 전 동일한 수치 표현으로 고정한다.
             payload['result']['embeddings']['vectors'] = [
                 [0.0 if v == 0 else float(v) for v in row] for row in batch.vectors]
@@ -144,9 +150,9 @@ class PostgresProcessingResultStaging:
                     conn.execute('''INSERT INTO server_processing_result_staging
                         (owner_user_id,paper_id,server_version_id,job_id,source_lease_token,
                          payload_version,payload_sha256,payload)
-                         VALUES (%s,%s,%s,%s,%s,2,%s,%s::jsonb)''',
+                         VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb)''',
                         (source.owner_user_id, source.paper_id, source.version_id, source.job_id,
-                         source.lease_token, digest, encoded.decode('utf-8')))
+                         source.lease_token, payload['schema_version'], digest, encoded.decode('utf-8')))
                 self._live(conn, source)
             return StagedProcessingResult(digest, old is not None)
         except ProcessingStagingError:
@@ -178,7 +184,7 @@ class PostgresProcessingResultStaging:
         data = row['payload']
         encoded = _encode(data)
         version = data.get('schema_version')
-        _require(len(encoded) <= self.max_bytes and type(version) is int and version in (1, 2)
+        _require(len(encoded) <= self.max_bytes and type(version) is int and version in (1, 2, 3)
                  and row['payload_version'] == version and data.get('authorization') == authorization
                  and data['result']['source'] == asdict(source)
                  and data['result']['translation_settings'] == asdict(self.settings)
@@ -202,10 +208,13 @@ class PostgresProcessingResultStaging:
                     TranslationStatus(t.get('status', TranslationStatus.TRANSLATED.value)))
                     for t in raw['translations']),
                 EmbeddingBatch(EmbeddingSpec(**embeddings['spec']), tuple(embeddings['chunk_ids']),
-                               tuple(tuple(row) for row in embeddings['vectors'])),
+                               tuple(tuple(row) for row in embeddings['vectors']),
+                               tuple(EmbeddingFragment(**f) for f in embeddings.get('fragments', ())),
+                               embeddings.get('split_policy')),
                 tuple(raw['empty_pages']), raw['status'],
             )
             payload, _, _ = self._payload(result)
+            _require(version in (1, 2, 3) and (version == 3) == bool(result.embeddings.fragments))
             expected = raw
             if version == 1:
                 expected = dict(raw)

@@ -1,43 +1,12 @@
 """고정 tokenizer의 토큰 구간을 분할한다. 원문 청크와 인용 식별자는 바꾸지 않는다."""
 
-from dataclasses import asdict, dataclass
 import hashlib
 import json
 
 
-class TokenWindowError(ValueError):
-    """본문이나 tokenizer 예외를 포함하지 않는 고정 오류."""
-
-
-@dataclass(frozen=True)
-class TokenWindowPolicy:
-    payload_tokens: int = 112
-    overlap_tokens: int = 24
-    version: str = 'token-window-v1'
-
-    def __post_init__(self):
-        if (type(self.payload_tokens) is not int or self.payload_tokens <= 0
-                or type(self.overlap_tokens) is not int
-                or not 0 <= self.overlap_tokens < self.payload_tokens
-                or self.version != 'token-window-v1'):
-            raise TokenWindowError('EMBEDDING_WINDOW_POLICY_INVALID')
-
-    @property
-    def stride(self):
-        return self.payload_tokens - self.overlap_tokens
-
-    def fingerprint(self):
-        return {**asdict(self), 'stride_tokens': self.stride}
-
-
-@dataclass(frozen=True, repr=False)
-class TokenWindow:
-    embedding_fragment_id: str
-    embedding_set_id: str
-    parent_chunk_id: str
-    token_start: int
-    token_end: int
-    token_ids: tuple[int, ...]
+from solo_leveling.domain.embedding_windows import (
+    TokenWindow as TokenWindow, TokenWindowError as TokenWindowError, TokenWindowPolicy as TokenWindowPolicy,
+)
 
 
 def token_ids(tokenizer, text, *, special_tokens):

@@ -41,6 +41,27 @@ def secrets():
         SLP_VERIFY_OPENAI_API_KEY='synthetic-api')
 
 
+def test_fragment_plan_is_explicit_and_reaches_worker_options(tmp_path):
+    from solo_leveling.domain.embedding_windows import TokenWindowPolicy
+    raw = raw_config()
+    assert 'embedding_split_policy' not in plan(tmp_path).raw
+    raw.update(schema_version=2, embedding_split_policy=TokenWindowPolicy().fingerprint())
+    configured = plan(tmp_path, raw)
+    with bootstrap.build(config(), configured, secrets(), pool_factory=lambda *args: Pool(),
+                         client_factory=lambda *args: Mock(), check=lambda _: None) as resources:
+        assert resources.stage_options['fragment_policy'] == TokenWindowPolicy()
+    raw['schema_version'] = 1
+    with pytest.raises(ValueError): plan(tmp_path, raw)
+
+
+@pytest.mark.parametrize('policy', [None, {}, {'version':'unknown'},
+    {'version':'token-window-v1','payload_tokens':112,'overlap_tokens':24,'stride_tokens':89}])
+def test_fragment_plan_rejects_invalid_policy_before_resources(tmp_path, policy):
+    raw = raw_config()
+    raw.update(schema_version=2,embedding_split_policy=policy)
+    with pytest.raises(ValueError): plan(tmp_path,raw)
+
+
 def test_approved_payload_bounds_reject_mutation_and_enforce_totals():
     bounds = bootstrap.ApprovedPayloadBounds('synthetic-model', 50, raw_config()['requests'])
     with pytest.raises(ValueError): bounds('other-model', payload())
