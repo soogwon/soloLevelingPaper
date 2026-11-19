@@ -84,6 +84,7 @@ test('현재 서버의 배열형 기기 응답을 계정 화면 계약으로 정
       name: 'My PC',
       connected_at: '2026-11-13T00:00:00Z',
       last_active_at: null,
+      last_active_available: false,
     }],
   });
 });

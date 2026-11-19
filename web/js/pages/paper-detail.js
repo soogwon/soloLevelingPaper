@@ -20,7 +20,7 @@ import {
 
 const TABS = [['', '전체'], ['note', '메모'], ['highlight', '하이라이트']];
 
-function summarySection(summary) {
+export function summarySection(summary) {
   if (!summary || !summary.items?.length) {
     return html`${emptyBlock('저장된 요약이 없어요', 'Claude에서 요약을 저장하면 여기에 보여요. 이 화면에서 새 요약을 만들지 않아요.')}`;
   }
@@ -38,7 +38,7 @@ function summarySection(summary) {
         <h3>${g.label}</h3>
         ${evidence.length
           ? html`<button type="button" class="link-btn" data-action="toggle-evidence" aria-expanded="false" aria-controls="${panelId}">근거 ${evidence.length}개 보기</button>`
-          : evidenceCount ? html`<span class="hint">근거 ${evidenceCount}개 연결됨</span>` : ''}
+          : evidenceCount ? html`<span class="hint">근거 ID ${evidenceCount}개 저장됨 · 상세 인용은 아직 불러오지 않음</span>` : ''}
       </div>
       <ul>${g.items.map((i) => html`<li>${i.text}</li>`)}</ul>
       ${evidence.length ? html`<ul class="evidence-list" id="${panelId}" hidden>${evidence.map((ev) => html`<li class="quote">

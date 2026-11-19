@@ -57,7 +57,7 @@ async function optionalAnnotationPage(promise, params = {}) {
   }
 }
 
-function normalizeDevices(response) {
+export function normalizeDevices(response) {
   const raw = Array.isArray(response) ? response : response?.items;
   if (!Array.isArray(raw) || raw.some((device) =>
     typeof device?.device_id !== 'string' || !device.device_id.trim())) {
@@ -73,6 +73,9 @@ function normalizeDevices(response) {
       name: device.name ?? device.display_name ?? '이름 없는 PC',
       connected_at: device.connected_at ?? device.created_at ?? null,
       last_active_at: device.last_active_at ?? null,
+      // 구형 기기 API는 최근 활동 필드를 제공하지 않는다. 필드가 없는 경우와
+      // 서버가 명시적으로 null을 반환한 경우를 화면에서 구분한다.
+      last_active_available: Object.hasOwn(device, 'last_active_at'),
     })),
   };
 }
