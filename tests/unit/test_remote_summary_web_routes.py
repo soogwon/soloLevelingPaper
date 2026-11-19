@@ -30,3 +30,4 @@ def test_non_web_identity_and_missing_or_failed_result():
     c,s=client('bearer');assert c.get(f'/v1/remote-summaries/contexts/{ID}/latest').status_code==403;s.latest.assert_not_called()
     c,s=client();s.latest.return_value=None;assert c.get(f'/v1/remote-summaries/contexts/{ID}/latest').status_code==404
     s.latest.side_effect=RuntimeError('비밀');r=c.get(f'/v1/remote-summaries/contexts/{ID}/latest');assert r.status_code==503 and '비밀' not in r.text
+    assert r.headers['cache-control']=='no-store'

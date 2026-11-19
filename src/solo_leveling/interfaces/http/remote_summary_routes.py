@@ -15,12 +15,13 @@ def create_summary_review_router(require_principal:Any,service):
         notice_version:str=Field(min_length=1,max_length=100)
     def call(principal,response,method,*args):
         response.headers['Cache-Control']='no-store'
-        if principal.credential_type!='web_session':raise HTTPException(403,detail={'code':'web_session_required'})
-        if service is None:raise HTTPException(503,detail={'code':'summary_unavailable'})
+        headers={'Cache-Control':'no-store'}
+        if principal.credential_type!='web_session':raise HTTPException(403,detail={'code':'web_session_required'},headers=headers)
+        if service is None:raise HTTPException(503,detail={'code':'summary_unavailable'},headers=headers)
         try:value=getattr(service,method)(principal.user_id,*args)
-        except (ValueError,RemoteExecutionConflict):raise HTTPException(409,detail={'code':'summary_review_conflict'}) from None
-        except Exception:raise HTTPException(503,detail={'code':'summary_unavailable'}) from None
-        if value is None:raise HTTPException(404,detail={'code':'summary_not_found'})
+        except (ValueError,RemoteExecutionConflict):raise HTTPException(409,detail={'code':'summary_review_conflict'},headers=headers) from None
+        except Exception:raise HTTPException(503,detail={'code':'summary_unavailable'},headers=headers) from None
+        if value is None:raise HTTPException(404,detail={'code':'summary_not_found'},headers=headers)
         return value
     @router.get('/reviews/{key}')
     def view(key:UUID,principal:Principal,response:Response):return call(principal,response,'view',str(key))
