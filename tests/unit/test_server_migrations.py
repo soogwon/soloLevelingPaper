@@ -41,8 +41,8 @@ def migration(version, sql="SELECT 1"):
 def test_discovers_repository_server_migrations_in_strict_order():
     items = discover_migrations(__import__("pathlib").Path("migrations/server"))
 
-    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 57)]
-    assert items[-1].name == "0056_learning_consent_role_guard.sql"
+    assert [item.version for item in items] == [f"{number:04d}" for number in range(1, 58)]
+    assert items[-1].name == "0057_remote_quiz_generation_inputs.sql"
 
 
 def test_remote_annotation_request_ledger_is_separate_from_device_sync_identity():
