@@ -38,7 +38,7 @@ def test_real_tools_do_not_accept_claimed_owner_or_consent(monkeypatch):
     module.register_summary_tools(server,NS(owner=lambda:'alice'),service)
     async def check():
         tools = await server.list_tools()
-        assert len(tools) == 7
+        assert len(tools) == 8
         for tool in tools:
             properties = tool.inputSchema['properties']
             assert 'owner_user_id' not in properties and 'confirmed' not in properties
@@ -60,3 +60,13 @@ def test_summary_scope_is_supported_but_not_required_for_existing_readers():
             result = client.get('/.well-known/oauth-protected-resource/mcp')
             assert result.status_code == 200
             assert ('summaries:write' in result.json()['scopes_supported']) is enabled
+
+
+def test_export_uses_owner_and_same_key_without_generation(monkeypatch):
+    monkeypatch.setattr(module,'get_access_token',lambda:token(['summaries:write']))
+    server,service=Server(),Mock()
+    module.register_summary_tools(server,NS(owner=lambda:'alice'),service)
+    service.result.return_value={'status':'not_found'}
+    assert server.tools['export_remote_summary']('key')=={'status':'not_found'}
+    service.result.assert_called_once_with('alice','key')
+    service.submit.assert_not_called()

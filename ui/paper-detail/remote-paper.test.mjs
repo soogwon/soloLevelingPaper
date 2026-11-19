@@ -9,9 +9,9 @@ function reply(offset=0,after=null) {return {structuredContent:{status:'ok',resu
     summary:null,keywords:[],important_sentences:[],generation_notice:'생성하지 않습니다.',page_notice:'고정 판본'},
   annotation_page:{items:[{annotation_id:aid,context_id:ctx,kind:'note',revision:1,body:'연결 없는 메모',segments:[]}],next_cursor:after?null:aid}}}};}
 function setup(){
-  const doc=new JSDOM('<p id="status"></p><pre id="paper"></pre><pre id="sections"></pre><pre id="records"></pre><button id="sections-more"></button><button id="records-more"></button><button id="refresh"></button>').window.document;
+  const doc=new JSDOM('<pre id="summary"></pre><button id="summary-export"></button><textarea id="summary-markdown"></textarea><p id="status"></p><pre id="paper"></pre><pre id="sections"></pre><pre id="records"></pre><button id="sections-more"></button><button id="records-more"></button><button id="refresh"></button>').window.document;
   let resolve;const calls=[];
-  const app={connect:async()=>{},callServerTool:a=>{calls.push(a);return new Promise(r=>resolve=r);}};
+  const app={connect:async()=>{},callServerTool:a=>{if(a.name==='get_latest_remote_summary')return Promise.resolve({structuredContent:{status:'not_found'}});calls.push(a);return new Promise(r=>resolve=r);}};
   mountRemotePaper(app,doc);app.ontoolinput({arguments:{context_id:ctx}});app.ontoolresult(reply());
   return {doc,app,calls,finish:r=>resolve(r)};
 }
@@ -36,4 +36,32 @@ test('다른 연결·게시본·맥락·잘못된 커서는 이전 결과까지 
     const s=setup(),pending=s.doc.getElementById('sections-more').onclick(),r=reply(20);mutate(r.structuredContent.result);s.finish(r);await pending;
     assert.equal(s.doc.getElementById('records').textContent,'');assert(s.doc.getElementById('refresh').disabled);
   }
+});
+function summary(){return {structuredContent:{state:'completed',context_id:ctx,request_key:aid,result:{context_id:ctx,
+  binding:{context_id:ctx,publication_id:ctx,parse_revision_id:ctx,server_version_id:'v1',paper_id:ctx},scope:'section',section_id:'s',generated_at:'2026-11-19',
+  items:[{kind:'method',text:'<img src=x> 합성 요약',evidence_ids:[aid]}]}}};}
+const tick=()=>new Promise(r=>setTimeout(r,0));
+test('저장 요약 범위·근거 표시와 같은 키 Markdown 내보내기',async()=>{
+ const s=setup();s.app.callServerTool=async a=>{s.calls.push(a);return a.name==='get_latest_remote_summary'?summary():{structuredContent:{status:'ok',context_id:ctx,request_key:aid,publication_id:ctx,media_type:'text/markdown',markdown:'# 합성 요약'}};};
+ s.app.ontoolinput({arguments:{context_id:ctx}});s.app.ontoolresult(reply());await tick();
+ assert.match(s.doc.getElementById('summary').textContent,/섹션 s/);assert.match(s.doc.getElementById('summary').textContent,/근거 ID/);assert.equal(s.doc.querySelector('img'),null);
+ await s.doc.getElementById('summary-export').onclick();assert.equal(s.calls.at(-1).arguments.request_key,aid);assert.equal(s.doc.getElementById('summary-markdown').value,'# 합성 요약');
+});
+for(const event of ['cancel','input','pagehide'])test(`늦은 요약 차단 ${event}`,async()=>{
+ const s=setup();let resolve;s.app.callServerTool=()=>new Promise(r=>resolve=r);
+ s.app.ontoolinput({arguments:{context_id:ctx}});s.app.ontoolresult(reply());
+ if(event==='cancel')s.app.ontoolcancelled();if(event==='input')s.app.ontoolinput({arguments:{context_id:aid}});if(event==='pagehide')s.doc.defaultView.dispatchEvent(new s.doc.defaultView.Event('pagehide'));
+ resolve(summary());await tick();assert.doesNotMatch(s.doc.getElementById('summary').textContent,/합성 요약/);assert(s.doc.getElementById('summary-export').disabled);
+});
+test('요약 없음·권한·오류·다른 게시본은 내보내지 않는다',async()=>{
+ for(const value of [{structuredContent:{status:'not_found'}},{structuredContent:{status:'not_authorized'}},{isError:true},(()=>{const v=summary();v.structuredContent.result.binding.publication_id=aid;return v;})()]){
+  const s=setup();s.app.callServerTool=async()=>value;s.app.ontoolinput({arguments:{context_id:ctx}});s.app.ontoolresult(reply());await tick();
+  assert(s.doc.getElementById('summary-export').disabled);assert.doesNotMatch(s.doc.getElementById('summary').textContent,/합성 요약/);
+ }
+});
+test('내보내기 도중 취소되면 Markdown을 지운다',async()=>{
+ const s=setup();s.app.callServerTool=async()=>summary();s.app.ontoolinput({arguments:{context_id:ctx}});s.app.ontoolresult(reply());await tick();
+ let resolve;s.app.callServerTool=()=>new Promise(r=>resolve=r);const pending=s.doc.getElementById('summary-export').onclick();s.app.ontoolcancelled();
+ resolve({structuredContent:{status:'ok',context_id:ctx,request_key:aid,publication_id:ctx,media_type:'text/markdown',markdown:'늦은 결과'}});await pending;
+ assert.equal(s.doc.getElementById('summary-markdown').value,'');
 });
