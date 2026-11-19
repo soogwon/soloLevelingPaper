@@ -54,13 +54,17 @@ def grant_summary_role(conn, schema, role, *, worker=False):
         IF current_user<>TG_ARGV[0] THEN RETURN NEW; END IF;
         IF TG_TABLE_NAME='server_remote_consents' THEN
             IF NEW.notice_version<>'remote-summary-v1' OR NEW.purpose NOT IN ('storage','ai_provider')
-               OR (TG_OP='UPDATE' AND OLD.notice_version<>'remote-summary-v1') THEN
+               OR (TG_OP='UPDATE' AND (OLD.notice_version<>'remote-summary-v1'
+                  OR NEW.revoked_at IS NULL
+                  OR (OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at))) THEN
                 RAISE EXCEPTION 'summary_scope_invalid' USING ERRCODE='42501';
             END IF;
         ELSIF TG_TABLE_NAME='server_remote_executions' THEN
             IF NEW.operation<>'generate_paper_summary' OR (TG_OP='UPDATE' AND OLD.operation<>'generate_paper_summary')
                OR (TG_ARGV[1]='web' AND ((TG_OP='INSERT' AND NEW.state<>'queued')
-                  OR (TG_OP='UPDATE' AND NEW.state<>'cancel_requested'))) THEN
+                  OR (TG_OP='UPDATE' AND (NEW.state<>'cancel_requested'
+                     OR OLD.state NOT IN ('queued','running')
+                     OR NEW.lease_token IS NOT NULL OR NEW.lease_expires_at IS NOT NULL)))) THEN
                 RAISE EXCEPTION 'summary_scope_invalid' USING ERRCODE='42501';
             END IF;
         ELSIF NOT EXISTS (SELECT 1 FROM {}.server_remote_executions e

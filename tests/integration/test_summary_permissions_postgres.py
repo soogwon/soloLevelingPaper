@@ -37,7 +37,7 @@ def restricted(pool):
                 grant_summary_role(conn,schema,role,worker=worker)
             roles.append(role)
             runtimes.append(ConnectionPool(make_conninfo(DSN,user=role,password='local-test-only'),
-                kwargs=dict(row_factory=dict_row,options=f'-c search_path={schema}'),min_size=1,max_size=4))
+                kwargs=dict(row_factory=dict_row,options=f'-c search_path={schema}'),min_size=1,max_size=4,open=True))
         yield runtimes, roles, schema
     finally:
         for runtime in runtimes:
@@ -79,6 +79,11 @@ def test_restricted_end_to_end_and_restore(pool,db,stores,restricted):
     assert runner.run_once()=='finished'
     assert runner.run('alice',saved['execution_id'])=='not_claimed'
     assert post.call_count==1
+    import psycopg
+    with runtimes[0].connection() as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege,match='summary_scope_invalid'):
+            with conn.transaction():
+                conn.execute("UPDATE server_remote_executions SET state='cancel_requested' WHERE execution_id=%s",(saved['execution_id'],))
     assert service.result('alice',key)['result']['items'][0]['text']=='합성 요약'
     assert service.latest('alice',context)['request_key']==key
     assert service.evidence('alice',key,evidence)['original_text']==request.unpack()[1][0].original_text
@@ -159,3 +164,15 @@ def test_privileged_role_is_rejected_before_grants(pool):
         schema = conn.execute('SELECT current_schema() AS s').fetchone()['s']
         with pytest.raises(ValueError,match='summary_role_not_isolated'):
             grant_summary_role(conn,schema,role)
+
+
+def test_revoked_consent_cannot_be_reactivated(pool,db,stores,restricted):
+    import psycopg
+    service,key,_,_,_ = review(db,stores,pool,restricted[0][0])
+    service.revoke('alice',key,'ai_provider')
+    assert service.revoke('alice',key,'ai_provider')['ai_provider']=='revoked'
+    with restricted[0][0].connection() as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege,match='summary_scope_invalid'):
+            with conn.transaction():
+                conn.execute("UPDATE server_remote_consents SET revoked_at=NULL WHERE consent_id=(SELECT ai_consent_id FROM server_summary_reviews WHERE request_key=%s)",(key,))
+    assert service.view('alice',key)['ai_provider']=='revoked'
