@@ -52,6 +52,7 @@ class FakeModel:
         self.backend = 'torch'
         self.max_seq_length = 512
         self.default_prompt_name = None
+        self.tokenizer = SimpleNamespace(encode=lambda text, **kwargs: [101, *range(len(text.split())), 102])
         self.parameter = SimpleNamespace(dtype='torch.float32', device='cpu')
         self.pooling = dict(word_embedding_dimension=2, pooling_mode_mean_tokens=True,
                             pooling_mode_cls_token=False, pooling_mode_max_tokens=False)
@@ -104,6 +105,32 @@ def test_uses_pinned_local_factory_and_explicit_encoding_without_default_cache(f
     assert result.spec == spec and result.chunk_ids == ('c1', 'c2')
     assert result.vectors == ((1.0, 0.0), (1.0, 0.0))
     with pytest.raises(FrozenInstanceError): adapter.batch_size = 1
+
+
+@pytest.mark.parametrize('size', [127, 248])
+def test_overlong_inputs_are_rejected_before_any_vector_encoding(fixture, size):
+    adapter, spec, items, model, _ = fixture
+    items = (items[0], replace(items[1], text=' '.join(['합성'] * size)))
+    with pytest.raises(ProcessingError, match='^PROCESSING_EMBEDDING_INPUT_TOO_LONG$'):
+        adapter.embed(items, spec)
+    model.encoder.assert_not_called()
+
+
+def test_exact_input_limit_includes_special_tokens(fixture):
+    adapter, spec, items, model, _ = fixture
+    result = adapter.embed((replace(items[0], text=' '.join(['합성'] * 126)),), spec)
+    assert result.chunk_ids == ('c1',)
+    model.encoder.assert_called_once()
+
+
+def test_query_uses_same_no_truncation_guard(fixture):
+    from dataclasses import asdict
+    from solo_leveling.infrastructure.embeddings.remote_query import PinnedQueryEmbeddingRuntime
+    adapter, spec, _, model, _ = fixture
+    binding = SimpleNamespace(model_fingerprint=json.dumps(asdict(spec)))
+    with pytest.raises(ProcessingError, match='^PROCESSING_EMBEDDING_INPUT_TOO_LONG$'):
+        PinnedQueryEmbeddingRuntime(adapter, spec).embed(' '.join(['질문'] * 127), binding)
+    model.encoder.assert_not_called()
 
 
 @pytest.mark.parametrize('change', [dict(runtime='onnx'), dict(precision='float16'), dict(normalization='none'),
