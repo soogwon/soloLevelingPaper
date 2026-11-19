@@ -50,6 +50,8 @@ def test_reset_preserves_login_and_rebuilds_isolated_schema():
                 assert ('server_remote_learning_records',) in tables
                 assert ('server_question_token_counts',) in tables
                 vector_oid = conn.execute("SELECT oid FROM pg_extension WHERE extname='vector'").fetchone()[0]
+                # SQL 표준 본문으로 선언된 이관 함수는 원천 테이블보다 먼저 삭제한다.
+                conn.execute("DROP FUNCTION public.server_lock_insight_import(text, uuid, uuid, text, text) RESTRICT")
                 # 이 전용 DB에서 방금 만든 테이블만 명시적으로 한 번에 삭제한다.
                 conn.execute(sql.SQL("DROP TABLE {} RESTRICT").format(sql.SQL(', ').join(
                     sql.Identifier('public', row[0]) for row in tables)))

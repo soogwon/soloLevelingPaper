@@ -105,6 +105,7 @@ def test_nonsuper_restore_preserves_vector_and_rolls_back_failure():
                 )
                 conn.execute(sql.SQL("CREATE SCHEMA slp_staging AUTHORIZATION {}").format(sql.Identifier(owner)))
                 tables = list(before)
+                conn.execute("DROP FUNCTION public.server_lock_insight_import(text, uuid, uuid, text, text) RESTRICT")
                 conn.execute(
                     sql.SQL("DROP TABLE {} RESTRICT").format(
                         sql.SQL(",").join(sql.Identifier("public", t) for t in tables)
