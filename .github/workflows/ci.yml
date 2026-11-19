@@ -89,10 +89,10 @@ jobs:
           python - <<'PY'
           import xml.etree.ElementTree as ET
           cases = ET.parse('web-backup.xml').findall('.//testcase')
-          assert len(cases) == 7, f'웹·복구 사례 수 불일치: {len(cases)}'
+          assert len(cases) == 8, f'웹·복구 사례 수 불일치: {len(cases)}'
           assert not any(case.find(tag) is not None for case in cases
                          for tag in ('skipped', 'failure', 'error')), '웹·복구 리허설 미통과'
-          print('제한 웹·복구: 7 passed, 0 skipped')
+          print('제한 웹·복구: 8 passed, 0 skipped')
           PY
       - name: 제한 웹 계정과 복구 결과 보관
         if: ${{ always() }}
