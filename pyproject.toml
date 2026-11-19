@@ -22,6 +22,7 @@ solo-leveling-kg-check = "solo_leveling.interfaces.cli.kg_check:main"
 solo-leveling-remote-upload-cleanup = "solo_leveling.interfaces.cli.remote_upload_cleanup:main"
 solo-leveling-remote-deletion-cleanup = "solo_leveling.interfaces.cli.remote_deletion_cleanup:main"
 
+solo-leveling-summary-worker = "solo_leveling.interfaces.cli.summary_worker:main"
 solo-leveling-quiz-worker = "solo_leveling.interfaces.cli.quiz_worker:main"
 solo-leveling-question-worker = "solo_leveling.interfaces.cli.question_worker:main"
 solo-leveling-worker-verify = "solo_leveling.interfaces.cli.processing_verification:main"
