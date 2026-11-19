@@ -145,6 +145,19 @@ class PostgresSummaryReviews:
             context = str(row['context_id'])
         return PostgresSummaryResults(self.pool).get(owner, context, key)
 
+    def evidence(self, owner, key, evidence_id):
+        from .remote_summary_results import PostgresSummaryResults
+        with self.pool.connection() as conn:
+            row = self._row(conn, owner, key)
+            if row is None:
+                return None
+            context = str(row['context_id'])
+        return PostgresSummaryResults(self.pool).evidence(owner, context, key, evidence_id)
+
+    def latest(self, owner, context):
+        from .remote_summary_results import PostgresSummaryResults
+        return PostgresSummaryResults(self.pool).latest(owner, context)
+
     def cancel(self, owner, key):
         with self.pool.connection() as conn:
             row = self._row(conn, owner, key)

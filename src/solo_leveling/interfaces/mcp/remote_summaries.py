@@ -49,3 +49,13 @@ def register_summary_tools(server, queries, reviews):
     def cancel_remote_summary(request_key: str) -> dict:
         """사용자가 요청한 기존 요약을 취소한다. 이미 전송한 호출의 비용은 취소되지 않는다."""
         return call('cancel', request_key)
+
+    @server.tool()
+    def get_remote_summary_evidence(request_key: str, evidence_id: str) -> dict:
+        """저장된 요약이 실제 인용한 근거의 고정 원문·번역·페이지를 재조회한다. 새 검색·생성은 없다."""
+        return call('evidence', request_key, evidence_id)
+
+    @server.tool()
+    def get_latest_remote_summary(context_id: str) -> dict:
+        """해당 맥락의 가장 최근 성공 요약을 읽는다. 실패한 재생성은 이전 성공 요약을 덮어쓰지 않는다."""
+        return call('latest', context_id)

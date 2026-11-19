@@ -182,6 +182,40 @@ def test_result_restart_restore_and_foreign_access_without_new_generation(pool, 
     assert db('SELECT count(*) n FROM server_provider_attempts WHERE execution_id=%s', (row.execution_id,))[0]['n'] == 1
 
 
+def test_summary_evidence_and_latest_preserve_fixed_sources(pool, db, stores):
+    from solo_leveling.interfaces.http.remote_summary_results import PostgresSummaryResults
+    args=setup(db,stores,pool);key=str(uuid4());row=submit(pool,args,key)
+    intent=completed_attempt(pool,args,row)
+    binding,sources,_=args[0].unpack()
+    service=PostgresSummaryResults(pool)
+    service.complete(intent,[dict(kind='method',text='합성 요약',evidence_ids=[sources[0].evidence_id])])
+    evidence=service.evidence('alice',binding.context_id,key,sources[0].evidence_id)
+    assert evidence['original_text']==sources[0].original_text
+    assert evidence['publication_id']==binding.publication_id
+    assert service.evidence('bob',binding.context_id,key,sources[0].evidence_id) is None
+    assert service.evidence('alice',binding.context_id,key,sources[1].evidence_id) is None
+    assert service.latest('alice',binding.context_id)['request_key']==key
+    assert service.latest('bob',binding.context_id) is None
+    db('UPDATE server_papers SET deleted_at=clock_timestamp() WHERE paper_id=%s',(binding.paper_id,))
+    assert service.evidence('alice',binding.context_id,key,sources[0].evidence_id) is None
+
+
+def test_summary_result_rejects_duplicate_json_fields(pool, db, stores):
+    import hashlib
+    from solo_leveling.interfaces.http.remote_summary_results import PostgresSummaryResults
+    args=setup(db,stores,pool);key=str(uuid4());row=submit(pool,args,key)
+    intent=completed_attempt(pool,args,row)
+    binding,sources,_=args[0].unpack()
+    service=PostgresSummaryResults(pool)
+    service.complete(intent,[dict(kind='method',text='합성 요약',evidence_ids=[sources[0].evidence_id])])
+    raw=db('SELECT payload_json FROM server_remote_executions WHERE execution_id=%s',(row.execution_id,))[0]['payload_json']
+    changed='{"context_id":'+json.dumps(binding.context_id)+','+raw[1:]
+    db('UPDATE server_remote_executions SET payload_json=%s,payload_sha256=%s WHERE execution_id=%s',
+       (changed,hashlib.sha256(changed.encode()).hexdigest(),row.execution_id))
+    with pytest.raises(ValueError,match='result_invalid'):
+        service.get('alice',binding.context_id,key)
+
+
 @pytest.mark.parametrize('failure', ['unsupported', 'revoked', 'cancelled', 'late_lease', 'unobserved'])
 def test_failed_result_does_not_publish(pool, db, stores, failure):
     from solo_leveling.interfaces.http.remote_summary_results import PostgresSummaryResults
