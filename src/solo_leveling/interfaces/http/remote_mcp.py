@@ -90,7 +90,7 @@ class PublicBoundaryMiddleware:
 def create_remote_mcp(
     settings: RemoteMcpSettings,
     verifier: TokenVerifier | None = None,
-    *, product_queries=None, question_service=None, annotation_service=None, cancellation_service=None, summary_service=None, reflection_service=None,
+    *, product_queries=None, question_service=None, annotation_service=None, cancellation_service=None, summary_service=None, reflection_service=None, quiz_service=None,
 ) -> RemoteMcpBundle:
     if not settings.enabled:
         raise ValueError("원격 MCP 설정이 활성화되어야 합니다.")
@@ -161,15 +161,18 @@ def create_remote_mcp(
         if reflection_service is not None:
             from solo_leveling.interfaces.mcp.remote_reflection import register_remote_reflection
             register_remote_reflection(server,product_queries,reflection_service)
+        if quiz_service is not None:
+            from solo_leveling.interfaces.mcp.remote_quiz import register_remote_quiz
+            register_remote_quiz(server,product_queries,quiz_service)
 
         if annotation_service is not None:
             from solo_leveling.interfaces.mcp.remote_annotations import register_annotation_tools
             register_annotation_tools(server, product_queries, annotation_service)
 
-    if (cancellation_service is not None or summary_service is not None or reflection_service is not None) and not settings.product_reads_enabled:
+    if (cancellation_service is not None or summary_service is not None or reflection_service is not None or quiz_service is not None) and not settings.product_reads_enabled:
         raise ValueError('processing_cancel_settings_invalid')
     app = server.streamable_http_app()
-    if cancellation_service is not None or summary_service is not None or reflection_service is not None:
+    if cancellation_service is not None or summary_service is not None or reflection_service is not None or quiz_service is not None:
         # 지원 권한만 확장한다. 읽기 전용 토큰의 기존 MCP 접근은 유지한다.
         from mcp.server.auth.routes import create_protected_resource_routes
         metadata = create_protected_resource_routes(
@@ -178,7 +181,8 @@ def create_remote_mcp(
             scopes_supported=[*server.settings.auth.required_scopes,
                               *(['jobs:cancel'] if cancellation_service is not None else []),
                               *(['summaries:write'] if summary_service is not None else []),
-                              *(['reflections:read','reflections:write'] if reflection_service is not None else [])])
+                              *(['reflections:read','reflections:write'] if reflection_service is not None else []),
+                              *(['quizzes:read','quizzes:write'] if quiz_service is not None else [])])
         paths = {route.path for route in metadata}
         app.router.routes[:] = [route for route in app.router.routes if getattr(route,'path',None) not in paths] + metadata
     app.add_middleware(NoSessionMiddleware)

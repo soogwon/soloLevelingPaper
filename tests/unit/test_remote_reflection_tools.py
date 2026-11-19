@@ -28,7 +28,7 @@ def test_read_cannot_write_or_grant_consent(monkeypatch):
     assert '비밀' not in str(server.tools['get_reading_comparison']('ctx'))
 
 
-def test_summary_and_reflection_scopes_coexist_without_blocking_readers():
+def test_summary_reflection_and_quiz_scopes_coexist_without_blocking_readers():
     from starlette.testclient import TestClient
     from solo_leveling.interfaces.http.remote_mcp import create_remote_mcp
     from solo_leveling.interfaces.http.settings import RemoteMcpSettings
@@ -36,8 +36,8 @@ def test_summary_and_reflection_scopes_coexist_without_blocking_readers():
         resource_url='https://mcp.example.com/mcp',audience='https://mcp.example.com/mcp',
         issuer='https://auth.example.com/',jwks_url='https://auth.example.com/jwks',
         allowed_hosts=('mcp.example.com',),allowed_client_ids=('synthetic',))
-    bundle=create_remote_mcp(settings,product_queries=NS(),summary_service=NS(),reflection_service=NS())
+    bundle=create_remote_mcp(settings,product_queries=NS(),summary_service=NS(),reflection_service=NS(),quiz_service=NS())
     assert set(bundle.server.settings.auth.required_scopes)=={'spike:read','papers:read'}
     with TestClient(bundle.app,base_url='https://mcp.example.com') as client:
         scopes=client.get('/.well-known/oauth-protected-resource/mcp').json()['scopes_supported']
-        assert {'summaries:write','reflections:read','reflections:write'}<=set(scopes)
+        assert {'summaries:write','reflections:read','reflections:write','quizzes:read','quizzes:write'}<=set(scopes)
