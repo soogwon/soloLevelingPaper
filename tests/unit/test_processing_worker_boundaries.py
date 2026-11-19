@@ -104,7 +104,8 @@ def test_worker_partial_translation_stays_unpublished_without_embedding(harness)
     response.json.return_value = envelope('')
     worker.result_store = Mock()
     result = worker.run_once()
-    worker.result_store.save.assert_not_called()
+    worker.result_store.save.assert_called_once_with(result.result)
+    assert result.staged is worker.result_store.save.return_value and result.published is None
     assert result.job == job and result.result.status == 'translation_incomplete'
     assert result.result.embeddings is None
     advice = processing_result_advice(result.result)

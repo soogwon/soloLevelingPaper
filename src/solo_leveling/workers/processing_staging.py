@@ -107,6 +107,79 @@ class PostgresProcessingResultStaging:
         except (ProcessingStagingError, ProcessingError, ValueError, TypeError, AttributeError, OverflowError):
             raise ProcessingStagingError('processing_staging_invalid') from None
 
+    @staticmethod
+    def _chunk_key(chunk):
+        return [chunk.chunk_index, chunk.pdf_page,
+                hashlib.sha256(chunk.original_text.encode('utf-8')).hexdigest()]
+
+    def _checkpoint_payload(self, result):
+        source = result.source
+        _source(source)
+        _require(result.status == 'translation_incomplete' and result.embeddings is None
+                 and result.translation_settings == self.settings and source.pdf_size <= self.limits.max_pdf_bytes)
+        RemoteProcessingStages._document(result.document, source, self.limits)
+        _require(len(result.document.chunks) == len(result.translations))
+        chunks = []
+        for chunk, item in zip(result.document.chunks, result.translations):
+            _require(item.chunk_id == chunk.chunk_id)
+            checked = self._translation(chunk, asdict(item))
+            chunks.append({'key': self._chunk_key(chunk), 'text': checked.text,
+                           'status': checked.status.value,
+                           'failure_code': checked.failure_code.value if checked.failure_code else None})
+        _require(any(item['status'] == TranslationStatus.TRANSLATION_FAILED.value for item in chunks))
+        return {'schema_version': 4, 'source': asdict(source), 'translation_settings': asdict(self.settings),
+                'chunks': chunks}
+
+    def _translation(self, chunk, item):
+        code = item['failure_code']
+        return ChunkTranslationResult(
+            TranslationRequest(chunk.chunk_id, chunk.parse_revision_id, chunk.original_text,
+                               self.settings.target_language),
+            item['text'], None if code is None else TranslationFailureCode(code), TranslationStatus(item['status']),
+        )
+
+    def reusable_translations(self, source, chunks):
+        """이전 실행의 같은 입력과 동의에 한해 성공 결과만 새 리비전에 붙인다."""
+        try:
+            _source(source)
+            with self.pool.connection() as conn:
+                auth = self._lock(conn, source)
+                row = conn.execute(
+                    """SELECT payload, payload_sha256, source_lease_token
+                       FROM server_processing_result_staging
+                       WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s AND job_id=%s
+                         AND payload_version=4 AND source_lease_token<>%s
+                       ORDER BY created_at DESC, source_lease_token DESC LIMIT 1""",
+                    (source.owner_user_id, source.paper_id, source.version_id, source.job_id, source.lease_token),
+                ).fetchone()
+                if row is None:
+                    return None
+                data = row['payload']
+                encoded = _encode(data)
+                _require(len(encoded) <= self.max_bytes and hashlib.sha256(encoded).hexdigest() == row['payload_sha256']
+                         and data['schema_version'] == 4 and data['authorization'] == auth
+                         and data['translation_settings'] == asdict(self.settings))
+                prior = ProcessingSource(**data['source'])
+                _source(prior)
+                _require(prior.lease_token == str(row['source_lease_token'])
+                         and (prior.owner_user_id, prior.paper_id, prior.version_id, prior.job_id,
+                              prior.pdf_size, prior.pdf_sha256)
+                         == (source.owner_user_id, source.paper_id, source.version_id, source.job_id,
+                             source.pdf_size, source.pdf_sha256)
+                         and len(data['chunks']) == len(chunks))
+                reusable = {}
+                for chunk, item in zip(chunks, data['chunks']):
+                    _require(item['key'] == self._chunk_key(chunk))
+                    translated = self._translation(chunk, item)
+                    if translated.indexable:
+                        reusable[chunk.chunk_id] = translated
+                self._live(conn, source)
+                return reusable
+        except ProcessingStagingError:
+            raise
+        except Exception:
+            raise ProcessingStagingError('processing_checkpoint_unavailable') from None
+
     def _lock(self, conn, source):
         # 삭제와 같은 논문→job 순서. job을 독점해 저장과 새 provider 예약을 직렬화한다.
         paper = conn.execute('''SELECT paper_id FROM server_papers
@@ -137,7 +210,8 @@ class PostgresProcessingResultStaging:
             raise ProcessingStagingError('processing_staging_not_allowed')
 
     def save(self, result):
-        payload, _, _ = self._payload(result)
+        incomplete = result.status == 'translation_incomplete'
+        payload = self._checkpoint_payload(result) if incomplete else self._payload(result)[0]
         source = result.source
         try:
             with self.pool.connection() as conn:
@@ -159,6 +233,14 @@ class PostgresProcessingResultStaging:
                         (source.owner_user_id, source.paper_id, source.version_id, source.job_id,
                          source.lease_token, payload['schema_version'], digest, encoded.decode('utf-8')))
                 self._live(conn, source)
+                if incomplete:
+                    # 부분 결과와 실패 상태는 같이 확정한다. 일반 worker가 자동 재접수하지 않는다.
+                    conn.execute("""UPDATE server_processing_jobs
+                        SET status='failed', retryable=false, error_code='translation_incomplete',
+                            lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,heartbeat_at=NULL,
+                            finished_at=clock_timestamp(),updated_at=clock_timestamp()
+                        WHERE owner_user_id=%s AND job_id=%s AND lease_token=%s""",
+                        (source.owner_user_id, source.job_id, source.lease_token))
             return StagedProcessingResult(digest, old is not None)
         except ProcessingStagingError:
             raise

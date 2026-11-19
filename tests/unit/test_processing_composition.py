@@ -162,3 +162,27 @@ def test_worker_runs_scoped_composition_without_publishing(composed, staging_fai
         call.args[1] for call in inputs.allowed.call_args_list}
     assert all(call.args[0] == source for call in inputs.allowed.call_args_list)
     jobs.succeed.assert_not_called()
+
+
+def test_checkpoint_composition_dispatches_only_failed_chunk_in_new_slot(composed):
+    from solo_leveling.domain.translation import ChunkTranslationResult, TranslationRequest
+
+    factory, source, pdf, ledger, post, _, _, _, check = composed
+    initial = factory(source, check).run(source, pdf)
+    initial_keys = [request.dispatch_key for request in ledger.requests]
+    post.reset_mock()
+    replacement = replace(source, parse_revision_id='recovery-parse', translation_revision_id='recovery-translation',
+                          embedding_set_id='recovery-set', lease_token='recovery-lease')
+
+    def reuse(current, chunks):
+        assert current == replacement
+        first = chunks[0]
+        request = TranslationRequest(first.chunk_id, first.parse_revision_id, first.original_text)
+        return {first.chunk_id: ChunkTranslationResult(request, '기존 번역을 재사용합니다.')}
+
+    factory.reuse_translations = reuse
+    recovered = factory(replacement, check).run(replacement, pdf)
+    assert recovered.status == initial.status == 'prepared'
+    assert recovered.translations[0].text == '기존 번역을 재사용합니다.'
+    assert post.call_count == 1
+    assert ledger.requests[-1].dispatch_key not in initial_keys

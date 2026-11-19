@@ -23,7 +23,8 @@ class ProcessingStagesFactory:
 
     def __init__(self, authorization, *, service_config, model_dir, embedding_spec,
                  limits, retry_policy, policy_version, window_key, token_upper_bound,
-                 batch_size, post=None, model_factory=None, fragment_policy=None, quality_retry_once=False):
+                 batch_size, post=None, model_factory=None, fragment_policy=None, quality_retry_once=False,
+                 reuse_translations=None):
         if (not isinstance(service_config, OpenAITranslationConfig)
                 or not callable(token_upper_bound)
                 or not service_config.allow_external_api or service_config.local_only):
@@ -36,6 +37,7 @@ class ProcessingStagesFactory:
         self.post, self.model_factory = post, model_factory
         self.fragment_policy = fragment_policy
         self.quality_retry_once = quality_retry_once
+        self.reuse_translations = reuse_translations
 
     def __call__(self, source, check_allowed):
         if check_allowed(source, 'parse') is not True:
@@ -66,9 +68,9 @@ class ProcessingStagesFactory:
             upper = estimate(config.translation_settings.model, payload)
             if type(upper) is not int or upper < 1:
                 raise ProcessingError('PROCESSING_CONFIG_INVALID')
-            # 새 lease/리비전이나 다른 payload로 같은 논리 전송 슬롯을 재사용하지 않는다.
-            # 저장 번역 재사용 전까지 재claim은 기존 슬롯에서 안전하게 거부된다.
-            raw = json.dumps(['remote-translation-v1', source.job_id, chunk.chunk_index, attempt],
+            # 명시적 복구만 별도 슬롯을 사용한다. 일반 실행 재claim은 기존 슬롯을 유지한다.
+            namespace = 'remote-translation-recovery-v1' if self.reuse_translations else 'remote-translation-v1'
+            raw = json.dumps([namespace, source.job_id, chunk.chunk_index, attempt],
                              separators=(',', ':')).encode('utf-8')
             key = hashlib.sha256(raw).hexdigest()
             return PreparedProviderAttempt(key, digest, upper)
@@ -80,7 +82,7 @@ class ProcessingStagesFactory:
         provider = OpenAITranslationProvider(config, transport=transport)
         translator = GatedProcessingTranslation(
             TranslationService(provider, retry_policy=self.retry_policy,quality_retry_once=self.quality_retry_once),
-            prepare_attempt=prepare,
+            prepare_attempt=prepare, reuse_translations=self.reuse_translations,
         )
         options = {} if self.model_factory is None else {'model_factory': self.model_factory}
         embedder = PyTorchProcessingEmbedder(model_dir=self.model_dir,
@@ -92,7 +94,8 @@ class ProcessingStagesFactory:
 
 
 def create_processing_worker(pool, objects, *, worker_id, lease_seconds,
-                             max_staging_bytes, heartbeat_interval_seconds=None, jobs=None, **stage_options):
+                             max_staging_bytes, heartbeat_interval_seconds=None, jobs=None,
+                             recover_translation=False, **stage_options):
     """서버 소유 DB/R2 연결과 명시적 정책으로 실행 가능한 worker를 만든다."""
     from solo_leveling.interfaces.http.processing_jobs import PostgresProcessingJobStore
     from solo_leveling.workers.processing_authorization import PostgresProcessingAuthorization
@@ -107,6 +110,8 @@ def create_processing_worker(pool, objects, *, worker_id, lease_seconds,
 
     publisher = PostgresStagedProcessingPublisher(staging)
     authorization = PostgresProcessingAuthorization(pool)
+    if recover_translation:
+        stage_options['reuse_translations'] = staging.reusable_translations
     factory = ProcessingStagesFactory(authorization, **stage_options)
     return RemoteProcessingWorker(PostgresProcessingJobStore(pool) if jobs is None else jobs, authorization, objects, None,
         worker_id=worker_id, lease_seconds=lease_seconds,

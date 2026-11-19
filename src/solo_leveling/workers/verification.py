@@ -19,11 +19,14 @@ class VerificationConfig:
     worker_id: str
     lease_seconds: int
     max_staging_bytes: int
+    recover_translation: bool = False
 
     def __post_init__(self):
         for field in fields(self):
             value = getattr(self, field.name)
-            if field.name in ('lease_seconds', 'max_staging_bytes'):
+            if field.name == 'recover_translation':
+                if type(value) is not bool: raise ValueError('verification_config_invalid')
+            elif field.name in ('lease_seconds', 'max_staging_bytes'):
                 if type(value) is not int or value < 1: raise ValueError('verification_config_invalid')
             elif type(value) is not str or not value.strip() or len(value) > 512:
                 raise ValueError('verification_config_invalid')
@@ -59,6 +62,8 @@ class VerificationJobStore(PostgresProcessingJobStore):
         c = self.config
         if worker_id != c.worker_id or lease_seconds != c.lease_seconds:
             raise ValueError('verification_config_invalid')
+        if c.recover_translation:
+            return self._claim_recovery(worker_id, lease_seconds)
         # 전역 candidate/만료 작업 정리를 사용하지 않으며 재실행도 자동 허용하지 않는다.
         with self._pool.connection() as conn:
             row = conn.execute('''UPDATE server_processing_jobs
@@ -73,6 +78,28 @@ class VerificationJobStore(PostgresProcessingJobStore):
                     c.paper_id, c.version_id, c.payload_hash)).fetchone()
         return None if row is None else _job(row)
 
+    def _claim_recovery(self, worker_id, lease_seconds):
+        c = self.config
+        with self._pool.connection() as conn:
+            row = conn.execute("""UPDATE server_processing_jobs j
+                SET status='running',attempt=attempt+1,retryable=false,lease_owner=%s,lease_token=%s,
+                    lease_expires_at=clock_timestamp()+make_interval(secs => %s),
+                    heartbeat_at=clock_timestamp(),updated_at=clock_timestamp(),error_code=NULL,finished_at=NULL
+                WHERE j.owner_user_id=%s AND j.job_id=%s AND j.paper_id=%s AND j.server_version_id=%s
+                  AND j.payload_hash=%s AND j.job_kind='full_processing' AND j.status='failed' AND j.attempt=1
+                  AND j.max_attempts>j.attempt AND j.error_code='translation_incomplete'
+                  AND EXISTS (SELECT 1 FROM server_papers p
+                    WHERE p.owner_user_id=j.owner_user_id AND p.paper_id=j.paper_id AND p.deleted_at IS NULL)
+                  AND EXISTS (SELECT 1 FROM server_processing_result_staging s
+                    WHERE s.owner_user_id=j.owner_user_id AND s.job_id=j.job_id AND s.payload_version=4)
+                  AND NOT EXISTS (SELECT 1 FROM server_processing_provider_attempts a
+                    WHERE a.owner_user_id=j.owner_user_id AND a.execution_id=j.job_id::text
+                      AND (a.status IN ('reserved','unknown') OR a.actual_input_tokens>a.reserved_input_tokens
+                           OR a.actual_output_tokens>a.reserved_output_tokens))
+                RETURNING j.*""", (worker_id, str(uuid4()), lease_seconds, c.owner_user_id, c.job_id,
+                                    c.paper_id, c.version_id, c.payload_hash)).fetchone()
+        return None if row is None else _job(row)
+
 
 def run_once(config, resources):
     """resources는 운영자가 검토한 context manager가 공급하는 내부 의존성이다."""
@@ -80,11 +107,14 @@ def run_once(config, resources):
     pool = IsolatedPool(resources.pool, config)
     options = dict(resources.stage_options)
     # bootstrap이 전역 queue나 worker 설정을 덮어쓰지 못하게 한다.
-    forbidden = {'jobs', 'pool', 'objects', 'worker_id', 'lease_seconds', 'max_staging_bytes'}
+    forbidden = {'jobs', 'pool', 'objects', 'worker_id', 'lease_seconds', 'max_staging_bytes', 'recover_translation'}
     if forbidden.intersection(options): raise ValueError('verification_config_invalid')
     worker = create_processing_worker(pool, resources.objects, worker_id=config.worker_id,
         lease_seconds=config.lease_seconds, max_staging_bytes=config.max_staging_bytes,
-        jobs=VerificationJobStore(pool, config), **options)
+        jobs=VerificationJobStore(pool, config), recover_translation=config.recover_translation, **options)
     result = worker.run_once()
     if result is None: return 'not_claimed'
-    return 'published' if result.published is not None else 'not_published'
+    if result.published is not None: return 'published'
+    if result.staged is not None and result.result.status == 'translation_incomplete':
+        return 'translation_checkpoint_saved'
+    return 'not_published'
