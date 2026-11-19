@@ -99,7 +99,8 @@ class RemoteSummaryInput:
                  and value['operation'] == OPERATION and value['notice_version'] == NOTICE_VERSION)
         try:
             binding = RemoteSearchBinding(**value['binding'])
-            _require(all(_text(v, 16384) for v in asdict(binding).values()))
+            _require(all(_text(v, 16384) for v in asdict(binding).values())
+                     and binding.publication_policy == 'complete')
             fingerprint = _load(binding.model_fingerprint)
             _require(type(fingerprint) is dict and bool(fingerprint))
             _require(type(value['sources']) is list and 1 <= len(value['sources']) <= 1000)

@@ -128,3 +128,8 @@ def test_result_keeps_revision_and_defensive_copy():
     assert payload['binding']['publication_id'] == 'publication'
     assert payload['binding']['translation_revision_id'] == 'translation'
     assert payload['prompt_version'] == 'v1'
+
+
+def test_partial_publication_cannot_be_presented_as_complete_summary_scope():
+    with pytest.raises(RemoteSummaryError):
+        make(binding=replace(BINDING, publication_policy='partial'))
