@@ -173,6 +173,18 @@ def create_app(
         from .remote_summary_reviews import PostgresSummaryReviews
         managed_summary_store = PostgresDeviceStore.from_dsn(summary_connection_dsn(summary_settings))
         remote_summaries = PostgresSummaryReviews(managed_summary_store.connection_pool, **summary_settings.arguments)
+    managed_quiz_store = None
+    from .remote_quiz_settings import load_quiz_settings, quiz_connection_dsn
+    quiz_settings = load_quiz_settings()
+    if quiz_settings is not None:
+        if (not selected_remote_mcp.enabled or not selected_remote_mcp.product_reads_enabled
+                or remote_product_queries is None or remote_quizzes is not None or remote_quiz_reviews is not None):
+            raise ValueError('quiz_settings_invalid')
+        from .remote_quiz import PostgresRemoteQuiz
+        from .remote_quiz_generation_reviews import PostgresQuizGenerationReviews
+        managed_quiz_store = PostgresDeviceStore.from_dsn(quiz_connection_dsn(quiz_settings))
+        remote_quizzes = PostgresRemoteQuiz(managed_quiz_store.connection_pool)
+        remote_quiz_reviews = PostgresQuizGenerationReviews(managed_quiz_store.connection_pool, **quiz_settings.arguments)
     managed_reflection_stores = []
     remote_reflection_mcp = remote_reflections
     from .remote_reflection_settings import load_reflection_settings
@@ -229,6 +241,9 @@ def create_app(
             if managed_summary_store is not None:
                 stack.callback(managed_summary_store.close)
                 managed_summary_store.open()
+            if managed_quiz_store is not None:
+                stack.callback(managed_quiz_store.close)
+                managed_quiz_store.open()
             for store in managed_reflection_stores:
                 stack.callback(store.close)
                 store.open()
