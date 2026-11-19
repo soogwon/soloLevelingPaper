@@ -21,6 +21,12 @@ export function paperRow(p) {
     else line = '아직 저장된 학습 기록이 없어요';
   }
   if (date) line += ` · 마지막 학습 ${date}`;
+  const source = {
+    explicit: '연결 PC에서 저장한 상태',
+    remote_learning: '원격 학습 기록',
+    remote_file: '등록된 원격 원문',
+    unknown: '상태 근거 미확인',
+  }[p.reading_status_source] ?? '상태 근거 미확인';
 
   return html`<a class="row" href="${href}">
     <span class="row-icon">${icons.file()}</span>
@@ -30,7 +36,7 @@ export function paperRow(p) {
       <span class="row-line">${line}</span>
     </span>
     ${statusBadge(p.reading_status)}
-    ${p.reading_basis_version_id ? html`<span>상태 기준 버전: ${p.reading_basis_version_id}</span>` : ''}
+    <span>상태 근거: ${source}${p.reading_basis_version_id ? ` · 기준 버전: ${p.reading_basis_version_id}` : ''}</span>
   </a>`;
 }
 

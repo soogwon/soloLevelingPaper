@@ -485,6 +485,9 @@ def create_web_paper_router(require_principal: Any, store: PaperStore, file_stor
         reading_status: Literal["not_started", "reading", "completed", "unknown"]
         reading_basis_version_id: str | None = None
         reading_state_revision: int = 0
+        reading_status_source: Literal["explicit", "remote_learning", "remote_file", "unknown"] = "unknown"
+        reading_context_id: UUID | None = None
+        reading_status_updated_at: datetime | None = None
         collection_id: str | None
 
     class PaperPageView(BaseModel):
@@ -559,6 +562,9 @@ def create_web_paper_router(require_principal: Any, store: PaperStore, file_stor
                 last_studied_at=item.last_studied_at, reading_status=item.reading_status,
                 reading_basis_version_id=item.reading_basis_version_id,
                 reading_state_revision=item.reading_state_revision,
+                reading_status_source=item.reading_status_source,
+                reading_context_id=item.reading_context_id,
+                reading_status_updated_at=item.reading_status_updated_at,
                 collection_id=item.collection_id,
             ) for item in result.items],
             page=result.page, page_size=result.page_size,
@@ -644,8 +650,11 @@ def create_web_paper_router(require_principal: Any, store: PaperStore, file_stor
             published=published, selected_learning_record_id=item.selected_learning_record_id,
             selected_version_id=item.selected_version_id, last_position=item.last_position,
             last_studied_at=item.last_studied_at, reading_status=item.reading_status,
-                reading_basis_version_id=item.reading_basis_version_id,
-                reading_state_revision=item.reading_state_revision,
+            reading_basis_version_id=item.reading_basis_version_id,
+            reading_state_revision=item.reading_state_revision,
+            reading_status_source=item.reading_status_source,
+            reading_context_id=item.reading_context_id,
+            reading_status_updated_at=item.reading_status_updated_at,
             collection_id=item.collection_id,
             version=(VersionView(version_id=item.selected_version_id, file_name=item.file_name)
                      if item.selected_version_id else None),

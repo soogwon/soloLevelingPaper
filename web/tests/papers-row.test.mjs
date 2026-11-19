@@ -68,3 +68,9 @@ test('완료 기준 원문 버전을 선택 버전과 별도로 표시하고 이
   assert.match(output, /&lt;old-version&gt;/);
   assert.doesNotMatch(output, /<old-version>/);
 });
+
+test('원격 학습 상태의 근거와 기준 판본을 함께 표시한다', () => {
+  const output = String(paperRow({...paper, reading_status: 'reading',
+    reading_status_source: 'remote_learning', reading_basis_version_id: 'version-1'}));
+  assert.match(output, /상태 근거: 원격 학습 기록 · 기준 버전: version-1/);
+});

@@ -276,8 +276,56 @@ def test_status_filter_uses_synced_record_and_excludes_unknown_papers():
         "user-1", query=None, reading_status="reading", page=3, limit=10)
 
     assert result == PaperPage((), 3, 10, 0, 0)
-    assert "COALESCE(rs.status, 'unknown') = %s" in pool.conn.calls[1][0]
+    assert "reading.status = %s" in pool.conn.calls[1][0]
     assert pool.conn.calls[1][1] == ("user-1", "reading")
+
+
+def test_list_uses_remote_learning_status_for_the_selected_remote_version():
+    context_id = "00000000-0000-0000-0000-000000000701"
+    pool = Pool([
+        Result(), Result({"total_count": 1}), Result(many=[{
+            "paper_id": PAPER_ID, "title": "Remote", "authors": None,
+            "publication_year": None, "learning_record_id": None,
+            "selected_version_id": "remote-v1", "file_name": "remote.pdf",
+            "last_position": None, "last_studied_at": None,
+            "reading_status": "completed", "reading_basis_version_id": "remote-v1",
+            "reading_state_revision": 0, "reading_status_source": "remote_learning",
+            "reading_context_id": context_id, "reading_status_updated_at": NOW,
+            "collection_id": None,
+        }]),
+    ])
+
+    page = PostgresPaperStore(pool).list_papers(
+        "user-1", query=None, reading_status=None, page=1, limit=20)
+
+    item, = page.items
+    assert item.reading_status == "completed"
+    assert item.reading_status_source == "remote_learning"
+    assert item.reading_basis_version_id == "remote-v1"
+    assert item.reading_context_id == context_id
+    assert "server_remote_learning_records" in pool.conn.calls[2][0]
+
+
+def test_detail_uses_latest_remote_learning_status_for_selected_version():
+    context_id = "00000000-0000-0000-0000-000000000701"
+    pool = Pool([
+        Result(),
+        Result({"paper_id": PAPER_ID, "title": "Remote", "authors": None,
+                "publication_year": None, "origin": "remote"}),
+        Result(),
+        Result({"server_version_id": "remote-v1", "file_name": "remote.pdf",
+                "updated_at": NOW}),
+        Result({"status": "reading", "basis_version_id": "remote-v1",
+                "revision": 0, "updated_at": NOW, "context_id": context_id}),
+    ])
+
+    detail = PostgresPaperStore(pool).get_paper(
+        "user-1", PAPER_ID, learning_record_id=None, version_id="remote-v1")
+
+    assert detail.paper.reading_status == "reading"
+    assert detail.paper.reading_status_source == "remote_learning"
+    assert detail.paper.reading_basis_version_id == "remote-v1"
+    assert detail.paper.reading_context_id == context_id
 
 
 def test_collection_filters_use_owned_membership_join():

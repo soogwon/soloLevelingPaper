@@ -58,7 +58,8 @@ def row():
         "segments": [{"chunk_id": "chunk-1", "parse_revision_id": "parse-1",
                       "target": "translation", "translation_revision_id": "translation-1",
                       "start_offset": 0, "end_offset": 2, "quote_snapshot": "문장"}],
-        "original_created_at": NOW, "updated_at": NOW,
+        "original_created_at": NOW, "created_at": NOW, "updated_at": NOW,
+        "context_id": None, "storage_origin": "local_sync",
     }
 
 
@@ -87,11 +88,11 @@ def test_postgres_list_uses_owner_scope_full_date_counts_and_stable_order():
     assert page.total_count == 25 and page.total_pages == 2
     assert page.date_counts == (AnnotationDateCount(date(2026, 11, 14), 25),)
     count_sql, count_params = pool.conn.calls[1]
-    assert "a.owner_user_id=%s" in count_sql
-    assert count_params[0] == "user-1"
+    assert "FROM server_context_annotations" in count_sql
+    assert count_params[:2] == ("user-1", "user-1")
     assert "jsonb_array_elements(a.segments)" in count_sql
     list_sql = pool.conn.calls[3][0]
-    assert "a.original_created_at DESC, a.annotation_id DESC" in list_sql
+    assert "a.created_at DESC, a.storage_origin DESC" in list_sql
 
 
 def test_page_past_end_keeps_counts_without_item_query():
@@ -115,7 +116,30 @@ def test_get_annotation_is_owner_scoped():
     item = PostgresPaperStore(pool).get_annotation("user-1", ANNOTATION_ID)
 
     assert item.annotation_id == ANNOTATION_ID
-    assert pool.conn.calls[1][1] == ("user-1", ANNOTATION_ID)
+    assert pool.conn.calls[1][1] == ("user-1", ANNOTATION_ID, "user-1", ANNOTATION_ID)
+
+
+def test_postgres_list_serializes_remote_annotation_without_local_learning_record():
+    remote = row() | {
+        "learning_record_id": None,
+        "context_id": "00000000-0000-0000-0000-000000000601",
+        "storage_origin": "remote",
+    }
+    pool = Pool([
+        Result(), Result({"total_count": 1}),
+        Result(many=[{"created_date": date(2026, 11, 14), "item_count": 1}]),
+        Result(many=[remote]),
+    ])
+
+    page = PostgresPaperStore(pool).list_annotations(
+        "user-1", kind=None, start_date=None, end_date=None, query=None,
+        sort="newest", paper_id=None, version_id=None, page=1, limit=20,
+    )
+
+    item, = page.items
+    assert item.learning_record_id is None
+    assert item.context_id == remote["context_id"]
+    assert item.storage_origin == "remote"
 
 
 class Store:

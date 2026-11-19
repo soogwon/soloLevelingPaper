@@ -22,3 +22,9 @@ test('저장 인용과 현재 본문 일치 검증 상태를 구분한다', () =
   }]}));
   assert.match(verified, /한국어 번역 · 현재 본문 일치 확인/);
 });
+
+test('원격 MCP 기록과 로컬 동기화 기록의 저장 출처를 구분한다', () => {
+  const base = {annotation_id:'a',kind:'note',body:'메모',segments:[]};
+  assert.match(String(compactAnnotationCard({...base,storage_origin:'remote'})), /원격 MCP 저장/);
+  assert.match(String(compactAnnotationCard({...base,storage_origin:'local_sync'})), /로컬 동기화/);
+});

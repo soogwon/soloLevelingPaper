@@ -15,6 +15,11 @@ function creationOriginBadge(value) {
   return html`<span class="badge b-gray">저장된 작성 출처: ${label} (미검증)</span>`;
 }
 
+function storageOriginBadge(value) {
+  const label = value === 'remote' ? '원격 MCP 저장' : '로컬 동기화';
+  return html`<span class="badge b-gray">${label}</span>`;
+}
+
 function firstPosition(annotation) {
   for (const s of annotation.segments ?? []) {
     const text = formatPosition(s.position);
@@ -29,7 +34,7 @@ function firstPosition(annotation) {
 export function annotationDetailHref(a) {
   return buildHash(`/papers/${encodeURIComponent(a.paper.paper_id)}`, {
     version: a.version_id,
-    record: a.learning_record_id,
+    record: a.learning_record_id || undefined,
     annotation: a.annotation_id,
   });
 }
@@ -55,7 +60,7 @@ export function compactAnnotationCard(a, { focused = false } = {}) {
   return html`<article class="note-card ${focused ? 'is-focus' : ''}" data-annotation-id="${a.annotation_id}" ${focused ? html`tabindex="-1"` : ''}>
     ${focused ? html`<span class="focus-label">메모 페이지에서 선택한 기록</span>` : ''}
     <div class="note-top">
-      <span class="note-tags">${kindBadge(a.kind)}${creationOriginBadge(a.creation_origin)}</span>
+      <span class="note-tags">${kindBadge(a.kind)}${creationOriginBadge(a.creation_origin)}${storageOriginBadge(a.storage_origin)}</span>
       <span class="note-pos">${firstPosition(a) ?? '위치 연결 없음'}</span>
     </div>
     ${quotes(a)}
@@ -68,7 +73,7 @@ export function compactAnnotationCard(a, { focused = false } = {}) {
 export function fullAnnotationCard(a, { showDate = false } = {}) {
   return html`<article class="note-card lg">
     <div class="note-top">
-      <span class="note-tags">${kindBadge(a.kind)}${creationOriginBadge(a.creation_origin)}</span>
+      <span class="note-tags">${kindBadge(a.kind)}${creationOriginBadge(a.creation_origin)}${storageOriginBadge(a.storage_origin)}</span>
       <span class="note-date">${dateText(a, showDate)}</span>
     </div>
     ${quotes(a)}
