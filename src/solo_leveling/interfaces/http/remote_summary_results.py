@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 from solo_leveling.application.summary.remote_contract import (
-    OPERATION, NOTICE_VERSION, RemoteSummaryInput, validated_summary_payload,
+    OPERATION, NOTICE_VERSION, RemoteSummaryInput, validated_summary_payload, _load,
 )
 from .remote_executions import (
     PostgresRemoteExecutionStore, RemoteExecutionLeaseLost, validate_execution_scope, _question_consent,
@@ -74,7 +74,7 @@ class PostgresSummaryResults:
                 JOIN server_execution_contexts c ON c.owner_user_id=e.owner_user_id AND c.context_id=e.context_id
                 JOIN server_papers p ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
                 WHERE e.owner_user_id=%s AND e.context_id=%s AND e.operation=%s AND e.request_key=%s
-                  AND p.deleted_at IS NULL''', (owner, context, OPERATION, key)).fetchone()
+                  AND p.deleted_at IS NULL FOR SHARE OF p''', (owner, context, OPERATION, key)).fetchone()
         if row is None:
             return None
         payload = None
@@ -83,7 +83,7 @@ class PostgresSummaryResults:
                 raw = row['payload_json']
                 if hashlib.sha256(raw.encode()).hexdigest() != row['payload_sha256']:
                     raise ValueError()
-                payload = json.loads(raw)
+                payload = _load(raw)
                 request = RemoteSummaryInput(json.dumps(row['input_snapshot']))
                 if request.unpack()[0].context_id != context or request.unpack()[0].owner_user_id != owner:
                     raise ValueError()
@@ -96,3 +96,36 @@ class PostgresSummaryResults:
                 raise ValueError('remote_summary_result_invalid') from None
         return dict(execution_id=row['execution_id'], context_id=context, request_key=key,
                     state=row['state'], result=payload)
+
+    def evidence(self,owner,context,request_key,evidence_id):
+        # 같은 조회 transaction의 고정 결과·입력만 읽고 별도 검색이나 생성은 하지 않는다.
+        with self.pool.connection() as conn:
+            scoped = PostgresSummaryResults(SimpleNamespace(connection=lambda:nullcontext(conn)))
+            result = scoped.get(owner,context,request_key)
+            if result is None or result['result'] is None:
+                return None
+            used = {eid for item in result['result']['items'] for eid in item['evidence_ids']}
+            if evidence_id not in used:
+                return None
+            row = conn.execute('''SELECT input_snapshot FROM server_summary_inputs
+                WHERE owner_user_id=%s AND execution_id=%s''',(owner,result['execution_id'])).fetchone()
+            request = RemoteSummaryInput(json.dumps(row['input_snapshot']))
+            binding,sources,_ = request.unpack()
+            source = next((s for s in sources if s.evidence_id==evidence_id),None)
+            if source is None:
+                raise ValueError('remote_summary_evidence_invalid')
+            return dict(context_id=context,request_key=request_key,evidence_id=evidence_id,
+                        paper_id=binding.paper_id,version_id=binding.server_version_id,
+                        publication_id=binding.publication_id,parse_revision_id=binding.parse_revision_id,
+                        translation_revision_id=binding.translation_revision_id,chunk_id=source.chunk_id,
+                        pdf_page=source.pdf_page,section_id=source.section_id,
+                        original_text=source.original_text,translated_text=source.translated_text)
+
+    def latest(self,owner,context):
+        with self.pool.connection() as conn:
+            row = conn.execute('''SELECT request_key FROM server_remote_executions
+                WHERE owner_user_id=%s AND context_id=%s AND operation=%s AND state='completed'
+                ORDER BY finished_at DESC,execution_id DESC LIMIT 1''',(owner,str(UUID(context)),OPERATION)).fetchone()
+            if row is None:
+                return None
+            return PostgresSummaryResults(SimpleNamespace(connection=lambda:nullcontext(conn))).get(owner,context,str(row['request_key']))
