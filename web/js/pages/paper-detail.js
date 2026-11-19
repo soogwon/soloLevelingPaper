@@ -1,4 +1,5 @@
 // 3. 논문 상세 페이지 — GET /v1/papers/{id}, GET /v1/annotations, GET /v1/annotations/{id}, POST /v1/resume-requests
+import { remotePaperJobs } from '../lib/remote-paper-jobs.js';
 import { remotePaperNotes } from '../lib/remote-paper-notes.js';
 import { CONFIG } from '../config.js';
 import { api } from '../api/index.js';
@@ -110,8 +111,10 @@ export default async function paperDetailPage({ view, params, query }) {
         <div data-slot="memo-pager"></div>
       </section>
     </div>
+    <section class="card panel" data-slot="remote-jobs"></section>
     <section class="card panel" data-slot="remote-notes"></section>`);
 
+  const jobsReady = CONFIG.USE_MOCK ? Promise.resolve() : remotePaperJobs(view.querySelector('[data-slot="remote-jobs"]'), paper.paper_id, versionId);
   const remoteReady = CONFIG.USE_MOCK ? Promise.resolve() : remotePaperNotes(view.querySelector('[data-slot="remote-notes"]'), paper.paper_id, versionId);
 
   // ---------- 메모·하이라이트 (페이지 번호 방식) ----------
@@ -286,5 +289,5 @@ export default async function paperDetailPage({ view, params, query }) {
   await loadFocus();
   if (closed || !view.isConnected) return;
   await loadMemos(memoState.page);
-  await remoteReady;
+  await Promise.all([remoteReady, jobsReady]);
 }
