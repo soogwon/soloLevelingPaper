@@ -44,7 +44,7 @@ def test_reset_preserves_login_and_rebuilds_isolated_schema():
                 assert conn.execute("SELECT count(*) FROM server_users").fetchone()[0] == 1
                 conn.execute("INSERT INTO server_users(owner_user_id, display_name) VALUES ('synthetic', '합성')")
                 tables = conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename").fetchall()
-                assert len(tables) == 49
+                assert ('server_embedding_fragments',) in tables
                 assert ('server_remote_learning_requests',) in tables
                 assert ('server_annotation_consents',) in tables
                 assert ('server_remote_learning_records',) in tables
@@ -85,6 +85,8 @@ def test_reset_preserves_login_and_rebuilds_isolated_schema():
                 assert conn.execute("SELECT count(*) FROM slp_staging.server_users").fetchone()[0] == 0
                 assert conn.execute("SELECT count(*) FROM slp_staging.server_remote_learning_records").fetchone()[0] == 0
                 assert conn.execute("SELECT count(*) FROM pg_tables WHERE schemaname='public'").fetchone()[0] == 0
+                rebuilt = conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='slp_staging' ORDER BY tablename").fetchall()
+                assert rebuilt == tables
             for role in (web, worker):
                 runtime = make_conninfo(target, user=role, password='local-rehearsal-only')
                 assert not migrate(runtime, migrations, check=True).pending
