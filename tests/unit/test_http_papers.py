@@ -650,6 +650,8 @@ def test_web_list_shape_matches_external_site_without_inventing_learning_data():
         "selected_learning_record_id": None, "selected_version_id": None,
         "last_position": None, "last_studied_at": None, "reading_status": "unknown",
         "collection_id": None, "reading_basis_version_id": None, "reading_state_revision": 0,
+        "reading_status_source": "unknown", "reading_context_id": None,
+        "reading_status_updated_at": None,
     }]
 
 
