@@ -108,3 +108,26 @@ from pathlib import Path
 register_remote_quiz(FastMCP('합성 퀴즈 이미지'), SimpleNamespace(owner=lambda: None), PostgresRemoteQuiz(None))
 assert Path('/app/src/solo_leveling/interfaces/mcp/assets/remote-quiz-attempt.html').is_file()
 print('REMOTE_QUIZ_IMAGE_READY')
+
+# 요약 활성화 조립·웹 조회·내보내기 import를 네트워크 없는 이미지에서 확인한다.
+import json
+from solo_leveling.interfaces.http.remote_summary_settings import load_summary_settings
+from solo_leveling.interfaces.http.remote_summary_reviews import PostgresSummaryReviews
+from solo_leveling.application.summary.remote_export import export_summary
+os.environ.update({
+    'REMOTE_SUMMARIES_ENABLED':'true',
+    'REMOTE_SUMMARY_DATABASE_URL':'postgresql://summary:synthetic@127.0.0.1/test',
+    'REMOTE_SUMMARY_SETTINGS_JSON':json.dumps(dict(
+        policy=dict(version='summary-test',timeout_seconds=120,stage_timeout_seconds=60,max_calls=1,max_input_tokens=1000,max_output_tokens=100),
+        settings=dict(provider='openai',model='synthetic',prompt_version='remote-summary-v1',language='ko',budget_policy_version='summary-test'),
+        window_key='test',review_seconds=60,web_origin='https://example.invalid')),
+})
+summary_settings = load_summary_settings()
+summary_app = create_app(remote_mcp_settings=settings)
+assert any(getattr(route,'path','')=='/v1/remote-summaries/contexts/{context}/latest' for route in summary_app.routes)
+summary_bundle = create_remote_mcp(settings,product_queries=Queries(),
+    summary_service=PostgresSummaryReviews(None,**summary_settings.arguments))
+assert {'prepare_remote_summary','get_latest_remote_summary','export_remote_summary'} <= {
+    tool.name for tool in asyncio.run(summary_bundle.server.list_tools())}
+assert callable(export_summary)
+print('REMOTE_SUMMARY_IMAGE_OK; no database or provider calls')

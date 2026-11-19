@@ -13,6 +13,8 @@ COPY src/solo_leveling/domain/__init__.py src/solo_leveling/domain/annotation.py
 COPY src/solo_leveling/domain/quiz.py src/solo_leveling/domain/paper_summary.py ./src/solo_leveling/domain/
 COPY src/solo_leveling/application/quiz/__init__.py src/solo_leveling/application/quiz/remote_contract.py ./src/solo_leveling/application/quiz/
 COPY src/solo_leveling/application/summary/__init__.py src/solo_leveling/application/summary/remote_contract.py ./src/solo_leveling/application/summary/
+COPY src/solo_leveling/application/summary/remote_export.py ./src/solo_leveling/application/summary/
+COPY src/solo_leveling/interfaces/mcp/remote_summaries.py ./src/solo_leveling/interfaces/mcp/
 COPY src/solo_leveling/domain/reflection.py ./src/solo_leveling/domain/
 COPY src/solo_leveling/interfaces/mcp/remote_quiz_reviews.py ./src/solo_leveling/interfaces/mcp/
 COPY src/solo_leveling/interfaces/mcp/remote_reflection.py ./src/solo_leveling/interfaces/mcp/
