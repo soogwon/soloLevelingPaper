@@ -1,8 +1,15 @@
 import { request } from '../api/client.js';
 import { html, setHTML } from './html.js';
 
-const labels = { queued: '대기', processing: '처리 중', completed: '처리 완료', failed: '처리 실패', cancelled: '취소됨' };
+const labels = { queued: '대기', processing: '처리 중', completed: '처리 완료', failed: '처리 실패', cancelled: '취소됨', publication_pending: '게시 대기', published: '후보 게시됨' };
 const uuid = v => typeof v === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(v);
+
+const recovery = job => ['translation_recovery', 'reparse'].includes(job.job_kind);
+const reviewPath = /^\/#\/reprocessing\/[0-9a-f-]{36}\/(?:translation_recovery|reparse)\?key=[0-9a-f-]{36}$/i;
+function statusLabel(job) {
+  if (job.status === 'published') return job.selected_context_id ? '새 색인 선택됨' : '게시됨·선택 대기';
+  return labels[job.status];
+}
 
 // 처리 상태는 학습 완료·최근 학습 위치와 별도로 표시한다.
 export async function remotePaperJobs(view, paper, version) {
@@ -20,7 +27,8 @@ export async function remotePaperJobs(view, paper, version) {
     setHTML(view, html`<h2>처리 작업</h2><p>선택한 원문 판본: ${version}</p>
       <p>처리 완료는 학습 완료가 아닙니다. 취소해도 기존 게시 결과와 학습 기록은 유지되며, 이미 발생한 외부 호출·비용은 되돌리지 않습니다.</p>
       <p role="status">${message}</p>
-      ${items.map(j => html`<section><h3>${labels[j.status]}</h3><p>작업 ${j.job_id} · revision ${j.revision}</p>
+      ${items.map(j => html`<section><h3>${statusLabel(j)}</h3><p>작업 ${j.job_id}${j.revision == null ? '' : ` · revision ${j.revision}`}</p>
+        ${recovery(j) ? html`<p>${j.job_kind === 'reparse' ? 'PDF 재파싱' : '번역 복구'}</p><a href="${j.web_path}">기존 검토 화면 열기</a>` : ''}
         <p>${j.file_name || j.title || '제목 없음'}</p>${j.error_code ? html`<p>오류 코드: ${j.error_code}</p>` : ''}</section>`)}
       ${next ? html`<button data-jobs-more ${busy ? 'disabled' : ''}>처리 작업 더 보기</button>` : ''}
       <button data-jobs-refresh ${busy ? 'disabled' : ''}>처리 상태 다시 조회</button>`);
@@ -35,7 +43,8 @@ export async function remotePaperJobs(view, paper, version) {
       if (!current(n)) return;
       if (page.status !== 'ok' || !Array.isArray(page.jobs) || page.jobs.some(j => !uuid(j.job_id)
           || j.paper_id !== paper || j.server_version_id !== version || !Object.hasOwn(labels, j.status)
-          || !Number.isSafeInteger(j.revision) || j.revision < 1) || (page.next_after != null && !uuid(page.next_after))) throw Error('scope');
+          || (recovery(j) ? j.revision !== null || typeof j.web_path !== 'string' || !reviewPath.test(j.web_path)
+              : !Number.isSafeInteger(j.revision) || j.revision < 1)) || (page.next_after != null && !uuid(page.next_after))) throw Error('scope');
       items = append ? [...new Map([...items, ...page.jobs].map(j => [j.job_id, j])).values()] : page.jobs;
       next = page.next_after; busy = false; draw(items.length ? '' : '이 판본의 처리 작업이 없습니다.');
     } catch {

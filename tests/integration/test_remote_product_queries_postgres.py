@@ -227,3 +227,96 @@ def test_whole_paper_detail_keeps_publication_and_pages_sections(db, stores, poo
     db('UPDATE server_papers SET deleted_at=clock_timestamp() WHERE paper_id=%s', (first.paper,))
     assert queries.detail(pinned.context_id) == {'status': 'not_found'}
     assert not db('SELECT attempt_id FROM server_provider_attempts')
+
+
+def test_reprocessing_jobs_share_web_and_mcp_projection(db, pool, monkeypatch):
+    from tests.integration.test_reprocessing_publication_postgres import setup, publisher
+    from solo_leveling.interfaces.http.auth import AuthenticatedPrincipal
+    from solo_leveling.interfaces.http.remote_job_routes import create_web_job_router
+    from solo_leveling.interfaces.http.remote_job_queries import RemoteJobQueries
+    from fastapi import FastAPI
+
+    service, approval, old, context = setup(pool, db, 'reparse')
+    owner, key = approval.owner, approval.request_key
+    job = service.view(owner,key)['job_id']
+    queries = RemoteProductQueries(pool)
+    for who, subject in ((owner,'account-a'),('other-'+str(uuid4()),'account-b')):
+        db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'합성') ON CONFLICT DO NOTHING",(who,))
+        queries.owners.link_identity(who,VerifiedRemoteIdentity(SETTINGS.issuer,subject+'-reprocessing'))
+    options = replace(SETTINGS,product_reads_enabled=True)
+    monkeypatch.setenv('REMOTE_REPROCESSING_JOB_READS_ENABLED','true')
+    app = create_app(remote_mcp_settings=options, remote_mcp_verifier=Verifier('-reprocessing'),
+                     remote_product_queries=queries,remote_reprocessing=service)
+    principal = AuthenticatedPrincipal(owner,'web_session')
+    web = FastAPI()
+    web.include_router(create_web_job_router(lambda:principal,pool,reprocessing_enabled=True))
+    with TestClient(app,base_url=SETTINGS.resource_url[:-4]) as mcp, TestClient(web) as http:
+        get_args = {'job_id':job}
+        path = f'/v1/processing-jobs/{job}'
+        staged = result(mcp,'get_remote_processing_job',get_args)['result']
+        assert staged['status']=='publication_pending'
+        assert staged['web_path']==f'/#/reprocessing/{context}/reparse?key={key}'
+        assert staged['revision'] is None and not staged['cancellation_available']
+        assert http.get(path).json()['result']==staged
+        # 상태 투영은 실제 실행 없이 원장의 전이를 재현한다.
+        for state, expected in (('queued','queued'),('running','processing'),('failed','failed'),('cancelled','cancelled')):
+            db('''UPDATE server_reprocessing_reviews SET state=%s,
+                budget_reserved=(%s IN ('queued','running')),
+                lease_token=CASE WHEN %s='running' THEN gen_random_uuid() ELSE NULL END,
+                lease_until=CASE WHEN %s='running' THEN clock_timestamp()+interval '1 minute' ELSE NULL END
+                WHERE owner_user_id=%s AND request_key=%s''',(state,state,state,state,owner,key))
+            projected=http.get(path).json()['result']
+            assert projected['status']==expected
+            assert projected==result(mcp,'get_remote_processing_job',get_args)['result']
+        db("UPDATE server_reprocessing_reviews SET state='staged' WHERE owner_user_id=%s AND request_key=%s",(owner,key))
+        assert result(mcp,'get_remote_processing_job',get_args,token='account-b')=={'status':'not_found'}
+        assert result(mcp,'list_remote_processing_jobs',token='account-b')['jobs']==[]
+        principal=AuthenticatedPrincipal('other','web_session')
+        assert http.get(path).status_code==404
+        principal=AuthenticatedPrincipal(owner,'web_session')
+        pub=publisher(service,approval).run_once()
+        first=result(mcp,'list_remote_processing_jobs',{'limit':1})
+        second=result(mcp,'list_remote_processing_jobs',{'limit':1,'after':first['next_after']})
+        listed=first['jobs']+second['jobs']
+        assert len(listed)==2 and sum(j['job_id']==job for j in listed)==1 and second['next_after'] is None
+        published=http.get(path).json()['result']
+        assert published['status']=='published' and published['publication_id']==pub
+        assert http.get(f'/v1/papers/{old.paper_id}/processing-jobs',params={'version_id':old.server_version_id}).json()['jobs']==listed
+        selected=service.select(owner,key,pub)['publication']['selected_context_id']
+        assert http.get(path).json()['result']['selected_context_id']==selected
+        assert RemoteJobQueries(pool,lambda:owner).get(job)['result']['job_kind']=='embed'
+        db('UPDATE server_papers SET deleted_at=clock_timestamp() WHERE paper_id=%s',(old.paper_id,))
+        assert http.get(path).status_code==404
+        assert result(mcp,'get_remote_processing_job',get_args)=={'status':'not_found'}
+        assert service.view(owner,key) is None
+
+
+def test_reprocessing_job_reads_need_only_projected_review_columns(db, pool):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from psycopg import sql
+    from tests.integration.test_reprocessing_publication_postgres import setup
+    from solo_leveling.interfaces.http.remote_job_queries import RemoteJobQueries
+
+    service, approval, _, _ = setup(pool, db)
+    owner = approval.owner
+    job = service.view(owner, approval.request_key)['job_id']
+    role = sql.Identifier('job_read_' + uuid4().hex)
+    with pool.connection() as conn:
+        with conn.transaction(force_rollback=True):
+            schema = sql.Identifier(conn.execute('SELECT current_schema() AS name').fetchone()['name'])
+            conn.execute(sql.SQL('CREATE ROLE {} NOLOGIN NOINHERIT').format(role))
+            conn.execute(sql.SQL('GRANT USAGE ON SCHEMA {} TO {}').format(schema, role))
+            for name in ('server_processing_jobs','server_papers','server_processing_job_authorizations',
+                         'server_remote_upload_intents','server_processing_publications','server_execution_contexts'):
+                conn.execute(sql.SQL('GRANT SELECT ON {}.{} TO {}').format(schema, sql.Identifier(name), role))
+            conn.execute(sql.SQL('''GRANT SELECT (owner_user_id,job_id,context_id,operation,state,created_at,
+                publication_id,request_key,selected_context_id) ON {}.server_reprocessing_reviews TO {}''').format(schema, role))
+            conn.execute(sql.SQL('SET LOCAL ROLE {}').format(role))
+            restricted = SimpleNamespace(connection=lambda: nullcontext(conn))
+            queries = RemoteJobQueries(restricted, lambda: owner, reprocessing_enabled=True)
+            assert queries.get(job)['result']['status'] == 'publication_pending'
+            assert len(queries.list()['jobs']) == 2
+            assert conn.execute("""SELECT has_column_privilege(current_user,'server_reprocessing_reviews',
+                'staged_result','SELECT') AS body,has_table_privilege(current_user,'server_reprocessing_reviews',
+                'UPDATE') AS write""").fetchone() == {'body': False, 'write': False}

@@ -25,3 +25,26 @@ test('다른 판본·논문의 응답과 장애를 빈 정상 결과로 표시�
 test('로그아웃 후 늦은 응답은 표시하지 않는다',async t=>{
  let resolve;t.mock.method(globalThis,'fetch',()=>new Promise(r=>resolve=r));const v=view();const pending=remotePaperJobs(v,paper,version);listeners.get('auth:logout')();const before=v.innerHTML;resolve(response({status:'ok',jobs:[job]}));await pending;assert.equal(v.innerHTML,before);assert.equal(v.textContent,'');
 });
+
+test('복구 상태와 같은 키의 검토 링크를 표시하고 외부 링크를 거부한다', async t => {
+  const path = `/#/reprocessing/${id(5)}/reparse?key=${id(6)}`;
+  const base = {...job, job_kind:'reparse', revision:null, web_path:path};
+  t.mock.method(globalThis,'fetch',async()=>response({status:'ok',jobs:[
+    {...base,status:'publication_pending'},
+    {...base,job_id:id(4),status:'published'},
+    {...base,job_id:id(7),status:'published',selected_context_id:id(8)},
+  ]}));
+  const v=view();
+  await remotePaperJobs(v,paper,version);
+  for (const label of ['게시 대기','게시됨·선택 대기','새 색인 선택됨','PDF 재파싱']) assert.ok(v.innerHTML.includes(label));
+  assert.ok(v.innerHTML.includes(`href="${path}"`));
+  assert.doesNotMatch(v.innerHTML,/revision null/);
+  listeners.get('pagehide')();
+  t.mock.restoreAll();
+  t.mock.method(globalThis,'fetch',async()=>response({status:'ok',jobs:[{...base,web_path:'https://example.invalid/'}]}));
+  const wrong=view();
+  await remotePaperJobs(wrong,paper,version);
+  assert.match(wrong.innerHTML,/확인하지 못했습니다/);
+  assert.doesNotMatch(wrong.innerHTML,/example.invalid/);
+  listeners.get('pagehide')();
+});

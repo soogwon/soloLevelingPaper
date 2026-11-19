@@ -91,6 +91,7 @@ def create_remote_mcp(
     settings: RemoteMcpSettings,
     verifier: TokenVerifier | None = None,
     *, product_queries=None, question_service=None, annotation_service=None, cancellation_service=None, summary_service=None, reflection_service=None, quiz_service=None, quiz_review_service=None,
+    reprocessing_job_reads=False,
 ) -> RemoteMcpBundle:
     if not settings.enabled:
         raise ValueError("원격 MCP 설정이 활성화되어야 합니다.")
@@ -144,7 +145,8 @@ def create_remote_mcp(
         if product_queries is None:
             raise ValueError("remote_product_queries_required")
         from solo_leveling.interfaces.mcp.remote_product import register_product_queries
-        register_product_queries(server, product_queries, cancellation_enabled=cancellation_service is not None)
+        register_product_queries(server, product_queries, cancellation_enabled=cancellation_service is not None,
+                                 reprocessing_enabled=reprocessing_job_reads)
         from solo_leveling.interfaces.mcp.remote_learning_path import register_remote_learning_path
         register_remote_learning_path(server, product_queries)
         if cancellation_service is not None:
