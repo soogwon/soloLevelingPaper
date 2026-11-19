@@ -43,6 +43,10 @@ def embed_texts(texts: List[str], model_name: str = DEFAULT_MODEL_NAME,
     model = (_get_model(model_name, local_files_only=True) if local_files_only
              else _get_model(model_name))
     with stage('embedding_encode'):
+        from .token_windows import require_fits
+        # 로컬 경로도 긴 입력을 조용히 잘라 기존 색인에 성공으로 저장하지 않는다.
+        for text in texts:
+            require_fits(getattr(model, 'tokenizer', None), text, getattr(model, 'max_seq_length', None))
         vectors = model.encode(texts, convert_to_numpy=True)
     return [v.tolist() for v in vectors]
 

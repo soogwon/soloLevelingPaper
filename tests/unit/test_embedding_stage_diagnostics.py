@@ -22,6 +22,9 @@ def test_embedding_stages_are_distinct_and_do_not_log_content(monkeypatch, failu
     calls = []
 
     class Model:
+        max_seq_length = 128
+        tokenizer = SimpleNamespace(encode=lambda *args, **kwargs: [1, 2, 3])
+
         def __init__(self, name):
             calls.append('construct')
             if failure == 'construct':
