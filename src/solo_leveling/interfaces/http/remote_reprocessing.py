@@ -1,4 +1,4 @@
-"""원격 복구 검토·동의·예산 예약. 실행 포트 없이 별도 원장에만 접수한다."""
+"""원격 복구 검토·동의·예산 예약. 명시적 실행 승인 전에는 별도 원장에만 접수한다."""
 from contextlib import nullcontext
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
@@ -115,7 +115,8 @@ class PostgresReprocessingReviews:
                 state=row['state'],job_id=str(row['job_id']) if row['job_id'] else None,
                 active=row['active'] and row['contract']==self.contract and row['state']=='review',
                 expires_at=row['expires_at'].isoformat(),storage=states.get('storage','missing'),
-                ai_provider=states.get('ai_provider','missing'),execution_enabled=False)
+                ai_provider=states.get('ai_provider','missing'),execution_enabled=row['state']=='running',
+                result_ready=row['state']=='staged', publication_ready=False, failure_code=row.get('failure_code'))
 
     def grant(self,owner,key,purpose,notice):
         if purpose not in ('storage','ai_provider') or notice != NOTICE:
@@ -171,7 +172,9 @@ class PostgresReprocessingReviews:
 
     def _receipt(self,row):
         return dict(request_key=str(row['request_key']),job_id=str(row['job_id']) if row['job_id'] else None,
-                    state=row['state'],execution_enabled=False,message='접수됨·실행 연결 대기' if row['state']=='queued' else '취소됨')
+                    state=row['state'],execution_enabled=row['state']=='running',
+                    message={'queued':'접수됨·실행 승인 대기','running':'처리 중','staged':'결과 저장됨·새 색인 게시 대기',
+                             'failed':'처리 중단','cancelled':'취소됨'}.get(row['state'],'검토 중'))
 
     def cancel(self,owner,key,purpose=None):
         if purpose is not None and purpose not in ('storage','ai_provider'):raise ValueError('invalid_purpose')
@@ -184,5 +187,6 @@ class PostgresReprocessingReviews:
             if purpose:
                 cid=row['storage_consent_id' if purpose=='storage' else 'ai_consent_id']
                 conn.execute('UPDATE server_remote_consents SET revoked_at=COALESCE(revoked_at,clock_timestamp()) WHERE owner_user_id=%s AND consent_id=%s',(owner,cid))
-            row=conn.execute("UPDATE server_reprocessing_reviews SET state='cancelled',budget_reserved=false WHERE owner_user_id=%s AND request_key=%s RETURNING *",(owner,key)).fetchone()
+            if row['state'] in ('review','queued','running'):
+                conn.execute("UPDATE server_reprocessing_reviews SET state='cancelled',budget_reserved=false,lease_token=NULL,lease_until=NULL WHERE owner_user_id=%s AND request_key=%s",(owner,key))
         return self.view(owner,key)
