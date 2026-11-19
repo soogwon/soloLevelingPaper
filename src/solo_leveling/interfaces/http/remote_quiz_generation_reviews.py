@@ -1,0 +1,158 @@
+"""외부 전송 없이 퀴즈 범위·상한을 준비하고 별도 목적 동의 후 접수한다."""
+from contextlib import nullcontext
+from types import SimpleNamespace
+from urllib.parse import urlsplit
+from uuid import UUID, uuid4
+import json
+
+from solo_leveling.application.remote_execution_policy import RemoteExecutionPolicy
+from solo_leveling.application.quiz.remote_contract import NOTICE as NOTICE_VERSION, RemoteQuizGenerationInput
+from .remote_executions import PostgresRemoteExecutionStore, RemoteExecutionConflict
+from .remote_quiz_preparation import PostgresQuizPreparation
+from .remote_quiz_intake import PostgresQuizIntake, OPERATION
+
+
+class PostgresQuizGenerationReviews:
+    def __init__(self, pool, *, settings, policy, window_key, review_seconds, web_origin):
+        url = urlsplit(web_origin)
+        if (type(policy) is not RemoteExecutionPolicy or policy.max_calls != 1
+                or type(review_seconds) is not int or not 60 <= review_seconds <= 86400
+                or not isinstance(window_key, str) or not window_key.strip()
+                or len(window_key) > 200 or url.scheme != 'https' or not url.hostname
+                or url.username or url.password or url.query or url.fragment or url.path not in ('', '/')):
+            raise ValueError('quiz_generation_review_config_invalid')
+        PostgresQuizIntake(pool, settings=settings)
+        if settings['budget_policy_version'] != policy.version:
+            raise ValueError('quiz_generation_review_policy_invalid')
+        self.pool, self.settings, self.policy = pool, dict(settings), policy
+        self.window, self.seconds, self.origin = window_key, review_seconds, web_origin.rstrip('/')
+
+    def prepare(self, owner, key, context, evidence_ids, *, step, question_count, question_type):
+        key, context = str(UUID(key)), str(UUID(context))
+        with self.pool.connection() as conn:
+            conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+                         (f'{owner}\x1fquiz_generation-review\x1f{key}',))
+            scoped = SimpleNamespace(connection=lambda: nullcontext(conn))
+            request = PostgresQuizPreparation(scoped, settings=self.settings, policy=self.policy).prepare(
+                owner, context, evidence_ids, step=step, question_count=question_count, question_type=question_type)
+            if request is None:
+                return None
+            old = conn.execute('SELECT input_hash FROM server_quiz_generation_reviews WHERE owner_user_id=%s AND request_key=%s', (owner, key)).fetchone()
+            if old is not None:
+                if old['input_hash'] != request.input_hash:
+                    raise RemoteExecutionConflict('quiz_generation_review_conflict')
+            else:
+                conn.execute('''INSERT INTO server_quiz_generation_reviews
+                    (owner_user_id,request_key,context_id,input_hash,input_snapshot,policy_snapshot,
+                     window_key,notice_version,expires_at)
+                    VALUES (%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,clock_timestamp()+make_interval(secs=>%s))''',
+                    (owner,key,context,request.input_hash,request.encoded,json.dumps(self.policy.snapshot()),
+                     self.window,NOTICE_VERSION,self.seconds))
+        return dict(request_key=key, review_url=f'{self.origin}/#/quiz-generation/{key}', status='review_required')
+
+    def _row(self, conn, owner, key):
+        return conn.execute('''SELECT r.*
+            FROM server_quiz_generation_reviews r JOIN server_execution_contexts c
+              ON c.owner_user_id=r.owner_user_id AND c.context_id=r.context_id
+            JOIN server_papers p ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
+            WHERE r.owner_user_id=%s AND r.request_key=%s AND p.deleted_at IS NULL
+            FOR UPDATE OF r''', (owner,str(UUID(key)))).fetchone()
+
+    def _active(self, conn, row):
+        # 행 잠금 대기 전 평가된 시각을 쓰지 않는다. 예약 뒤에도 현재 시각을 재검사한다.
+        active = conn.execute('SELECT clock_timestamp()<%s AS active', (row['expires_at'],)).fetchone()['active']
+        if (not active or row['notice_version'] != NOTICE_VERSION
+                or row['policy_snapshot'] != self.policy.snapshot() or row['window_key'] != self.window
+                or any(row['input_snapshot'][k] != v for k,v in self.settings.items())):
+            raise ValueError('quiz_generation_review_expired_or_changed')
+
+    def view(self, owner, key):
+        with self.pool.connection() as conn:
+            row = self._row(conn,owner,key)
+            if row is None:
+                return None
+            notice = RemoteQuizGenerationInput(json.dumps(row['input_snapshot'])).transfer_notice()
+            consents = conn.execute('''SELECT consent_id,revoked_at FROM server_remote_consents
+                WHERE owner_user_id=%s AND consent_id IN (%s,%s)''',
+                (owner,row['storage_consent_id'],row['ai_consent_id'])).fetchall()
+            states = {r['consent_id']: 'revoked' if r['revoked_at'] else 'current' for r in consents}
+            try:
+                self._active(conn, row)
+                active = True
+            except ValueError:
+                active = False
+            execution = PostgresRemoteExecutionStore(SimpleNamespace(connection=lambda: nullcontext(conn))).lookup(owner, OPERATION, str(row['request_key']))
+            return dict(**notice,request_key=str(row['request_key']),policy=row['policy_snapshot'],
+                        execution_id=execution.execution_id if execution else None,
+                        state=execution.state if execution else None,
+                        active=active,expires_at=row['expires_at'].isoformat(),
+                        server_now=conn.execute('SELECT clock_timestamp() AS now').fetchone()['now'].isoformat(),
+                        storage=states.get(row['storage_consent_id'],'missing'),
+                        ai_provider=states.get(row['ai_consent_id'],'missing'))
+
+    def grant(self, owner, key, purpose, notice, input_hash):
+        if purpose not in ('storage','ai_provider') or notice != NOTICE_VERSION:
+            raise ValueError('quiz_generation_notice_changed')
+        column = 'storage_consent_id' if purpose == 'storage' else 'ai_consent_id'
+        with self.pool.connection() as conn:
+            row = self._row(conn,owner,key)
+            if row is None:
+                return None
+            self._active(conn, row)
+            if input_hash != row['input_hash']:
+                raise ValueError('quiz_generation_review_changed')
+            if row[column] is None:
+                cid = str(uuid4())
+                conn.execute('''INSERT INTO server_remote_consents
+                    (consent_id,owner_user_id,purpose,input_hash,notice_version) VALUES (%s,%s,%s,%s,%s)''',
+                    (cid,owner,purpose,row['input_hash'],NOTICE_VERSION))
+                conn.execute(f'UPDATE server_quiz_generation_reviews SET {column}=%s WHERE owner_user_id=%s AND request_key=%s', (cid,owner,key))
+            self._active(conn, row)
+        return self.view(owner,key)
+
+    def revoke(self, owner, key, purpose):
+        if purpose not in ('storage','ai_provider'):
+            raise ValueError('quiz_generation_purpose_invalid')
+        with self.pool.connection() as conn:
+            row = self._row(conn,owner,key)
+            if row is None:
+                return None
+            cid = row['storage_consent_id' if purpose == 'storage' else 'ai_consent_id']
+            conn.execute('''UPDATE server_remote_consents SET revoked_at=COALESCE(revoked_at,clock_timestamp())
+                WHERE owner_user_id=%s AND consent_id=%s''', (owner,cid))
+        return self.view(owner,key)
+
+    def submit(self, owner, key):
+        key = str(UUID(key))
+        with self.pool.connection() as conn:
+            row = self._row(conn,owner,key)
+            if row is None:
+                return None
+            scoped = SimpleNamespace(connection=lambda: nullcontext(conn))
+            old = PostgresRemoteExecutionStore(scoped).lookup(owner,OPERATION,key)
+            if old is not None:
+                return dict(execution_id=old.execution_id,state=old.state,request_key=key)
+            self._active(conn, row)
+            if not row['storage_consent_id'] or not row['ai_consent_id']:
+                raise ValueError('quiz_generation_consent_required')
+            saved = PostgresQuizIntake(scoped,settings=self.settings).submit(owner,key,
+                RemoteQuizGenerationInput(json.dumps(row['input_snapshot'])),row['storage_consent_id'],
+                row['ai_consent_id'],policy=self.policy,window_key=self.window)
+            if saved is None:
+                raise ValueError('quiz_generation_admission_denied')
+            self._active(conn, row)
+            return dict(execution_id=saved.execution_id,state=saved.state,request_key=key)
+
+    def cancel(self, owner, key):
+        with self.pool.connection() as conn:
+            row = self._row(conn, owner, key)
+            if row is None:
+                return None
+            store = PostgresRemoteExecutionStore(SimpleNamespace(connection=lambda: nullcontext(conn)))
+            execution = store.lookup(owner, OPERATION, str(row['request_key']))
+            if execution is None:
+                return dict(request_key=str(row['request_key']), state='not_submitted')
+            state = store.request_cancel(owner, execution.execution_id)
+            return dict(request_key=str(row['request_key']), execution_id=execution.execution_id,
+                        state=state or execution.state,
+                        message='미전송 예산은 반환하며 이미 전송한 호출의 비용은 취소되지 않습니다.')

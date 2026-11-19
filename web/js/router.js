@@ -2,6 +2,7 @@
 // parent: 앱 안에서 이전 화면 기록이 없을 때 '뒤로'가 이동할 화면 (null이면 버튼 비활성화)
 
 const ROUTES = [
+  { pattern: /^\/quiz-generation\/([^/]+)$/, keys: ['requestKey'], nav: 'papers', parent: '/papers', load: () => import('./pages/quiz-generation-review.js') },
   { pattern: /^\/reflections\/([^/]+)\/consent$/, keys: ['contextId'], nav: 'papers', parent: '/papers', load: () => import('./pages/reflection-consent.js') },
   { pattern: /^\/quizzes\/([^/]+)\/([^/]+)\/consent$/, keys: ['contextId', 'quizId'], nav: 'papers', parent: '/papers', load: () => import('./pages/quiz-consent.js') },
   { pattern: /^\/remote-learning$/, nav: 'papers', parent: '/papers', load: () => import('./pages/remote-dashboard.js') },
