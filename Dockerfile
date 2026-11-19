@@ -38,6 +38,7 @@ COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-recovery.html src
 COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-compose.html src/solo_leveling/interfaces/mcp/assets/remote-annotation-compose.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-evidence-detail.html src/solo_leveling/interfaces/mcp/assets/remote-evidence-detail.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-paper-detail.html src/solo_leveling/interfaces/mcp/assets/remote-paper-detail.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
+COPY src/solo_leveling/interfaces/mcp/assets/remote-reading-progress.html src/solo_leveling/interfaces/mcp/assets/remote-reading-progress.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-job-cancellation.html src/solo_leveling/interfaces/mcp/assets/remote-job-cancellation.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/domain/quiz_attempt.py ./src/solo_leveling/domain/
 COPY src/solo_leveling/application/quiz/attempts.py ./src/solo_leveling/application/quiz/

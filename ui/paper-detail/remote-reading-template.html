@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<title>원격 읽기 상태</title>
+<body>
+  <h1>원격 읽기 상태</h1>
+  <p id="title"></p>
+  <p id="record"></p>
+  <p id="status" role="status">읽기 상태를 불러오는 중입니다.</p>
+  <div>
+    <button id="complete" type="button" disabled>읽기 완료</button>
+    <button id="reopen" type="button" disabled>다시 읽기</button>
+  </div>
+  <form id="position">
+    <label for="page">최근 PDF 페이지</label>
+    <input id="page" type="number" min="1" step="1" disabled>
+    <button id="save" type="submit" disabled>최근 위치 저장</button>
+    <p>고정 PDF 판본의 페이지 번호입니다. 빈칸으로 저장하면 위치가 지워집니다.</p>
+  </form>
+  <button id="refresh" type="button" disabled>최신 상태 조회</button>
+  <button id="retry" type="button" disabled hidden>같은 요청 다시 저장</button>
+  <!-- APP_SCRIPT -->
+</body>
+</html>
