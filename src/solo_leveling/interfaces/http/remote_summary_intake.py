@@ -43,6 +43,10 @@ class PostgresSummaryIntake:
                 store = PostgresRemoteExecutionStore(scoped)
                 conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
                              (f'{owner}\x1f{OPERATION}\x1f{key}',))
+                # 재조회는 worker와 동일하게 실행 행을 부모 논문보다 먼저 잠근다.
+                conn.execute('''SELECT execution_id FROM server_remote_executions
+                    WHERE owner_user_id=%s AND operation=%s AND request_key=%s FOR UPDATE''',
+                    (owner, OPERATION, key)).fetchone()
                 # 전체 입력 대조와 예산 예약 전에 삭제와 같은 부모 잠금을 잡는다.
                 parent = conn.execute('''SELECT p.paper_id FROM server_execution_contexts c
                     JOIN server_papers p ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
