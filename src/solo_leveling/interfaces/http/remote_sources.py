@@ -1,5 +1,7 @@
 """고정 원격 publication에서 검색·인접 출처를 읽는 PostgreSQL adapter."""
 
+import json
+
 from solo_leveling.application.evidence_qa.remote_contract import (
     RemoteRetrievalContractError,
     RemoteSearchBinding,
@@ -33,6 +35,8 @@ class PostgresRemoteSourceReader:
 
     def _read(self, binding, predicate, tail):
         try:
+            vector_table = ('server_embedding_fragments' if 'split_policy' in json.loads(binding.model_fingerprint)
+                            else 'server_embedding_vectors')
             with self._pool.connection() as conn:
                 rows = conn.execute(
                     f"""SELECT c.chunk_id,c.ordinal,c.pdf_page,c.section_id,c.original_text,
@@ -64,15 +68,15 @@ class PostgresRemoteSourceReader:
                           ON tc.owner_user_id=pub.owner_user_id
                          AND tc.translation_revision_id=pub.translation_revision_id
                          AND tc.chunk_id=c.chunk_id
-                        JOIN server_embedding_vectors ev
-                          ON ev.owner_user_id=pub.owner_user_id
-                         AND ev.embedding_set_id=pub.embedding_set_id
-                         AND ev.chunk_id=c.chunk_id
                         WHERE ec.owner_user_id=%s AND ec.context_id=%s
                           AND ec.paper_id=%s AND ec.server_version_id=%s
                           AND ec.publication_id=%s AND ec.parse_revision_id=%s
                           AND pub.translation_revision_id=%s AND pub.embedding_set_id=%s
                           AND pub.publication_policy=%s AND p.deleted_at IS NULL
+                          AND EXISTS (SELECT 1 FROM {vector_table} ev
+                               WHERE ev.owner_user_id=pub.owner_user_id
+                                 AND ev.embedding_set_id=pub.embedding_set_id
+                                 AND ev.chunk_id=c.chunk_id)
                           AND {predicate}
                         ORDER BY c.ordinal,c.chunk_id
                         FOR SHARE OF p,pub,pr,tr,es""",

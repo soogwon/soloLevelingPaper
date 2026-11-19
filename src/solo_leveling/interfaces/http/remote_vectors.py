@@ -61,10 +61,21 @@ class PostgresRemoteScopedSearch:
         if type(top_k) is not int or not 1 <= top_k <= 100:
             raise ValueError("remote_top_k_invalid")
         dimension = _fingerprint_dimension(binding)
+        fingerprint = json.loads(binding.model_fingerprint)
+        fragmented = 'split_policy' in fingerprint
+        if fragmented:
+            from solo_leveling.infrastructure.embeddings.token_windows import TokenWindowPolicy
+            policy = fingerprint['split_policy']
+            try:
+                expected = TokenWindowPolicy(policy['payload_tokens'], policy['overlap_tokens'],
+                                             policy['version']).fingerprint()
+                if policy != expected:
+                    raise ValueError()
+            except (ValueError, KeyError, TypeError):
+                raise ValueError('remote_model_fingerprint_invalid') from None
         query_vector = _vector_literal(self._embed_question(question, binding), dimension)
         with self._pool.connection() as conn:
-            rows = conn.execute(
-                """SELECT c.chunk_id, c.pdf_page, c.section_id,
+            sql = """SELECT c.chunk_id, c.pdf_page, c.section_id,
                           (v.embedding <=> %s::vector) AS cosine_distance
                    FROM server_embedding_vectors v
                    JOIN server_papers paper ON paper.owner_user_id=v.owner_user_id
@@ -97,7 +108,16 @@ class PostgresRemoteScopedSearch:
                      AND (cardinality(%s::integer[]) = 0 OR c.pdf_page = ANY(%s::integer[]))
                      AND (cardinality(%s::text[]) = 0 OR c.section_id = ANY(%s::text[]))
                    ORDER BY v.embedding <=> %s::vector, c.chunk_id
-                   LIMIT %s""",
+                   LIMIT %s"""
+            if fragmented:
+                # 같은 부모의 조각들이 후보 수를 채우지 않도록 LIMIT 전에 부모별로 묶는다.
+                sql = sql.replace('FROM server_embedding_vectors v', 'FROM server_embedding_fragments v')
+                sql = sql.replace('(v.embedding <=> %s::vector) AS cosine_distance',
+                                  'min(v.embedding <=> %s::vector) AS cosine_distance')
+                sql = sql.replace('ORDER BY v.embedding <=> %s::vector, c.chunk_id',
+                    'GROUP BY c.chunk_id, c.pdf_page, c.section_id '
+                    'ORDER BY min(v.embedding <=> %s::vector), c.chunk_id')
+            rows = conn.execute(sql,
                 (
                     query_vector,
                     binding.owner_user_id,
