@@ -16,10 +16,21 @@ class PinnedQueryEmbeddingRuntime:
     def embed(self, question, binding):
         if not isinstance(question, str) or not question.strip():
             raise RemoteRetrievalContractError('REMOTE_SEARCH_INPUT_INVALID')
-        if canonical_fingerprint(binding.model_fingerprint) != self._fingerprint:
+        fingerprint = canonical_fingerprint(binding.model_fingerprint)
+        settings = json.loads(fingerprint)
+        policy = settings.pop('split_policy', None)
+        if 'split_policy' in json.loads(fingerprint):
+            from .token_windows import TokenWindowPolicy
+            try:
+                if policy != TokenWindowPolicy(policy['payload_tokens'], policy['overlap_tokens'],
+                                               policy['version']).fingerprint():
+                    raise ValueError()
+            except (KeyError, TypeError, ValueError):
+                raise RemoteRetrievalContractError('REMOTE_MODEL_MISMATCH') from None
+        if canonical_fingerprint(json.dumps(settings)) != self._fingerprint:
             raise RemoteRetrievalContractError('REMOTE_MODEL_MISMATCH')
         # 처리 adapter의 artifact·실제 런타임·정규화 검사를 질문에도 동일하게 적용한다.
         batch = self._embedder.embed((ProcessedTranslation('query', question, None),), self._spec)
         if batch.spec != self._spec or batch.chunk_ids != ('query',) or len(batch.vectors) != 1:
             raise RemoteRetrievalContractError('REMOTE_EMBEDDING_INVALID')
-        return QueryEmbedding(batch.vectors[0], self._fingerprint)
+        return QueryEmbedding(batch.vectors[0], fingerprint)

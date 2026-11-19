@@ -23,3 +23,19 @@ def test_query_runtime_checks_fingerprint_before_model_and_preserves_question():
     with pytest.raises(RemoteRetrievalContractError):
         runtime.embed('합성 질문', binding)
     engine.embed.assert_not_called()
+
+
+def test_fragment_policy_preserves_model_check_and_full_result_fingerprint():
+    from solo_leveling.infrastructure.embeddings.token_windows import TokenWindowPolicy
+    spec = EmbeddingSpec('model','rev','model','rev','mean','l2',128,2,'cosine','float32','pytorch','test','a'*64)
+    engine = Mock()
+    engine.embed.return_value = EmbeddingBatch(spec, ('query',), ((1.,0.),))
+    runtime = PinnedQueryEmbeddingRuntime(engine, spec)
+    binding = SimpleNamespace(model_fingerprint=json.dumps({**asdict(spec),
+                              'split_policy': TokenWindowPolicy().fingerprint()}))
+    assert FingerprintCheckedEmbedder(runtime)('합성 질문', binding) == (1.,0.)
+    engine.reset_mock()
+    binding.model_fingerprint=json.dumps({**asdict(spec), 'split_policy': None})
+    with pytest.raises(RemoteRetrievalContractError):
+        runtime.embed('합성 질문', binding)
+    engine.embed.assert_not_called()
