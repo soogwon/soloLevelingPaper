@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 import json
 import os
+import time
 from uuid import uuid4
 
 import pytest
@@ -21,10 +22,10 @@ from solo_leveling.workers.remote_summary import PersistedSummaryExecutor, Remot
 pytestmark = pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'), reason='격리 PostgreSQL 필요')
 
 
-def setup(db, stores, pool, *, response='ok'):
+def setup(db, stores, pool, *, response='ok', timeout=120):
     _, _, binding = seed(db, stores, pool, 'alice')
     db("INSERT INTO server_users(owner_user_id,display_name) VALUES ('alice','합성 사용자') ON CONFLICT DO NOTHING")
-    policy = RemoteExecutionPolicy(str(uuid4()), 120, 60, 1, 1000, 100)
+    policy = RemoteExecutionPolicy(str(uuid4()), timeout, min(60, timeout), 1, 1000, 100)
     config = dict(provider='openai', model='synthetic', prompt_version='remote-summary-v1',
                   language='ko', budget_policy_version=policy.version)
     request = PostgresSummaryPreparation(pool, **config).prepare('alice', binding.context_id)
@@ -85,3 +86,32 @@ def test_withdrawn_consent_never_sends(pool, db, stores):
     assert RemoteSummaryRunner(pool,executor).run('alice',row.execution_id) == 'blocked'
     post.assert_not_called()
     assert db('SELECT state FROM server_remote_executions WHERE execution_id=%s',(row.execution_id,))[0]['state'] == 'failed'
+
+
+@pytest.mark.parametrize('stop', ['expired', 'cancelled'])
+def test_stopped_before_dispatch_releases_reservation(pool, db, stores, stop):
+    row, _, _, post, executor, _ = setup(db, stores, pool, timeout=1 if stop == 'expired' else 120)
+    if stop == 'expired':
+        time.sleep(1.05)
+    else:
+        from solo_leveling.interfaces.http.remote_executions import PostgresRemoteExecutionStore
+        PostgresRemoteExecutionStore(pool).request_cancel('alice', row.execution_id)
+    assert RemoteSummaryRunner(pool, executor).run('alice', row.execution_id) == stop
+    post.assert_not_called()
+    reservation = db('SELECT remaining_input_tokens,remaining_output_tokens FROM server_question_budget_reservations WHERE execution_id=%s', (row.execution_id,))[0]
+    assert reservation['remaining_input_tokens'] == 0
+    assert reservation['remaining_output_tokens'] == 0
+
+
+def test_revocation_during_response_prevents_completion(pool, db, stores):
+    row, key, context, post, executor, ai = setup(db, stores, pool)
+    response = post.return_value
+    def revoke_then_return(*args, **kwargs):
+        db('UPDATE server_remote_consents SET revoked_at=clock_timestamp() WHERE consent_id=%s', (ai,))
+        return response
+    post.side_effect = revoke_then_return
+    runner = RemoteSummaryRunner(pool, executor)
+    assert runner.run('alice', row.execution_id) == 'failed'
+    assert runner.run('alice', row.execution_id) == 'not_claimed'
+    assert post.call_count == 1
+    assert PostgresSummaryResults(pool).get('alice', context, key)['result'] is None
