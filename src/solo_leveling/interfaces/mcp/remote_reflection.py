@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 from importlib.resources import files
+from typing import Any
 import time
 from uuid import UUID
 
@@ -11,7 +12,7 @@ from solo_leveling.interfaces.http.remote_mcp_auth import RemoteIdentityAccessTo
 from solo_leveling.interfaces.http.remote_executions import RemoteExecutionConflict
 
 
-URI = 'ui://remote-reflection/reading.html'
+URI = 'ui://remote-reflection/reading-v2.html'
 READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
 
@@ -72,7 +73,7 @@ def register_remote_reflection(server, queries, service, *, web_origin=None):
         return files('solo_leveling.interfaces.mcp').joinpath('assets/remote-reflection.html').read_text(encoding='utf-8')
 
     @server.tool(meta={'ui': {'resourceUri': URI}}, annotations=READ)
-    def show_remote_reading_reflection(context_id: str, expected_binding: str | None = None) -> dict:
+    def show_remote_reading_reflection(context_id: str, expected_binding: str | None = None) -> dict[str, Any]:
         """고정 학습 맥락의 읽기 전후 질문, 저장 답변과 비교 카드를 엽니다."""
         def load(owner):
             context = str(UUID(context_id))
@@ -94,7 +95,7 @@ def register_remote_reflection(server, queries, service, *, web_origin=None):
                                              idempotentHint=True, openWorldHint=False))
     def save_remote_reflection_card(context_id: str, expected_binding: str, request_key: str,
                                     question_revision: str, template_id: str, body: str, status: str,
-                                    expected_revision: int, storage_consent_id: str) -> dict:
+                                    expected_revision: int, storage_consent_id: str) -> dict[str, Any]:
         """사용자가 카드에서 확인한 답변을 고정 맥락과 동일 요청 키로 저장합니다."""
         def save(owner):
             context = str(UUID(context_id))
