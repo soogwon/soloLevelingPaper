@@ -139,6 +139,11 @@ class RemoteProductQueries:
                 'limitations': ['remote_summary_not_available', 'remote_keywords_not_available',
                                 'remote_important_sentences_not_available']
                                + ([] if catalog else ['section_catalog_not_available']),
+                'reprocessing_preview': {
+                    'tool': 'preview_remote_reprocessing',
+                    'context_id': context_id,
+                    'operations': ['translation_recovery', 'reparse'],
+                    'required_scope': 'papers:read', 'submission_available': False},
                 'annotation_lookup': {'tool': 'list_remote_annotations',
                                       'arguments': {'context_id': context_id, 'limit': 20},
                                       'required_scope': 'annotations:read'},
@@ -179,6 +184,13 @@ class RemoteProductQueries:
 def register_product_queries(server, queries, *, cancellation_enabled=False):
     from pydantic import StrictInt
     from solo_leveling.interfaces.http.remote_job_queries import RemoteJobQueries
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                             idempotentHint=True, openWorldHint=False))
+    def preview_remote_reprocessing(context_id: str, operation: str) -> dict[str, Any]:
+        """고정 게시본의 translation_recovery 또는 reparse 범위·전송 예정 항목을 조회한다. 비용은 미산정이며 접수·동의·AI 호출·색인 변경은 하지 않는다."""
+        from solo_leveling.interfaces.http.remote_recovery_preview import RemoteRecoveryPreview
+        return RemoteRecoveryPreview(queries).preview(context_id, operation)
 
     def can_cancel():
         token = get_access_token()

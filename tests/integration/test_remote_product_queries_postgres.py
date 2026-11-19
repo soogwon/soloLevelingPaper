@@ -45,7 +45,7 @@ def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool):
     with TestClient(create_app(remote_mcp_settings=settings,remote_mcp_verifier=Verifier(),
                               remote_product_queries=queries),base_url=SETTINGS.resource_url[:-4]) as client:
         names={v['name'] for v in call(client,'tools/list').json()['result']['tools']}
-        assert names=={'whoami','probe_card','probe_delay','list_remote_papers','open_remote_paper','get_remote_question','get_remote_evidence','get_remote_paper_detail','get_learning_path','get_prerequisites','list_remote_processing_jobs','get_remote_processing_job'}
+        assert names=={'whoami','probe_card','probe_delay','list_remote_papers','open_remote_paper','get_remote_question','get_remote_evidence','get_remote_paper_detail','get_learning_path','get_prerequisites','list_remote_processing_jobs','get_remote_processing_job','preview_remote_reprocessing'}
         job_id = str(db('SELECT source_job_id FROM server_processing_publications WHERE publication_id=%s', (first.publication,))[0]['source_job_id'])
         listed_jobs = result(client, 'list_remote_processing_jobs')
         assert listed_jobs['jobs'][0]['job_id'] == job_id
