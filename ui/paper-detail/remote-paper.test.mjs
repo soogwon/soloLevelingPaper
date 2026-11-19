@@ -9,7 +9,7 @@ function reply(offset=0,after=null,saved_summary={status:'not_found'},saved_summ
     summary:null,keywords:[],important_sentences:[],generation_notice:'생성하지 않습니다.',page_notice:'고정 판본'},
   annotation_page:{items:[{annotation_id:aid,context_id:ctx,kind:'note',revision:1,body:'연결 없는 메모',segments:[]}],next_cursor:after?null:aid}}}};}
 function setup(){
-  const doc=new JSDOM('<pre id="summary"></pre><button id="summary-export"></button><textarea id="summary-markdown"></textarea><p id="status"></p><pre id="paper"></pre><pre id="sections"></pre><pre id="records"></pre><button id="sections-more"></button><button id="records-more"></button><button id="refresh"></button>').window.document;
+  const doc=new JSDOM('<pre id="summary"></pre><button id="summary-export"></button><textarea id="summary-markdown"></textarea><p id="status"></p><pre id="paper"></pre><pre id="sections"></pre><pre id="records"></pre><pre id="insights"></pre><button id="sections-more"></button><button id="records-more"></button><button id="refresh"></button>').window.document;
   let resolve;const calls=[];
   const app={connect:async()=>{},callServerTool:a=>{calls.push(a);return new Promise(r=>resolve=r);}};
   mountRemotePaper(app,doc);app.ontoolinput({arguments:{context_id:ctx}});app.ontoolresult(reply());
@@ -86,4 +86,21 @@ test('다른 요청의 Markdown과 취소 뒤 내보내기를 차단한다',()=>
  s.doc.getElementById('summary-export').onclick();
  assert.equal(s.doc.getElementById('summary-markdown').value,'');
  assert.deepEqual(s.calls,[]);
+});
+
+
+test('고정 판본에 이관된 항목의 종류·페이지·원문을 텍스트로 표시한다',()=>{
+ const s=setup(), result=reply();
+ const d=result.structuredContent.result.detail;
+ d.insights_status='ready';
+ d.keywords=[{kind:'keyword',content_kind:'extracted',pdf_page:1,text:'<img src=x>',
+   quote_original:'<img src=x>',parse_revision_id:ctx,translation_revision_id:null}];
+ d.important_sentences=[{...d.keywords[0],kind:'important_sentence',content_kind:'generated',
+   text:'다른 판본',translation_revision_id:aid}];
+ s.app.ontoolinput({arguments:{context_id:ctx}});s.app.ontoolresult(result);
+ const content=s.doc.getElementById('insights').textContent;
+ assert.match(content,/키워드 · 원문 추출 · PDF 1페이지/);
+ assert.match(content,/원문 인용: <img src=x>/);
+ assert.doesNotMatch(content,/다른 판본/);
+ assert.equal(s.doc.querySelector('img'),null);
 });
