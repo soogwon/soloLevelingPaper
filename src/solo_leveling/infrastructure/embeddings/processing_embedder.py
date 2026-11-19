@@ -12,11 +12,13 @@ from typing import Callable
 from solo_leveling.domain.remote_processing import (
     EmbeddingBatch, EmbeddingSpec, ProcessedTranslation, ProcessingError,
 )
+from .token_windows import TokenWindowError, require_fits
 
 _SAFE_CODES = frozenset({
     'PROCESSING_EMBEDDING_CONFIG_INVALID', 'PROCESSING_EMBEDDING_ARTIFACT_MISMATCH',
     'PROCESSING_EMBEDDING_RUNTIME_MISMATCH', 'PROCESSING_EMBEDDING_INVALID',
     'PROCESSING_EMBEDDING_FAILED', 'PROCESSING_CHECK_UNAVAILABLE', 'PROCESSING_NOT_ALLOWED',
+    'PROCESSING_EMBEDDING_INPUT_TOO_LONG',
 })
 
 
@@ -194,6 +196,15 @@ class PyTorchProcessingEmbedder:
             _validate_modules(folder)
             _require(processing_artifact_sha256(folder) == spec.artifact_sha256,
                      'PROCESSING_EMBEDDING_ARTIFACT_MISMATCH')
+            _check(check_allowed)
+            # 분할 결과의 저장·검색 연결 전에는 잘린 벡터를 게시하지 않는다.
+            for item in items:
+                try:
+                    require_fits(model.tokenizer, item.text, spec.max_length)
+                except TokenWindowError as error:
+                    if str(error) == 'EMBEDDING_INPUT_TOO_LONG':
+                        raise ProcessingError('PROCESSING_EMBEDDING_INPUT_TOO_LONG') from None
+                    raise ProcessingError('PROCESSING_EMBEDDING_INVALID') from None
             _check(check_allowed)
             values = model.encode([item.text for item in items], batch_size=batch_size,
                 normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False, prompt='')
