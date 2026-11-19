@@ -3,12 +3,15 @@
 import asyncio
 import math
 from dataclasses import dataclass
+from importlib.resources import files
 from typing import Any
+from urllib.parse import urlsplit
 
 from mcp.server.auth.provider import TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl
 from starlette.responses import JSONResponse
 
@@ -17,6 +20,7 @@ from .settings import RemoteMcpSettings
 
 
 CARD_URI = "ui://remote-spike/card.html"
+PDF_REGISTRATION_URI = "ui://remote-paper/register-pdf.html"
 TOOLS = frozenset({"whoami", "probe_card", "probe_delay"})
 
 
@@ -144,6 +148,24 @@ def create_remote_mcp(
     if settings.product_reads_enabled:
         if product_queries is None:
             raise ValueError("remote_product_queries_required")
+        upload_url = f"https://{urlsplit(settings.resource_url).netloc}/#/uploads"
+
+        @server.tool(meta={"ui": {"resourceUri": PDF_REGISTRATION_URI}},
+                     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                                 idempotentHint=True, openWorldHint=False))
+        def open_remote_pdf_registration() -> dict[str, str]:
+            """웹 PDF 등록 화면을 안내합니다. 파일 선택과 보관 동의는 웹에서 진행합니다."""
+            return {
+                "upload_url": upload_url,
+                "message": f"웹에서 PDF를 선택하고 보관에 동의하세요. {upload_url}",
+            }
+
+        @server.resource(PDF_REGISTRATION_URI, mime_type="text/html;profile=mcp-app",
+                         meta={"ui": {"csp": {"connectDomains": [], "resourceDomains": []}}})
+        def pdf_registration_card() -> str:
+            return files("solo_leveling.interfaces.mcp").joinpath(
+                "assets/remote-pdf-registration.html").read_text(encoding="utf-8")
+
         from solo_leveling.interfaces.mcp.remote_product import register_product_queries
         register_product_queries(server, product_queries, cancellation_enabled=cancellation_service is not None,
                                  reprocessing_enabled=reprocessing_job_reads)

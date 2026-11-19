@@ -22,6 +22,10 @@ bundle = create_remote_mcp(settings, product_queries=Queries())
 names = {tool.name for tool in asyncio.run(bundle.server.list_tools())}
 assert {'list_remote_papers', 'open_remote_paper', 'get_remote_question', 'get_learning_path', 'get_prerequisites'} <= names
 assert 'submit_paper_question' not in names
+assert 'open_remote_pdf_registration' in names
+registration = asyncio.run(bundle.server.call_tool('open_remote_pdf_registration', {}))
+assert 'https://mcp.example.com/#/uploads' in str(registration)
+assert 'PDF 등록' in str(asyncio.run(bundle.server.read_resource('ui://remote-paper/register-pdf.html')))
 print('REMOTE_PRODUCT_IMAGE_OK; no database or provider calls')
 
 # 동의 웹과 MCP 쓰기 기능을 함께 켠 조립도 네트워크 없이 확인한다.
