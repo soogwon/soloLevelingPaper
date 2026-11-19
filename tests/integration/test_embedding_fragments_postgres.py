@@ -14,6 +14,7 @@ from solo_leveling.infrastructure.embeddings.token_windows import split_token_wi
 from solo_leveling.interfaces.http.remote_fragment_vectors import PostgresEmbeddingFragmentWriter
 from solo_leveling.interfaces.http.remote_vectors import EmbeddingWriteScope, PostgresRemoteScopedSearch
 from solo_leveling.interfaces.http.remote_retrieval import PostgresRemoteContextResolver
+from solo_leveling.interfaces.http.remote_sources import PostgresRemoteSourceReader
 from solo_leveling.application.evidence_qa.remote_contract import RemoteSearchFilters
 
 pytestmark = pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'), reason='격리 PostgreSQL 필요')
@@ -59,6 +60,9 @@ def test_fragments_group_before_limit_and_keep_original_chunk_ids(db, stores, po
     assert [h.cosine_distance for h in hits] == pytest.approx([0.,0.2])
     assert [h.chunk_id for h in search.search('합성', binding, RemoteSearchFilters((2,)), 1)] == [state[3][3][1]]
     assert search.search('합성', replace(binding, owner_user_id='other'), RemoteSearchFilters(), 2) == ()
+    sources = PostgresRemoteSourceReader(pool).read_chunks(binding,tuple(h.chunk_id for h in hits))
+    assert len(sources) == 2
+    assert {s.chunk_id for s in sources} == set(state[3][3])
 
 
 @pytest.mark.parametrize('fault', ['gap', 'tail', 'parent-count', 'policy'])
