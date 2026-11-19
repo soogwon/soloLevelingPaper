@@ -131,3 +131,22 @@ assert {'prepare_remote_summary','get_latest_remote_summary','export_remote_summ
     tool.name for tool in asyncio.run(summary_bundle.server.list_tools())}
 assert callable(export_summary)
 print('REMOTE_SUMMARY_IMAGE_OK; no database or provider calls')
+
+# 퀴즈도 실제 환경 설정으로 시작하며 기존 요약·성찰 연결과 함께 조립한다.
+from solo_leveling.interfaces.http.remote_quiz_settings import load_quiz_settings
+os.environ.update({
+    'REMOTE_QUIZZES_ENABLED':'true',
+    'REMOTE_QUIZ_DATABASE_URL':'postgresql://quiz:synthetic@127.0.0.1/test',
+    'REMOTE_QUIZ_SETTINGS_JSON':json.dumps(dict(
+        policy=dict(version='quiz-test',timeout_seconds=120,stage_timeout_seconds=60,max_calls=1,max_input_tokens=1000,max_output_tokens=100),
+        settings=dict(provider='openai',model='synthetic',prompt_version='remote-quiz-generation-v1',language='ko',budget_policy_version='quiz-test'),
+        window_key='test',review_seconds=60,web_origin='https://example.invalid')),
+})
+quiz_settings = load_quiz_settings()
+quiz_app = create_app(remote_mcp_settings=settings)
+assert any(getattr(route,'path','')=='/v1/remote-quizzes/{context}/{quiz_id}/consent' for route in quiz_app.routes)
+quiz_bundle = create_remote_mcp(settings, product_queries=Queries(), quiz_service=PostgresRemoteQuiz(None),
+    quiz_review_service=PostgresQuizGenerationReviews(None,**quiz_settings.arguments))
+quiz_names = {tool.name for tool in asyncio.run(quiz_bundle.server.list_tools())}
+assert {'prepare_remote_quiz_generation','get_quiz','submit_quiz'} <= quiz_names
+print('REMOTE_QUIZ_BOOTSTRAP_IMAGE_OK; no database or provider calls')
