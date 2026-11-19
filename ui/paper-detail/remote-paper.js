@@ -2,7 +2,7 @@ const uuid = v => typeof v === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9
 export function mountRemotePaper(app, doc) {
   const el = id => doc.getElementById(id);
   const buttons = ['sections-more','records-more','refresh'];
-  let summaryKey = null;
+  let summaryMarkdown = null;
   let generation = 0, incoming = null, scope = null, busy = false;
   function clear(message) {
     ++generation; scope = null; busy = false; resetSummary('요약 조회 전입니다.');
@@ -12,12 +12,12 @@ export function mountRemotePaper(app, doc) {
   }
 
   function resetSummary(message) {
-    summaryKey = null;
+    summaryMarkdown = null;
     el('summary').textContent = message;
     el('summary-export').disabled = true;
     el('summary-markdown').value = ''; el('summary-markdown').hidden = true;
   }
-  function displaySummary(value, expected) {
+  function displaySummary(value, markdown, expected) {
     resetSummary('저장 요약을 확인합니다.');
     try {
       const result = value?.result, b = result?.binding;
@@ -33,24 +33,21 @@ export function mountRemotePaper(app, doc) {
           || !Array.isArray(result.items) || !result.items.length || result.items.length > 100
           || !result.items.every(i=>['claim','method','result','limitation'].includes(i?.kind) && typeof i.text === 'string'
             && Array.isArray(i.evidence_ids) && i.evidence_ids.length && i.evidence_ids.every(uuid))) throw new Error();
-      summaryKey = value.request_key;
       el('summary').textContent = `범위: ${result.scope === 'paper' ? '논문 전체' : '섹션 ' + result.section_id}\n판본: ${b.server_version_id}\n생성: ${result.generated_at}\n구조·근거 ID 검증 결과이며 의미적 정확성은 별도 확인이 필요합니다.\n\n` +
         result.items.map(i=>`${i.kind}: ${i.text}\n근거 ID: ${i.evidence_ids.join(', ')}`).join('\n\n');
-      el('summary-export').disabled = false;
+      if (markdown?.status === 'ok' && markdown.context_id === expected.context_id
+          && markdown.request_key === value.request_key && markdown.publication_id === expected.publication_id
+          && markdown.media_type === 'text/markdown' && typeof markdown.markdown === 'string'
+          && markdown.markdown.length > 0) {
+        summaryMarkdown = markdown.markdown;
+        el('summary-export').disabled = false;
+      }
     } catch {resetSummary('요약을 조회하지 못했습니다. 새로고침하거나 채팅에서 같은 맥락의 요약을 조회하세요.');}
   }
-  el('summary-export').onclick = async () => {
-    if (!summaryKey || !scope) return;
-    const current = generation, key = summaryKey, expected = {...scope};
-    el('summary-export').disabled = true;
-    try {
-      const reply = await app.callServerTool({name:'export_remote_summary',arguments:{request_key:key}}), v = reply?.structuredContent;
-      if (current !== generation) return;
-      if (reply?.isError || v?.status !== 'ok' || v.context_id !== expected.context_id || v.request_key !== key
-          || v.publication_id !== expected.publication_id || v.media_type !== 'text/markdown' || typeof v.markdown !== 'string') throw new Error();
-      el('summary-markdown').value = v.markdown; el('summary-markdown').hidden = false;
-    } catch {if (current === generation) resetSummary('내보내지 못했습니다. 새로고침 후 다시 조회하세요.');}
-    finally {if (current === generation && summaryKey) el('summary-export').disabled = false;}
+  el('summary-export').onclick = () => {
+    if (!scope || !summaryMarkdown) return;
+    el('summary-markdown').value = summaryMarkdown;
+    el('summary-markdown').hidden = false;
   };
 
   function render(reply, expected) {
@@ -89,7 +86,7 @@ export function mountRemotePaper(app, doc) {
     el('sections-more').disabled = scope.nextSection === null;
     el('records-more').disabled = scope.nextRecord === null;
     el('refresh').disabled = false;
-    displaySummary(r.saved_summary, d);
+    displaySummary(r.saved_summary, r.saved_summary_markdown, d);
   }
   async function load(kind) {
     if (!scope || busy || (kind === 'sections' && scope.nextSection === null) || (kind === 'records' && scope.nextRecord === null)) return;

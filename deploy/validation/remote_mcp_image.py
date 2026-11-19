@@ -48,7 +48,7 @@ print('REMOTE_ANNOTATION_IMAGE_OK; no database or provider calls')
 
 assert '원격 근거 상세' in str(asyncio.run(annotation_bundle.server.read_resource('ui://remote-evidence/detail.html')))
 
-assert '원격 논문 상세' in str(asyncio.run(annotation_bundle.server.read_resource('ui://remote-paper/detail.html')))
+assert '원격 논문 상세' in str(asyncio.run(annotation_bundle.server.read_resource('ui://remote-paper/detail-v2.html')))
 
 from solo_leveling.knowledge import load_graph
 assert load_graph().revision_id
