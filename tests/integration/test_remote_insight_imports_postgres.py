@@ -18,7 +18,7 @@ pytestmark = pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'), re
 
 
 @pytest.fixture
-def fixture(pool, db):
+def fixture(pool, db, request):
     publisher, source, fingerprint = prepared(pool, db)
     publication = publish(publisher, source, fingerprint)
     context, device = uuid4(), uuid4()
@@ -29,9 +29,10 @@ def fixture(pool, db):
         (owner_user_id,context_id,paper_id,server_version_id,publication_id,parse_revision_id)
         VALUES (%s,%s,%s,%s,%s,%s)''',
        (owner, context, source.paper_id, source.version_id, publication.publication_id, source.parse_revision_id))
-    db("""UPDATE server_pdf_uploads SET local_version_id='local-version',source_kind='local'
-        WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s""",
-       (owner, source.paper_id, source.version_id))
+    if getattr(request, 'param', 'local') == 'local':
+        db("""UPDATE server_pdf_uploads SET local_version_id='local-version',source_kind='local'
+            WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s""",
+           (owner, source.paper_id, source.version_id))
     binding = db('''SELECT c.chunk_id,c.original_text,c.pdf_page,c.section_id,t.translated_text
         FROM server_processing_chunks c JOIN server_translation_chunks t USING(owner_user_id,chunk_id)
         WHERE c.parse_revision_id=%s''', (source.parse_revision_id,))[0]
@@ -121,6 +122,7 @@ def test_source_and_permissions_fail_without_writes(pool, db, fixture):
         conn.execute(sql.SQL('DROP ROLE {}').format(role))
 
 
+@pytest.mark.parametrize('fixture', ['local', 'remote'], indirect=True)
 def test_device_source_mapping_is_read_only_and_checks_owner_and_exact_hash(pool, db, fixture):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -150,3 +152,27 @@ def test_device_source_mapping_is_read_only_and_checks_owner_and_exact_hash(pool
         principal = AuthenticatedPrincipal(x.owner, 'web_session')
         assert client.post(path, json=body).status_code == 403
     assert db('SELECT revision FROM server_remote_insight_collections WHERE context_id=%s', (x.context,)) == []
+
+
+
+@pytest.mark.parametrize('fixture', ['remote'], indirect=True)
+def test_verified_web_upload_can_import_but_unverified_source_cannot(pool, db, fixture):
+    x = fixture
+    store = PostgresRemoteInsightImports(pool)
+    attempt = x.request
+    wrong_hash = attempt.model_copy(update={'pdf_sha256': 'b' * 64})
+    assert store.save(x.owner, x.device, x.context, wrong_hash) is None
+    assert store.save('another-owner', x.device, x.context, attempt) is None
+    assert store.save(x.owner, uuid4(), x.context, attempt) is None
+    db("UPDATE server_remote_upload_intents SET status='failed' WHERE owner_user_id=%s", (x.owner,))
+    assert store.save(x.owner, x.device, x.context, attempt) is None
+    assert db('SELECT revision FROM server_remote_insight_collections WHERE context_id=%s', (x.context,)) == []
+    db("UPDATE server_remote_upload_intents SET status='verified' WHERE owner_user_id=%s", (x.owner,))
+    assert store.save(x.owner, x.device, x.context, attempt)['revision'] == 1
+    assert store.save(x.owner, x.device, x.context, attempt)['revision'] == 1
+    queries = RemoteProductQueries(pool)
+    queries.insights_enabled = True
+    queries.owner = lambda: x.owner
+    detail = queries.detail(str(x.context))['result']
+    assert detail['keywords'][0]['quote_original'] == attempt.items[0].quote_original
+    assert detail['important_sentences'][0]['translation_revision_id'] == str(attempt.translation_revision_id)
