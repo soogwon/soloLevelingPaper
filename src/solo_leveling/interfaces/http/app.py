@@ -38,6 +38,7 @@ def create_app(
     deletion_store=None,
     remote_product_queries=None,
     remote_questions=None,
+    remote_summaries=None,
     remote_annotation_recovery=None,
     remote_annotation_products=None,
     remote_mcp_annotations=None,
@@ -282,6 +283,8 @@ def create_app(
         require_principal, selected_remote_consent_store, selected_remote_processing_intake))
     from .remote_question_routes import create_question_review_router
     app.include_router(create_question_review_router(require_principal,remote_questions))
+    from .remote_summary_routes import create_summary_review_router
+    app.include_router(create_summary_review_router(require_principal,remote_summaries))
     if remote_annotation_products is not None:
         if remote_annotation_recovery is None:
             remote_annotation_recovery = remote_annotation_products
