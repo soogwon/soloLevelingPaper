@@ -285,6 +285,8 @@ def create_app(
         require_principal, selected_remote_consent_store, selected_remote_processing_intake))
     from .remote_question_routes import create_question_review_router
     app.include_router(create_question_review_router(require_principal,remote_questions))
+    from .remote_quiz_routes import create_quiz_router
+    app.include_router(create_quiz_router(require_principal,remote_quizzes))
     from .remote_reflection_routes import create_reflection_router
     app.include_router(create_reflection_router(require_principal,remote_reflections))
     from .remote_summary_routes import create_summary_review_router

@@ -2,7 +2,7 @@
 from contextlib import nullcontext
 from dataclasses import asdict
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 import json
 
 from solo_leveling.application.quiz.attempts import QuizAttemptService
@@ -81,6 +81,46 @@ class PostgresRemoteQuiz:
                        for i,q in enumerate(row['snapshot']['questions'])],
             notice_version=NOTICE,storage_input_hash=NOTICE+':'+row['snapshot_hash'],
             grading_notice='단답형은 정규화된 정답 문구와 정확히 일치할 때만 정답입니다. AI 채점하지 않습니다.')
+
+    def consent(self,owner,context,quiz_id):
+        with self.pool.connection() as conn:
+            row = self._quiz(conn,owner,context,quiz_id)
+            if row is None:
+                return None
+            current = conn.execute("""SELECT consent_id FROM server_remote_consents WHERE owner_user_id=%s
+                AND purpose='storage' AND notice_version=%s AND input_hash=%s AND revoked_at IS NULL
+                ORDER BY consent_id LIMIT 1""",(owner,NOTICE,NOTICE+':'+row['snapshot_hash'])).fetchone()
+            return dict(context_id=str(UUID(context)),quiz_id=str(UUID(quiz_id)),quiz_revision=row['snapshot_hash'],
+                        notice_version=NOTICE,storage='current' if current else 'missing',
+                        consent_id=current['consent_id'] if current else None,
+                        notice='이 학습 맥락의 고정 퀴즈에 제출한 답안·점수·오답 근거를 저장합니다. AI 생성·전송 동의는 포함하지 않습니다.')
+
+    def grant_storage(self,owner,context,quiz_id,notice,quiz_revision):
+        if notice != NOTICE:
+            raise ValueError('remote_quiz_notice_changed')
+        with self.pool.connection() as conn:
+            row = self._quiz(conn,owner,context,quiz_id,write=True)
+            if row is None:
+                return None
+            if row['snapshot_hash'] != quiz_revision:
+                raise RemoteExecutionConflict('remote_quiz_revision_changed')
+            current = conn.execute("""SELECT consent_id FROM server_remote_consents WHERE owner_user_id=%s
+                AND purpose='storage' AND notice_version=%s AND input_hash=%s AND revoked_at IS NULL
+                LIMIT 1""",(owner,NOTICE,NOTICE+':'+quiz_revision)).fetchone()
+            if current is None:
+                conn.execute("""INSERT INTO server_remote_consents(consent_id,owner_user_id,purpose,input_hash,notice_version)
+                    VALUES (%s,%s,'storage',%s,%s)""",(str(uuid4()),owner,NOTICE+':'+quiz_revision,NOTICE))
+        return self.consent(owner,context,quiz_id)
+
+    def revoke_storage(self,owner,context,quiz_id):
+        with self.pool.connection() as conn:
+            row = self._quiz(conn,owner,context,quiz_id,write=True)
+            if row is None:
+                return None
+            conn.execute("""UPDATE server_remote_consents SET revoked_at=clock_timestamp() WHERE owner_user_id=%s
+                AND purpose='storage' AND notice_version=%s AND input_hash=%s AND revoked_at IS NULL""",
+                (owner,NOTICE,NOTICE+':'+row['snapshot_hash']))
+        return self.consent(owner,context,quiz_id)
 
     def submit(self,owner,context,quiz_id,key,answers,storage_consent_id):
         context,quiz_id,key = str(UUID(context)),str(UUID(quiz_id)),str(UUID(key))

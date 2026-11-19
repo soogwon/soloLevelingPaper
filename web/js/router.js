@@ -3,6 +3,7 @@
 
 const ROUTES = [
   { pattern: /^\/reflections\/([^/]+)\/consent$/, keys: ['contextId'], nav: 'papers', parent: '/papers', load: () => import('./pages/reflection-consent.js') },
+  { pattern: /^\/quizzes\/([^/]+)\/([^/]+)\/consent$/, keys: ['contextId', 'quizId'], nav: 'papers', parent: '/papers', load: () => import('./pages/quiz-consent.js') },
   { pattern: /^\/remote-learning$/, nav: 'papers', parent: '/papers', load: () => import('./pages/remote-dashboard.js') },
   { pattern: /^\/remote-learning\/([^/]+)$/, keys: ['contextId'], nav: 'papers', parent: '/papers', load: () => import('./pages/remote-learning.js') },
   { pattern: /^\/questions\/([^/]+)$/, keys: ['requestKey'], nav: 'papers', parent: '/papers', load: () => import('./pages/question-review.js') },
