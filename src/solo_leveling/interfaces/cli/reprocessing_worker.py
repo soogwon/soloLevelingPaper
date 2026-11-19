@@ -11,6 +11,7 @@ from solo_leveling.workers.reprocessing_runtime import factory
 def main(argv=None):
     parser=ArgumentParser(description=__doc__)
     parser.add_argument('--execute',action='store_true')
+    parser.add_argument('--publish',action='store_true',help='저장 결과를 로컬 임베딩하고 후보 게시본으로 저장')
     args=parser.parse_args(argv)
     if not args.execute:
         print(json.dumps({'status':'execute_required'}));return 2
@@ -21,9 +22,11 @@ def main(argv=None):
     try:
         logging.disable(logging.CRITICAL)
         with open(os.devnull,'w') as sink,redirect_stdout(sink),redirect_stderr(sink):
-            with factory() as worker:status=worker.run_once()
+            with (factory(publish=True) if args.publish else factory()) as worker:
+                result=worker.run_once()
+                status='published' if args.publish else result
         print(json.dumps({'status':status}))
-        return 0 if status in ('staged','idle') else 1
+        return 0 if status in ('staged','idle','published') else 1
     except (Exception,KeyboardInterrupt):
         print(json.dumps({'status':'reprocessing_worker_failed'}));return 1
     finally:

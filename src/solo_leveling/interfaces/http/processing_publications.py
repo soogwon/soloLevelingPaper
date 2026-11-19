@@ -42,6 +42,7 @@ class ProcessingPublicationStore(Protocol):
         source_lease_token: str,
         *,
         policy: PublicationPolicy,
+        activate: bool = True,
     ) -> ProcessingPublication: ...
 
     def get_active(
@@ -67,8 +68,9 @@ class PostgresProcessingPublicationStore:
         source_lease_token: str,
         *,
         policy: PublicationPolicy,
+        activate: bool = True,
     ) -> ProcessingPublication:
-        if policy not in ("complete", "partial"):
+        if type(activate) is not bool or policy not in ("complete", "partial"):
             raise ValueError("publication_policy_invalid")
         with self._pool.connection() as conn:
             row = conn.execute(
@@ -180,15 +182,16 @@ class PostgresProcessingPublicationStore:
                     source_lease_token,
                 ),
             )
-            updated = conn.execute(
-                """UPDATE server_processing_versions
-                   SET active_publication_id=%s
-                   WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s
-                   RETURNING server_version_id""",
-                (publication_id, owner_user_id, paper_id, server_version_id),
-            ).fetchone()
-            if updated is None:
-                raise ProcessingPublicationNotFound("processing_version_not_found")
+            if activate:
+                updated = conn.execute(
+                    """UPDATE server_processing_versions
+                       SET active_publication_id=%s
+                       WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s
+                       RETURNING server_version_id""",
+                    (publication_id, owner_user_id, paper_id, server_version_id),
+                ).fetchone()
+                if updated is None:
+                    raise ProcessingPublicationNotFound("processing_version_not_found")
             # 게시와 작업 완료를 같은 transaction에서 처리한다. 게시만 되고 작업이 running으로
             # 남으면 lease 만료 뒤 다시 claim되어 같은 처리를 반복하고 비용이 중복된다.
             finished = conn.execute(

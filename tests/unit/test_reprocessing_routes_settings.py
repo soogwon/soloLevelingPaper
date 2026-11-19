@@ -77,3 +77,19 @@ def test_environment_assembles_and_closes_dedicated_pool(monkeypatch):
     factory.assert_called_once_with(environment()['REMOTE_REPROCESSING_DATABASE_URL'])
     with TestClient(app):store.open.assert_called_once()
     store.close.assert_called_once()
+
+
+def test_selection_requires_csrf_and_pinned_publication():
+    from tests.unit.test_http_web_auth import Store
+    from solo_leveling.interfaces.http.web_auth import WebIdentity,SESSION_COOKIE,CSRF_COOKIE
+    store=Store();store.sessions['session-token']=WebIdentity('alice','합성',None)
+    service=Mock();service.select.return_value={'state':'published'}
+    app=create_app(device_store=NS(),web_session_store=store,remote_reprocessing=service)
+    key,pub=str(uuid4()),str(uuid4())
+    with TestClient(app,base_url='https://example.test') as client:
+        client.cookies.set(SESSION_COOKIE,'session-token');client.cookies.set(CSRF_COOKIE,'csrf-token')
+        path=f'/v1/reprocessing/reviews/{key}/select'
+        assert client.post(path,json={'publication_id':pub}).status_code==403
+        assert client.post(path,headers={'X-CSRF-Token':'csrf-token'},json={'publication_id':pub,'owner':'other'}).status_code==422
+        assert client.post(path,headers={'X-CSRF-Token':'csrf-token'},json={'publication_id':pub}).status_code==200
+        service.select.assert_called_once_with('alice',key,pub)

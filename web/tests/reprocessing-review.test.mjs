@@ -34,5 +34,10 @@ test('미저장 키는 읽기 미리보기만 열고 명시적 검토 저장 버
 });
 test('저장된 worker 결과는 게시 완료로 표시하거나 다시 접수하지 않는다',async t=>{
  const calls=[];t.mock.method(globalThis,'fetch',async(url,opts)=>{calls.push(opts.method);return {ok:true,status:200,json:async()=>({...value,state:'staged',active:false,job_id:'same-job',result_ready:true,publication_ready:false})};});
- const v=view();await page(args(v));await v.querySelector('[data-submit]').onclick();await v.querySelector('[data-cancel]').onclick();assert.deepEqual(calls,['GET']);assert.match(v.innerHTML,/결과 저장됨·새 색인 게시 대기/);listeners.get('pagehide')();
+ const v=view();await page(args(v));await v.querySelector('[data-submit]').onclick();assert.deepEqual(calls,['GET']);assert.match(v.innerHTML,/결과 저장됨·새 색인 게시 대기/);listeners.get('pagehide')();
+});
+test('새 게시본은 명시적 선택 후 새 학습 맥락으로 연결하고 재선택하지 않는다',async t=>{
+ const calls=[];const publication={publication_id:'33333333-3333-4333-8333-333333333333',embedding_set_id:'new-index',selected_context_id:null};
+ t.mock.method(globalThis,'fetch',async(url,opts)=>{calls.push([url,opts.method,opts.body]);return {ok:true,status:200,json:async()=>({...value,state:'published',active:false,publication_ready:true,publication:{...publication,selected_context_id:calls.length>1?'new-context':null}})};});
+ const v=view();await page(args(v));assert.deepEqual(calls.map(c=>c[1]),['GET']);await v.querySelector('[data-select]').onclick();assert.deepEqual(calls.map(c=>c[1]),['GET','POST']);assert.deepEqual(JSON.parse(calls[1][2]),{publication_id:publication.publication_id});assert.match(v.innerHTML,/#\/remote-learning\/new-context/);await v.querySelector('[data-select]').onclick();assert.equal(calls.length,2);listeners.get('pagehide')();
 });

@@ -117,7 +117,7 @@ class PostgresStagedProcessingPublisher:
             WHERE owner_user_id=%s AND publication_id=%s''', (digest, source.owner_user_id, publication_id))
 
     @staticmethod
-    def _materialize(conn, tx, result):
+    def _materialize(conn, tx, result, *, reuse_parse=False):
         source = result.source
         prefix = (source.owner_user_id, source.paper_id, source.version_id)
         generation = (source.job_id, source.lease_token)
@@ -130,11 +130,12 @@ class PostgresStagedProcessingPublisher:
         metadata['translation_status_counts'] = {
             status:sum(t.status.value == status for t in result.translations)
             for status in sorted({t.status.value for t in result.translations})}
-        conn.execute('''INSERT INTO server_parse_revisions
-            (owner_user_id,paper_id,server_version_id,parse_revision_id,status,chunk_count,
-             source_job_id,source_lease_token,document_metadata)
-            VALUES (%s,%s,%s,%s,'building',%s,%s,%s,%s::jsonb)''',
-            (*prefix, source.parse_revision_id, size, *generation, json.dumps(metadata)))
+        if not reuse_parse:
+            conn.execute('''INSERT INTO server_parse_revisions
+                (owner_user_id,paper_id,server_version_id,parse_revision_id,status,chunk_count,
+                 source_job_id,source_lease_token,document_metadata)
+                VALUES (%s,%s,%s,%s,'building',%s,%s,%s,%s::jsonb)''',
+                (*prefix, source.parse_revision_id, size, *generation, json.dumps(metadata)))
         conn.execute('''INSERT INTO server_translation_revisions
             (owner_user_id,paper_id,server_version_id,parse_revision_id,translation_revision_id,status,
              source_chunk_count,translated_chunk_count,source_job_id,source_lease_token,translation_settings)
@@ -151,11 +152,12 @@ class PostgresStagedProcessingPublisher:
         scope = EmbeddingWriteScope(*prefix, source.parse_revision_id, source.translation_revision_id,
                                     source.embedding_set_id, result.embeddings.spec.dimension)
         for index, (chunk, translation) in enumerate(zip(result.document.chunks, result.translations)):
-            conn.execute('''INSERT INTO server_processing_chunks
-                (owner_user_id,paper_id,server_version_id,parse_revision_id,chunk_id,ordinal,pdf_page,
-                 original_text,section_id,printed_page_label) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
-                (*prefix, source.parse_revision_id, chunk.chunk_id, chunk.chunk_index, chunk.pdf_page,
-                 chunk.original_text, chunk.section_id, chunk.printed_page_label))
+            if not reuse_parse:
+                conn.execute('''INSERT INTO server_processing_chunks
+                    (owner_user_id,paper_id,server_version_id,parse_revision_id,chunk_id,ordinal,pdf_page,
+                     original_text,section_id,printed_page_label) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                    (*prefix, source.parse_revision_id, chunk.chunk_id, chunk.chunk_index, chunk.pdf_page,
+                     chunk.original_text, chunk.section_id, chunk.printed_page_label))
             conn.execute('''INSERT INTO server_translation_chunks
                 (owner_user_id,paper_id,server_version_id,parse_revision_id,translation_revision_id,chunk_id,
                  translated_text,translation_status,translation_failure_code)
@@ -182,5 +184,6 @@ class PostgresStagedProcessingPublisher:
             ('server_translation_revisions', 'translation_revision_id', source.translation_revision_id),
             ('server_embedding_sets', 'embedding_set_id', source.embedding_set_id),
         ):
+            if reuse_parse and table=='server_parse_revisions':continue
             conn.execute(f'''UPDATE {table} SET status='ready',completed_at=CURRENT_TIMESTAMP
                 WHERE owner_user_id=%s AND {key}=%s''', (source.owner_user_id, value))
