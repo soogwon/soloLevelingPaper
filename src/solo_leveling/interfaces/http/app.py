@@ -1,6 +1,7 @@
 """중앙 HTTP API 애플리케이션 팩터리."""
 
 from contextlib import AsyncExitStack, asynccontextmanager
+import os
 from typing import TYPE_CHECKING
 
 from .settings import HttpSettings, load_http_settings
@@ -233,7 +234,9 @@ def create_app(
         remote_job_cancellations = PostgresProcessingCancellationStore(managed_cancel_store.connection_pool)
     if remote_job_cancellations is not None and (not selected_remote_mcp.enabled or not selected_remote_mcp.product_reads_enabled):
         raise ValueError('processing_cancel_settings_invalid')
-    remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries, question_service=remote_questions, summary_service=remote_summaries, reflection_service=remote_reflection_mcp, quiz_service=remote_quizzes, quiz_review_service=remote_quiz_reviews, annotation_service=remote_mcp_annotations, cancellation_service=remote_job_cancellations)
+    reprocessing_job_reads = (remote_reprocessing is not None
+                              and os.environ.get('REMOTE_REPROCESSING_JOB_READS_ENABLED') == 'true')
+    remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries, question_service=remote_questions, summary_service=remote_summaries, reflection_service=remote_reflection_mcp, quiz_service=remote_quizzes, quiz_review_service=remote_quiz_reviews, annotation_service=remote_mcp_annotations, cancellation_service=remote_job_cancellations, reprocessing_job_reads=reprocessing_job_reads)
                      if selected_remote_mcp.enabled else None)
 
     @asynccontextmanager
@@ -334,7 +337,8 @@ def create_app(
     if (remote_product_queries is not None and selected_remote_mcp.enabled
             and selected_remote_mcp.product_reads_enabled):
         from .remote_job_routes import create_web_job_router
-        app.include_router(create_web_job_router(require_principal, remote_product_queries.pool))
+        app.include_router(create_web_job_router(require_principal, remote_product_queries.pool,
+                                                       reprocessing_enabled=reprocessing_job_reads))
     app.include_router(create_file_router(require_principal, selected_file_upload_store, object_storage))
     app.include_router(create_remote_upload_router(
         require_principal, selected_remote_upload_store,

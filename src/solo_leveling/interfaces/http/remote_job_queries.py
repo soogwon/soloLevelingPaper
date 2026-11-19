@@ -7,7 +7,8 @@ _STATUSES = {'queued': 'queued', 'running': 'processing', 'succeeded': 'complete
 _SAFE_ERRORS = frozenset({'max_attempts_exhausted', 'lease_expired_not_retryable'})
 _SELECT = '''SELECT j.job_id,j.paper_id,j.server_version_id,j.job_kind,j.status,
     j.attempt,j.revision,j.error_code,j.created_at,j.updated_at,j.finished_at,p.title,u.file_name,
-    pub.publication_id,pub.embedding_set_id
+    pub.publication_id,pub.embedding_set_id,
+    NULL::uuid AS context_id,NULL::uuid AS request_key,NULL::uuid AS selected_context_id
     FROM server_processing_jobs j
     JOIN server_papers p ON p.owner_user_id=j.owner_user_id AND p.paper_id=j.paper_id
     LEFT JOIN server_processing_job_authorizations a
@@ -22,6 +23,37 @@ _SELECT = '''SELECT j.job_id,j.paper_id,j.server_version_id,j.job_kind,j.status,
       ORDER BY published_at DESC,publication_id DESC LIMIT 1
     ) pub ON j.status='succeeded'
     WHERE j.owner_user_id=%s AND p.deleted_at IS NULL'''
+
+
+_RECOVERY_SELECT = """SELECT r.job_id,c.paper_id,c.server_version_id,r.operation AS job_kind,r.state AS status,
+    NULL::integer AS attempt,NULL::integer AS revision,NULL::text AS error_code,
+    r.created_at,NULL::timestamptz AS updated_at,NULL::timestamptz AS finished_at,
+    p.title,NULL::text AS file_name,pub.publication_id,pub.embedding_set_id,
+    r.context_id,r.request_key,r.selected_context_id
+    FROM server_reprocessing_reviews r
+    JOIN server_execution_contexts c ON c.owner_user_id=r.owner_user_id AND c.context_id=r.context_id
+    JOIN server_papers p ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
+    LEFT JOIN server_processing_publications pub ON pub.owner_user_id=c.owner_user_id
+      AND pub.paper_id=c.paper_id AND pub.server_version_id=c.server_version_id
+      AND pub.publication_id=r.publication_id AND r.state='published'
+    WHERE r.owner_user_id=%s AND p.deleted_at IS NULL AND r.job_id IS NOT NULL AND r.state<>'review'"""
+_RECOVERY_STATUS = dict(_STATUSES, running='processing', staged='publication_pending', published='published')
+
+
+def _recovery_view(row):
+    result = {key: str(row[key]) if row[key] is not None else None for key in (
+        'job_id', 'paper_id', 'server_version_id', 'job_kind', 'title', 'publication_id',
+        'embedding_set_id', 'selected_context_id')}
+    result.update(
+        status=_RECOVERY_STATUS[row['status']], attempt=None, revision=None,
+        file_name=None, created_at=row['created_at'].isoformat(), updated_at=None, finished_at=None,
+        error_code='processing_failed' if row['status']=='failed' else None,
+        cancellation_available=False,
+        cancellation_notice='취소 가능 여부는 웹 검토 화면에서 확인하세요.',
+        learning_notice='후보 게시 후 웹 검토 화면에서 새 색인을 선택할 수 있습니다.',
+        web_path=f"/#/reprocessing/{row['context_id']}/{row['job_kind']}?key={row['request_key']}",
+    )
+    return result
 
 
 def _view(row, cancellation_enabled=False):
@@ -41,9 +73,24 @@ def _view(row, cancellation_enabled=False):
 
 
 class RemoteJobQueries:
-    def __init__(self, pool, owner, cancellation_enabled=False):
+    def __init__(self, pool, owner, cancellation_enabled=False, *, reprocessing_enabled=False):
         self.pool, self.owner = pool, owner
         self.cancellation_enabled = cancellation_enabled
+        self.reprocessing_enabled = reprocessing_enabled
+
+    def _source(self, owner):
+        if not self.reprocessing_enabled:
+            return '(' + _SELECT + ') q', (owner,)
+        normal = _SELECT
+        # 게시 때 만들어지는 내부 embed 행 대신 동일 ID의 복구 원장을 보여준다.
+        normal += """ AND NOT EXISTS (SELECT 1 FROM server_reprocessing_reviews r
+                    WHERE r.owner_user_id=j.owner_user_id AND r.job_id=j.job_id)"""
+        return '(' + normal + ' UNION ALL ' + _RECOVERY_SELECT + ') q', (owner, owner)
+
+    def _view(self, row, cancellation_enabled=False):
+        if row.get('context_id') is not None:
+            return _recovery_view(row)
+        return _view(row, cancellation_enabled)
 
     def list(self, after=None, limit=20):
         try:
@@ -58,9 +105,10 @@ class RemoteJobQueries:
                 return {'status': 'not_found'}
             with self.pool.connection() as conn:
                 # UUID 기준 커서는 상태가 바뀌어도 중복·누락을 만들지 않는다.
-                rows = conn.execute(_SELECT + ' AND (%s::uuid IS NULL OR j.job_id>%s::uuid)'
-                    + ' ORDER BY j.job_id LIMIT %s', (owner, after, after, limit + 1)).fetchall()
-            return {'status': 'ok', 'jobs': [_view(r, self.cancellation_enabled) for r in rows[:limit]],
+                source, params = self._source(owner)
+                rows = conn.execute('SELECT * FROM ' + source + ' WHERE (%s::uuid IS NULL OR q.job_id>%s::uuid)'
+                    + ' ORDER BY q.job_id LIMIT %s', (*params, after, after, limit + 1)).fetchall()
+            return {'status': 'ok', 'jobs': [self._view(r, self.cancellation_enabled) for r in rows[:limit]],
                     'next_after': str(rows[limit - 1]['job_id']) if len(rows) > limit else None}
         except Exception:
             return {'status': 'unavailable'}
@@ -86,10 +134,11 @@ class RemoteJobQueries:
                       AND p.deleted_at IS NULL""", (owner, paper_id, version_id)).fetchone()
                 if not exists:
                     return {'status': 'not_found'}
-                rows = conn.execute(_SELECT + ' AND j.paper_id=%s AND j.server_version_id=%s'
-                    + ' AND (%s::uuid IS NULL OR j.job_id>%s::uuid) ORDER BY j.job_id LIMIT %s',
-                    (owner, paper_id, version_id, after, after, limit + 1)).fetchall()
-            return {'status': 'ok', 'jobs': [_view(r) for r in rows[:limit]],
+                source, params = self._source(owner)
+                rows = conn.execute('SELECT * FROM ' + source + ' WHERE q.paper_id=%s AND q.server_version_id=%s'
+                    + ' AND (%s::uuid IS NULL OR q.job_id>%s::uuid) ORDER BY q.job_id LIMIT %s',
+                    (*params, paper_id, version_id, after, after, limit + 1)).fetchall()
+            return {'status': 'ok', 'jobs': [self._view(r) for r in rows[:limit]],
                     'next_after': str(rows[limit - 1]['job_id']) if len(rows) > limit else None}
         except Exception:
             return {'status': 'unavailable'}
@@ -104,7 +153,8 @@ class RemoteJobQueries:
             if owner is None:
                 return {'status': 'not_found'}
             with self.pool.connection() as conn:
-                row = conn.execute(_SELECT + ' AND j.job_id=%s', (owner, job_id)).fetchone()
-            return {'status': 'ok', 'result': _view(row, self.cancellation_enabled)} if row else {'status': 'not_found'}
+                source, params = self._source(owner)
+                row = conn.execute('SELECT * FROM ' + source + ' WHERE q.job_id=%s', (*params, job_id)).fetchone()
+            return {'status': 'ok', 'result': self._view(row, self.cancellation_enabled)} if row else {'status': 'not_found'}
         except Exception:
             return {'status': 'unavailable'}

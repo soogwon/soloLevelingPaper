@@ -6,11 +6,11 @@ from .auth import AuthenticatedPrincipal
 from .remote_job_queries import RemoteJobQueries
 
 
-def create_web_job_router(require_principal, pool):
-    router = APIRouter(prefix='/v1/papers')
+def create_web_job_router(require_principal, pool, *, reprocessing_enabled=False):
+    router = APIRouter(prefix='/v1')
     Principal = Annotated[AuthenticatedPrincipal, Depends(require_principal)]
 
-    @router.get('/{paper_id}/processing-jobs')
+    @router.get('/papers/{paper_id}/processing-jobs')
     def list_jobs(paper_id: UUID, principal: Principal, response: Response,
                   version_id: Annotated[str, Query(min_length=1, max_length=128)],
                   after: UUID | None = None,
@@ -19,13 +19,27 @@ def create_web_job_router(require_principal, pool):
         response.headers.update(headers)
         if principal.credential_type != 'web_session':
             raise HTTPException(403, {'code': 'web_session_required'}, headers=headers)
-        result = RemoteJobQueries(pool, lambda: principal.user_id).for_paper(
+        result = RemoteJobQueries(pool, lambda: principal.user_id, reprocessing_enabled=reprocessing_enabled).for_paper(
             str(paper_id), version_id, str(after) if after else None, limit)
         if result['status'] != 'ok':
             status, code = {'not_found': (404, 'paper_not_found'),
                             'invalid_argument': (422, 'invalid_job_query')}.get(
                                 result['status'], (503, 'processing_jobs_unavailable'))
             raise HTTPException(status, {'code': code}, headers=headers)
+        return result
+
+    @router.get('/processing-jobs/{job_id}')
+    def get_job(job_id: UUID, principal: Principal, response: Response):
+        headers = {'Cache-Control': 'no-store'}
+        response.headers.update(headers)
+        if principal.credential_type != 'web_session':
+            raise HTTPException(403, {'code': 'web_session_required'}, headers=headers)
+        result = RemoteJobQueries(pool, lambda: principal.user_id,
+                                  reprocessing_enabled=reprocessing_enabled).get(str(job_id))
+        if result['status'] == 'not_found':
+            raise HTTPException(404, {'code': 'processing_job_not_found'}, headers=headers)
+        if result['status'] != 'ok':
+            raise HTTPException(503, {'code': 'processing_jobs_unavailable'}, headers=headers)
         return result
 
     return router

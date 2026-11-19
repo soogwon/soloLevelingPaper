@@ -181,7 +181,7 @@ class RemoteProductQueries:
             return {'status':'unavailable'}
 
 
-def register_product_queries(server, queries, *, cancellation_enabled=False):
+def register_product_queries(server, queries, *, cancellation_enabled=False, reprocessing_enabled=False):
     from pydantic import StrictInt
     from solo_leveling.interfaces.http.remote_job_queries import RemoteJobQueries
 
@@ -200,14 +200,14 @@ def register_product_queries(server, queries, *, cancellation_enabled=False):
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                              idempotentHint=True, openWorldHint=False))
     def list_remote_processing_jobs(after: str | None = None, limit: StrictInt = 20) -> dict:
-        """내 처리 작업을 UUID 순서로 조회한다. 반환 커서를 그대로 사용하며 새 접수·재시도·AI 호출은 하지 않는다."""
-        return RemoteJobQueries(queries.pool, queries.owner, can_cancel()).list(after, limit)
+        """내 처리 및 복구 작업을 UUID 순서로 조회한다. 복구 작업의 web_path는 기존 검토 화면을 연다. 반환 커서를 그대로 사용하며 새 접수·재시도·AI 호출은 하지 않는다."""
+        return RemoteJobQueries(queries.pool, queries.owner, can_cancel(), reprocessing_enabled=reprocessing_enabled).list(after, limit)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                              idempotentHint=True, openWorldHint=False))
     def get_remote_processing_job(job_id: str) -> dict:
-        """내 작업의 안전한 상태·해당 작업의 게시본을 조회한다. 처리 완료는 학습 완료가 아니며 취소는 별도 확인 절차를 거친다."""
-        return RemoteJobQueries(queries.pool, queries.owner, can_cancel()).get(job_id)
+        """내 작업의 안전한 상태·게시본을 조회한다. 복구 작업의 web_path는 기존 검토 화면을 연다. 처리 완료는 학습 완료가 아니며 취소는 별도 확인 절차를 거친다."""
+        return RemoteJobQueries(queries.pool, queries.owner, can_cancel(), reprocessing_enabled=reprocessing_enabled).get(job_id)
 
     @server.tool()
     def list_remote_papers(offset: int = 0) -> dict:
