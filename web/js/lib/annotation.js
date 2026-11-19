@@ -7,8 +7,12 @@ import { formatPosition, formatDateTime, formatTime } from './format.js';
 const TARGET_LABEL = { original: '원문', translation: '한국어 번역' };
 
 function creationOriginBadge(value) {
-  const label = {user:'사용자', ai:'AI', unknown:'미상'}[value] ?? '미상';
-  return html`<span class="badge b-gray">최초 생성 시 신고 주체: ${label} (신고)</span>`;
+  const label = {
+    user: '사용자 입력',
+    ai: 'AI 생성',
+    unknown: '확인되지 않음',
+  }[value] ?? '확인되지 않음';
+  return html`<span class="badge b-gray">저장된 작성 출처: ${label} (미검증)</span>`;
 }
 
 function firstPosition(annotation) {
@@ -32,7 +36,9 @@ export function annotationDetailHref(a) {
 
 function quotes(a) {
   return (a.segments ?? []).map((s) => html`<div class="quote">
-    <span class="badge b-src">${TARGET_LABEL[s.target] ?? '인용'}</span>
+    <span class="badge b-src">${TARGET_LABEL[s.target] ?? '인용'} · ${
+      s.text_match_verified ? '현재 본문 일치 확인' : '저장 당시 인용 · 현재 본문 일치 미확인'
+    }</span>
     <p class="quote-text">${s.quote}</p>
   </div>`);
 }

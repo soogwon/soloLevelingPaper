@@ -77,7 +77,11 @@ export default async function accountPage({ view }) {
             ${icons.laptop()}
             <div>
               <div class="device-name">${d.name}</div>
-              <div class="meta">연결 ${formatDate(d.connected_at)} · 최근 활동 ${d.last_active_at ? formatDateTime(d.last_active_at) : '기록 없음'}</div>
+              <div class="meta">등록 상태 연결됨 · 연결 ${formatDate(d.connected_at)} · 최근 활동 ${
+                d.last_active_available
+                  ? (d.last_active_at ? formatDateTime(d.last_active_at) : '기록 없음')
+                  : '정보 미제공'
+              }</div>
             </div>
           </div>
           <button type="button" class="btn btn-outline-danger" data-action="disconnect" data-device-id="${d.device_id}" data-device-name="${d.name}">연결 해제</button>
