@@ -83,3 +83,17 @@ assert {'get_reading_questions', 'get_reading_comparison', 'get_reading_storage_
         'save_reading_answer', 'delete_reading_answer'} <= {
     tool.name for tool in asyncio.run(reflection_bundle.server.list_tools())}
 print('REMOTE_REFLECTION_IMAGE_OK; no database or provider calls')
+
+# 퀴즈 검토 링크·상태 도구만 조립하며 실제 저장소나 생성기는 연결하지 않는다.
+from solo_leveling.interfaces.http.remote_quiz_generation_reviews import PostgresQuizGenerationReviews
+from solo_leveling.application.remote_execution_policy import RemoteExecutionPolicy
+quiz_reviews = PostgresQuizGenerationReviews(None, settings=dict(provider='synthetic', model='synthetic',
+    prompt_version='v1', language='ko', budget_policy_version='synthetic'),
+    policy=RemoteExecutionPolicy('synthetic', 120, 60, 1, 1000, 100), window_key='test',
+    review_seconds=60, web_origin='https://example.invalid')
+quiz_review_bundle = create_remote_mcp(settings, product_queries=Queries(), quiz_review_service=quiz_reviews)
+assert {'prepare_remote_quiz_generation', 'get_remote_quiz_generation_review'} <= {
+    tool.name for tool in asyncio.run(quiz_review_bundle.server.list_tools())}
+assert any(getattr(route, 'path', '') == '/v1/remote-quiz-generation/reviews/{key}'
+           for route in create_app(remote_mcp_settings=settings, remote_quiz_reviews=quiz_reviews).routes)
+print('REMOTE_QUIZ_REVIEW_IMAGE_OK; no database or provider calls')
