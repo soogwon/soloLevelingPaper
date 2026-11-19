@@ -148,7 +148,8 @@ def create_remote_mcp(
     if settings.product_reads_enabled:
         if product_queries is None:
             raise ValueError("remote_product_queries_required")
-        upload_url = f"https://{urlsplit(settings.resource_url).netloc}/#/uploads"
+        web_origin = f"https://{urlsplit(settings.resource_url).netloc}"
+        upload_url = f"{web_origin}/#/uploads"
 
         @server.tool(meta={"ui": {"resourceUri": PDF_REGISTRATION_URI}},
                      annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
@@ -185,7 +186,7 @@ def create_remote_mcp(
 
         if reflection_service is not None:
             from solo_leveling.interfaces.mcp.remote_reflection import register_remote_reflection
-            register_remote_reflection(server,product_queries,reflection_service)
+            register_remote_reflection(server, product_queries, reflection_service, web_origin=web_origin)
         if quiz_review_service is not None:
             from solo_leveling.interfaces.mcp.remote_quiz_reviews import register_quiz_review_tools
             register_quiz_review_tools(server, product_queries, quiz_review_service)
