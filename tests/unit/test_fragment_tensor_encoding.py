@@ -41,6 +41,7 @@ def test_tensor_encoding_preserves_ids_without_text_roundtrip(monkeypatch):
             assert kwargs == dict(padding=True,return_tensors='pt')
             return inputs
     class Model:
+        device = "cpu"
         tokenizer = PreparedTokenizer()
         def eval(self): pass
         def __call__(self, features):

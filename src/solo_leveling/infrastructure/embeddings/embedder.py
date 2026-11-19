@@ -60,3 +60,22 @@ def embedding_dimension(model_name: str = DEFAULT_MODEL_NAME) -> int:
     if getter is None:
         getter = model.get_sentence_embedding_dimension
     return getter()
+
+
+def embed_token_windows(chunks, embedding_set_id, *, model_name):
+    """캐시된 로컬 모델로 원래 토큰 ID를 직접 임베딩한다."""
+    from .processing_embedder import _encode_token_windows
+    from .token_windows import split_token_windows
+
+    model = _get_model(model_name, local_files_only=True)
+    windows = tuple(
+        window
+        for chunk in chunks
+        for window in split_token_windows(
+            model.tokenizer, chunk.text, parent_chunk_id=chunk.chunk_id,
+            embedding_set_id=embedding_set_id, max_length=model.max_seq_length,
+        )
+    )
+    vectors = _encode_token_windows(model, windows, max_length=model.max_seq_length,
+                                    batch_size=8, check_allowed=lambda: True)
+    return windows, vectors.tolist()

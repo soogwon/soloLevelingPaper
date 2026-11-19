@@ -413,6 +413,18 @@ CREATE TABLE IF NOT EXISTS search_index_chunks (
     chunk_id TEXT NOT NULL,
     PRIMARY KEY (embedding_set_id, chunk_id)
 );
+-- 조각은 검색에만 사용하고 근거는 게시된 부모 청크를 참조한다.
+CREATE TABLE IF NOT EXISTS local_embedding_fragments (
+    embedding_set_id TEXT NOT NULL,
+    fragment_id TEXT NOT NULL,
+    chunk_id TEXT NOT NULL,
+    token_start INTEGER NOT NULL CHECK (token_start >= 0),
+    token_end INTEGER NOT NULL CHECK (token_end > token_start),
+    PRIMARY KEY (embedding_set_id, fragment_id),
+    UNIQUE (embedding_set_id, chunk_id, token_start),
+    FOREIGN KEY (embedding_set_id, chunk_id)
+        REFERENCES search_index_chunks(embedding_set_id, chunk_id) ON DELETE CASCADE
+);
 -- 청크 소속을 게시 트랜잭션 또는 실제 벡터 컬렉션에서 확인한 색인만 기록한다.
 -- 이 표에 없는 구버전 멤버십은 현재 번역 결과로 추측하지 않고 미확인으로 취급한다.
 CREATE TABLE IF NOT EXISTS search_index_chunk_snapshots (

@@ -13,6 +13,7 @@ dependencies = []
 solo-leveling-mcp = "solo_leveling.interfaces.mcp.runtime:main"
 solo-leveling-desktop = "solo_leveling.interfaces.cli.desktop:main"
 solo-leveling-prepare-model = "solo_leveling.interfaces.cli.prepare_embedding_model:main"
+solo-leveling-local-reindex = "solo_leveling.interfaces.cli.local_reindex:main"
 solo-leveling-mcp-diagnostics = "solo_leveling.interfaces.cli.mcp_diagnostics:main"
 solo-leveling-verification-retention = "solo_leveling.interfaces.cli.verification_retention:main"
 solo-leveling-api = "solo_leveling.interfaces.http.runtime:main"

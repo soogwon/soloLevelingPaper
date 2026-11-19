@@ -73,6 +73,20 @@ Chroma는 `chunks-{embedding_set_id}` 컬렉션에 저장한다. 논문별 모�
 SQLite의 get_search_index로 고정 리비전의 embedding_set_id·모델·차원을 얻어 검색해야 한다.
 현재 B의 context 기반 검색 서비스는 SQLite·Chroma에 연결되어 있으며, MCP 도구 노출은 아직 없다.
 
+### 로컬 토큰 하위 조각 재색인
+
+기존 로컬 색인의 논문 판본 ID와 현재 기본 색인 ID를 확인한 뒤, 같은 DATA_ROOT
+설정에서 다음 명령을 실행합니다. 모델은 미리 로컬 캐시에 준비되어 있어야 합니다.
+
+```bash
+solo-leveling-local-reindex --version-id <판본-ID> --base-embedding-set-id <기본-색인-ID>
+```
+
+기존 번역 성공 청크를 토큰 하위 조각으로 임베딩하고, 새 벡터 컬렉션을 검증한 뒤
+새 색인 ID를 출력합니다. 새 학습 맥락은 새 기본 색인을 사용하며 기존 맥락과
+저장된 근거는 기존 색인을 계속 가리킵니다. 기준 색인이 실행 중 바뀌면 게시가
+거부됩니다. 이 명령은 번역이나 외부 API 호출을 시작하지 않습니다.
+
 ## 학습 맥락 기반 범위 검색
 
 `SearchEntryService`는 context 선택 없이 논문 버전으로 기본 context를 준비한다.
