@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.integration.test_remote_processing_postgres import pool, db, DSN, new_id  # noqa: F401
 from tests.fixtures.web_permissions import grant_web
+from tests.integration.test_remote_annotations_postgres import context, stores  # noqa: F401
 
 pytestmark = pytest.mark.skipif(not os.environ.get("SOLO_TEST_POSTGRES_DSN"), reason="격리 PostgreSQL 필요")
 
@@ -233,6 +234,45 @@ def test_web_login_papers_learning_annotations_collections_resume_devices(web, w
     other = sessions.create_session(WebIdentity(new_id(), "다른 합성", None), datetime.now(timezone.utc))
     client.cookies.set("slp_session", other.token)
     call(client, "GET", f"/v1/papers/{paper}", expected=404)
+
+
+def test_web_remote_annotation_is_owner_scoped_with_restricted_role(
+    web, web_pool, pool, context,
+):
+    from solo_leveling.interfaces.http.remote_annotations import PostgresRemoteAnnotationStore
+    from solo_leveling.interfaces.http.web_auth import WebIdentity
+    from tests.integration.test_remote_annotations_postgres import annotation
+
+    client, sessions, other_owner = web
+    owner, context_id, _ = context
+    assert owner != other_owner
+    remote = PostgresRemoteAnnotationStore(pool).create(
+        owner, "paper-detail", context_id, "web-library", annotation(context),
+    ).annotation
+    path = f"/v1/annotations/{remote.annotation_id}"
+    assert all(
+        item["annotation_id"] != remote.annotation_id
+        for item in call(client, "GET", "/v1/annotations")["items"]
+    )
+    call(client, "GET", path, expected=404)
+
+    session = sessions.create_session(WebIdentity(owner, "합성 소유자", None), datetime.now(timezone.utc))
+    client.cookies.set("slp_session", session.token)
+    detail = call(client, "GET", path)
+    assert detail["context_id"] == context_id
+    assert detail["storage_origin"] == "remote"
+    assert detail in call(client, "GET", "/v1/annotations")["items"]
+
+    with web_pool.connection() as conn:
+        for table in (
+            "server_remote_learning_records", "server_context_annotations", "server_execution_contexts",
+        ):
+            privileges = conn.execute(
+                "SELECT has_table_privilege(current_user, %s, 'SELECT') AS readable, "
+                "has_table_privilege(current_user, %s, 'INSERT, UPDATE, DELETE') AS writable",
+                (table, table),
+            ).fetchone()
+            assert privileges == {"readable": True, "writable": False}
 
 
 def test_web_remote_upload_consent_admission_deletion(web, db):

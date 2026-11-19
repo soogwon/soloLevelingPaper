@@ -29,7 +29,9 @@ def create_annotation_router(require_principal: Any, store: PaperStore):
     class AnnotationView(BaseModel):
         annotation_id: UUID
         paper: PaperRef
-        learning_record_id: UUID
+        learning_record_id: UUID | None
+        context_id: UUID | None = None
+        storage_origin: Literal["local_sync", "remote"] = "local_sync"
         version_id: str | None
         kind: Literal["note", "highlight"]
         body: str
@@ -68,6 +70,7 @@ def create_annotation_router(require_principal: Any, store: PaperStore):
         return AnnotationView(
             annotation_id=item.annotation_id, paper=PaperRef(paper_id=item.paper_id, title=item.paper_title),
             learning_record_id=item.learning_record_id,
+            context_id=item.context_id, storage_origin=item.storage_origin,
             version_id=item.selected_version_id, kind=item.kind, body=item.body,
             step=item.step, segments=segments, created_at=item.created_at,
             updated_at=item.updated_at, creation_origin=item.creation_origin,

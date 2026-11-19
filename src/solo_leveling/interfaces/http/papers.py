@@ -95,7 +95,7 @@ class StoredAnnotation:
     annotation_id: str
     paper_id: str
     paper_title: str | None
-    learning_record_id: str
+    learning_record_id: str | None
     selected_version_id: str | None
     kind: str
     body: str
@@ -104,6 +104,8 @@ class StoredAnnotation:
     created_at: datetime
     updated_at: datetime
     creation_origin: str = 'unknown'
+    context_id: str | None = None
+    storage_origin: str = 'local_sync'
 
 
 @dataclass(frozen=True)
@@ -145,6 +147,9 @@ class PaperListItem:
     collection_id: str | None = None
     reading_basis_version_id: str | None = None
     reading_state_revision: int = 0
+    reading_status_source: str = "unknown"
+    reading_context_id: str | None = None
+    reading_status_updated_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -343,7 +348,7 @@ class PostgresPaperStore:
             filters.append("p.title ILIKE %s ESCAPE '\\'")
             params.append(f"%{_escape_like(query)}%")
         if reading_status is not None:
-            filters.append("COALESCE(rs.status, 'unknown') = %s")
+            filters.append("reading.status = %s")
             params.append(reading_status)
         if collection_id is not None:
             filters.append("cp.collection_id = %s")
@@ -358,7 +363,7 @@ class PostgresPaperStore:
             WHERE owner_user_id=p.owner_user_id AND paper_id=p.paper_id
             ORDER BY last_studied_at DESC NULLS LAST, learning_record_id ASC LIMIT 1
         ) r ON TRUE LEFT JOIN LATERAL (
-            SELECT u.server_version_id, u.file_name
+            SELECT u.server_version_id, u.file_name, u.updated_at
             FROM server_pdf_uploads u
             JOIN server_processing_versions v ON v.owner_user_id=u.owner_user_id
               AND v.paper_id=u.paper_id AND v.server_version_id=u.server_version_id
@@ -366,6 +371,50 @@ class PostgresPaperStore:
               AND u.owner_user_id=p.owner_user_id AND u.paper_id=p.paper_id
             ORDER BY u.updated_at DESC, u.upload_id ASC LIMIT 1
         ) remote_file ON TRUE LEFT JOIN server_paper_reading_states rs ON rs.paper_id=p.paper_id
+          LEFT JOIN LATERAL (
+            SELECT rl.status, rl.context_id, rl.updated_at, rl.server_version_id
+            FROM server_remote_learning_records rl
+            WHERE rl.owner_user_id=p.owner_user_id AND rl.paper_id=p.paper_id
+              AND rl.server_version_id=COALESCE(r.selected_version_id, remote_file.server_version_id)
+            ORDER BY rl.updated_at DESC, rl.context_id LIMIT 1
+          ) remote_learning ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT
+              CASE
+                WHEN rs.basis_version_id=COALESCE(r.selected_version_id, remote_file.server_version_id)
+                  THEN rs.status
+                WHEN remote_learning.status IS NOT NULL THEN remote_learning.status
+                WHEN remote_file.server_version_id IS NOT NULL THEN 'not_started'
+                ELSE 'unknown'
+              END AS status,
+              CASE
+                WHEN rs.basis_version_id=COALESCE(r.selected_version_id, remote_file.server_version_id)
+                  THEN 'explicit'
+                WHEN remote_learning.status IS NOT NULL THEN 'remote_learning'
+                WHEN remote_file.server_version_id IS NOT NULL THEN 'remote_file'
+                ELSE 'unknown'
+              END AS source,
+              CASE
+                WHEN rs.basis_version_id=COALESCE(r.selected_version_id, remote_file.server_version_id)
+                  THEN rs.basis_version_id
+                WHEN remote_learning.status IS NOT NULL THEN remote_learning.server_version_id
+                WHEN remote_file.server_version_id IS NOT NULL THEN remote_file.server_version_id
+                ELSE NULL
+              END AS basis_version_id,
+              CASE WHEN remote_learning.status IS NOT NULL
+                AND rs.basis_version_id IS DISTINCT FROM
+                    COALESCE(r.selected_version_id, remote_file.server_version_id)
+                THEN remote_learning.context_id ELSE NULL END AS context_id,
+              CASE
+                WHEN rs.basis_version_id=COALESCE(r.selected_version_id, remote_file.server_version_id)
+                  THEN rs.updated_at
+                WHEN remote_learning.status IS NOT NULL THEN remote_learning.updated_at
+                WHEN remote_file.server_version_id IS NOT NULL THEN remote_file.updated_at
+                ELSE NULL
+              END AS status_updated_at,
+              CASE WHEN rs.basis_version_id=COALESCE(r.selected_version_id, remote_file.server_version_id)
+                THEN rs.revision ELSE 0 END AS revision
+          ) reading ON TRUE
           LEFT JOIN server_collection_papers cp
           ON cp.owner_user_id=p.owner_user_id AND cp.paper_id=p.paper_id"""
         with _connection(self._pool) as conn:
@@ -384,8 +433,13 @@ class PostgresPaperStore:
                                 ELSE r.selected_version_id END AS selected_version_id,
                            CASE WHEN r.learning_record_id IS NULL THEN remote_file.file_name
                                 ELSE r.file_name END AS file_name,
-                           r.last_position, r.last_studied_at, rs.status AS reading_status,
-                           rs.basis_version_id AS reading_basis_version_id, rs.revision AS reading_state_revision, cp.collection_id
+                           r.last_position, r.last_studied_at, reading.status AS reading_status,
+                           reading.basis_version_id AS reading_basis_version_id,
+                           reading.revision AS reading_state_revision,
+                           reading.source AS reading_status_source,
+                           reading.context_id AS reading_context_id,
+                           reading.status_updated_at AS reading_status_updated_at,
+                           cp.collection_id
                     FROM server_papers p {latest} WHERE {where}
                     ORDER BY r.last_studied_at DESC NULLS LAST, p.paper_id ASC LIMIT %s OFFSET %s""",
                 (*params, limit, (page - 1) * limit),
@@ -402,6 +456,10 @@ class PostgresPaperStore:
             collection_id=(str(row.get("collection_id")) if row.get("collection_id") else None),
             reading_basis_version_id=row.get("reading_basis_version_id"),
             reading_state_revision=row.get("reading_state_revision") or 0,
+            reading_status_source=row.get("reading_status_source") or "unknown",
+            reading_context_id=(str(row.get("reading_context_id"))
+                                if row.get("reading_context_id") is not None else None),
+            reading_status_updated_at=row.get("reading_status_updated_at"),
         ) for row in rows)
         return PaperPage(items, page, limit, total, total_pages)
 
@@ -593,16 +651,16 @@ class PostgresPaperStore:
                          page: int, limit: int) -> AnnotationPage:
         if sort not in ("newest", "oldest"):
             raise ValueError("지원하지 않는 메모 정렬입니다.")
-        conditions = ["a.owner_user_id=%s"]
-        params: list[Any] = [owner_user_id]
+        conditions = ["TRUE"]
+        params: list[Any] = [owner_user_id, owner_user_id]
         if kind is not None:
             conditions.append("a.kind=%s")
             params.append(kind)
         if start_date is not None:
-            conditions.append("a.original_created_at >= (%s::date::timestamp AT TIME ZONE 'Asia/Seoul')")
+            conditions.append("a.created_at >= (%s::date::timestamp AT TIME ZONE 'Asia/Seoul')")
             params.append(start_date)
         if end_date is not None:
-            conditions.append("a.original_created_at < ((%s::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul')")
+            conditions.append("a.created_at < ((%s::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul')")
             params.append(end_date)
         if paper_id is not None:
             conditions.append("a.paper_id=%s")
@@ -613,31 +671,57 @@ class PostgresPaperStore:
         if query is not None:
             pattern = f"%{_escape_like(query)}%"
             conditions.append(
-                """(a.body ILIKE %s ESCAPE '\\' OR p.title ILIKE %s ESCAPE '\\'
+                """(a.body ILIKE %s ESCAPE '\\' OR a.paper_title ILIKE %s ESCAPE '\\'
                     OR EXISTS (SELECT 1 FROM jsonb_array_elements(a.segments) segment
                                WHERE segment->>'quote_snapshot' ILIKE %s ESCAPE '\\'))"""
             )
             params.extend((pattern, pattern, pattern))
         where = " AND ".join(conditions)
         direction = "ASC" if sort == "oldest" else "DESC"
-        base = "FROM server_annotations a JOIN server_papers p ON p.paper_id=a.paper_id"
+        # 두 저장소는 공통 원본 식별자를 공유하지 않는다. 본문·시각이 같다는 이유로
+        # 서로 다른 사용자 기록을 합치지 않고 저장 출처와 불변 annotation_id를 보존한다.
+        unified = """WITH unified AS (
+            SELECT a.annotation_id,a.paper_id,p.title AS paper_title,a.learning_record_id,
+                   a.selected_version_id,a.kind,a.body,a.step,a.segments,
+                   a.original_created_at AS created_at,a.source_updated_at AS updated_at,
+                   a.creation_origin,NULL::uuid AS context_id,'local_sync'::text AS storage_origin
+            FROM server_annotations a
+            JOIN server_papers p ON p.owner_user_id=a.owner_user_id AND p.paper_id=a.paper_id
+            WHERE a.owner_user_id=%s AND p.deleted_at IS NULL
+            UNION ALL
+            SELECT a.annotation_id,c.paper_id,p.title AS paper_title,r.learning_record_id,
+                   c.server_version_id AS selected_version_id,a.kind,a.body,a.step,a.segments,
+                   a.created_at,a.updated_at,a.creation_origin,a.context_id,
+                   'remote'::text AS storage_origin
+            FROM server_context_annotations a
+            JOIN server_execution_contexts c
+              ON c.owner_user_id=a.owner_user_id AND c.context_id=a.context_id
+            JOIN server_papers p
+              ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
+            LEFT JOIN server_remote_learning_records r
+              ON r.owner_user_id=a.owner_user_id AND r.context_id=a.context_id
+            WHERE a.owner_user_id=%s AND a.deleted_at IS NULL AND p.deleted_at IS NULL
+        ) """
+        base = "FROM unified a"
         with _connection(self._pool) as conn:
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             total = int(conn.execute(
-                f"SELECT count(*) AS total_count {base} WHERE {where}", tuple(params),
+                unified + f"SELECT count(*) AS total_count {base} WHERE {where}", tuple(params),
             ).fetchone()["total_count"])
             total_pages = (total + limit - 1) // limit
             counts = conn.execute(
-                f"""SELECT (a.original_created_at AT TIME ZONE 'Asia/Seoul')::date AS created_date,
+                unified + f"""SELECT (a.created_at AT TIME ZONE 'Asia/Seoul')::date AS created_date,
                            count(*) AS item_count {base} WHERE {where}
                     GROUP BY created_date ORDER BY created_date {direction}""", tuple(params),
             ).fetchall()
             rows = [] if page > total_pages else conn.execute(
-                f"""SELECT a.annotation_id, a.paper_id, p.title AS paper_title,
+                unified + f"""SELECT a.annotation_id, a.paper_id, a.paper_title,
                            a.learning_record_id, a.selected_version_id, a.kind, a.body, a.step,
-                           a.segments, a.original_created_at, a.source_updated_at AS updated_at, a.creation_origin
+                            a.segments, a.created_at, a.updated_at, a.creation_origin,
+                            a.context_id, a.storage_origin
                     {base} WHERE {where}
-                    ORDER BY a.original_created_at {direction}, a.annotation_id {direction}
+                     ORDER BY a.created_at {direction}, a.storage_origin {direction},
+                              a.annotation_id {direction}
                     LIMIT %s OFFSET %s""", (*params, limit, (page - 1) * limit),
             ).fetchall()
         return AnnotationPage(
@@ -650,12 +734,29 @@ class PostgresPaperStore:
         with _connection(self._pool) as conn:
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             row = conn.execute(
-                """SELECT a.annotation_id, a.paper_id, p.title AS paper_title,
-                          a.learning_record_id, a.selected_version_id, a.kind, a.body, a.step,
-                          a.segments, a.original_created_at, a.source_updated_at AS updated_at, a.creation_origin
-                   FROM server_annotations a JOIN server_papers p ON p.paper_id=a.paper_id
-                   WHERE a.owner_user_id=%s AND a.annotation_id=%s""",
-                (owner_user_id, annotation_id),
+                """SELECT * FROM (
+                     SELECT a.annotation_id,a.paper_id,p.title AS paper_title,a.learning_record_id,
+                            a.selected_version_id,a.kind,a.body,a.step,a.segments,
+                            a.original_created_at AS created_at,a.source_updated_at AS updated_at,
+                            a.creation_origin,NULL::uuid AS context_id,'local_sync'::text AS storage_origin
+                     FROM server_annotations a
+                     JOIN server_papers p ON p.owner_user_id=a.owner_user_id AND p.paper_id=a.paper_id
+                     WHERE a.owner_user_id=%s AND a.annotation_id=%s AND p.deleted_at IS NULL
+                     UNION ALL
+                     SELECT a.annotation_id,c.paper_id,p.title AS paper_title,r.learning_record_id,
+                            c.server_version_id,a.kind,a.body,a.step,a.segments,a.created_at,a.updated_at,
+                            a.creation_origin,a.context_id,'remote'::text AS storage_origin
+                     FROM server_context_annotations a
+                     JOIN server_execution_contexts c
+                       ON c.owner_user_id=a.owner_user_id AND c.context_id=a.context_id
+                     JOIN server_papers p
+                       ON p.owner_user_id=c.owner_user_id AND p.paper_id=c.paper_id
+                     LEFT JOIN server_remote_learning_records r
+                       ON r.owner_user_id=a.owner_user_id AND r.context_id=a.context_id
+                     WHERE a.owner_user_id=%s AND a.annotation_id=%s
+                       AND a.deleted_at IS NULL AND p.deleted_at IS NULL
+                   ) found ORDER BY storage_origin LIMIT 1""",
+                (owner_user_id, annotation_id, owner_user_id, annotation_id),
             ).fetchone()
         if row is None:
             raise PaperNotFound
@@ -668,7 +769,7 @@ class PostgresPaperStore:
             paper = conn.execute(
                 """SELECT p.paper_id, p.title, p.authors, p.publication_year, p.origin,
                           s.status AS reading_status, s.basis_version_id AS reading_basis_version_id,
-                          s.revision AS reading_state_revision
+                          s.revision AS reading_state_revision, s.updated_at AS reading_status_updated_at
                    FROM server_papers p LEFT JOIN server_paper_reading_states s ON s.paper_id=p.paper_id
                    WHERE p.paper_id=%s AND p.owner_user_id=%s AND p.deleted_at IS NULL""", (paper_id, owner_user_id),
             ).fetchone()
@@ -694,7 +795,7 @@ class PostgresPaperStore:
             if record is None and learning_record_id is None and paper.get("origin") == "remote":
                 # 학습 이력을 만들지 않고 소유자의 검증된 원격 판본만 선택한다.
                 remote_file = conn.execute(
-                    """SELECT u.server_version_id, u.file_name
+                    """SELECT u.server_version_id, u.file_name, u.updated_at
                        FROM server_pdf_uploads u JOIN server_processing_versions v
                          ON v.owner_user_id=u.owner_user_id AND v.paper_id=u.paper_id
                         AND v.server_version_id=u.server_version_id
@@ -704,6 +805,33 @@ class PostgresPaperStore:
                        ORDER BY u.updated_at DESC,u.upload_id ASC LIMIT 1""",
                     (owner_user_id, paper_id, version_id, version_id),
                 ).fetchone()
+            selected_version_id = (record["selected_version_id"] if record else
+                                   remote_file["server_version_id"] if remote_file else None)
+            reading = ({"status": paper.get("reading_status"),
+                        "basis_version_id": paper.get("reading_basis_version_id"),
+                        "revision": paper.get("reading_state_revision") or 0,
+                        "updated_at": paper.get("reading_status_updated_at")}
+                       if selected_version_id is not None
+                       and paper.get("reading_basis_version_id") == selected_version_id else None)
+            reading_source = "explicit" if reading is not None else "unknown"
+            reading_context_id = None
+            if (reading is None and selected_version_id is not None
+                    and paper.get("origin") == "remote"):
+                reading = conn.execute(
+                    """SELECT status, server_version_id AS basis_version_id, 0 AS revision,
+                              updated_at, context_id
+                       FROM server_remote_learning_records
+                       WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s
+                       ORDER BY updated_at DESC, context_id LIMIT 1""",
+                    (owner_user_id, paper_id, selected_version_id),
+                ).fetchone()
+                if reading is not None:
+                    reading_source = "remote_learning"
+                    reading_context_id = str(reading["context_id"])
+            if reading is None and remote_file is not None:
+                reading = {"status": "not_started", "basis_version_id": selected_version_id,
+                           "revision": 0, "updated_at": remote_file.get("updated_at")}
+                reading_source = "remote_file"
             summary = None
             if record is not None:
                 summary = conn.execute(
@@ -727,13 +855,15 @@ class PostgresPaperStore:
             publication_year=paper["publication_year"],
             file_name=record["file_name"] if record else remote_file["file_name"] if remote_file else None,
             selected_learning_record_id=str(record["learning_record_id"]) if record else None,
-            selected_version_id=(record["selected_version_id"] if record else
-                                 remote_file["server_version_id"] if remote_file else None),
+            selected_version_id=selected_version_id,
             last_position=record["last_position"] if record else None,
             last_studied_at=record["last_studied_at"] if record else None,
-            reading_status=paper.get("reading_status") or "unknown",
-            reading_basis_version_id=paper.get("reading_basis_version_id"),
-            reading_state_revision=paper.get("reading_state_revision") or 0,
+            reading_status=reading["status"] if reading is not None else "unknown",
+            reading_basis_version_id=(reading.get("basis_version_id") if reading is not None else None),
+            reading_state_revision=(reading.get("revision") or 0 if reading is not None else 0),
+            reading_status_source=reading_source,
+            reading_context_id=reading_context_id,
+            reading_status_updated_at=(reading.get("updated_at") if reading is not None else None),
         )
         stored_summary = (StoredSummary(
             str(summary["summary_id"]), summary["original_created_at"], summary["author_type"],
@@ -753,9 +883,12 @@ def _payload_hash(metadata: PaperMetadata) -> bytes:
 def _stored_annotation(row) -> StoredAnnotation:
     return StoredAnnotation(
         str(row["annotation_id"]), str(row["paper_id"]), row["paper_title"],
-        str(row["learning_record_id"]), row["selected_version_id"], row["kind"],
-        row["body"], row["step"], tuple(row["segments"]), row["original_created_at"],
+        str(row["learning_record_id"]) if row.get("learning_record_id") is not None else None,
+        row["selected_version_id"], row["kind"], row["body"], row["step"],
+        tuple(row["segments"]), row.get("created_at", row.get("original_created_at")),
         row["updated_at"], row.get('creation_origin', 'unknown'),
+        str(row["context_id"]) if row.get("context_id") is not None else None,
+        row.get("storage_origin", "local_sync"),
     )
 
 

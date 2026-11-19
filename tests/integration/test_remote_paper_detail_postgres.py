@@ -36,10 +36,14 @@ def test_remote_pdf_without_learning_record_is_visible_and_owned(pool, db):
         assert item.title is None
         assert item.selected_version_id == intent.server_version_id
         assert item.selected_learning_record_id is None
-        assert item.reading_status == 'unknown'
+        assert item.reading_status == 'not_started'
+        assert item.reading_status_source == 'remote_file'
+        assert item.reading_basis_version_id == intent.server_version_id
     page = papers.list_papers(owner, query=None, reading_status=None, page=1, limit=20)
     assert page.items[0].file_name == 'synthetic.pdf'
     assert page.items[0].selected_version_id == intent.server_version_id
+    assert page.items[0].reading_status == 'not_started'
+    assert page.items[0].reading_status_source == 'remote_file'
     assert files.get_file_access(owner, intent.paper_id, intent.server_version_id).status == 'ready'
     route = next(r.endpoint for r in create_app(paper_store=papers, file_upload_store=files).routes
                  if r.path == '/v1/papers/{paper_id}')

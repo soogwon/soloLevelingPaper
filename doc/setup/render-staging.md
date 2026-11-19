@@ -55,6 +55,25 @@ OIDC 공급자에는 `https://solo-leveling-staging.soogyung.com/v1/auth/callbac
 Auth0를 사용할 때 `OIDC_AUDIENCE`에는 Custom API의 Identifier를 입력하고, 해당 API는 RS256과
 RFC 9068 access-token profile을 사용해야 합니다. 자세한 설정은 [Auth0 설정](auth0.md)을 따릅니다.
 
+### 원격 읽기 상태와 전역 메모 조회 권한
+
+마이그레이션 `0065` 적용 후 새 웹 버전을 시작하기 전에, 실제 웹 연결 역할에
+`server_remote_learning_records`, `server_context_annotations`,
+`server_execution_contexts`의 `SELECT`를 부여합니다. 스키마 소유자로 접속해
+스키마와 역할 이름을 다음 예시의 값과 대조합니다.
+
+```sql
+GRANT SELECT ON TABLE
+    slp_staging.server_remote_learning_records,
+    slp_staging.server_context_annotations,
+    slp_staging.server_execution_contexts
+TO "실제_웹_연결_역할";
+```
+
+웹 역할에서 논문 목록·상세와 전역 메모 목록·상세를 조회하고, 다른 계정의 기록이
+노출되지 않는지 확인합니다. 롤백 시 이전 웹 버전을 복원한 뒤 이 배포에서 새로
+추가한 조회 권한만 회수합니다.
+
 ## PDF 객체 저장소
 
 PDF는 Render Web Service의 임시 파일시스템에 저장하지 않습니다. 별도의 비공개 S3 호환 버킷을 만들고

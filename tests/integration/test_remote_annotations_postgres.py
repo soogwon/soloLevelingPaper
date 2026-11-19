@@ -12,6 +12,7 @@ from solo_leveling.interfaces.http.remote_annotations import (
     RemoteAnnotationInput,
     RemoteAnnotationReferenceError,
 )
+from solo_leveling.interfaces.http.papers import PostgresPaperStore
 from tests.integration.test_remote_processing_postgres import (  # noqa: F401
     claimed_job,
     db,
@@ -55,6 +56,27 @@ def annotation(context, *, body="합성 메모", quote="synthetic", target="orig
         (SegmentInput(context[2][3][0], 0, len(quote), quote, target, translation_id),),
         creation_origin="ai",
     )
+
+
+def test_remote_annotation_is_visible_in_owner_global_web_library(pool, context):
+    owner, context_id, _ = context
+    remote = PostgresRemoteAnnotationStore(pool).create(
+        owner, "paper-detail", context_id, "global-library", annotation(context),
+    ).annotation
+
+    page = PostgresPaperStore(pool).list_annotations(
+        owner, kind=None, start_date=None, end_date=None, query=None,
+        sort="newest", paper_id=None, version_id=None, page=1, limit=20,
+    )
+
+    found = next(item for item in page.items if item.annotation_id == remote.annotation_id)
+    assert found.context_id == context_id
+    assert found.storage_origin == "remote"
+    assert found.paper_id
+    assert not PostgresPaperStore(pool).list_annotations(
+        "other-owner", kind=None, start_date=None, end_date=None, query=None,
+        sort="newest", paper_id=None, version_id=None, page=1, limit=20,
+    ).items
 
 
 def test_concurrent_replay_is_one_annotation_and_returns_current_revision(pool, db, context):
