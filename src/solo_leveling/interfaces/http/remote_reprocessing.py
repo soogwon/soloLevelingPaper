@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import json
 from types import SimpleNamespace
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 
 from .remote_recovery_preview import RemoteRecoveryPreview
 from .remote_retrieval import PostgresRemoteContextResolver
@@ -116,7 +116,8 @@ class PostgresReprocessingReviews:
                 active=row['active'] and row['contract']==self.contract and row['state']=='review',
                 expires_at=row['expires_at'].isoformat(),storage=states.get('storage','missing'),
                 ai_provider=states.get('ai_provider','missing'),execution_enabled=row['state']=='running',
-                result_ready=row['state']=='staged', publication_ready=False, failure_code=row.get('failure_code'))
+                result_ready=row['state'] in ('staged','published'), publication_ready=row['state']=='published',
+                publication=self._publication(conn,row), failure_code=row.get('failure_code'))
 
     def grant(self,owner,key,purpose,notice):
         if purpose not in ('storage','ai_provider') or notice != NOTICE:
@@ -174,7 +175,7 @@ class PostgresReprocessingReviews:
         return dict(request_key=str(row['request_key']),job_id=str(row['job_id']) if row['job_id'] else None,
                     state=row['state'],execution_enabled=row['state']=='running',
                     message={'queued':'접수됨·실행 승인 대기','running':'처리 중','staged':'결과 저장됨·새 색인 게시 대기',
-                             'failed':'처리 중단','cancelled':'취소됨'}.get(row['state'],'검토 중'))
+                             'published':'새 색인 게시됨·선택 대기','failed':'처리 중단','cancelled':'취소됨'}.get(row['state'],'검토 중'))
 
     def cancel(self,owner,key,purpose=None):
         if purpose is not None and purpose not in ('storage','ai_provider'):raise ValueError('invalid_purpose')
@@ -187,6 +188,41 @@ class PostgresReprocessingReviews:
             if purpose:
                 cid=row['storage_consent_id' if purpose=='storage' else 'ai_consent_id']
                 conn.execute('UPDATE server_remote_consents SET revoked_at=COALESCE(revoked_at,clock_timestamp()) WHERE owner_user_id=%s AND consent_id=%s',(owner,cid))
-            if row['state'] in ('review','queued','running'):
+            if row['state'] in ('review','queued','running','staged'):
                 conn.execute("UPDATE server_reprocessing_reviews SET state='cancelled',budget_reserved=false,lease_token=NULL,lease_until=NULL WHERE owner_user_id=%s AND request_key=%s",(owner,key))
+        return self.view(owner,key)
+
+    def _publication(self,conn,row):
+        if row.get('publication_id') is None:return None
+        value=conn.execute("SELECT publication_id,parse_revision_id,translation_revision_id,embedding_set_id FROM server_processing_publications WHERE owner_user_id=%s AND publication_id=%s",
+                           (row['owner_user_id'],row['publication_id'])).fetchone()
+        if value is None:return None
+        return dict(**{k:str(v) for k,v in value.items()},
+                    selected_context_id=str(row['selected_context_id']) if row['selected_context_id'] else None)
+
+    def select(self,owner,key,publication_id):
+        publication_id=str(UUID(publication_id))
+        with self.pool.connection() as conn:
+            row=self._row(conn,owner,key)
+            if row is None:return None
+            if row['state']!='published' or str(row['publication_id'])!=publication_id:
+                raise ValueError('reprocessing_publication_conflict')
+            if row['selected_context_id'] is not None:
+                return dict(state='published',publication_ready=True,publication=self._publication(conn,row))
+            if self._states(conn,row).get('storage')!='current':
+                raise ValueError('reprocessing_consent_required')
+            p=row['snapshot']['preview']
+            live=conn.execute('SELECT paper_id FROM server_papers WHERE owner_user_id=%s AND paper_id=%s AND deleted_at IS NULL FOR SHARE',
+                              (owner,p['paper_id'])).fetchone()
+            version=conn.execute('SELECT active_publication_id FROM server_processing_versions WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s FOR UPDATE',
+                                 (owner,p['paper_id'],p['version_id'])).fetchone()
+            if live is None or version is None or (str(version['active_publication_id']) if version['active_publication_id'] is not None else None) not in (row['snapshot']['pdf']['active_publication_id'],publication_id):
+                raise ValueError('reprocessing_revision_conflict')
+            publication=self._publication(conn,row)
+            context=str(uuid5(NAMESPACE_URL,f'reprocessing-selection:{owner}:{key}:{publication_id}'))
+            conn.execute('INSERT INTO server_execution_contexts(owner_user_id,context_id,paper_id,server_version_id,publication_id,parse_revision_id) VALUES (%s,%s,%s,%s,%s,%s)',
+                         (owner,context,p['paper_id'],p['version_id'],publication_id,publication['parse_revision_id']))
+            conn.execute('UPDATE server_processing_versions SET active_publication_id=%s WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s',
+                         (publication_id,owner,p['paper_id'],p['version_id']))
+            conn.execute('UPDATE server_reprocessing_reviews SET selected_context_id=%s WHERE owner_user_id=%s AND request_key=%s',(context,owner,key))
         return self.view(owner,key)

@@ -40,8 +40,12 @@ export default async function reprocessingReview({ view, params, query = {} }) {
         <p>제공자 ${c?.provider} · 모델 ${c?.model}</p>
         <p>작업 전체 최대 ${c?.max_calls}회 · 입력 ${c?.max_input_tokens}토큰 · 출력 ${c?.max_output_tokens}토큰</p>
         <p>설정 단가 기준 상한 $${c?.max_cost_usd} USD. 사용자·서비스 예산을 함께 예약합니다. 실제 비용 측정값이 아닙니다.</p>
-        <p>접수만으로 실행하지 않습니다. 별도 실행 승인 후 처리하며 재파싱은 원문 추출만 수행합니다. 저장 결과의 새 색인 게시·선택은 아직 연결되지 않았습니다. 취소해도 이미 전송한 요청의 비용은 반환하지 않습니다.</p>
-        <p>상태: ${({queued:'접수됨·실행 승인 대기',running:'처리 중',staged:'결과 저장됨·새 색인 게시 대기',failed:'처리 중단',cancelled:'취소됨'})[value.state] || value.state} · 작업 ID: ${value.job_id || '없음'}</p>
+        <p>접수만으로 실행하지 않습니다. 별도 실행 승인 후 처리하며 재파싱은 원문 추출만 수행합니다. 새 색인은 게시 후 별도로 선택해야 적용됩니다. 기존 학습 맥락은 유지됩니다. 취소해도 이미 전송한 요청의 비용은 반환하지 않습니다.</p>
+        <p>상태: ${value.publication?.selected_context_id ? '새 색인 선택됨' : ({queued:'접수됨·실행 승인 대기',running:'처리 중',staged:'결과 저장됨·새 색인 게시 대기',published:'새 색인 게시됨·선택 대기',failed:'처리 중단',cancelled:'취소됨'})[value.state] || value.state} · 작업 ID: ${value.job_id || '없음'}</p>
+        ${value.publication ? html`<p>새 게시 ${value.publication.publication_id} · 색인 ${value.publication.embedding_set_id}</p>
+          <p>새 색인을 선택하면 새 학습 맥락을 만듭니다. 이전 메모·질문·근거는 이전 맥락에 남습니다.</p>
+          <button data-select ${busy || !value.publication_ready || value.storage !== 'current' || value.publication.selected_context_id ? 'disabled' : ''}>새 색인 선택·새 학습 시작</button>
+          ${value.publication.selected_context_id ? html`<a href="#/remote-learning/${encodeURIComponent(value.publication.selected_context_id)}">선택한 학습 맥락 열기</a>` : ''}` : ''}
         <p>검토 만료: ${value.expires_at || '검토 저장 후 확정'}</p>
         ${valid() ? '' : html`<p>계약 또는 대상이 일치하지 않습니다. 변경 작업을 차단했습니다.</p>`}
         ${value.state === 'draft' ? html`<button data-prepare ${busy || !valid() ? 'disabled' : ''}>이 요청 키로 검토 저장</button>` : ''}
@@ -52,7 +56,7 @@ export default async function reprocessingReview({ view, params, query = {} }) {
           <button data-revoke="${purpose}" ${busy || value[purpose] !== 'current' ? 'disabled' : ''}>철회하고 접수 취소</button>
         </fieldset>`)}
         <button data-submit ${busy || !valid() || !value.active || value.state !== 'review' || value.storage !== 'current' || value.ai_provider !== 'current' ? 'disabled' : ''}>동의한 작업 접수</button>
-        <button data-cancel ${busy || !['review', 'queued', 'running'].includes(value.state) ? 'disabled' : ''}>취소·예약 반환</button>
+        <button data-cancel ${busy || !['review', 'queued', 'running', 'staged'].includes(value.state) ? 'disabled' : ''}>취소·예약 반환</button>
       </section>` : ''}<button data-refresh ${busy ? 'disabled' : ''}>같은 요청 다시 조회</button>`);
     view.querySelector('[data-refresh]').onclick = () => run('GET', path);
     const prepare = view.querySelector('[data-prepare]');
@@ -66,8 +70,13 @@ export default async function reprocessingReview({ view, params, query = {} }) {
     view.querySelectorAll('[data-revoke]').forEach(el => { el.onclick = () => run('POST', `${path}/consents/${el.dataset.revoke}/revoke`); });
     const submit = view.querySelector('[data-submit]');
     if (submit) submit.onclick = () => { if (valid() && value.active && value.state === 'review' && value.storage === 'current' && value.ai_provider === 'current') return run('POST', `${path}/submit`); };
+    const select = view.querySelector('[data-select]');
+    if (select) select.onclick = () => {
+      if (value?.publication_ready && value.storage === 'current' && value.publication?.publication_id && !value.publication.selected_context_id)
+        return run('POST', `${path}/select`, { publication_id: value.publication.publication_id });
+    };
     const cancel = view.querySelector('[data-cancel]');
-    if (cancel) cancel.onclick = () => { if (['review', 'queued', 'running'].includes(value?.state)) return run('POST', `${path}/cancel`); };
+    if (cancel) cancel.onclick = () => { if (['review', 'queued', 'running', 'staged'].includes(value?.state)) return run('POST', `${path}/cancel`); };
   }
   async function run(method, target, body) {
     if (closed || busy) return;

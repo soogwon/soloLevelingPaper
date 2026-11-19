@@ -18,7 +18,8 @@ def load_plan(path):
     with Path(path).open('rb') as stream: raw=stream.read(1048577)
     require(len(raw)<=1048576)
     plan=load(raw.decode('utf-8'))
-    require(type(plan) is dict and set(plan)=={'database_name','database_role','schema_name','approval','config','r2','translation'})
+    require(type(plan) is dict and set(plan) in ({'database_name','database_role','schema_name','approval','config','r2','translation'},
+        {'database_name','database_role','schema_name','approval','config','r2','translation','publication'}))
     for name in ('database_name','database_role','schema_name'):
         require(type(plan[name]) is str and re.fullmatch('[a-z_][a-z0-9_]{0,62}',plan[name]))
     ReprocessingApproval(**plan['approval'])
@@ -42,7 +43,7 @@ def objects_for(plan, source):
 
 
 @contextmanager
-def build(plan,source,*,pool_factory=_pool,post=None):
+def build(plan,source,*,pool_factory=_pool,post=None,publish=False):
     require(source.get('REPROCESSING_WORKER_EXECUTION_ENABLED')=='true')
     dsn=source.get('REPROCESSING_WORKER_DATABASE_URL')
     require(type(dsn) is str)
@@ -60,6 +61,23 @@ def build(plan,source,*,pool_factory=_pool,post=None):
                     =={'database':plan['database_name'],'schema':plan['schema_name']})
             role=conn.execute('SELECT rolname,rolsuper,rolcreatedb,rolcreaterole,rolbypassrls,rolinherit FROM pg_roles WHERE rolname=current_user').fetchone()
             require(role and role['rolname']==plan['database_role'] and not any(role[k] for k in ('rolsuper','rolcreatedb','rolcreaterole','rolbypassrls','rolinherit')))
+        if publish:
+            from pathlib import Path
+            from solo_leveling.domain.remote_processing import EmbeddingSpec
+            from solo_leveling.domain.embedding_windows import TokenWindowPolicy
+            from solo_leveling.infrastructure.embeddings.processing_embedder import PyTorchProcessingEmbedder
+            from solo_leveling.interfaces.http.remote_reprocessing import PostgresReprocessingReviews
+            from .reprocessing_publication import ReprocessingPublisher
+            config=plan.get('publication')
+            require(type(config) is dict and set(config)=={'model_dir','embedding_spec','fragment_policy','batch_size'})
+            require(Path(config['model_dir']).is_absolute())
+            spec=EmbeddingSpec(**config['embedding_spec']);policy=TokenWindowPolicy(**config['fragment_policy'])
+            def embedder(embedding,allowed):
+                return PyTorchProcessingEmbedder(Path(config['model_dir']),allowed,batch_size=config['batch_size'],
+                    fragment_policy=policy,embedding_set_id=embedding)
+            yield ReprocessingPublisher(PostgresReprocessingReviews(pool,config=plan['config']),
+                ReprocessingApproval(**plan['approval']),spec,embedder,execution_enabled=True)
+            return
         translator=None
         if plan['translation'] is not None:
             t=plan['translation']
@@ -75,10 +93,10 @@ def build(plan,source,*,pool_factory=_pool,post=None):
 
 
 @contextmanager
-def factory():
+def factory(*,publish=False):
     try:
         require(os.environ.get('REPROCESSING_WORKER_EXECUTION_ENABLED')=='true')
         plan=load_plan(os.environ.get('REPROCESSING_WORKER_CONFIG',''))
-        with build(plan,os.environ) as worker:yield worker
+        with build(plan,os.environ,publish=publish) as worker:yield worker
     except Exception:
         raise RuntimeError('reprocessing_runtime_failed') from None

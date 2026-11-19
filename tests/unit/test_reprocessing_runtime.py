@@ -49,3 +49,40 @@ def test_cli_suppresses_raw_error_and_stops_after_one(monkeypatch,capsys):
     assert cli.main(['--execute'])==1 and calls==[1]
     output=capsys.readouterr()
     assert json.loads(output.out)=={'status':'reprocessing_worker_failed'} and not output.err
+
+
+def test_publish_cli_uses_explicit_offline_phase(monkeypatch,capsys):
+    calls=[]
+    @contextmanager
+    def factory(*,publish=False):
+        calls.append(publish)
+        class Publisher:
+            def run_once(self):return 'synthetic-publication'
+        yield Publisher()
+    monkeypatch.setattr(cli,'factory',factory)
+    assert cli.main(['--execute','--publish'])==0 and calls==[True]
+    assert json.loads(capsys.readouterr().out)=={'status':'published'}
+
+
+def test_publish_build_does_not_require_provider_or_r2_credentials():
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from tests.fixtures.processing_result import SPEC
+    from tests.integration.test_remote_reprocessing_postgres import CONFIG
+    from solo_leveling.workers.reprocessing_publication import ReprocessingPublisher
+    plan=dict(database_name='db',database_role='worker',schema_name='test',
+        approval=dict(owner='synthetic',request_key=str(uuid4()),input_hash='a'*64),config=CONFIG,
+        r2=None,translation=None,publication=dict(model_dir='/synthetic/model',embedding_spec=asdict(SPEC),
+            fragment_policy=dict(payload_tokens=112,overlap_tokens=24),batch_size=8))
+    closed=[]
+    @contextmanager
+    def connection():
+        def execute(sql):
+            result={'database':'db','schema':'test'} if 'current_database' in sql else dict(rolname='worker',rolsuper=False,rolcreatedb=False,rolcreaterole=False,rolbypassrls=False,rolinherit=False)
+            return SimpleNamespace(fetchone=lambda:result)
+        yield SimpleNamespace(execute=execute)
+    pool=SimpleNamespace(open=lambda **_:None,close=lambda:closed.append(True),connection=connection)
+    with build(plan,{'REPROCESSING_WORKER_EXECUTION_ENABLED':'true','REPROCESSING_WORKER_DATABASE_URL':'postgresql://worker:synthetic@localhost/db'},pool_factory=lambda *_:pool,publish=True) as runner:
+        assert isinstance(runner,ReprocessingPublisher)
+    assert closed==[True]

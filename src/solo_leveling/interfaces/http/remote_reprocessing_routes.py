@@ -17,6 +17,11 @@ class ReprocessingConsent(BaseModel):
     notice_version: Literal['remote-reprocessing-v1']
 
 
+class SelectReprocessing(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    publication_id: UUID
+
+
 def create_reprocessing_router(require_principal, service):
     router=APIRouter(prefix='/v1/reprocessing')
     Principal=Annotated[AuthenticatedPrincipal,Depends(require_principal)]
@@ -48,4 +53,7 @@ def create_reprocessing_router(require_principal, service):
     def submit(key:UUID,principal:Principal,response:Response):return call(principal,response,'submit',str(key))
     @router.post('/reviews/{key}/cancel')
     def cancel(key:UUID,principal:Principal,response:Response):return call(principal,response,'cancel',str(key))
+    @router.post('/reviews/{key}/select')
+    def select(key:UUID,body:SelectReprocessing,principal:Principal,response:Response):
+        return call(principal,response,'select',str(key),str(body.publication_id))
     return router

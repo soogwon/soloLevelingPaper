@@ -51,7 +51,7 @@ def test_real_reparse_stage_preserves_old_publication_and_returns_budget(db,stor
     assert all(r['reserved_input_tokens']==0 for r in db('SELECT * FROM server_dispatch_budget_limits WHERE window_key=%s',(reviews.contract['window_key'],)))
     assert reviews.view(remote.owner,key)['result_ready']
     reviews.cancel(remote.owner,key)
-    assert row_for(db,a)['state']=='staged'
+    assert row_for(db,a)['state']=='cancelled'
 
 
 class Response:
