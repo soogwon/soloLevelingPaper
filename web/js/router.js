@@ -5,6 +5,7 @@ const ROUTES = [
   { pattern: /^\/remote-learning$/, nav: 'papers', parent: '/papers', load: () => import('./pages/remote-dashboard.js') },
   { pattern: /^\/remote-learning\/([^/]+)$/, keys: ['contextId'], nav: 'papers', parent: '/papers', load: () => import('./pages/remote-learning.js') },
   { pattern: /^\/questions\/([^/]+)$/, keys: ['requestKey'], nav: 'papers', parent: '/papers', load: () => import('./pages/question-review.js') },
+  { pattern: /^\/summaries\/([^/]+)$/, keys: ['requestKey'], nav: 'papers', parent: '/papers', load: () => import('./pages/summary-review.js') },
   { pattern: /^\/uploads$/, nav: 'papers', parent: '/papers', load: () => import('./pages/upload.js') },
   { pattern: /^\/papers$/, nav: 'papers', parent: null, load: () => import('./pages/papers.js') },
   { pattern: /^\/papers\/([^/]+)$/, keys: ['paperId'], nav: 'papers', parent: '/papers', load: () => import('./pages/paper-detail.js') },

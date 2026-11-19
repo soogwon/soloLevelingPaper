@@ -185,7 +185,7 @@ def create_app(
         remote_job_cancellations = PostgresProcessingCancellationStore(managed_cancel_store.connection_pool)
     if remote_job_cancellations is not None and (not selected_remote_mcp.enabled or not selected_remote_mcp.product_reads_enabled):
         raise ValueError('processing_cancel_settings_invalid')
-    remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries, question_service=remote_questions, annotation_service=remote_mcp_annotations, cancellation_service=remote_job_cancellations)
+    remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries, question_service=remote_questions, summary_service=remote_summaries, annotation_service=remote_mcp_annotations, cancellation_service=remote_job_cancellations)
                      if selected_remote_mcp.enabled else None)
 
     @asynccontextmanager

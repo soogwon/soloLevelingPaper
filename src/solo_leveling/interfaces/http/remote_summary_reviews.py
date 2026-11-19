@@ -135,3 +135,26 @@ class PostgresSummaryReviews:
             if saved is None:
                 raise ValueError('summary_admission_denied')
             return dict(execution_id=saved.execution_id,state=saved.state,request_key=key)
+
+    def result(self, owner, key):
+        from .remote_summary_results import PostgresSummaryResults
+        with self.pool.connection() as conn:
+            row = self._row(conn, owner, key)
+            if row is None:
+                return None
+            context = str(row['context_id'])
+        return PostgresSummaryResults(self.pool).get(owner, context, key)
+
+    def cancel(self, owner, key):
+        with self.pool.connection() as conn:
+            row = self._row(conn, owner, key)
+            if row is None:
+                return None
+            store = PostgresRemoteExecutionStore(SimpleNamespace(connection=lambda: nullcontext(conn)))
+            execution = store.lookup(owner, OPERATION, str(row['request_key']))
+            if execution is None:
+                return dict(request_key=str(row['request_key']), state='not_submitted')
+            state = store.request_cancel(owner, execution.execution_id)
+            return dict(request_key=str(row['request_key']), execution_id=execution.execution_id,
+                        state=state or execution.state,
+                        message='미전송 예산은 반환하며 이미 전송한 호출의 비용은 취소되지 않습니다.')
