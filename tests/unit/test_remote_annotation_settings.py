@@ -61,7 +61,7 @@ def test_app_uses_separate_pools_and_closes_both(monkeypatch):
     assemble = Mock(return_value=None)
     monkeypatch.setattr(remote_mcp, 'create_remote_mcp', assemble)
     app = create_app(device_store=NS(), remote_mcp_settings=NS(enabled=True, product_reads_enabled=True),
-                     remote_product_queries=NS())
+                     remote_product_queries=NS(pool=NS()))
     service = assemble.call_args.kwargs['annotation_service']
     assert service.store._pool is stores[1].connection_pool
     assert service.service_id == 'remote-paper'
@@ -84,7 +84,7 @@ def test_second_pool_open_failure_closes_first(monkeypatch):
     monkeypatch.setattr(PostgresDeviceStore, 'from_dsn', Mock(side_effect=[first, second]))
     monkeypatch.setattr(remote_mcp, 'create_remote_mcp', Mock(return_value=None))
     app = create_app(device_store=NS(), remote_mcp_settings=NS(enabled=True, product_reads_enabled=True),
-                     remote_product_queries=NS())
+                     remote_product_queries=NS(pool=NS()))
     with pytest.raises(RuntimeError):
         with TestClient(app):
             pass

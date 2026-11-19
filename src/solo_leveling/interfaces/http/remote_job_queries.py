@@ -65,6 +65,35 @@ class RemoteJobQueries:
         except Exception:
             return {'status': 'unavailable'}
 
+    def for_paper(self, paper_id, version_id, after=None, limit=20):
+        try:
+            paper_id = str(UUID(paper_id))
+            after = str(UUID(after)) if after is not None else None
+            if (not isinstance(version_id, str) or not version_id.strip()
+                    or len(version_id) > 128 or "\x00" in version_id
+                    or type(limit) is not int or not 1 <= limit <= 50):
+                return {'status': 'invalid_argument'}
+        except (ValueError, TypeError, AttributeError):
+            return {'status': 'invalid_argument'}
+        try:
+            owner = self.owner()
+            if owner is None:
+                return {'status': 'not_found'}
+            with self.pool.connection() as conn:
+                exists = conn.execute("""SELECT 1 FROM server_processing_versions v
+                    JOIN server_papers p ON p.owner_user_id=v.owner_user_id AND p.paper_id=v.paper_id
+                    WHERE v.owner_user_id=%s AND v.paper_id=%s AND v.server_version_id=%s
+                      AND p.deleted_at IS NULL""", (owner, paper_id, version_id)).fetchone()
+                if not exists:
+                    return {'status': 'not_found'}
+                rows = conn.execute(_SELECT + ' AND j.paper_id=%s AND j.server_version_id=%s'
+                    + ' AND (%s::uuid IS NULL OR j.job_id>%s::uuid) ORDER BY j.job_id LIMIT %s',
+                    (owner, paper_id, version_id, after, after, limit + 1)).fetchall()
+            return {'status': 'ok', 'jobs': [_view(r) for r in rows[:limit]],
+                    'next_after': str(rows[limit - 1]['job_id']) if len(rows) > limit else None}
+        except Exception:
+            return {'status': 'unavailable'}
+
     def get(self, job_id):
         try:
             job_id = str(UUID(job_id))

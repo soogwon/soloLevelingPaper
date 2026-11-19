@@ -270,6 +270,10 @@ def create_app(
     app.include_router(create_paper_router(require_principal, selected_paper_store))
     app.include_router(create_web_paper_router(
         require_principal, selected_paper_store, selected_file_upload_store))
+    if (remote_product_queries is not None and selected_remote_mcp.enabled
+            and selected_remote_mcp.product_reads_enabled):
+        from .remote_job_routes import create_web_job_router
+        app.include_router(create_web_job_router(require_principal, remote_product_queries.pool))
     app.include_router(create_file_router(require_principal, selected_file_upload_store, object_storage))
     app.include_router(create_remote_upload_router(
         require_principal, selected_remote_upload_store,

@@ -22,3 +22,16 @@ def test_error_and_missing_identity_are_safe():
     q.owner=lambda:None
     assert q.get(str(uuid4())) == {'status':'not_found'}
     assert q.get('bad') == {'status':'invalid_argument'}
+
+@pytest.mark.parametrize('version', ['', ' ', 'a\x00b', 'v' * 129, None])
+def test_paper_job_invalid_version_never_reads_database(version):
+    pool, owner = Mock(), Mock()
+    assert RemoteJobQueries(pool, owner).for_paper(str(uuid4()), version) == {'status': 'invalid_argument'}
+    pool.connection.assert_not_called()
+    owner.assert_not_called()
+
+
+def test_paper_job_database_failure_is_not_empty_success():
+    pool = Mock()
+    pool.connection.side_effect = RuntimeError('secret provider token')
+    assert RemoteJobQueries(pool, lambda: 'owner').for_paper(str(uuid4()), 'v1') == {'status': 'unavailable'}
