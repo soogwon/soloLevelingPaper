@@ -18,6 +18,24 @@ class PostgresSummaryResults:
     def __init__(self, pool):
         self.pool = pool
 
+    def input(self, intent):
+        with self.pool.connection() as conn:
+            if not validate_execution_scope(conn, intent):
+                return None
+            if _question_consent(conn, intent.owner_user_id, intent.storage_consent_id,
+                                 intent.ai_consent_id, intent.input_hash, NOTICE_VERSION) is None:
+                return None
+            row = conn.execute("""SELECT s.input_snapshot FROM server_summary_inputs s
+                JOIN server_remote_executions e ON e.owner_user_id=s.owner_user_id AND e.execution_id=s.execution_id
+                WHERE s.owner_user_id=%s AND s.execution_id=%s AND e.operation=%s""",
+                (intent.owner_user_id, intent.execution_id, OPERATION)).fetchone()
+            if row is None:
+                return None
+            request = RemoteSummaryInput(json.dumps(row['input_snapshot']))
+            if request.input_hash != intent.input_hash:
+                raise ValueError('remote_summary_input_invalid')
+            return request
+
     def complete(self, intent, items):
         with self.pool.connection() as conn:
             if not validate_execution_scope(conn, intent):
