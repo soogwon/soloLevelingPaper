@@ -16,6 +16,7 @@ class PostgresRemoteContextResolver:
         if not all(isinstance(v, str) and v.strip() for v in (owner_user_id, context_id, paper_id, version_id)):
             raise ValueError("remote_context_lookup_invalid")
         with self._pool.connection() as conn:
+            # 두 고유 제약 중 어느 쪽에서 동시 요청 충돌이 나도 기존 바인딩을 확인한다.
             conn.execute(
                 """INSERT INTO server_execution_contexts
                      (owner_user_id,context_id,paper_id,server_version_id,publication_id,parse_revision_id)
@@ -27,7 +28,7 @@ class PostgresRemoteContextResolver:
                      AND p.paper_id=v.paper_id AND p.server_version_id=v.server_version_id
                      AND p.publication_id=v.active_publication_id
                    WHERE v.owner_user_id=%s AND v.paper_id=%s AND v.server_version_id=%s
-                   ON CONFLICT (owner_user_id,context_id) DO NOTHING""",
+                   ON CONFLICT DO NOTHING""",
                 (context_id, owner_user_id, paper_id, version_id),
             )
         binding = self.resolve(owner_user_id, context_id)
