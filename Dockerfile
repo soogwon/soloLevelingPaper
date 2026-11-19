@@ -37,6 +37,11 @@ COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-compose.html src/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-evidence-detail.html src/solo_leveling/interfaces/mcp/assets/remote-evidence-detail.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-paper-detail.html src/solo_leveling/interfaces/mcp/assets/remote-paper-detail.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-job-cancellation.html src/solo_leveling/interfaces/mcp/assets/remote-job-cancellation.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
+COPY src/solo_leveling/domain/quiz_attempt.py ./src/solo_leveling/domain/
+COPY src/solo_leveling/application/quiz/attempts.py ./src/solo_leveling/application/quiz/
+COPY src/solo_leveling/application/evidence_qa/errors.py ./src/solo_leveling/application/evidence_qa/
+COPY src/solo_leveling/interfaces/mcp/remote_quiz.py src/solo_leveling/interfaces/mcp/remote_quiz_cards.py ./src/solo_leveling/interfaces/mcp/
+COPY src/solo_leveling/interfaces/mcp/assets/remote-quiz-attempt.html src/solo_leveling/interfaces/mcp/assets/remote-quiz-attempt.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 RUN pip install --no-cache-dir ".[server]"
 
 COPY migrations/server/*.sql ./migrations/server/

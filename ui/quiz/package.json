@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "node build.mjs",
-    "test": "node --test quiz.test.mjs"
+    "build": "node build.mjs && node build-remote.mjs",
+    "test": "node --test *.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "2.0.3"

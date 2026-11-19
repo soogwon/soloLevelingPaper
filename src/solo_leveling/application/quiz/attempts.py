@@ -20,7 +20,6 @@ from solo_leveling.domain.quiz_attempt import (
     DEFAULT_HISTORY_PAGE, AnswerResult, AttemptValidationError, QuizAttempt, QuizAttemptPage, SubmitResult,
     submit_input_hash, validate_request_key,
 )
-from solo_leveling.infrastructure.database import repository as repo
 
 Answer = Union[int, str]  # 객관식은 고른 선택지 위치(0부터), 단답형은 답안 문자열
 
@@ -80,6 +79,7 @@ class QuizAttemptService:
     # ── 제출·채점 ───────────────────────────────────────────
     def submit(self, context_id: str, step: str, answers: Mapping[int, Answer]) -> QuizAttempt:
         """답안을 채점해 시도로 저장한다. answers의 키는 문항 위치(0부터)이며, 빠진 문항은 무응답이다."""
+        from solo_leveling.infrastructure.database import repository as repo
         if step not in LEARNING_STEPS:
             raise AttemptValidationError(f'지원하지 않는 학습 단계: {step!r}')
         if repo.get_learning_context(self.db_path, context_id) is None:
@@ -92,6 +92,7 @@ class QuizAttemptService:
     def submit_once(self, *, context_id: str, step: str, quiz_id: str, request_key: str,
                     answers: Mapping[int, Answer]) -> SubmitResult:
         """완료된 제출을 우선 재사용하고, 새 제출만 채점한 뒤 원자적으로 저장한다."""
+        from solo_leveling.infrastructure.database import repository as repo
         validate_request_key(request_key)
         if step not in LEARNING_STEPS or not isinstance(quiz_id, str) or not quiz_id.strip():
             raise AttemptValidationError('단계 또는 퀴즈 ID가 올바르지 않습니다.')
@@ -151,6 +152,7 @@ class QuizAttemptService:
 
     # ── 조회 ────────────────────────────────────────────────
     def get_attempt(self, attempt_id: str) -> QuizAttempt:
+        from solo_leveling.infrastructure.database import repository as repo
         attempt = repo.get_quiz_attempt(self.db_path, attempt_id)
         if attempt is None:
             raise ResourceNotFoundError('attempt not found')
@@ -158,6 +160,7 @@ class QuizAttemptService:
 
     def history(self, context_id: str, step: Optional[str] = None) -> Tuple[QuizAttempt, ...]:
         """과거 시도를 오래된 순서로 돌려준다."""
+        from solo_leveling.infrastructure.database import repository as repo
         if step is not None and step not in LEARNING_STEPS:
             raise AttemptValidationError(f'지원하지 않는 학습 단계: {step!r}')
         if repo.get_learning_context(self.db_path, context_id) is None:
@@ -167,6 +170,7 @@ class QuizAttemptService:
     def history_page(self, context_id: str, step: Optional[str] = None, limit: int = DEFAULT_HISTORY_PAGE,
                      cursor: Optional[str] = None) -> QuizAttemptPage:
         """시도 요약을 최신순 한 페이지로 돌려준다. 답안은 읽지 않는다(#145)."""
+        from solo_leveling.infrastructure.database import repository as repo
         if step is not None and step not in LEARNING_STEPS:
             raise AttemptValidationError(f'지원하지 않는 학습 단계: {step!r}')
         if repo.get_learning_context(self.db_path, context_id) is None:
@@ -175,6 +179,7 @@ class QuizAttemptService:
 
     def step_scores(self, context_id: str) -> Tuple[StepScore, ...]:
         """단계별 시도 횟수, 가장 최근 점수, 최고 점수. 시도가 없는 단계도 포함한다."""
+        from solo_leveling.infrastructure.database import repository as repo
         if repo.get_learning_context(self.db_path, context_id) is None:
             raise ResourceNotFoundError('context not found')
         summaries = {summary.step: summary
@@ -192,6 +197,7 @@ class QuizAttemptService:
 
     def review(self, attempt_id: str) -> Tuple[ReviewItem, ...]:
         """틀린 문항마다 정답·채점 기준·정답을 뒷받침하는 원문을 묶어 돌려준다."""
+        from solo_leveling.infrastructure.database import repository as repo
         attempt = self.get_attempt(attempt_id)
         items = []
         for result in attempt.wrong_results:

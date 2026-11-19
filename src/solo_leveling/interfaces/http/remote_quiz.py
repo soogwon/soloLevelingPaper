@@ -161,6 +161,36 @@ class PostgresRemoteQuiz:
                 AND context_id=%s AND attempt_id=%s''',(owner,context,str(UUID(attempt_id)))).fetchone()
             return row['payload'] if row else None
 
+    def generation_result(self, owner, context, request_key):
+        """생성 요청 키에서 완료 퀴즈만 찾는다. 정답은 기존 get과 동일하게 숨긴다."""
+        from uuid import uuid5, NAMESPACE_URL
+        from .remote_executions import PostgresRemoteExecutionStore
+        with self.pool.connection() as conn:
+            scoped = SimpleNamespace(connection=lambda: nullcontext(conn))
+            execution = PostgresRemoteExecutionStore(scoped).lookup(owner, 'generate_quiz', str(UUID(request_key)))
+            if (execution is None or not execution.access_allowed
+                    or execution.lookup.context_id != str(UUID(context))):
+                return None
+            quiz = None
+            if execution.state == 'completed':
+                quiz_id = str(uuid5(NAMESPACE_URL, 'remote-quiz:' + owner + ':' + execution.execution_id))
+                quiz = PostgresRemoteQuiz(scoped).get(owner, context, quiz_id)
+                if quiz is None:
+                    raise ValueError('remote_quiz_result_missing')
+            return dict(context_id=str(UUID(context)), request_key=str(UUID(request_key)),
+                        execution_id=execution.execution_id, state=execution.state, quiz=quiz)
+
+    def attempt_by_key(self, owner, context, quiz_id, request_key):
+        """전송 결과가 유실돼도 새 답안 저장 없이 같은 요청 결과만 조회한다."""
+        with self.pool.connection() as conn:
+            if self._quiz(conn, owner, context, quiz_id) is None:
+                return None
+            row = conn.execute("""SELECT payload FROM server_remote_quiz_attempts
+                WHERE owner_user_id=%s AND context_id=%s AND quiz_id=%s AND request_key=%s""",
+                (owner, str(UUID(context)), str(UUID(quiz_id)), str(UUID(request_key)))).fetchone()
+            return dict(context_id=str(UUID(context)), quiz_id=str(UUID(quiz_id)),
+                        request_key=str(UUID(request_key)), attempt=row['payload'] if row else None)
+
     def history(self,owner,context,*,limit=20,cursor=None):
         if type(limit) is not int or not 1<=limit<=100:
             raise ValueError('remote_quiz_page_invalid')

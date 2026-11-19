@@ -15,7 +15,7 @@ def register_remote_quiz(server,queries,service):
         owner=queries.owner()
         if owner is None:return {'status':'not_authorized'}
         try:
-            value=getattr(service,method)(owner,*args,**kwargs)
+            value=(method(owner) if callable(method) else getattr(service,method)(owner,*args,**kwargs))
             return {'status':'not_found'} if value is None else {'status':'ok','result':value}
         except RemoteExecutionConflict:
             return {'status':'conflict','message':'같은 키의 퀴즈나 답안을 바꿀 수 없습니다. 기존 시도를 조회하세요.'}
@@ -62,3 +62,11 @@ def register_remote_quiz(server,queries,service):
             payload=result['result']
             result['result']={**payload,'results':[r for r in payload['results'] if not r['is_correct']]}
         return result
+
+    @server.tool()
+    def get_remote_quiz_generation_result(context_id: str, request_key: str) -> dict:
+        """기존 생성 요청 키로 상태와 정답을 숨긴 완료 퀴즈 ID를 조회한다. 새 생성·전송은 없다."""
+        return call('quizzes:read', 'generation_result', context_id, request_key)
+
+    from .remote_quiz_cards import register_quiz_cards
+    register_quiz_cards(server, service, call, get_access_token)

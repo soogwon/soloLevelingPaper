@@ -26,7 +26,7 @@ def test_read_only_and_wrong_review_are_pinned_to_saved_attempt(monkeypatch):
     assert len(saved['results'])==2
     assert server.tools['submit_quiz']('ctx','quiz','key',{'0':1},'consent')['status']=='not_authorized'
     service.submit.assert_not_called()
-    assert not any('generate' in name or 'consent' in name for name in server.tools)
+    assert not any(name.startswith('generate') or 'consent' in name for name in server.tools)
 
 
 def test_position_keys_are_canonical_and_values_are_not_coerced(monkeypatch):
