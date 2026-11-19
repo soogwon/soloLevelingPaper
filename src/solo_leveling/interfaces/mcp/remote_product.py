@@ -16,6 +16,7 @@ from solo_leveling.interfaces.mcp.remote_recovery import restored_guidance
 class RemoteProductQueries:
     def __init__(self, pool):
         self.pool = pool
+        self.insights_enabled = False
         self.evidences = PostgresRemoteEvidenceReader(pool)
         self.owners = PostgresRemoteOwnerResolver(pool)
         self.contexts = PostgresRemoteContextResolver(pool)
@@ -89,8 +90,25 @@ class RemoteProductQueries:
                     WHERE r.owner_user_id=%s AND r.paper_id=%s AND r.server_version_id=%s
                       AND r.parse_revision_id=%s AND p.deleted_at IS NULL''',
                     (owner, binding.paper_id, binding.server_version_id, binding.parse_revision_id)).fetchone()
+                insight_rows = []
+                insight_status = 'unsupported'
+                if row is not None and self.insights_enabled:
+                    try:
+                        with conn.transaction():
+                            insight_rows = conn.execute("""SELECT
+                                i.item - 'source_chunk_id' - 'source_translation_revision_id' AS item,
+                                a.source->>'stored_at' AS stored_at
+                                FROM server_remote_insight_collections a,
+                                    jsonb_array_elements(a.items) WITH ORDINALITY AS i(item, n)
+                                WHERE a.owner_user_id=%s AND a.context_id=%s
+                                ORDER BY a.device_id,a.source_collection_id,i.n LIMIT 41""",
+                                (owner, context_id)).fetchall()
+                        insight_status = 'ready' if insight_rows else 'empty'
+                    except Exception:
+                        insight_status = 'unavailable'
             if row is None:
                 return {'status': 'not_found'}
+            insights = [dict(r['item'], stored_at=r['stored_at']) for r in insight_rows[:40]]
             metadata = row['document_metadata']
             sections = metadata.get('sections', [])
             if not isinstance(sections, list):
@@ -135,9 +153,14 @@ class RemoteProductQueries:
                 'embedding_set_id': binding.embedding_set_id, 'title': row['title'],
                 'section_catalog': catalog[section_offset:section_offset + 20],
                 'next_section_offset': section_offset + 20 if len(catalog) > section_offset + 20 else None,
-                'summary': None, 'keywords': [], 'important_sentences': [],
-                'limitations': ['remote_summary_not_available', 'remote_keywords_not_available',
-                                'remote_important_sentences_not_available']
+                'summary': None,
+                'keywords': [item for item in insights if item['kind'] == 'keyword'],
+                'important_sentences': [item for item in insights if item['kind'] == 'important_sentence'],
+                'insights_status': insight_status,
+                'insights_truncated': len(insight_rows) > 40,
+                'limitations': ['remote_summary_not_available']
+                               + ([] if self.insights_enabled else [
+                                   'remote_keywords_not_available', 'remote_important_sentences_not_available'])
                                + ([] if catalog else ['section_catalog_not_available']),
                 'reprocessing_preview': {
                     'tool': 'preview_remote_reprocessing',
@@ -148,7 +171,7 @@ class RemoteProductQueries:
                                       'arguments': {'context_id': context_id, 'limit': 20},
                                       'required_scope': 'annotations:read'},
                 'page_notice': '목차 페이지는 이 고정 PDF 판본 기준입니다. 인쇄 페이지나 다른 판본의 페이지와 다를 수 있습니다.',
-                'generation_notice': '저장 요약은 별도 요약 조회 권한으로 확인합니다. 키워드는 아직 제공하지 않으며 조회 시 자동 생성하지 않습니다.'}}
+                'generation_notice': '저장 요약은 별도 요약 조회 권한으로 확인합니다. 키워드·중요 문장은 이관된 항목만 표시하며 조회 시 자동 생성하지 않습니다.'}}
         except Exception:
             return {'status': 'unavailable'}
 

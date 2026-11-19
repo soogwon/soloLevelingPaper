@@ -6,7 +6,7 @@ export function mountRemotePaper(app, doc) {
   let generation = 0, incoming = null, scope = null, busy = false;
   function clear(message) {
     ++generation; scope = null; busy = false; resetSummary('요약 조회 전입니다.');
-    for (const id of ['paper','sections','records']) el(id).textContent = '';
+    for (const id of ['paper','sections','records','insights']) el(id).textContent = '';
     for (const id of buttons) el(id).disabled = true;
     el('status').textContent = message;
   }
@@ -50,6 +50,27 @@ export function mountRemotePaper(app, doc) {
     el('summary-markdown').hidden = false;
   };
 
+  function displayInsights(detail) {
+    const rows = [...detail.keywords, ...detail.important_sentences].filter(item =>
+      item?.parse_revision_id === detail.parse_revision_id &&
+      (item.translation_revision_id === null || item.translation_revision_id === detail.translation_revision_id) &&
+      ['extracted', 'generated'].includes(item.content_kind) &&
+      Number.isSafeInteger(item.pdf_page) && item.pdf_page > 0 &&
+      typeof item.text === 'string' && typeof item.quote_original === 'string');
+    const messages = {
+      empty: '이관된 키워드·중요 문장이 없습니다.',
+      unsupported: '이 연결에서는 키워드·중요 문장 조회를 지원하지 않습니다.',
+      unavailable: '키워드·중요 문장을 조회하지 못했습니다.',
+    };
+    const display = rows.map(item =>
+      `${item.kind === 'keyword' ? '키워드' : '중요 문장'} · ${item.content_kind === 'extracted' ? '원문 추출' : '기존 생성'} · PDF ${item.pdf_page}페이지
+${item.text}
+원문 인용: ${item.quote_original}`);
+    if (detail.insights_truncated) display.push('저장된 항목 중 처음 40개를 표시합니다.');
+    el('insights').textContent = display.length ? display.join('\n\n')
+      : messages[detail.insights_status ?? 'unsupported'] ?? '고정 판본과 일치하는 항목이 없습니다.';
+  }
+
   function render(reply, expected) {
     const r = reply?.structuredContent?.result, d = r?.detail, p = r?.annotation_page;
     if (reply?.isError || reply?.structuredContent?.status !== 'ok'
@@ -71,8 +92,8 @@ export function mountRemotePaper(app, doc) {
           && Array.isArray(a.segments) && a.segments.every(s => s && ['original','translation'].includes(s.target) && typeof s.quote_snapshot === 'string'))
         || new Set(p.items.map(a=>a.annotation_id)).size !== p.items.length
         || !(p.next_cursor === null || (uuid(p.next_cursor) && p.next_cursor !== r.after && p.items.at(-1)?.annotation_id === p.next_cursor))
-        || d.summary !== null || !Array.isArray(d.keywords) || d.keywords.length
-        || !Array.isArray(d.important_sentences) || d.important_sentences.length
+        || d.summary !== null || !Array.isArray(d.keywords) || d.keywords.length > 40
+        || !Array.isArray(d.important_sentences) || d.important_sentences.length + d.keywords.length > 40
         || typeof d.generation_notice !== 'string' || typeof d.page_notice !== 'string') {
       clear('결과나 연결을 확인할 수 없습니다. 채팅에서 상세를 다시 여세요.'); return;
     }
@@ -87,6 +108,7 @@ export function mountRemotePaper(app, doc) {
     el('records-more').disabled = scope.nextRecord === null;
     el('refresh').disabled = false;
     displaySummary(r.saved_summary, r.saved_summary_markdown, d);
+    displayInsights(d);
   }
   async function load(kind) {
     if (!scope || busy || (kind === 'sections' && scope.nextSection === null) || (kind === 'records' && scope.nextRecord === null)) return;

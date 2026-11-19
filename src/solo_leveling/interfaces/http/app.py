@@ -44,6 +44,7 @@ def create_app(
     remote_quiz_reviews=None,
     remote_summaries=None,
     remote_reprocessing=None,
+    remote_insight_imports=None,
     remote_annotation_recovery=None,
     remote_annotation_products=None,
     remote_mcp_annotations=None,
@@ -152,6 +153,19 @@ def create_app(
             database = DatabaseSettings(dsn)
             managed_remote_store = PostgresDeviceStore.from_dsn(database.dsn)
             remote_product_queries = RemoteProductQueries(managed_remote_store.connection_pool)
+    managed_insight_store = None
+    insights_enabled = os.environ.get('REMOTE_INSIGHT_IMPORTS_ENABLED') == 'true'
+    if insights_enabled:
+        from .remote_insights import PostgresRemoteInsightImports
+        from .settings import DatabaseSettings
+
+        if remote_product_queries is None:
+            raise ValueError('remote_insight_product_reads_required')
+        remote_product_queries.insights_enabled = True
+        if remote_insight_imports is None:
+            insight_database = DatabaseSettings(os.environ.get('REMOTE_INSIGHT_IMPORT_DATABASE_URL', '').strip())
+            managed_insight_store = PostgresDeviceStore.from_dsn(insight_database.dsn)
+            remote_insight_imports = PostgresRemoteInsightImports(managed_insight_store.connection_pool)
     managed_question_store = None
     if remote_questions is None:
         from .remote_question_settings import load_question_settings
@@ -248,6 +262,9 @@ def create_app(
             if managed_remote_store is not None:
                 managed_remote_store.open()
                 stack.callback(managed_remote_store.close)
+            if managed_insight_store is not None:
+                stack.callback(managed_insight_store.close)
+                managed_insight_store.open()
             if managed_question_store is not None:
                 managed_question_store.open()
                 stack.callback(managed_question_store.close)
@@ -355,6 +372,9 @@ def create_app(
     app.include_router(create_reflection_router(require_principal,remote_reflections))
     from .remote_reprocessing_routes import create_reprocessing_router
     app.include_router(create_reprocessing_router(require_principal, remote_reprocessing))
+    if remote_insight_imports is not None:
+        from .remote_insight_routes import create_insight_import_router
+        app.include_router(create_insight_import_router(require_principal, remote_insight_imports))
     from .remote_summary_routes import create_summary_review_router
     app.include_router(create_summary_review_router(require_principal,remote_summaries))
     if remote_annotation_products is not None:

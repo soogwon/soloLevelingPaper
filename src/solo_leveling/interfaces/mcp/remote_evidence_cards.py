@@ -9,7 +9,7 @@ from solo_leveling.application.summary.remote_export import export_summary
 
 CARD_URI = 'ui://remote-evidence/detail.html'
 # 상세 응답을 읽는 새 번들은 이전 호스트 캐시와 구분한다.
-PAPER_CARD_URI = 'ui://remote-paper/detail-v2.html'
+PAPER_CARD_URI = 'ui://remote-paper/detail-v3.html'
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                             idempotentHint=True, openWorldHint=False)
 
