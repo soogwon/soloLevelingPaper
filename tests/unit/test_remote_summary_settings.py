@@ -79,3 +79,20 @@ def test_failed_pool_open_is_closed(monkeypatch):
     with pytest.raises(RuntimeError):
         with TestClient(app):pass
     store.close.assert_called_once()
+
+
+def test_remote_pool_uses_trusted_ca_without_changing_other_connections(monkeypatch):
+    import certifi
+    from psycopg.conninfo import conninfo_to_dict
+    store,factory,_=configured(monkeypatch)
+    monkeypatch.setenv('REMOTE_SUMMARY_DATABASE_URL','postgresql://summary:synthetic@db.example.test/summary?sslmode=verify-full')
+    monkeypatch.setenv('PGSSLROOTCERT','/unchanged/other-ca.pem')
+    monkeypatch.setattr(certifi,'where',lambda:'/trusted bundle/ca.pem')
+    create_app(device_store=NS(),remote_mcp_settings=NS(enabled=True,product_reads_enabled=True),remote_product_queries=NS(pool=NS()))
+    factory.assert_called_once()
+    args=conninfo_to_dict(factory.call_args.args[0])
+    assert args['sslmode']=='verify-full' and args['sslrootcert']=='/trusted bundle/ca.pem'
+    assert args['host']=='db.example.test' and args['user']=='summary' and args['dbname']=='summary'
+    import os
+    assert os.environ['PGSSLROOTCERT']=='/unchanged/other-ca.pem'
+    store.open.assert_not_called()
