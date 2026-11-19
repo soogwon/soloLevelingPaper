@@ -535,8 +535,9 @@ def get_search_index(db_path: str, version_id: str, parse_revision_id: str | Non
     embedding_set_id를 주면 그 색인을 정확히 조회한다(기존 context가 가리키는 색인). 주지 않으면 논문 버전의
     기본 색인(is_default=1)을 돌려주며, 버전만으로 임의의 색인을 고르는 경로는 없다.
     """
-    query = '''SELECT s.*, e.model_name, e.dimension FROM search_indexes s
-               JOIN embedding_sets e USING(embedding_set_id) WHERE s.version_id=?'''
+    query = '''SELECT s.*, e.model_name, e.dimension, v.paper_id FROM search_indexes s
+               JOIN embedding_sets e USING(embedding_set_id)
+               JOIN paper_versions v ON v.version_id=s.version_id WHERE s.version_id=?'''
     params: list = [version_id]
     if embedding_set_id is not None:
         query, params = query + ' AND s.embedding_set_id=?', params + [embedding_set_id]
@@ -667,6 +668,60 @@ def publish_search_index(db_path: str, version_id: str, parse_revision_id: str,
                      (embedding_set.embedding_set_id, 'publish'))
         conn.execute("UPDATE processing_jobs SET status='ready', stage='index', limitations=?, updated_at=? WHERE job_id=?",
                      (json.dumps(limitations, ensure_ascii=False), now_iso(), job_id))
+
+
+def read_local_fragment_parents(conn, embedding_set_id: str) -> dict[str, str]:
+    """이관 전 읽기 전용 DB는 기존 청크 단위 색인으로 읽는다."""
+    if not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_embedding_fragments'").fetchone():
+        return {}
+    return {row['fragment_id']: row['chunk_id'] for row in conn.execute(
+        'SELECT fragment_id, chunk_id FROM local_embedding_fragments WHERE embedding_set_id=?',
+        (embedding_set_id,))}
+
+
+def publish_fragment_reindex(db_path, base, embedding_set, chunks, windows):
+    """기본 색인이 여전히 준비 시점과 같을 때 새 색인만 게시한다."""
+    with closing(get_connection(db_path)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        current = conn.execute(
+            'SELECT * FROM search_indexes WHERE version_id=? AND is_default=1',
+            (base['version_id'],)).fetchone()
+        if current is None or any(current[key] != base[key] for key in current.keys()):
+            raise RequestConflictError('재색인 기준이 변경되었습니다. 현재 기본 색인을 확인해 주세요.')
+        parse_id, translation_id = base['parse_revision_id'], base['translation_revision_id']
+        if read_translated_chunks(conn, parse_id, translation_id) != chunks:
+            raise RequestConflictError('재색인 대상 번역이 변경되었습니다.')
+        ids = _validated_published_chunk_ids(conn, parse_id, translation_id, [c.chunk_id for c in chunks])
+        job_id, timestamp = str(uuid4()), now_iso()
+        old_job = conn.execute(
+            "SELECT limitations FROM processing_jobs WHERE job_id=? AND status='ready'",
+            (base['job_id'],)).fetchone()
+        if old_job is None:
+            raise RequestConflictError('재색인 기준 작업이 변경되었습니다.')
+        conn.execute(
+            """INSERT INTO processing_jobs
+               (job_id, version_id, status, stage, limitations, created_at, updated_at)
+               VALUES (?, ?, 'ready', 'index', ?, ?, ?)""",
+            (job_id, base['version_id'], old_job['limitations'], timestamp, timestamp))
+        conn.execute('INSERT INTO embedding_sets VALUES (?, ?, ?, ?, ?)',
+                     (embedding_set.embedding_set_id, translation_id, embedding_set.model_name,
+                      embedding_set.dimension, timestamp))
+        conn.execute('UPDATE search_indexes SET is_default=0 WHERE embedding_set_id=?',
+                     (base['embedding_set_id'],))
+        conn.execute(
+            """INSERT INTO search_indexes
+               (embedding_set_id, version_id, parse_revision_id, translation_revision_id, job_id, chunk_count)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (embedding_set.embedding_set_id, base['version_id'], parse_id, translation_id, job_id, len(ids)))
+        _insert_search_index_chunks(conn, embedding_set.embedding_set_id, ids)
+        conn.execute("INSERT INTO search_index_chunk_snapshots VALUES (?, 'publish')",
+                     (embedding_set.embedding_set_id,))
+        conn.executemany(
+            """INSERT INTO local_embedding_fragments
+               (embedding_set_id, fragment_id, chunk_id, token_start, token_end) VALUES (?, ?, ?, ?, ?)""",
+            ((w.embedding_set_id, w.embedding_fragment_id, w.parent_chunk_id, w.token_start, w.token_end)
+             for w in windows))
 
 
 # ── 기존 논문 재파싱(#116) ──────────────────────────────────────

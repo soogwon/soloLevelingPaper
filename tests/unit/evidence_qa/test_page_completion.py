@@ -33,7 +33,8 @@ def retriever(pair):
     search, next_chunk = pair
     index = {'embedding_set_id': 'idx'}
     reader = SQLiteChromaRetriever('unused', SimpleNamespace(get_collection=lambda name: object()))
-    reader._snapshot = lambda scope: (index, {c.chunk_id: c for c in (search.items[0].chunk, next_chunk)})
+    chunks = {c.chunk_id: c for c in (search.items[0].chunk, next_chunk)}
+    reader._snapshot = lambda scope: (index, chunks, {key: key for key in chunks})
     reader._verify_vectors = lambda *args: None
     return reader
 

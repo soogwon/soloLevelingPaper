@@ -131,6 +131,8 @@ def _encode_token_windows(model, windows, *, max_length, batch_size, check_allow
                 _require(len(item['input_ids']) <= max_length, 'PROCESSING_EMBEDDING_INPUT_TOO_LONG')
                 inputs.append(item)
             features = model.tokenizer.pad(inputs, padding=True, return_tensors='pt')
+            if str(model.device) != 'cpu':
+                features = features.to(model.device)
             vectors = model(features)['sentence_embedding']
             vectors = torch.nn.functional.normalize(vectors, p=2, dim=1)
             rows.append(vectors.detach().cpu())

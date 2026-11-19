@@ -78,14 +78,14 @@ class SQLiteChromaRetriever:
     @traced('continuation_lookup')
     def following_chunks(self, search: SearchResult, indices: tuple[int, ...]) -> tuple[Chunk, ...]:
         """게시 색인을 다시 확인하고 정확히 지정된 다음 번호만 반환한다."""
-        index, chunks = self._snapshot(search.scope)
+        index, chunks, parents = self._snapshot(search.scope)
         if index['embedding_set_id'] != search.embedding_set_id:
             raise ValueError('보충 조회 중 검색 색인이 변경되었습니다.')
         for item in search.items:
             if chunks.get(item.chunk.chunk_id) != item.chunk:
                 raise ValueError('보충 조회 중 검색 청크가 변경되었습니다.')
         collection = self.client.get_collection(f"chunks-{index['embedding_set_id']}")
-        self._verify_vectors(collection, chunks, index)
+        self._verify_vectors(collection, chunks, index, parents)
         scope = search.scope
         return tuple(c for c in chunks.values() if c.chunk_index in indices
                      and (not scope.pdf_pages or c.pdf_page in scope.pdf_pages
@@ -114,6 +114,7 @@ class SQLiteChromaRetriever:
             if row is None:
                 raise ValueError('검색 범위에 일치하는 게시 완료 색인이 없습니다.')
             chunks = repo.read_translated_chunks(conn, scope.parse_revision_id, scope.translation_revision_id)
+            parents = repo.read_local_fragment_parents(conn, row['embedding_set_id'])
         index = dict(row)
         if any(page > index['page_count'] for page in scope.pdf_pages):
             raise InvalidArgumentError('PDF 페이지가 문서 범위를 벗어났습니다.')
@@ -124,19 +125,23 @@ class SQLiteChromaRetriever:
         full_scope = SearchScope(scope.version_id, scope.parse_revision_id, scope.translation_revision_id)
         for chunk in chunks:
             validate_chunk(chunk, full_scope)
-        return index, {c.chunk_id: c for c in chunks}
+        by_id = {c.chunk_id: c for c in chunks}
+        if parents and set(parents.values()) != by_id.keys():
+            raise ValueError('색인 조각의 부모 청크가 DB와 일치하지 않습니다.')
+        index['fragmented'] = bool(parents)
+        return index, by_id, parents or {key: key for key in by_id}
 
     @staticmethod
-    def _verify_vectors(collection, chunks, index):
+    def _verify_vectors(collection, chunks, index, parents):
         # 검색 실패와 정상적인 빈 결과를 구분하기 위해 게시된 색인 전체를 확인한다.
         stored = collection.get(include=['documents', 'metadatas', 'embeddings'])
         ids = stored['ids']
-        if len(ids) != len(chunks) or set(ids) != set(chunks):
+        if len(ids) != len(parents) or set(ids) != parents.keys():
             raise ValueError('벡터 색인의 청크 구성과 DB가 일치하지 않습니다.')
         expected = {key: index[key] for key in ('embedding_set_id', 'paper_id', 'version_id')}
         for i, chunk_id in enumerate(ids):
             meta = stored['metadatas'][i] or {}
-            if stored['documents'][i] != chunks[chunk_id].text or any(meta.get(k) != v for k, v in expected.items()):
+            if stored['documents'][i] != chunks[parents[chunk_id]].text or any(meta.get(k) != v for k, v in expected.items()):
                 raise ValueError('벡터 색인의 번역문 또는 메타데이터가 DB와 일치하지 않습니다.')
             vector = stored['embeddings'][i]
             if len(vector) != index['dimension'] or any(not math.isfinite(x) for x in vector):
@@ -172,11 +177,11 @@ class SQLiteChromaRetriever:
         if not isinstance(scope, SearchScope):
             raise ValueError('검색 범위가 올바르지 않습니다.')
         require_text(scope.translation_revision_id, 'translation_revision_id')
-        index, chunks = self._snapshot(scope)
+        index, chunks, parents = self._snapshot(scope)
         # 조회 중 누락된 컬렉션을 새로 만들지 않는다.
         with stage('chroma_validation'):
             collection = self.client.get_collection(f"chunks-{index['embedding_set_id']}")
-            self._verify_vectors(collection, chunks, index)
+            self._verify_vectors(collection, chunks, index, parents)
         eligible = {key: c for key, c in chunks.items()
                     if (not scope.pdf_pages or c.pdf_page in scope.pdf_pages)
                     and (not scope.section_ids or c.section_id in scope.section_ids)}
@@ -186,23 +191,30 @@ class SQLiteChromaRetriever:
                 vectors = self.embedder([question], model_name=index['model_name'])
             if len(vectors) != 1 or len(vectors[0]) != index['dimension'] or any(not math.isfinite(x) for x in vectors[0]):
                 raise ValueError('질문 벡터의 차원 또는 값이 색인과 일치하지 않습니다.')
+            if index['fragmented']:
+                norm = math.hypot(*vectors[0])
+                if not math.isfinite(norm) or norm == 0:
+                    raise ValueError('질문 벡터를 정규화할 수 없습니다.')
+                vectors = [[value / norm for value in vectors[0]]]
             # 범위 밖 상위 결과 때문에 범위 안 결과가 누락되지 않도록 전체 후보를 검색한다.
             # 초기 소규모 구현이며, 대규모 색인의 사전 필터·페이지 처리는 후속 최적화다.
             with stage('vector_search'):
-                hits = collection.query(query_embeddings=vectors, n_results=len(chunks),
+                hits = collection.query(query_embeddings=vectors, n_results=len(parents),
                     where={'$and': [{'embedding_set_id': index['embedding_set_id']},
                                     {'paper_id': index['paper_id']}, {'version_id': scope.version_id}]},
                     include=['documents', 'distances'])
             ids, docs, distances = hits['ids'][0], hits['documents'][0], hits['distances'][0]
-            if len(ids) != len(chunks) or set(ids) != set(chunks) or len(docs) != len(ids) or len(distances) != len(ids):
+            if len(ids) != len(parents) or set(ids) != parents.keys() or len(docs) != len(ids) or len(distances) != len(ids):
                 raise ValueError('검색 중 벡터 색인 구성이 변경되었거나 결과가 누락되었습니다.')
-            ranked = []
-            for chunk_id, doc, distance in zip(ids, docs, distances):
+            best_scores = {}
+            for vector_id, doc, distance in zip(ids, docs, distances):
+                chunk_id = parents[vector_id]
                 if doc != chunks[chunk_id].text or not math.isfinite(distance) or distance < 0:
                     raise ValueError('검색 결과의 번역문 또는 거리가 올바르지 않습니다.')
                 if chunk_id in eligible:
-                    ranked.append((chunk_id, 1.0 / (1.0 + distance)))
-            ranked.sort(key=lambda hit: (-hit[1], hit[0]))
+                    score = 1.0 / (1.0 + distance)
+                    best_scores[chunk_id] = max(best_scores.get(chunk_id, 0.0), score)
+            ranked = sorted(best_scores.items(), key=lambda hit: (-hit[1], hit[0]))
             if self.hybrid:
                 ranked = self._fuse_lexical(question, ranked, eligible)
             items = tuple(RetrievedChunk(eligible[key], score, rank)

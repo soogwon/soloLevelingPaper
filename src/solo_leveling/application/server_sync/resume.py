@@ -8,6 +8,7 @@ from typing import Any
 from solo_leveling.domain.annotation import (
     AnnotationValidationError, SegmentInput, validate_annotation_fields, validate_segments,
 )
+from solo_leveling.infrastructure.database import repository as repo
 from solo_leveling.infrastructure.database.schema import get_connection
 from solo_leveling.infrastructure.storage.pdf_source import open_pdf_source
 from solo_leveling.infrastructure.storage.server_client import ServerResponseInvalid
@@ -137,17 +138,21 @@ def _available_search_data(db_path: str, chroma_client: Any, paper_id: str,
             )]
             if len(chunk_ids) != row["chunk_count"]:
                 return False
+            parents = repo.read_local_fragment_parents(conn, row["embedding_set_id"])
+            if parents and set(parents.values()) != set(chunk_ids):
+                return False
+            vector_ids = list(parents) if parents else chunk_ids
     except sqlite3.Error:
         return False
 
     try:
         collection = chroma_client.get_collection(f"chunks-{row['embedding_set_id']}")
-        if collection.count() != len(chunk_ids):
+        if collection.count() != len(vector_ids):
             return False
-        stored = collection.get(ids=chunk_ids, include=["metadatas"])
-        if (set(stored["ids"]) != set(chunk_ids)
-                or len(stored["ids"]) != len(chunk_ids)
-                or len(stored["metadatas"]) != len(chunk_ids)):
+        stored = collection.get(ids=vector_ids, include=["metadatas"])
+        if (set(stored["ids"]) != set(vector_ids)
+                or len(stored["ids"]) != len(vector_ids)
+                or len(stored["metadatas"]) != len(vector_ids)):
             return False
         expected = {"embedding_set_id": row["embedding_set_id"],
                     "paper_id": paper_id, "version_id": version_id}
