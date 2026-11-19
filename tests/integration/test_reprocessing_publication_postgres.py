@@ -23,7 +23,7 @@ from solo_leveling.interfaces.http.remote_retrieval import PostgresRemoteContext
 pytestmark=pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'),reason='로컬 PostgreSQL 필요')
 
 
-def setup(pool,db,operation='translation_recovery'):
+def setup(pool,db,operation='translation_recovery',*,active_none=False):
     store,value=initial(pool,db)
     c=value.document.chunks[0]
     value=replace(value,translations=(ProcessedTranslation(c.chunk_id,c.original_text,TranslationFailureCode.EMPTY_TRANSLATION,TranslationStatus.ORIGINAL_ONLY),))
@@ -32,6 +32,7 @@ def setup(pool,db,operation='translation_recovery'):
     owner=value.source.owner_user_id;context=str(uuid4());key=str(uuid4())
     PostgresRemoteContextResolver(pool).pin(owner,context,old.paper_id,old.server_version_id)
     db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'합성') ON CONFLICT DO NOTHING",(owner,))
+    if active_none:db('UPDATE server_processing_versions SET active_publication_id=NULL WHERE paper_id=%s',(old.paper_id,))
     config=dict(CONFIG,window_key=str(uuid4()))
     for scope,id_ in [('owner',owner),('service','service')]:
         db('INSERT INTO server_dispatch_budget_limits(scope_type,scope_id,policy_version,window_key,max_input_tokens,max_output_tokens) VALUES (%s,%s,%s,%s,8000,2000)',
@@ -88,6 +89,8 @@ def test_candidate_atomic_publication_search_and_explicit_selection(pool,db,oper
     assert len(contexts)==1 and context not in contexts
     resolver=PostgresRemoteContextResolver(pool)
     assert resolver.resolve(a.owner,context).publication_id==old.publication_id
+    assert db('SELECT translated_text FROM server_translation_chunks WHERE owner_user_id=%s AND translation_revision_id=%s',
+              (a.owner,old.translation_revision_id))[0]['translated_text']=='Synthetic text.'
     selected_context=next(iter(contexts));binding=resolver.resolve(a.owner,selected_context)
     assert binding.publication_id==pub and binding.embedding_set_id==embedding
     assert resolver.resolve('other',selected_context) is None
@@ -150,3 +153,17 @@ def test_concurrent_publication_replays_one_result_and_revoked_selection_is_bloc
     reviews.cancel(a.owner,a.request_key,'storage')
     with pytest.raises(ValueError):reviews.select(a.owner,a.request_key,pubs[0])
     assert db('SELECT count(*) n FROM server_processing_publications WHERE owner_user_id=%s',(a.owner,))[0]['n']==2
+
+
+def test_invalid_document_limit_blocks_before_model_loading(pool,db):
+    reviews,a,_,_=setup(pool,db,'reparse')
+    db("UPDATE server_reprocessing_reviews SET staged_result=jsonb_set(staged_result,'{page_count}','999999'::jsonb) WHERE request_key=%s",(a.request_key,))
+    called=[]
+    with pytest.raises(Exception):publisher(reviews,a,lambda *_:called.append(True)).run_once()
+    assert not called
+
+
+def test_candidate_can_be_selected_when_review_had_no_active_pointer(pool,db):
+    reviews,a,_,_=setup(pool,db,active_none=True)
+    pub=publisher(reviews,a).run_once()
+    assert reviews.select(a.owner,a.request_key,pub)['publication']['selected_context_id']

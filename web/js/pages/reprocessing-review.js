@@ -41,7 +41,7 @@ export default async function reprocessingReview({ view, params, query = {} }) {
         <p>작업 전체 최대 ${c?.max_calls}회 · 입력 ${c?.max_input_tokens}토큰 · 출력 ${c?.max_output_tokens}토큰</p>
         <p>설정 단가 기준 상한 $${c?.max_cost_usd} USD. 사용자·서비스 예산을 함께 예약합니다. 실제 비용 측정값이 아닙니다.</p>
         <p>접수만으로 실행하지 않습니다. 별도 실행 승인 후 처리하며 재파싱은 원문 추출만 수행합니다. 새 색인은 게시 후 별도로 선택해야 적용됩니다. 기존 학습 맥락은 유지됩니다. 취소해도 이미 전송한 요청의 비용은 반환하지 않습니다.</p>
-        <p>상태: ${({queued:'접수됨·실행 승인 대기',running:'처리 중',staged:'결과 저장됨·새 색인 게시 대기',published:'새 색인 게시됨·선택 대기',failed:'처리 중단',cancelled:'취소됨'})[value.state] || value.state} · 작업 ID: ${value.job_id || '없음'}</p>
+        <p>상태: ${value.publication?.selected_context_id ? '새 색인 선택됨' : ({queued:'접수됨·실행 승인 대기',running:'처리 중',staged:'결과 저장됨·새 색인 게시 대기',published:'새 색인 게시됨·선택 대기',failed:'처리 중단',cancelled:'취소됨'})[value.state] || value.state} · 작업 ID: ${value.job_id || '없음'}</p>
         ${value.publication ? html`<p>새 게시 ${value.publication.publication_id} · 색인 ${value.publication.embedding_set_id}</p>
           <p>새 색인을 선택하면 새 학습 맥락을 만듭니다. 이전 메모·질문·근거는 이전 맥락에 남습니다.</p>
           <button data-select ${busy || !value.publication_ready || value.storage !== 'current' || value.publication.selected_context_id ? 'disabled' : ''}>새 색인 선택·새 학습 시작</button>

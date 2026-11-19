@@ -83,6 +83,9 @@ class ReprocessingPublisher:
         limits=ProcessingLimits(a.max_pdf_bytes,a.max_pages,a.max_chunks)
         validator=PostgresProcessingResultStaging(self.pool,limits=limits,translation_settings=settings,
             embedding_spec=self.spec,max_result_bytes=64_000_000)
+        from solo_leveling.application.remote_processing import RemoteProcessingStages
+        require(source.pdf_size<=limits.max_pdf_bytes)
+        RemoteProcessingStages._document(document,source,limits)
         # 모델 파일/토크나이저/런타임과 조각 대응 검증은 기존 어댑터·staging 검증기를 사용한다.
         batch=self.embedder_factory(embedding,self.allowed).embed(translations,self.spec)
         require(batch.split_policy is not None)
@@ -97,7 +100,7 @@ class ReprocessingPublisher:
             version=conn.execute('''SELECT active_publication_id FROM server_processing_versions
                 WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s FOR UPDATE''',
                 (a.owner,p['paper_id'],p['version_id'])).fetchone()
-            require(version and str(version['active_publication_id'])==pdf['active_publication_id'])
+            require(version and (str(version['active_publication_id']) if version['active_publication_id'] is not None else None)==pdf['active_publication_id'])
             # 정규 저장의 기존 lease 제약은 유지한다. 이 embed 작업은 트랜잭션 밖에서 queued로 노출되지 않는다.
             conn.execute('''INSERT INTO server_processing_jobs(job_id,owner_user_id,paper_id,server_version_id,
                 job_kind,request_key,payload_hash,status,attempt,max_attempts,retryable,lease_owner,lease_token,lease_expires_at,heartbeat_at)

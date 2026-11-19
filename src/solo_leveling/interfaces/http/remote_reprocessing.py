@@ -216,7 +216,7 @@ class PostgresReprocessingReviews:
                               (owner,p['paper_id'])).fetchone()
             version=conn.execute('SELECT active_publication_id FROM server_processing_versions WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s FOR UPDATE',
                                  (owner,p['paper_id'],p['version_id'])).fetchone()
-            if live is None or version is None or str(version['active_publication_id']) not in (row['snapshot']['pdf']['active_publication_id'],publication_id):
+            if live is None or version is None or (str(version['active_publication_id']) if version['active_publication_id'] is not None else None) not in (row['snapshot']['pdf']['active_publication_id'],publication_id):
                 raise ValueError('reprocessing_revision_conflict')
             publication=self._publication(conn,row)
             context=str(uuid5(NAMESPACE_URL,f'reprocessing-selection:{owner}:{key}:{publication_id}'))
