@@ -10,9 +10,9 @@ import sys
 from typing import Callable
 
 from solo_leveling.domain.remote_processing import (
-    EmbeddingBatch, EmbeddingSpec, ProcessedTranslation, ProcessingError,
+    EmbeddingBatch, EmbeddingFragment, EmbeddingSpec, ProcessedTranslation, ProcessingError,
 )
-from .token_windows import TokenWindowError, require_fits
+from .token_windows import TokenWindowError, TokenWindowPolicy, require_fits, split_token_windows
 
 _SAFE_CODES = frozenset({
     'PROCESSING_EMBEDDING_CONFIG_INVALID', 'PROCESSING_EMBEDDING_ARTIFACT_MISMATCH',
@@ -84,6 +84,60 @@ def _loaded_runtime_version():
     return ';'.join(versions)
 
 
+def _prepare_window(tokenizer, ids):
+    prepare = getattr(tokenizer, 'prepare_for_model', None)
+    if callable(prepare):
+        return prepare(list(ids), add_special_tokens=True, truncation=False, return_attention_mask=True)
+    # Transformers 5/6의 TokenizersBackend는 prepare_for_model을 제공하지 않는다.
+    # 고정 artifact의 단일 입력 템플릿을 해석하고 토큰 ID를 그대로 삽입한다.
+    template = json.loads(tokenizer.backend_tokenizer.post_processor.__getstate__())
+    _require(template.get('type') == 'TemplateProcessing', 'PROCESSING_EMBEDDING_RUNTIME_MISMATCH')
+    inputs, types, sequences = [], [], 0
+    for part in template['single']:
+        if set(part) == {'Sequence'}:
+            sequence = part['Sequence']
+            _require(sequence['id'] == 'A', 'PROCESSING_EMBEDDING_RUNTIME_MISMATCH')
+            values, type_id = list(ids), sequence['type_id']
+            sequences += 1
+        elif set(part) == {'SpecialToken'}:
+            special = part['SpecialToken']
+            values = template['special_tokens'][special['id']]['ids']
+            type_id = special['type_id']
+        else:
+            raise ProcessingError('PROCESSING_EMBEDDING_RUNTIME_MISMATCH')
+        _require(type(type_id) is int and type_id >= 0 and type(values) is list
+                 and all(type(v) is int and v >= 0 for v in values), 'PROCESSING_EMBEDDING_INVALID')
+        inputs.extend(values)
+        types.extend([type_id] * len(values))
+    _require(sequences == 1 and len(inputs) - len(ids) == tokenizer.num_special_tokens_to_add(pair=False),
+             'PROCESSING_EMBEDDING_RUNTIME_MISMATCH')
+    result = dict(input_ids=inputs, attention_mask=[1]*len(inputs))
+    if 'token_type_ids' in tokenizer.model_input_names:
+        result['token_type_ids'] = types
+    return result
+
+
+def _encode_token_windows(model, windows, *, max_length, batch_size, check_allowed):
+    """토큰 ID를 직접 준비해 디코딩·재토큰화에 따른 구간 변형을 막는다."""
+    import torch
+    rows = []
+    model.eval()
+    with torch.inference_mode():
+        for start in range(0, len(windows), batch_size):
+            _check(check_allowed)
+            inputs = []
+            for window in windows[start:start + batch_size]:
+                item = _prepare_window(model.tokenizer, window.token_ids)
+                _require(len(item['input_ids']) <= max_length, 'PROCESSING_EMBEDDING_INPUT_TOO_LONG')
+                inputs.append(item)
+            features = model.tokenizer.pad(inputs, padding=True, return_tensors='pt')
+            vectors = model(features)['sentence_embedding']
+            vectors = torch.nn.functional.normalize(vectors, p=2, dim=1)
+            rows.append(vectors.detach().cpu())
+            _check(check_allowed)
+    return torch.cat(rows, dim=0).numpy()
+
+
 def _validate_modules(folder):
     # SentenceTransformer의 modules.json은 trust_remote_code=False만으로 사용자 정의
     # module/path 로딩이 모두 차단되는 경계가 아니다. 기준선의 두 module만 허용한다.
@@ -118,10 +172,14 @@ class PyTorchProcessingEmbedder:
     check_allowed: Callable[[], bool]
     batch_size: int = 8
     model_factory: object = field(default=_load_model, repr=False)
+    fragment_policy: TokenWindowPolicy | None = None
+    embedding_set_id: str | None = None
 
     def __post_init__(self):
         _require(isinstance(self.model_dir, Path) and type(self.batch_size) is int
                  and self.batch_size > 0 and callable(self.model_factory) and callable(self.check_allowed))
+        _require(self.fragment_policy is None or type(self.fragment_policy) is TokenWindowPolicy
+                 and type(self.embedding_set_id) is str and bool(self.embedding_set_id.strip()))
 
     def _observe(self, model, spec):
         dimension = model.get_embedding_dimension()
@@ -197,21 +255,34 @@ class PyTorchProcessingEmbedder:
             _require(processing_artifact_sha256(folder) == spec.artifact_sha256,
                      'PROCESSING_EMBEDDING_ARTIFACT_MISMATCH')
             _check(check_allowed)
-            # 분할 결과의 저장·검색 연결 전에는 잘린 벡터를 게시하지 않는다.
-            for item in items:
-                try:
-                    require_fits(model.tokenizer, item.text, spec.max_length)
-                except TokenWindowError as error:
-                    if str(error) == 'EMBEDDING_INPUT_TOO_LONG':
-                        raise ProcessingError('PROCESSING_EMBEDDING_INPUT_TOO_LONG') from None
-                    raise ProcessingError('PROCESSING_EMBEDDING_INVALID') from None
-            _check(check_allowed)
-            values = model.encode([item.text for item in items], batch_size=batch_size,
-                normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False, prompt='')
+            fragments = []
+            if self.fragment_policy is not None:
+                windows = []
+                for item in items:
+                    group = split_token_windows(model.tokenizer, item.text, parent_chunk_id=item.chunk_id,
+                        embedding_set_id=self.embedding_set_id, max_length=spec.max_length, policy=self.fragment_policy)
+                    windows.extend(group)
+                    fragments.extend(EmbeddingFragment(w.embedding_fragment_id, w.embedding_set_id,
+                        w.parent_chunk_id,w.token_start,w.token_end,group[-1].token_end) for w in group)
+                values = _encode_token_windows(model, windows, max_length=spec.max_length,
+                    batch_size=batch_size, check_allowed=check_allowed)
+            else:
+                # 분할을 명시하지 않은 기존 경로에서도 잘린 벡터를 게시하지 않는다.
+                for item in items:
+                    try:
+                        require_fits(model.tokenizer, item.text, spec.max_length)
+                    except TokenWindowError as error:
+                        if str(error) == 'EMBEDDING_INPUT_TOO_LONG':
+                            raise ProcessingError('PROCESSING_EMBEDDING_INPUT_TOO_LONG') from None
+                        raise ProcessingError('PROCESSING_EMBEDDING_INVALID') from None
+                _check(check_allowed)
+                values = model.encode([item.text for item in items], batch_size=batch_size,
+                    normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False, prompt='')
             _check(check_allowed)
             _require(getattr(values.dtype, 'name', None) == 'float32', 'PROCESSING_EMBEDDING_INVALID')
             rows = values.tolist()
-            _require(type(rows) is list and len(rows) == len(items), 'PROCESSING_EMBEDDING_INVALID')
+            _require(type(rows) is list and len(rows) == (len(fragments) if fragments else len(items)),
+                     'PROCESSING_EMBEDDING_INVALID')
             for row in rows:
                 _require(type(row) is list and len(row) == spec.dimension
                          and all(type(v) in (int, float) and math.isfinite(v) for v in row),
@@ -225,7 +296,8 @@ class PyTorchProcessingEmbedder:
             _require(processing_artifact_sha256(folder) == spec.artifact_sha256,
                      'PROCESSING_EMBEDDING_ARTIFACT_MISMATCH')
             _check(check_allowed)
-            return EmbeddingBatch(spec, ids, tuple(tuple(row) for row in rows))
+            return EmbeddingBatch(spec, ids, tuple(tuple(row) for row in rows), tuple(fragments),
+                                  None if self.fragment_policy is None else self.fragment_policy.fingerprint())
         except ProcessingError as error:
             if (type(error) is ProcessingError and len(error.args) == 1
                     and type(error.args[0]) is str and error.args[0] in _SAFE_CODES):

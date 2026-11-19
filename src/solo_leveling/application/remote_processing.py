@@ -187,11 +187,10 @@ class RemoteProcessingStages:
             raise
         except Exception:
             raise ProcessingError('PROCESSING_EMBEDDING_FAILED') from None
-        _require(isinstance(embeddings, EmbeddingBatch) and embeddings.spec == spec
-                 and type(embeddings.chunk_ids) is tuple
-                 and embeddings.chunk_ids == tuple(c.chunk_id for c in document.chunks)
-                 and type(embeddings.vectors) is tuple and len(embeddings.vectors) == len(document.chunks),
+        _require(isinstance(embeddings, EmbeddingBatch) and embeddings.spec == spec,
                  'PROCESSING_EMBEDDING_INVALID')
+        from solo_leveling.application.embedding_fragments import validate_embedding_mapping
+        validate_embedding_mapping(embeddings, tuple(c.chunk_id for c in document.chunks), source.embedding_set_id)
         for vector in embeddings.vectors:
             _require(type(vector) is tuple and len(vector) == spec.dimension
                      and all(_finite(v) for v in vector),

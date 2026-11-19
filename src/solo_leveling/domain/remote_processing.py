@@ -78,10 +78,22 @@ class ProcessedTranslation:
 
 
 @dataclass(frozen=True, repr=False)
+class EmbeddingFragment:
+    embedding_fragment_id: str
+    embedding_set_id: str
+    parent_chunk_id: str
+    token_start: int
+    token_end: int
+    parent_token_count: int
+
+
+@dataclass(frozen=True, repr=False)
 class EmbeddingBatch:
     spec: EmbeddingSpec
     chunk_ids: tuple[str, ...]
     vectors: tuple[tuple[float, ...], ...]
+    fragments: tuple[EmbeddingFragment, ...] = ()
+    split_policy: dict | None = None
 
 
 @dataclass(frozen=True, repr=False)

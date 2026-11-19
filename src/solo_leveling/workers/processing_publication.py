@@ -7,6 +7,7 @@ import re
 
 from solo_leveling.interfaces.http.processing_publications import PostgresProcessingPublicationStore
 from solo_leveling.interfaces.http.remote_vectors import EmbeddingWriteScope, PostgresEmbeddingVectorWriter
+from solo_leveling.interfaces.http.remote_fragment_vectors import PostgresEmbeddingFragmentWriter
 from solo_leveling.workers.processing_authorization import _AUTH_SOURCE, _IDENTITY, _USAGE_BLOCKED, _params
 from solo_leveling.workers.processing_staging import _source, _uuid, _encode
 
@@ -121,6 +122,9 @@ class PostgresStagedProcessingPublisher:
         prefix = (source.owner_user_id, source.paper_id, source.version_id)
         generation = (source.job_id, source.lease_token)
         size = len(result.document.chunks)
+        fingerprint = asdict(result.embeddings.spec)
+        if result.embeddings.split_policy is not None:
+            fingerprint['split_policy'] = result.embeddings.split_policy
         metadata = dict(page_count=result.document.page_count, empty_pages=result.empty_pages,
                         sections=[asdict(s) for s in result.document.sections])
         conn.execute('''INSERT INTO server_parse_revisions
@@ -139,11 +143,11 @@ class PostgresStagedProcessingPublisher:
              status,indexed_chunk_count,model_fingerprint,source_job_id,source_lease_token)
             VALUES (%s,%s,%s,%s,%s,%s,'building',%s,%s::jsonb,%s,%s)''',
             (*prefix, source.parse_revision_id, source.translation_revision_id, source.embedding_set_id,
-             size, json.dumps(asdict(result.embeddings.spec)), *generation))
+             size, json.dumps(fingerprint), *generation))
         writer = PostgresEmbeddingVectorWriter(tx)
         scope = EmbeddingWriteScope(*prefix, source.parse_revision_id, source.translation_revision_id,
                                     source.embedding_set_id, result.embeddings.spec.dimension)
-        for chunk, translation, vector in zip(result.document.chunks, result.translations, result.embeddings.vectors):
+        for index, (chunk, translation) in enumerate(zip(result.document.chunks, result.translations)):
             conn.execute('''INSERT INTO server_processing_chunks
                 (owner_user_id,paper_id,server_version_id,parse_revision_id,chunk_id,ordinal,pdf_page,
                  original_text,section_id,printed_page_label) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
@@ -155,11 +159,20 @@ class PostgresStagedProcessingPublisher:
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s)''',
                 (*prefix, source.parse_revision_id, source.translation_revision_id, chunk.chunk_id,
                  translation.text, translation.status.value))
-            writer.put(scope, chunk.chunk_id, vector)
-        actual = conn.execute('''SELECT count(*) AS n FROM server_embedding_vectors
+            if not result.embeddings.fragments:
+                writer.put(scope, chunk.chunk_id, result.embeddings.vectors[index])
+        table = 'server_embedding_vectors'
+        expected_count = size
+        if result.embeddings.fragments:
+            fragments = PostgresEmbeddingFragmentWriter(tx)
+            for fragment, vector in zip(result.embeddings.fragments, result.embeddings.vectors):
+                fragments.put(scope, fragment, fragment.parent_token_count, vector)
+            table = 'server_embedding_fragments'
+            expected_count = len(result.embeddings.fragments)
+        actual = conn.execute(f'''SELECT count(*) AS n FROM {table}
             WHERE owner_user_id=%s AND embedding_set_id=%s AND dimension=%s''',
             (source.owner_user_id, source.embedding_set_id, scope.dimension)).fetchone()
-        if actual['n'] != size: raise ProcessingPublishError('processing_publication_vectors_incomplete')
+        if actual['n'] != expected_count: raise ProcessingPublishError('processing_publication_vectors_incomplete')
         for table, key, value in (
             ('server_parse_revisions', 'parse_revision_id', source.parse_revision_id),
             ('server_translation_revisions', 'translation_revision_id', source.translation_revision_id),

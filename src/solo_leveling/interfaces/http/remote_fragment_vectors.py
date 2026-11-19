@@ -11,13 +11,15 @@ class PostgresEmbeddingFragmentWriter:
 
     def put(self, scope, fragment, parent_token_count, embedding):
         from solo_leveling.infrastructure.embeddings.token_windows import TokenWindow
-        if (type(scope) is not EmbeddingWriteScope or type(fragment) is not TokenWindow
+        from solo_leveling.domain.remote_processing import EmbeddingFragment
+        if (type(scope) is not EmbeddingWriteScope or type(fragment) not in (TokenWindow, EmbeddingFragment)
                 or fragment.embedding_set_id != scope.embedding_set_id
                 or not re.fullmatch('[0-9a-f]{64}', fragment.embedding_fragment_id)
                 or any(type(v) is not int for v in
                        (fragment.token_start, fragment.token_end, parent_token_count))
                 or not 0 <= fragment.token_start < fragment.token_end <= parent_token_count
-                or len(fragment.token_ids) != fragment.token_end - fragment.token_start):
+                or type(fragment) is TokenWindow and len(fragment.token_ids) != fragment.token_end - fragment.token_start
+                or type(fragment) is EmbeddingFragment and parent_token_count != fragment.parent_token_count):
             raise ValueError('remote_fragment_invalid')
         vector = _vector_literal(embedding, scope.dimension)
         with self.pool.connection() as conn:

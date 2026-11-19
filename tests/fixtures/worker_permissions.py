@@ -15,10 +15,12 @@ INSERT = (
     'server_processing_result_staging', 'server_processing_provider_attempts',
     'server_parse_revisions', 'server_translation_revisions', 'server_embedding_sets',
     'server_processing_chunks', 'server_translation_chunks', 'server_embedding_vectors',
+    'server_embedding_fragments',
     'server_processing_publications',
 )
 UPDATE = {
     'server_embedding_vectors': ('embedding',),
+    'server_embedding_fragments': ('embedding',),
     'server_processing_jobs': ('status', 'attempt', 'retryable', 'lease_owner', 'lease_token',
         'lease_expires_at', 'heartbeat_at', 'updated_at', 'error_code', 'finished_at'),
     'server_dispatch_budget_limits': ('reserved_input_tokens', 'reserved_output_tokens',

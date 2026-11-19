@@ -133,6 +133,27 @@ def test_query_uses_same_no_truncation_guard(fixture):
     model.encoder.assert_not_called()
 
 
+def test_fragment_runtime_preserves_all_tokens_and_parent_ids(fixture, monkeypatch):
+    from tests.unit.test_embedding_token_windows import Tokenizer
+    adapter, spec, items, model, _ = fixture
+    model.tokenizer = Tokenizer()
+    adapter = replace(adapter, fragment_policy=module.TokenWindowPolicy(), embedding_set_id='new-set')
+    seen = []
+    def encode(current, windows, **kwargs):
+        assert current is model
+        seen.extend(windows)
+        return FakeArray([[1.,0.] for _ in windows])
+    monkeypatch.setattr(module, '_encode_token_windows', encode)
+    batch = adapter.embed((replace(items[0], text='248'),), spec)
+    assert batch.chunk_ids == ('c1',) and len(batch.vectors) == 3
+    assert [f.token_start for f in batch.fragments] == [0,88,176]
+    assert batch.fragments[-1].token_end == 248
+    assert {f.parent_token_count for f in batch.fragments} == {248}
+    assert {f.embedding_set_id for f in batch.fragments} == {'new-set'}
+    assert set(v for w in seen for v in w.token_ids) == set(range(248))
+    model.encoder.assert_not_called()
+
+
 @pytest.mark.parametrize('change', [dict(runtime='onnx'), dict(precision='float16'), dict(normalization='none'),
     dict(model_revision='b'*40), dict(tokenizer_revision='b'*40), dict(tokenizer_id='other'),
     dict(max_length=0), dict(dimension=True), dict(distance='dot')])

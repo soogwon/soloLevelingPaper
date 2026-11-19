@@ -84,10 +84,20 @@ class Plan:
 
 def load_plan(config, path):
     raw = read_json(path)
-    require(type(raw) is dict and set(raw) == {'schema_version', 'scope_sha256', 'runtime_image',
+    require(type(raw) is dict)
+    fragmented = type(raw.get('schema_version')) is int and raw['schema_version'] == 2
+    require(set(raw) == {'schema_version', 'scope_sha256', 'runtime_image',
         'runtime_lock_path', 'model_lock_path', 'model_dir', 'embedding_spec', 'limits', 'translation',
-        'batch_size', 'policy_version', 'window_key', 'r2', 'requests'})
-    require(type(raw['schema_version']) is int and raw['schema_version'] == 1 and raw['scope_sha256'] == scope_digest(config))
+        'batch_size', 'policy_version', 'window_key', 'r2', 'requests'}
+        | ({'embedding_split_policy'} if fragmented else set()))
+    require(type(raw['schema_version']) is int and raw['schema_version'] in (1, 2)
+            and raw['scope_sha256'] == scope_digest(config))
+    if fragmented:
+        from solo_leveling.infrastructure.embeddings.token_windows import TokenWindowPolicy
+        policy = raw['embedding_split_policy']
+        require(type(policy) is dict and set(policy) == {'payload_tokens','overlap_tokens','stride_tokens','version'})
+        require(policy == TokenWindowPolicy(
+            policy['payload_tokens'], policy['overlap_tokens'], policy['version']).fingerprint())
     require(type(raw['runtime_image']) is str and re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}', raw['runtime_image']))
     for name in ('runtime_lock_path', 'model_lock_path', 'model_dir'):
         require(type(raw[name]) is str and Path(raw[name]).is_absolute())
@@ -177,6 +187,11 @@ def build(config, plan, source, *, pool_factory=_pool, client_factory=_client, c
     options = dict(service_config=service, model_dir=Path(raw['model_dir']), embedding_spec=plan.spec,
         limits=plan.limits, retry_policy=retry, policy_version=raw['policy_version'], window_key=raw['window_key'],
         token_upper_bound=bounds, batch_size=raw['batch_size'])
+    if 'embedding_split_policy' in raw:
+        from solo_leveling.infrastructure.embeddings.token_windows import TokenWindowPolicy
+        policy = raw['embedding_split_policy']
+        options['fragment_policy'] = TokenWindowPolicy(
+            policy['payload_tokens'], policy['overlap_tokens'], policy['version'])
     with ExitStack() as stack:
         pool = pool_factory(dsn, config.schema_name)
         stack.callback(pool.close)
