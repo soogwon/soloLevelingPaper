@@ -188,3 +188,28 @@ def test_usage_overrun_is_recorded_and_no_result_is_staged(db,stores,pool):
     row=row_for(db,a)
     assert row['attempts'][0]['input_tokens']==130 and row['staged_result'] is None
     assert all(r['consumed_input_tokens']==4030 for r in db('SELECT * FROM server_dispatch_budget_limits WHERE window_key=%s',(reviews.contract['window_key'],)))
+
+
+def test_lowered_budget_after_intake_blocks_before_provider(db,stores,pool):
+    _,_,reviews,a,_=ready(db,stores,pool)
+    db("UPDATE server_dispatch_controls SET dispatch_enabled=true WHERE control_id='provider_dispatch'")
+    db('UPDATE server_dispatch_budget_limits SET max_input_tokens=1 WHERE window_key=%s',(reviews.contract['window_key'],))
+    sent=[]
+    stage=lambda row,w:w.dispatch('a'*64,100,100,lambda:sent.append(1))
+    assert ReprocessingWorker(reviews,a,stage,execution_enabled=True).run_once()=='blocked'
+    assert not sent and not row_for(db,a)['charged']
+
+
+def test_dispatch_stop_after_durable_attempt_blocks_physical_call(db,stores,pool):
+    _,_,reviews,a,_=ready(db,stores,pool)
+    db("UPDATE server_dispatch_controls SET dispatch_enabled=true WHERE control_id='provider_dispatch'")
+    sent=[]
+    def stage(row,w):
+        original=w.checkpoint
+        def checkpoint(*,dispatch=False):
+            if dispatch:db("UPDATE server_dispatch_controls SET dispatch_enabled=false WHERE control_id='provider_dispatch'")
+            return original(dispatch=dispatch)
+        w.checkpoint=checkpoint
+        return w.dispatch('a'*64,100,100,lambda:sent.append(1))
+    assert ReprocessingWorker(reviews,a,stage,execution_enabled=True).run_once()=='blocked'
+    assert not sent and row_for(db,a)['charged']

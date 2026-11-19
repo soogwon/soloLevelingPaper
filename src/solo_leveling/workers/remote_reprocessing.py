@@ -48,6 +48,8 @@ class ReprocessingWorker:
     def _source_allowed(self, conn, row):
         require(row['input_hash']==self.approval.input_hash and row['contract']==self.reviews.contract and row['active'])
         require(sha256(encoded(dict(snapshot=row['snapshot'],contract=row['contract'])).encode()).hexdigest()==row['input_hash'])
+        require(conn.execute('SELECT paper_id FROM server_papers WHERE owner_user_id=%s AND paper_id=%s AND deleted_at IS NULL FOR SHARE',
+            (row['owner_user_id'],row['snapshot']['preview']['paper_id'])).fetchone() is not None)
         require(self.reviews._states(conn,row)=={'storage':'current','ai_provider':'current'})
         require(self.reviews._snapshot(conn,row['owner_user_id'],str(row['context_id']),row['operation'])==row['snapshot'])
 
@@ -99,9 +101,12 @@ class ReprocessingWorker:
         self._source_allowed(conn,row)
         return row
 
-    def checkpoint(self):
+    def checkpoint(self, *, dispatch=False):
         with self.pool.connection() as conn:
             self._owned(conn)
+            if dispatch:
+                control=conn.execute("SELECT dispatch_enabled FROM server_dispatch_controls WHERE control_id='provider_dispatch' FOR SHARE").fetchone()
+                require(control and control['dispatch_enabled'])
             conn.execute('''UPDATE server_reprocessing_reviews SET lease_until=clock_timestamp()+make_interval(secs=>%s)
                 WHERE owner_user_id=%s AND request_key=%s''',
                 (self.approval.lease_seconds,self.approval.owner,self.approval.request_key))
@@ -117,8 +122,12 @@ class ReprocessingWorker:
                 and sum(a['input_upper'] for a in attempts)+input_upper<=contract['max_input_tokens']
                 and sum(a['output_upper'] for a in attempts)+output_upper<=contract['max_output_tokens'])
             require(not any(a['payload_hash']==payload_hash for a in attempts))
+            limits=self.reviews._budget(conn,row['owner_user_id'],contract)
+            require(len(limits)==2 and all(
+                b['reserved_input_tokens']+b['consumed_input_tokens']<=b['max_input_tokens']
+                and b['reserved_output_tokens']+b['consumed_output_tokens']<=b['max_output_tokens'] for b in limits))
             if not row['charged']:
-                require(row['budget_reserved'] and len(self.reviews._budget(conn,row['owner_user_id'],contract))==2)
+                require(row['budget_reserved'])
                 self.reviews._adjust(conn,row['owner_user_id'],contract,-1)
                 conn.execute('''UPDATE server_dispatch_budget_limits SET consumed_input_tokens=consumed_input_tokens+%s,
                     consumed_output_tokens=consumed_output_tokens+%s WHERE policy_version=%s AND window_key=%s
@@ -128,7 +137,7 @@ class ReprocessingWorker:
             conn.execute('''UPDATE server_reprocessing_reviews SET charged=true,budget_reserved=false,attempts=%s::jsonb
                 WHERE owner_user_id=%s AND request_key=%s''',(encoded(attempts),self.approval.owner,self.approval.request_key))
         # 전송 직전 취소·철회를 재검사한다. 이미 송신된 요청은 취소할 수 없고 상한은 반환하지 않는다.
-        self.checkpoint()
+        self.checkpoint(dispatch=True)
         response=transmit()
         from solo_leveling.application.provider_dispatch import ProviderResponse
         require(isinstance(response,ProviderResponse))
