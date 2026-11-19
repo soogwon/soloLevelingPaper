@@ -21,3 +21,17 @@ pytest tests/unit/test_embedding_token_windows.py tests/unit/test_processing_emb
 후속 단계에서 token ID를 재해독·재토큰화하지 않고 인코딩하는 경로, fragment 저장·fingerprint·부모별 검색 집계, 전체 매핑 확인 후 새 set 원자적 게시, 과거 context 보존 및 로컬 재색인을 연결해야 한다. 실제 모델 품질·성능 비교와 번역 실패 재시도 검증도 남아 있다. #587을 닫지 않는다.
 
 실제 staging 변경·PDF 전송·유료 API 호출은 수행하지 않는다.
+
+## 로컬 encode 경로 추가 점검
+
+원격 worker 외에 기존 로컬 `embed_texts`도 실제 tokenizer와
+`max_seq_length`로 특수 토큰 포함 길이를 검사한다. 배치 중 하나라도 초과하면
+전체 encode 전에 `EMBEDDING_INPUT_TOO_LONG`으로 거부한다. 질의도 같은 경로다.
+한도가 없는 모델을 임의로 128로 간주하지 않으며 tokenizer 오류에는 본문을 넣지 않는다.
+
+이 변경은 로컬 긴 문장을 성공적으로 재색인하는 기능이 아니다. 기존 긴 입력이
+조용히 잘린 채 성공하던 동작을 차단한다. 기존 색인/학습 맥락을 변경하지 않고,
+로컬 fragment 저장·부모 검색·명시적 재색인은 후속 범위로 남는다.
+
+대역 tokenizer로 경계 128토큰 허용, 129토큰 차단, 뒤쪽 긴 청크의 배치 전체
+encode 차단, 긴 질문, 오류 비노출, 모델 한도 미정 거부를 검증한다.

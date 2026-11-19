@@ -96,6 +96,9 @@ def test_model_load_and_encode_are_separate(capsys, monkeypatch):
             return [1.0]
 
     class Model:
+        max_seq_length = 128
+        tokenizer = SimpleNamespace(encode=lambda *args, **kwargs: [1, 2, 3])
+
         def encode(self, texts, **kwargs):
             return [Vector()]
 

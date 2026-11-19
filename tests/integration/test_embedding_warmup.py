@@ -1,3 +1,4 @@
+# ruff: noqa: F811
 """MCP 시작 시 임베딩 worker 준비(#119)."""
 
 from solo_leveling.infrastructure.database.schema import init_db
@@ -54,6 +55,9 @@ def cache_policy_worker(connection):
     from solo_leveling.infrastructure.embeddings.worker import run_worker
 
     class Model:
+        max_seq_length = 128
+        tokenizer = SimpleNamespace(encode=lambda *args, **kwargs: [1, 2, 3])
+
         def __init__(self, name, *, local_files_only=False):
             if name == 'missing' and local_files_only:
                 raise FileNotFoundError('SYNTHETIC_PRIVATE_CACHE_PATH')

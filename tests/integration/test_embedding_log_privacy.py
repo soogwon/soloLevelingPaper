@@ -20,9 +20,12 @@ def worker(connection):
     os.write(1, b'SYNTHETIC_NATIVE_PRIVATE\n')
     os.write(2, b'SYNTHETIC_NATIVE_PRIVATE\n')
     from array import array
-    from types import ModuleType
+    from types import ModuleType, SimpleNamespace
     from solo_leveling.infrastructure.embeddings.worker import run_worker
     class Model:
+        max_seq_length = 128
+        tokenizer = SimpleNamespace(encode=lambda *args, **kwargs: [1, 2, 3])
+
         def __init__(self, model_name):
             self.mode = model_name
 
