@@ -88,3 +88,20 @@ def test_delete_scrubs_history_and_old_key_cannot_resurrect_answer(pool,db,store
     assert service.save('alice',context,str(uuid4()),**dict(args,expected_revision=2,body='새 답변'))['revision']==3
     with pytest.raises(RemoteExecutionConflict):
         service.delete_answer('alice',context,args['template_id'],1)
+
+
+def test_web_storage_consent_is_context_scoped_and_revocable(pool,db,stores):
+    service,binding,args=setup(pool,db,stores);context=binding.context_id
+    service.revoke_storage('alice',context)
+    assert service.consent('alice',context)['storage']=='missing'
+    with pytest.raises(ValueError):
+        service.grant_storage('alice',context,'remote-question-v1',args['question_revision'])
+    assert service.grant_storage('bob',context,NOTICE,args['question_revision']) is None
+    with ThreadPoolExecutor(max_workers=3) as workers:
+        consents=list(workers.map(lambda _:service.grant_storage('alice',context,NOTICE,args['question_revision']),range(3)))
+    assert len({c['consent_id'] for c in consents})==1
+    args['storage_consent_id']=consents[0]['consent_id']
+    assert service.save('alice',context,str(uuid4()),**args)['revision']==1
+    service.revoke_storage('alice',context)
+    with pytest.raises(ValueError):
+        service.save('alice',context,str(uuid4()),**dict(args,expected_revision=1))
