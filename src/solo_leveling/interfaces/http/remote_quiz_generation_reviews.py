@@ -73,6 +73,15 @@ class PostgresQuizGenerationReviews:
                 execution.lookup.context_id != str(row['context_id'])
                 or execution.lookup.input_hash != row['input_hash'] or not execution.access_allowed):
             raise RemoteExecutionConflict('quiz_generation_review_conflict')
+        if execution is not None:
+            receipt = conn.execute('''SELECT e.storage_consent_id,e.ai_consent_id,e.notice_version,
+                    e.policy_snapshot,r.window_key FROM server_remote_executions e
+                JOIN server_question_budget_reservations r ON r.owner_user_id=e.owner_user_id
+                    AND r.execution_id=e.execution_id
+                WHERE e.owner_user_id=%s AND e.execution_id=%s''', (owner, execution.execution_id)).fetchone()
+            if receipt is None or any(receipt[k] != row[k] for k in
+                    ('storage_consent_id','ai_consent_id','notice_version','policy_snapshot','window_key')):
+                raise RemoteExecutionConflict('quiz_generation_review_conflict')
         return execution
 
     def view(self, owner, key):
