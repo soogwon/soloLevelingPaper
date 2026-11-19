@@ -79,7 +79,10 @@ class PostgresSummaryReviews:
                 active = True
             except ValueError:
                 active = False
+            execution = PostgresRemoteExecutionStore(SimpleNamespace(connection=lambda: nullcontext(conn))).lookup(owner, OPERATION, str(row['request_key']))
             return dict(**notice,request_key=str(row['request_key']),policy=row['policy_snapshot'],
+                        execution_id=execution.execution_id if execution else None,
+                        state=execution.state if execution else None,
                         active=active,expires_at=row['expires_at'].isoformat(),
                         storage=states.get(row['storage_consent_id'],'missing'),
                         ai_provider=states.get(row['ai_consent_id'],'missing'))

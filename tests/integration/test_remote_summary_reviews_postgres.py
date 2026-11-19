@@ -38,6 +38,9 @@ def test_preparation_requires_two_new_consents_and_concurrent_submit_is_single(p
     with ThreadPoolExecutor(max_workers=3) as workers:
         results = list(workers.map(lambda _:service.submit('alice',key),range(3)))
     assert len({r['execution_id'] for r in results}) == 1
+    restored = service.view('alice', key)
+    assert restored['execution_id'] == results[0]['execution_id']
+    assert restored['state'] == 'queued'
     service.revoke('alice',key,'ai_provider')
     assert service.submit('alice',key)['execution_id'] == results[0]['execution_id']
     assert service.view('alice',key)['ai_provider'] == 'revoked'
