@@ -42,6 +42,7 @@ def create_app(
     remote_quizzes=None,
     remote_quiz_reviews=None,
     remote_summaries=None,
+    remote_reprocessing=None,
     remote_annotation_recovery=None,
     remote_annotation_products=None,
     remote_mcp_annotations=None,
@@ -163,6 +164,15 @@ def create_app(
                 raise ValueError('question_settings_invalid')
             managed_question_store = PostgresDeviceStore.from_dsn(DatabaseSettings(dsn).dsn)
             remote_questions = PostgresQuestionReviews(managed_question_store.connection_pool,**question_settings)
+    managed_reprocessing_store = None
+    from .remote_reprocessing_settings import load_reprocessing_settings, reprocessing_connection_dsn
+    reprocessing_settings = load_reprocessing_settings()
+    if reprocessing_settings is not None:
+        if remote_reprocessing is not None:
+            raise ValueError('reprocessing_settings_invalid')
+        from .remote_reprocessing import PostgresReprocessingReviews
+        managed_reprocessing_store = PostgresDeviceStore.from_dsn(reprocessing_connection_dsn(reprocessing_settings))
+        remote_reprocessing = PostgresReprocessingReviews(managed_reprocessing_store.connection_pool, **reprocessing_settings.arguments)
     managed_summary_store = None
     from .remote_summary_settings import load_summary_settings, summary_connection_dsn
     summary_settings = load_summary_settings()
@@ -238,6 +248,9 @@ def create_app(
             if managed_question_store is not None:
                 managed_question_store.open()
                 stack.callback(managed_question_store.close)
+            if managed_reprocessing_store is not None:
+                stack.callback(managed_reprocessing_store.close)
+                managed_reprocessing_store.open()
             if managed_summary_store is not None:
                 stack.callback(managed_summary_store.close)
                 managed_summary_store.open()
@@ -336,6 +349,8 @@ def create_app(
     app.include_router(create_quiz_router(require_principal,remote_quizzes))
     from .remote_reflection_routes import create_reflection_router
     app.include_router(create_reflection_router(require_principal,remote_reflections))
+    from .remote_reprocessing_routes import create_reprocessing_router
+    app.include_router(create_reprocessing_router(require_principal, remote_reprocessing))
     from .remote_summary_routes import create_summary_review_router
     app.include_router(create_summary_review_router(require_principal,remote_summaries))
     if remote_annotation_products is not None:
