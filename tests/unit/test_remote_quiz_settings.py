@@ -104,3 +104,10 @@ def test_review_injection_conflict_is_rejected_before_pool(monkeypatch):
     with pytest.raises(ValueError,match='quiz_settings_invalid'):
         create_app(device_store=NS(),remote_mcp_settings=NS(enabled=True,product_reads_enabled=True),remote_product_queries=NS(pool=NS()),remote_quiz_reviews=NS())
     factory.assert_not_called()
+
+
+def test_runtime_cloze_profile_is_preserved():
+    env=environment();data=json.loads(env['REMOTE_QUIZ_SETTINGS_JSON'])
+    data['settings']['prompt_version']='remote-quiz-cloze-v1'
+    env['REMOTE_QUIZ_SETTINGS_JSON']=json.dumps(data)
+    assert load_quiz_settings(env).arguments['settings']['prompt_version']=='remote-quiz-cloze-v1'

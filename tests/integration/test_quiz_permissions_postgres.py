@@ -169,3 +169,39 @@ def test_revoked_consent_cannot_be_reactivated(pool,db,stores,restricted):
             with conn.transaction():
                 conn.execute("UPDATE server_remote_consents SET revoked_at=NULL WHERE consent_id=(SELECT ai_consent_id FROM server_quiz_generation_reviews WHERE request_key=%s)",(key,))
     assert service.view('alice',key)['ai_provider']=='revoked'
+
+
+def test_web_settings_reach_real_runtime_with_restricted_roles(pool,db,stores,restricted):
+    from solo_leveling.interfaces.http.remote_quiz_settings import load_quiz_settings
+    from solo_leveling.application.quiz.remote_contract import RemoteQuizGenerationInput
+    from solo_leveling.infrastructure.generation.gated_responses import payload_digest
+    from solo_leveling.workers.remote_quiz import quiz_payload
+    from solo_leveling.workers.quiz_runtime import create_runner, QuizPlan
+    from solo_leveling.workers.quiz_validation import PROFILE, PREFIX, MARKER, CRITERIA
+    # 실제 웹 설정을 거쳐 고정한 입력을 운영 검증기로 처리한다.
+    service,key,context,evidence,policy=review(db,stores,pool,restricted[0][0])
+    config=dict(service.settings)
+    config['prompt_version']=PROFILE
+    env=dict(REMOTE_QUIZZES_ENABLED='true',REMOTE_QUIZ_DATABASE_URL='postgresql://test:test@localhost/test',
+        REMOTE_QUIZ_SETTINGS_JSON=json.dumps(dict(policy=policy.snapshot(),settings=config,window_key='test',review_seconds=60,web_origin='https://example.test')))
+    loaded=load_quiz_settings(env)
+    service=PostgresQuizGenerationReviews(restricted[0][0],**loaded.arguments)
+    key=str(uuid4())
+    assert service.prepare('alice',key,context,(str(evidence),),step='preview',question_count=1,question_type='multiple_choice')['status']=='review_required'
+    for purpose in ('storage','ai_provider'):
+        service.grant('alice',key,purpose,'remote-quiz-generation-v1',service.view('alice',key)['input_hash'])
+    saved=service.submit('alice',key)
+    snapshot=db('SELECT input_snapshot FROM server_quiz_generation_inputs WHERE execution_id=%s',(saved['execution_id'],))[0]['input_snapshot']
+    request=RemoteQuizGenerationInput(json.dumps(snapshot))
+    source=request.unpack()[1][0];answer=source.original_text[:3]
+    item=dict(question_type='multiple_choice',prompt=PREFIX+source.original_text.replace(answer,MARKER,1),
+        choices=[answer,'불일치'],correct_index=0,answer=answer,grading_criteria=CRITERIA,evidence_ids=[source.evidence_id])
+    envelope=dict(status='completed',output=[dict(type='message',role='assistant',status='completed',content=[dict(type='output_text',text=json.dumps(dict(items=[item])))])],usage=dict(input_tokens=20,output_tokens=10))
+    post=Mock(return_value=SimpleNamespace(status_code=200,json=lambda:envelope,close=Mock()))
+    generation=dict(model=config['model'],timeout_seconds=30,max_output_tokens=policy.max_output_tokens)
+    payload=quiz_payload(request,OpenAIGenerationSettings('synthetic',**generation),policy)
+    plan=QuizPlan(dict(generation=generation,window_key='test',validation_profile=PROFILE,
+        requests=dict(max_requests=1,max_input_tokens=policy.max_input_tokens,max_output_tokens=policy.max_output_tokens,payloads={payload_digest(payload):100})),policy)
+    assert create_runner(restricted[0][1],plan,'synthetic',post=post).run_once()=='finished'
+    assert post.call_count==1
+    assert PostgresRemoteQuiz(restricted[0][0]).generation_result('alice',context,key)['state']=='completed'

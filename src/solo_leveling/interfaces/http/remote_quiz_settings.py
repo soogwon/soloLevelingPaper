@@ -30,7 +30,7 @@ def load_quiz_settings(env=None):
         data['policy'] = RemoteExecutionPolicy(**data['policy'])
         config = data['settings']
         # 기존 요청의 프롬프트를 다른 실행 계약으로 자동 전환하지 않는다.
-        if (config['provider'] != 'openai' or config['prompt_version'] != 'remote-quiz-generation-v1'
+        if (config['provider'] != 'openai' or config['prompt_version'] not in ('remote-quiz-generation-v1','remote-quiz-cloze-v1')
                 or config['language'] != 'ko'):
             raise ValueError()
         PostgresQuizGenerationReviews(None, **data)

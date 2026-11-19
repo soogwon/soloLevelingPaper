@@ -12,7 +12,7 @@ Refs #593. 이 문서는 코드 준비 범위이며 staging 적용 승인이 아
 ```json
 {
   "policy": {"version":"quiz-policy-v1","timeout_seconds":120,"stage_timeout_seconds":60,"max_calls":1,"max_input_tokens":4000,"max_output_tokens":1024},
-  "settings": {"provider":"openai","model":"승인된 모델 ID","prompt_version":"remote-quiz-generation-v1","language":"ko","budget_policy_version":"quiz-policy-v1"},
+  "settings": {"provider":"openai","model":"승인된 모델 ID","prompt_version":"remote-quiz-cloze-v1","language":"ko","budget_policy_version":"quiz-policy-v1"},
   "window_key":"승인된 예산 창",
   "review_seconds":3600,
   "web_origin":"https://example.invalid"
@@ -20,6 +20,8 @@ Refs #593. 이 문서는 코드 준비 범위이며 staging 적용 승인이 아
 ```
 
 예시는 운영 예산 승인이 아니다. 같은 정책·예산 창의 사용자/서비스 원장, 별도 생성 저장·AI 동의가 있어야 접수한다. 답안 저장 동의는 생성 동의와 별개다. 기존 worker 설정과 정확한 본문 해시별 토큰 상한은 [퀴즈 runtime](issue-593-quiz-runtime.md)을 따른다.
+
+운영 worker에는 `remote-quiz-cloze-v1`을 명시한다. 기존 `remote-quiz-generation-v1` 입력은 호환 조회·기존 주입 실행을 위해 허용하지만 빈칸형 runtime이 자동 변환하지 않는다. 동의 고지 버전 `remote-quiz-generation-v1`과 생성 프롬프트 버전은 별개다.
 
 제품 MCP 활성화·조회 객체가 필요하며 환경 설정과 직접 서비스 주입을 동시에 사용하면 시작을 거부한다. 하나의 전용 풀에서 생성 검토 서비스와 제출/복습 서비스를 웹·MCP에 연결한다. 풀은 lifespan에서 열고 시작 실패와 종료 시 닫는다. 웹 시작은 worker나 AI 호출을 실행하지 않는다.
 
