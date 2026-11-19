@@ -77,7 +77,7 @@ def test_worker_stops_heartbeat_before_publishing_only_prepared_results(monkeypa
     import solo_leveling.workers.remote_processing as module
     from solo_leveling.interfaces.http.object_storage import DownloadedObject
     value = result()
-    if not prepared: value = replace(value, status='translation_incomplete')
+    if not prepared: value = replace(value, status='translation_incomplete', embeddings=None)
     source = value.source
     heartbeat = Mock()
     monkeypatch.setattr(module, '_LeaseHeartbeat', lambda *args, **kwargs: heartbeat)
@@ -104,4 +104,5 @@ def test_worker_stops_heartbeat_before_publishing_only_prepared_results(monkeypa
     if prepared: assert output.published == 'publication'
     else:
         publisher.publish.assert_not_called()
-        stage.save.assert_not_called()
+        stage.save.assert_called_once_with(value)
+        assert output.staged is stage.save.return_value
