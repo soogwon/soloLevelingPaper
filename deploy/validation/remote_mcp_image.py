@@ -97,3 +97,14 @@ assert {'prepare_remote_quiz_generation', 'get_remote_quiz_generation_review'} <
 assert any(getattr(route, 'path', '') == '/v1/remote-quiz-generation/reviews/{key}'
            for route in create_app(remote_mcp_settings=settings, remote_quiz_reviews=quiz_reviews).routes)
 print('REMOTE_QUIZ_REVIEW_IMAGE_OK; no database or provider calls')
+
+
+# 퀴즈 제출 조립은 로컬 SQLite 저장소를 가져오지 않고도 가능해야 한다.
+from solo_leveling.interfaces.http.remote_quiz import PostgresRemoteQuiz
+from solo_leveling.interfaces.mcp.remote_quiz import register_remote_quiz
+from mcp.server.fastmcp import FastMCP
+from types import SimpleNamespace
+from pathlib import Path
+register_remote_quiz(FastMCP('합성 퀴즈 이미지'), SimpleNamespace(owner=lambda: None), PostgresRemoteQuiz(None))
+assert Path('/app/src/solo_leveling/interfaces/mcp/assets/remote-quiz-attempt.html').is_file()
+print('REMOTE_QUIZ_IMAGE_READY')
