@@ -276,8 +276,9 @@ def test_web_remote_annotation_is_owner_scoped_with_restricted_role(
 
 
 def test_web_remote_upload_consent_admission_deletion(web, db):
-    client, _, _ = web
+    client, sessions, _ = web
     from solo_leveling.interfaces.http.remote_upload_consents import NOTICE_VERSION
+    from solo_leveling.interfaces.http.web_auth import WebIdentity
 
     db(
         "INSERT INTO server_dispatch_controls(control_id,generation,dispatch_enabled,intake_enabled) VALUES ('provider_dispatch',1,true,true) ON CONFLICT(control_id) DO UPDATE SET intake_enabled=true,dispatch_enabled=true"
@@ -290,11 +291,23 @@ def test_web_remote_upload_consent_admission_deletion(web, db):
         201,
     )
     path = "/v1/remote-uploads/intents/" + intent["intent_id"]
+    source_path = f"/v1/remote-uploads/intents/by-paper/{intent['paper_id']}/{intent['version_id']}"
+    call(client, "GET", source_path, expected=404)
     call(client, "GET", path)
     call(client, "GET", path + "/consents")
     storage = call(client, "POST", path + "/consents/storage", {"notice_version": NOTICE_VERSION})
     call(client, "POST", path + "/prepare")
     call(client, "POST", path + "/complete")
+    assert call(client, "GET", source_path) == {
+        "intent_id": intent["intent_id"], "paper_id": intent["paper_id"],
+        "version_id": intent["version_id"], "active_publication_id": None,
+    }
+    call(client, "GET", source_path.rsplit("/", 1)[0] + "/" + new_id(), expected=404)
+    original_session = client.cookies.get("slp_session")
+    other = sessions.create_session(WebIdentity(new_id(), "다른 합성", None), datetime.now(timezone.utc))
+    client.cookies.set("slp_session", other.token)
+    call(client, "GET", source_path, expected=404)
+    client.cookies.set("slp_session", original_session)
     access = call(client, "GET", f"/v1/papers/{intent['paper_id']}/versions/{intent['version_id']}/file-access")
     assert access["status"] == "ready" and access["file_name"] == "synthetic.pdf"
     detail = call(client, "GET", f"/v1/papers/{intent['paper_id']}")

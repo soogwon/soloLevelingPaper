@@ -60,6 +60,26 @@ def create_remote_upload_consent_router(require_principal: Any, consents: Any, p
         if principal.credential_type != "web_session":
             raise HTTPException(status_code=403, detail={"code": "web_session_required"})
 
+    class ProcessingSourceView(BaseModel):
+        intent_id: UUID
+        paper_id: UUID
+        version_id: UUID
+        active_publication_id: UUID | None
+
+    @router.get("/by-paper/{paper_id}/{version_id}", response_model=ProcessingSourceView)
+    def get_processing_source(
+        paper_id: UUID, version_id: UUID, principal: Principal, response: Response,
+    ):
+        require_web(principal)
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            source = processing.find_source(principal.user_id, str(paper_id), str(version_id))
+        except Exception:
+            raise HTTPException(status_code=503, detail={"code": "remote_processing_unavailable"}) from None
+        if source is None:
+            raise _not_found(HTTPException)
+        return ProcessingSourceView(paper_id=paper_id, version_id=version_id, **source)
+
     @router.get("/{intent_id}/consents", response_model=ConsentStatusView)
     def get_consents(intent_id: UUID, principal: Principal, response: Response):
         require_web(principal)
