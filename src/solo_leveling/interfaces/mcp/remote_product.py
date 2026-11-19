@@ -143,7 +143,7 @@ class RemoteProductQueries:
                                       'arguments': {'context_id': context_id, 'limit': 20},
                                       'required_scope': 'annotations:read'},
                 'page_notice': '목차 페이지는 이 고정 PDF 판본 기준입니다. 인쇄 페이지나 다른 판본의 페이지와 다를 수 있습니다.',
-                'generation_notice': '게시본에 연결된 원격 요약·키워드 저장 계약은 아직 없습니다. 조회 시 자동 생성하지 않습니다.'}}
+                'generation_notice': '저장 요약은 별도 요약 조회 권한으로 확인합니다. 키워드는 아직 제공하지 않으며 조회 시 자동 생성하지 않습니다.'}}
         except Exception:
             return {'status': 'unavailable'}
 

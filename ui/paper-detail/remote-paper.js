@@ -2,13 +2,59 @@ const uuid = v => typeof v === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9
 export function mountRemotePaper(app, doc) {
   const el = id => doc.getElementById(id);
   const buttons = ['sections-more','records-more','refresh'];
+  let summaryKey = null;
   let generation = 0, incoming = null, scope = null, busy = false;
   function clear(message) {
-    ++generation; scope = null; busy = false;
+    ++generation; scope = null; busy = false; resetSummary('요약 조회 전입니다.');
     for (const id of ['paper','sections','records']) el(id).textContent = '';
     for (const id of buttons) el(id).disabled = true;
     el('status').textContent = message;
   }
+
+  function resetSummary(message) {
+    summaryKey = null;
+    el('summary').textContent = message;
+    el('summary-export').disabled = true;
+    el('summary-markdown').value = ''; el('summary-markdown').hidden = true;
+  }
+  async function loadSummary(expected) {
+    const current = generation;
+    resetSummary('저장 요약을 조회합니다.');
+    try {
+      const reply = await app.callServerTool({name:'get_latest_remote_summary',arguments:{context_id:expected.context_id}});
+      if (current !== generation) return;
+      const value = reply?.structuredContent, result = value?.result, b = result?.binding;
+      if (value?.status === 'not_found') {resetSummary('저장된 요약이 없습니다. 자동 생성하지 않습니다.'); return;}
+      if (value?.status === 'not_authorized') {resetSummary('요약 조회 권한을 확인해 주세요.'); return;}
+      if (reply?.isError || value?.state !== 'completed' || value.context_id !== expected.context_id
+          || !uuid(value.request_key) || result?.context_id !== expected.context_id || b?.context_id !== expected.context_id
+          || b.publication_id !== expected.publication_id || b.parse_revision_id !== expected.parse_revision_id
+          || b.server_version_id !== expected.version_id || b.paper_id !== expected.paper_id
+          || b.translation_revision_id !== expected.translation_revision_id
+          || !['paper','section'].includes(result.scope) || (result.scope === 'section' && typeof result.section_id !== 'string')
+          || !Array.isArray(result.items) || !result.items.length || result.items.length > 100
+          || !result.items.every(i=>['claim','method','result','limitation'].includes(i?.kind) && typeof i.text === 'string'
+            && Array.isArray(i.evidence_ids) && i.evidence_ids.length && i.evidence_ids.every(uuid))) throw new Error();
+      summaryKey = value.request_key;
+      el('summary').textContent = `범위: ${result.scope === 'paper' ? '논문 전체' : '섹션 ' + result.section_id}\n판본: ${b.server_version_id}\n생성: ${result.generated_at}\n구조·근거 ID 검증 결과이며 의미적 정확성은 별도 확인이 필요합니다.\n\n` +
+        result.items.map(i=>`${i.kind}: ${i.text}\n근거 ID: ${i.evidence_ids.join(', ')}`).join('\n\n');
+      el('summary-export').disabled = false;
+    } catch {if (current === generation) resetSummary('요약을 조회하지 못했습니다. 새로고침하거나 채팅에서 같은 맥락의 요약을 조회하세요.');}
+  }
+  el('summary-export').onclick = async () => {
+    if (!summaryKey || !scope) return;
+    const current = generation, key = summaryKey, expected = {...scope};
+    el('summary-export').disabled = true;
+    try {
+      const reply = await app.callServerTool({name:'export_remote_summary',arguments:{request_key:key}}), v = reply?.structuredContent;
+      if (current !== generation) return;
+      if (reply?.isError || v?.status !== 'ok' || v.context_id !== expected.context_id || v.request_key !== key
+          || v.publication_id !== expected.publication_id || v.media_type !== 'text/markdown' || typeof v.markdown !== 'string') throw new Error();
+      el('summary-markdown').value = v.markdown; el('summary-markdown').hidden = false;
+    } catch {if (current === generation) resetSummary('내보내지 못했습니다. 새로고침 후 다시 조회하세요.');}
+    finally {if (current === generation && summaryKey) el('summary-export').disabled = false;}
+  };
+
   function render(reply, expected) {
     const r = reply?.structuredContent?.result, d = r?.detail, p = r?.annotation_page;
     if (reply?.isError || reply?.structuredContent?.status !== 'ok'
@@ -45,12 +91,14 @@ export function mountRemotePaper(app, doc) {
     el('sections-more').disabled = scope.nextSection === null;
     el('records-more').disabled = scope.nextRecord === null;
     el('refresh').disabled = false;
+    void loadSummary(d);
   }
   async function load(kind) {
     if (!scope || busy || (kind === 'sections' && scope.nextSection === null) || (kind === 'records' && scope.nextRecord === null)) return;
     const expected = {...scope, section_offset:kind === 'refresh' ? 0 : kind === 'sections' ? scope.nextSection : scope.section_offset,
       after:kind === 'refresh' ? null : kind === 'records' ? scope.nextRecord : scope.after};
     const current = ++generation;
+    resetSummary('상세를 조회합니다.');
     busy = true; for (const id of buttons) el(id).disabled = true;
     try {
       const {context_id, expected_binding, section_offset, after} = expected;
