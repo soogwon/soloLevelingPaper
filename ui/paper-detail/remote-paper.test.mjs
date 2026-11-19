@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
 import {mountRemotePaper} from './remote-paper.js';
 const ctx='00000000-0000-0000-0000-000000000590', aid='00000000-0000-0000-0000-000000000591';
-function reply(offset=0,after=null,saved_summary={status:'not_found'}) {return {structuredContent:{status:'ok',result:{context_id:ctx,binding:'a'.repeat(64),section_offset:offset,after,saved_summary,
+function reply(offset=0,after=null,saved_summary={status:'not_found'},saved_summary_markdown=null) {return {structuredContent:{status:'ok',result:{context_id:ctx,binding:'a'.repeat(64),section_offset:offset,after,saved_summary,saved_summary_markdown,
   detail:{context_id:ctx,paper_id:ctx,version_id:'v1',publication_id:ctx,parse_revision_id:ctx,embedding_set_id:ctx,title:'<img src=x>',
     section_catalog:[{section_id:'s',parse_revision_id:ctx,title:'합성 목차',start_pdf_page:1,end_pdf_page:1}],next_section_offset:offset?null:20,
     summary:null,keywords:[],important_sentences:[],generation_notice:'생성하지 않습니다.',page_notice:'고정 판본'},
@@ -43,13 +43,13 @@ function summary(){return {state:'completed',context_id:ctx,request_key:aid,resu
   items:[{kind:'method',text:'<img src=x> 합성 요약',evidence_ids:[aid]}]}};}
 
 test('저장 요약 범위·근거 표시와 같은 키 Markdown 내보내기',async()=>{
- const s=setup();s.app.callServerTool=async a=>{s.calls.push(a);return {structuredContent:{status:'ok',context_id:ctx,request_key:aid,publication_id:ctx,media_type:'text/markdown',markdown:'# 합성 요약'}};};
- s.app.ontoolinput({arguments:{context_id:ctx}});s.app.ontoolresult(reply(0,null,summary()));
- assert.deepEqual(s.calls,[]);
+ const s=setup();
+ const markdown={status:'ok',context_id:ctx,request_key:aid,publication_id:ctx,media_type:'text/markdown',markdown:'# 합성 요약'};
+ s.app.ontoolinput({arguments:{context_id:ctx}});s.app.ontoolresult(reply(0,null,summary(),markdown));
  assert.match(s.doc.getElementById('summary').textContent,/섹션 s/);
  assert.match(s.doc.getElementById('summary').textContent,/근거 ID/);assert.equal(s.doc.querySelector('img'),null);
- await s.doc.getElementById('summary-export').onclick();
- assert.deepEqual(s.calls,[{name:'export_remote_summary',arguments:{request_key:aid}}]);
+ s.doc.getElementById('summary-export').onclick();
+ assert.deepEqual(s.calls,[]);
  assert.equal(s.doc.getElementById('summary-markdown').value,'# 합성 요약');
 });
 
@@ -75,9 +75,15 @@ test('요약 미지원·권한·오류·다른 게시본을 구분하고 내보�
  }
 });
 
-test('내보내기 도중 취소되면 Markdown을 지운다',async()=>{
- const s=setup();s.app.ontoolinput({arguments:{context_id:ctx}});s.app.ontoolresult(reply(0,null,summary()));
- let resolve;s.app.callServerTool=()=>new Promise(r=>resolve=r);const pending=s.doc.getElementById('summary-export').onclick();s.app.ontoolcancelled();
- resolve({structuredContent:{status:'ok',context_id:ctx,request_key:aid,publication_id:ctx,media_type:'text/markdown',markdown:'늦은 결과'}});await pending;
+test('다른 요청의 Markdown과 취소 뒤 내보내기를 차단한다',()=>{
+ const s=setup();
+ const markdown={status:'ok',context_id:ctx,request_key:ctx,publication_id:ctx,media_type:'text/markdown',markdown:'다른 결과'};
+ s.app.ontoolinput({arguments:{context_id:ctx}});s.app.ontoolresult(reply(0,null,summary(),markdown));
+ assert(s.doc.getElementById('summary-export').disabled);
+ s.app.ontoolinput({arguments:{context_id:ctx}});
+ s.app.ontoolresult(reply(0,null,summary(),{...markdown,request_key:aid}));
+ s.app.ontoolcancelled();
+ s.doc.getElementById('summary-export').onclick();
  assert.equal(s.doc.getElementById('summary-markdown').value,'');
+ assert.deepEqual(s.calls,[]);
 });

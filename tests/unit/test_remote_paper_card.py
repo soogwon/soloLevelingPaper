@@ -74,3 +74,35 @@ def test_detail_and_direct_summary_share_read_result_and_scope(monkeypatch):
     assert '비공개' not in str(response)
     summaries.prepare.assert_not_called()
     summaries.submit.assert_not_called()
+
+
+def test_detail_bundles_markdown_from_authorized_saved_result(monkeypatch):
+    from solo_leveling.interfaces.mcp import remote_summaries
+
+    access = token(['annotations:read', 'summaries:write'])
+    monkeypatch.setattr(module, 'get_access_token', lambda: access)
+    monkeypatch.setattr(remote_summaries, 'get_access_token', lambda: access)
+    queries = NS(owner=lambda: 'alice', detail=Mock(return_value={'status': 'ok', 'result': {}}))
+    annotations = Mock(service_id='remote-paper')
+    annotations.store.list_annotations.return_value = {'items': [], 'next_cursor': None}
+    summaries = Mock()
+    binding = dict.fromkeys(('context_id', 'paper_id', 'server_version_id', 'publication_id',
+                             'parse_revision_id', 'translation_revision_id'), CONTEXT)
+    saved = {'context_id': CONTEXT, 'request_key': CONTEXT, 'state': 'completed',
+             'result': dict.fromkeys(('scope', 'section_id', 'model', 'provider', 'language',
+                                      'input_hash', 'prompt_version', 'generated_at'), 'synthetic')}
+    saved['result'].update(context_id=CONTEXT, binding=binding,
+                           items=[{'kind': 'claim', 'text': '합성 결과', 'evidence_ids': [CONTEXT]}])
+    summaries.latest.return_value = saved
+    server = Server()
+    latest = remote_summaries.register_summary_tools(server, queries, summaries)
+    module.register_annotation_tools(server, queries, annotations, latest_summary=latest)
+
+    reply = server.tools['show_remote_paper_detail'](CONTEXT)['result']
+    assert reply['saved_summary'] == saved
+    markdown = reply['saved_summary_markdown']
+    assert markdown['publication_id'] == CONTEXT and markdown['request_key'] == CONTEXT
+    assert '합성 결과' in markdown['markdown'] and f'근거 ID: {CONTEXT}' in markdown['markdown']
+    summaries.latest.assert_called_once_with('alice', CONTEXT)
+    summaries.result.assert_not_called()
+    summaries.submit.assert_not_called()

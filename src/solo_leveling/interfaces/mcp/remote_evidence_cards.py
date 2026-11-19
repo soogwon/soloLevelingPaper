@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Any
 from mcp.types import ToolAnnotations
 
+from solo_leveling.application.summary.remote_export import export_summary
+
 CARD_URI = 'ui://remote-evidence/detail.html'
+# 상세 응답을 읽는 새 번들은 이전 호스트 캐시와 구분한다.
+PAPER_CARD_URI = 'ui://remote-paper/detail-v2.html'
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                             idempotentHint=True, openWorldHint=False)
 
@@ -48,11 +52,11 @@ def register_evidence_cards(server, queries, service, call, context, binding, *,
         """저장 인용·판본·페이지와 근거 청크의 메모 첫 페이지를 상세 카드로 연다. 더 보기는 같은 연결과 커서를 사용한다. AI 생성·쓰기 없이 조회한다."""
         return call(False, lambda owner: read(owner, context_id, evidence_id, after, 20, expected_binding))
 
-    @server.resource('ui://remote-paper/detail.html', mime_type='text/html;profile=mcp-app')
+    @server.resource(PAPER_CARD_URI, mime_type='text/html;profile=mcp-app')
     def remote_paper_detail_card():
         return Path(__file__).with_name('assets').joinpath('remote-paper-detail.html').read_text(encoding='utf-8')
 
-    @server.tool(meta={'ui': {'resourceUri': 'ui://remote-paper/detail.html'}}, annotations=READ_ONLY)
+    @server.tool(meta={'ui': {'resourceUri': PAPER_CARD_URI}}, annotations=READ_ONLY)
     def show_remote_paper_detail(context_id: str, section_offset: int = 0,
                                  after: str | None = None,
                                  expected_binding: str | None = None) -> dict[str, Any]:
@@ -72,9 +76,16 @@ def register_evidence_cards(server, queries, service, call, context, binding, *,
             page = service.store.list_annotations(owner, ctx, after=after, limit=20)
             if page is None:
                 return None
+            summary = latest_summary(ctx) if latest_summary is not None else {'status': 'unsupported'}
+            markdown = None
+            if summary.get('state') == 'completed' and summary.get('result'):
+                try:
+                    markdown = export_summary(summary)
+                except (ValueError, KeyError, TypeError):
+                    pass
             return {'context_id': ctx, 'binding': current, 'detail': detail['result'],
                     'section_offset': section_offset, 'after': after,
-                    'saved_summary': latest_summary(ctx) if latest_summary is not None else {'status': 'unsupported'},
+                    'saved_summary': summary, 'saved_summary_markdown': markdown,
                     'annotation_page': {'items': [asdict(item) for item in page['items']],
                                         'next_cursor': page['next_cursor']}}
         return call(False, operation)
