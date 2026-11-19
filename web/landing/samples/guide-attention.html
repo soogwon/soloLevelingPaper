@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>학습 안내 대화 예시 · Attention Is All You Need</title>
+  <meta name="description" content="solo-leveling-guide Skill로 Attention Is All You Need를 이해 목적으로 읽는 대화 예시">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+  <style>
+    /* 예시 파일은 단독으로 열리도록 스타일을 안에 둔다. 색·글꼴은 랜딩과 같다. */
+    :root {
+      --bg: #F6F6F9; --surface: #FFFFFF; --line: #E6E6EE; --line-soft: #EEEEF3;
+      --text: #16161D; --text-2: #3F3F4C; --muted: #5B5B6B;
+      --accent: #4338CA; --accent-hover: #3730A3; --accent-soft: #EEF0FF;
+      --ok-soft: #E5F5EC; --ok-ink: #14653A; --quote: #FFF8DB; --hl-ink: #704300; --warn-soft: #FEF3F2; --warn-ink: #B42318;
+      --font: 'Noto Sans KR', system-ui, -apple-system, 'Apple SD Gothic Neo', sans-serif;
+      --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: break-word; }
+    a { color: var(--accent); }
+    :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+    h1, h2, h3, p { margin: 0; }
+    sub { font-size: 0.72em; }
+
+    /* 퀴즈·교재 예시와 같은 "Skill 페이지로" 막대 */
+    .sl-back { background: var(--surface); border-bottom: 1px solid var(--line); }
+    .sl-back-inner { max-width: 1040px; margin: 0 auto; padding: 10px 20px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+    .sl-back a { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); text-decoration: none; font-size: 14px; font-weight: 500; }
+    .sl-back a:hover { border-color: var(--accent); color: var(--accent); }
+    .sl-back span { font-size: 13px; color: var(--muted); }
+    @media print { .sl-back { display: none; } }
+
+    .page-head { display: flex; flex-direction: column; gap: 6px; padding-top: 16px; }
+    .eyebrow { font-size: 12.5px; font-weight: 700; letter-spacing: 0.06em; color: var(--accent); }
+    .page-head h1 { font-size: 28px; line-height: 1.3; font-weight: 900; letter-spacing: -0.02em; }
+    .page-meta { font-size: 14px; color: var(--muted); }
+
+    .chat { max-width: 820px; margin: 0 auto; padding: 24px 20px 64px; display: flex; flex-direction: column; gap: 16px; }
+    .note { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; font-size: 14px; color: var(--muted); }
+    .note b { color: var(--text-2); }
+    .divider { display: flex; align-items: center; gap: 12px; font-size: 12.5px; font-weight: 700; color: var(--accent); letter-spacing: 0.04em; margin-top: 8px; }
+    .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+    .msg { display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
+    .who { font-size: 12.5px; font-weight: 700; color: var(--muted); }
+    .msg-user { align-self: flex-end; align-items: flex-end; max-width: 80%; }
+    .msg-user .bubble { background: var(--accent); color: #fff; border-radius: 16px 16px 4px 16px; padding: 10px 16px; }
+    .attach { font-size: 12.5px; opacity: 0.85; display: block; }
+    .msg-claude { align-self: stretch; }
+    .msg-claude .bubble { background: var(--surface); border: 1px solid var(--line); border-radius: 16px 16px 16px 4px; padding: 18px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+    .bubble ul, .bubble ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+    .bubble h3 { font-size: 15px; font-weight: 700; margin-top: 4px; }
+    .bubble h2 { font-size: 19px; font-weight: 900; letter-spacing: -0.02em; }
+
+    .ev { display: block; margin-top: 4px; background: var(--quote); border-radius: 8px; padding: 8px 10px; font-size: 13.5px; color: #2B2B36; }
+    .ev .loc { font-family: var(--mono); font-size: 12px; color: var(--hl-ink); margin-right: 6px; }
+    .ev i { font-style: italic; }
+    .tag { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 500; background: var(--accent-soft); color: var(--accent-hover); vertical-align: 1px; }
+    .warn { background: var(--warn-soft); border-radius: 10px; padding: 10px 12px; font-size: 14px; color: var(--warn-ink); }
+    .ask { background: var(--bg); border-radius: 10px; padding: 10px 12px; font-size: 14.5px; }
+
+    .table-box { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 560px; }
+    th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-top: 1px solid var(--line-soft); }
+    thead th { border-top: 0; background: var(--bg); font-size: 12.5px; font-weight: 500; color: var(--muted); }
+    td.num { font-family: var(--mono); color: var(--accent); width: 40px; }
+    td.loc { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; color: var(--text-2); }
+    tr.goal td { background: var(--accent-soft); font-weight: 700; }
+
+    .summary { border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+    .one-line { background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; font-size: 14.5px; }
+    .choices { list-style: none; padding: 0 !important; }
+    .choices li { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+    .choices li.picked { border-color: var(--accent); background: var(--accent-soft); }
+    code { font-family: var(--mono); font-size: 0.86em; background: var(--bg); padding: 1px 6px; border-radius: 5px; overflow-wrap: anywhere; }
+
+
+    @media (max-width: 600px) {
+      .chat { padding: 16px 16px 48px; }
+      .msg-user { max-width: 92%; }
+      .msg-claude .bubble { padding: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="sl-back"><div class="sl-back-inner"><a href="../skills.html#samples">← Skill 페이지로</a><span>결과물 예시 · 학습 안내</span></div></div>
+
+  <main class="chat">
+    <div class="page-head">
+      <span class="eyebrow">SOLO LEVELING PAPER · 학습 안내 대화 예시</span>
+      <h1>Attention Is All You Need 학습 안내</h1>
+      <p class="page-meta">solo-leveling-guide · 학습 목적: 이해 · 이미 아는 개념: RNN, 행렬 곱</p>
+    </div>
+    <p class="note"><b>이 예시는</b> 실제 논문 PDF(arXiv 1706.03762v7, 개념 지도 검수 판본)에 Skill 스크립트를 돌린 결과와 추출한 본문의 원문 인용으로 만들었어요. 실제 대화에서 Claude의 문장은 매번 조금씩 다르지만, 흐름·형식·근거 규칙은 같아요.</p>
+
+    <div class="divider">1. 목적과 수준 묻기</div>
+
+    <div class="msg msg-user">
+      <span class="who">사용자</span>
+      <p class="bubble"><span class="attach">📎 attention.pdf</span>이 논문 공부하고 싶어.</p>
+    </div>
+
+    <div class="msg msg-claude">
+      <span class="who">Claude</span>
+      <div class="bubble">
+        <p>좋아요, 시작 전에 두 가지만 알려 주세요.</p>
+        <ol>
+          <li>읽는 목적: <b>이해</b> / <b>구현</b> / <b>훑어보기</b> 중 무엇인가요?</li>
+          <li>이미 알고 있는 개념이 있나요? (없으면 “없음”)</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="msg msg-user">
+      <span class="who">사용자</span>
+      <p class="bubble">이해. RNN이랑 행렬 곱은 알아.</p>
+    </div>
+
+    <div class="divider">2. 학습 순서와 읽기 전 질문</div>
+
+    <div class="msg msg-claude">
+      <span class="who">Claude</span>
+      <div class="bubble">
+        <p>논문을 확인했어요. 15쪽이고, 팀이 검수한 개념 지도에 있는 판본이라 학습 순서와 쪽 위치를 그대로 보여 드릴게요.</p>
+        <p>아신다고 한 <b>순환 신경망</b>과 <b>행렬 곱</b>은 순서에서 뺐어요. 아는 것으로 판정한 건 아니니, 헷갈리면 언제든 물어보세요.</p>
+        <div class="table-box">
+          <table>
+            <thead><tr><th>순서</th><th>개념</th><th>왜 필요한가</th><th>논문 위치</th></tr></thead>
+            <tbody>
+              <tr><td class="num">1</td><td>단어 임베딩 (Word embedding)</td><td>→ 인코더-디코더 구조에 필요: 인코더와 디코더는 토큰을 임베딩 벡터로 받아 처리한다.</td><td class="loc">p.5 · 3.4</td></tr>
+              <tr><td class="num">2</td><td>인코더-디코더 구조 (Encoder-decoder architecture)</td><td>→ 어텐션 메커니즘에 필요: 어텐션은 디코더가 인코더의 모든 위치를 참고하도록 하기 위해 도입되었다.</td><td class="loc">p.2–3 · 3</td></tr>
+              <tr><td class="num">3</td><td>내적 (Dot product)</td><td>→ 어텐션 메커니즘에 필요: 관련도 점수를 벡터 사이의 유사도로 계산한다.</td><td class="loc">p.4 · 3.2.1</td></tr>
+              <tr><td class="num">4</td><td>소프트맥스 (Softmax)</td><td>→ 어텐션 메커니즘에 필요: 관련도 점수를 합이 1인 가중치로 바꿀 때 쓴다.</td><td class="loc">p.4–5 · 3.2.1, 3.4</td></tr>
+              <tr><td class="num">5</td><td>어텐션 메커니즘 (Attention mechanism)</td><td>→ 스케일드 닷-프로덕트 어텐션에 필요</td><td class="loc">p.2 · 2</td></tr>
+              <tr><td class="num">6</td><td>스케일드 닷-프로덕트 어텐션</td><td>→ 셀프 어텐션에 필요</td><td class="loc">p.4 · 3.2.1</td></tr>
+              <tr><td class="num">7</td><td>셀프 어텐션 (Self-attention)</td><td>→ 멀티헤드 어텐션에 필요</td><td class="loc">p.2, 6 · 2, 4</td></tr>
+              <tr><td class="num">8</td><td>멀티헤드 어텐션 (Multi-head attention)</td><td>→ 트랜스포머 인코더에 필요</td><td class="loc">p.4–5 · 3.2.2</td></tr>
+              <tr><td class="num">9</td><td>위치 인코딩 (Positional encoding)</td><td>→ 트랜스포머 인코더에 필요: 순환 구조가 없으므로 입력 임베딩에 위치 정보를 더한다.</td><td class="loc">p.6 · 3.5</td></tr>
+              <tr><td class="num">10</td><td>위치별 피드포워드 네트워크</td><td>→ 트랜스포머 인코더에 필요</td><td class="loc">p.5 · 3.3</td></tr>
+              <tr><td class="num">11</td><td>잔차 연결 (Residual connection)</td><td>→ 트랜스포머 인코더에 필요</td><td class="loc">p.3 · 3.1</td></tr>
+              <tr><td class="num">12</td><td>층 정규화 (Layer normalization)</td><td>→ 트랜스포머 인코더에 필요</td><td class="loc">p.3 · 3.1</td></tr>
+              <tr><td class="num">13</td><td>트랜스포머 인코더</td><td>→ 트랜스포머에 필요</td><td class="loc">p.3 · 3.1</td></tr>
+              <tr><td class="num">14</td><td>마스크드 셀프 어텐션 (Masked self-attention)</td><td>→ 트랜스포머에 필요: 디코더의 첫 어텐션 층이다.</td><td class="loc">p.3, 5 · 3.1, 3.2.3</td></tr>
+              <tr class="goal"><td class="num">15</td><td>트랜스포머 (Transformer) — 목표</td><td>논문의 핵심 기여인 어텐션만으로 된 모델 구조다.</td><td class="loc">p.2–3 · 3</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>읽기 전에 생각해 볼 질문 세 개예요. 답은 선택이고, 쓰시면 다 읽은 뒤 비교해 드릴게요.</p>
+        <ol>
+          <li><span class="tag">배경지식</span> 이 논문의 주제와 관련해 이미 알고 있는 배경지식은 무엇인가요?</li>
+          <li><span class="tag">가설</span> 이 논문이 풀려는 문제와 그 해결 방법에 대해 어떤 가설을 가지고 있나요?</li>
+          <li><span class="tag">기대</span> 이 논문에서 무엇을 얻고 싶고, 어떤 내용이 나올 것으로 기대하나요?</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="msg msg-user">
+      <span class="who">사용자</span>
+      <p class="bubble">가설: RNN이 느려서 병렬로 처리하는 방법을 제안했을 것 같아.</p>
+    </div>
+
+    <div class="divider">3. 1단계 미리보기</div>
+
+    <div class="msg msg-claude">
+      <span class="who">Claude</span>
+      <div class="bubble">
+        <p>1단계 <b>미리보기</b>예요. 목표는 논문 전체의 윤곽을 잡는 것이고, 초록(p.1), 1 Introduction(p.2), 7 Conclusion(p.10)을 읽으면 돼요.</p>
+        <ul>
+          <li><b>풀려는 문제:</b> RNN은 위치를 하나씩 순서대로 계산해서, 한 문장 안에서는 병렬 처리를 할 수 없어요.
+            <span class="ev"><span class="loc">p.2 · 1 Introduction</span><i>“This inherently sequential nature precludes parallelization within training examples”</i></span></li>
+          <li><b>제안:</b> 순환을 빼고 어텐션만으로 입력과 출력 사이의 관계를 잡는 <b>트랜스포머</b>를 제안해요.
+            <span class="ev"><span class="loc">p.2 · 1 Introduction</span><i>“a model architecture eschewing recurrence and instead relying entirely on an attention mechanism”</i></span></li>
+          <li><b>결과 미리보기:</b> 영어→독일어 번역에서 28.4 BLEU로 기존 최고 결과를 2 BLEU 넘게 앞섰어요. <span class="loc">(p.1, Abstract)</span></li>
+        </ul>
+        <h3>이 단계의 새 키워드</h3>
+        <div class="table-box">
+          <table>
+            <thead><tr><th>키워드</th><th>쉬운 정의</th><th>이 논문에서의 역할</th><th>처음 나오는 쪽</th></tr></thead>
+            <tbody>
+              <tr><td>트랜스포머 (Transformer)</td><td>순환·합성곱 없이 어텐션만 쓰는 모델 구조</td><td>논문이 제안하는 모델</td><td class="loc">p.1</td></tr>
+              <tr><td>어텐션 (Attention)</td><td>여러 위치 중 어디를 얼마나 참고할지 가중치로 정하는 방법</td><td>모델의 유일한 핵심 연산</td><td class="loc">p.1</td></tr>
+              <tr><td>BLEU</td><td>기계 번역 결과가 정답 번역과 얼마나 겹치는지 재는 점수</td><td>번역 품질 비교 지표</td><td class="loc">p.1</td></tr>
+              <tr><td>병렬화 (Parallelization)</td><td>여러 계산을 동시에 처리하는 것</td><td>RNN 대비 트랜스포머의 장점</td><td class="loc">p.2</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="ask"><b>확인 질문:</b> RNN이 긴 문장에서 특히 불리한 이유를 논문은 무엇이라고 하나요? 답해 보시고, 준비되면 2단계(구조 파악)로 넘어갈게요.</p>
+      </div>
+    </div>
+
+    <div class="divider">4. 질의응답</div>
+
+    <div class="msg msg-user">
+      <span class="who">사용자</span>
+      <p class="bubble">왜 √d<sub>k</sub>로 나눠?</p>
+    </div>
+
+    <div class="msg msg-claude">
+      <span class="who">Claude</span>
+      <div class="bubble">
+        <p>d<sub>k</sub>가 크면 쿼리와 키의 내적 값이 너무 커져서, 소프트맥스가 기울기가 거의 0인 구간으로 밀려나기 때문이에요. 그러면 학습이 잘 안 돼요. 그래서 내적을 √d<sub>k</sub>로 나눠 크기를 줄여요.</p>
+        <ul>
+          <li>근거:
+            <span class="ev"><span class="loc">p.4 · 3.2.1 Scaled Dot-Product Attention</span><i>“We suspect that for large values of dk, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients”</i></span></li>
+          <li>논문 각주 4(p.4)는 그 이유를 이렇게 설명해요: q와 k의 각 성분이 평균 0, 분산 1인 독립 확률변수라면 내적의 분산이 d<sub>k</sub>가 돼요. 즉 차원이 클수록 값이 넓게 퍼져요.</li>
+          <li>논문 표현이 “We suspect”인 점도 눈여겨보세요. 저자들도 확정이 아니라 <b>추정</b>으로 말하고 있어요.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="divider">5. 요약</div>
+
+    <div class="msg msg-user">
+      <span class="who">사용자</span>
+      <p class="bubble">요약해 줘.</p>
+    </div>
+
+    <div class="msg msg-claude">
+      <span class="who">Claude</span>
+      <div class="bubble">
+        <div class="summary">
+          <h2>Attention Is All You Need 요약</h2>
+          <p class="one-line"><b>한 줄 요약:</b> 순환·합성곱 없이 어텐션만으로 된 번역 모델(트랜스포머)을 제안해, 더 빠르게 학습하면서 번역 품질 최고 기록을 냈다. · 읽은 목적: 이해</p>
+
+          <h3>풀려는 문제</h3>
+          <ul><li>RNN은 위치를 순서대로 계산해 한 문장 안에서 병렬 처리를 할 수 없고, 긴 문장일수록 이 제약이 커진다. (p.2)</li></ul>
+
+          <h3>핵심 주장</h3>
+          <ul><li>어텐션만으로 입력·출력 사이의 관계를 잡을 수 있다.
+            <span class="ev"><span class="loc">p.2 · 1 Introduction</span><i>“relying entirely on an attention mechanism to draw global dependencies between input and output”</i></span></li></ul>
+
+          <h3>방법</h3>
+          <ul>
+            <li>인코더·디코더 각각 같은 층 6개를 쌓고, 층마다 멀티헤드 셀프 어텐션 + 위치별 피드포워드 네트워크를 둔다. 하위 층마다 잔차 연결과 층 정규화를 쓴다. (p.3, 3.1)</li>
+            <li>스케일드 닷-프로덕트 어텐션: 쿼리·키 내적을 √d<sub>k</sub>로 나누고 소프트맥스로 값에 가중치를 준다. (p.4, 3.2.1)</li>
+            <li>멀티헤드: 헤드 8개를 병렬로 쓰고, 헤드마다 d<sub>k</sub> = d<sub>v</sub> = 64. (p.5, 3.2.2)</li>
+            <li>순환이 없어서 사인·코사인 위치 인코딩을 입력 임베딩에 더한다. (p.6, 3.5)</li>
+          </ul>
+
+          <h3>결과</h3>
+          <ul>
+            <li>WMT 2014 영어→독일어: Transformer (big) 28.4 BLEU, 앙상블을 포함한 기존 최고보다 2.0 BLEU 이상 높다. 8개 P100 GPU로 3.5일 학습했다. (p.8, 6.1)</li>
+            <li>WMT 2014 영어→프랑스어: 초록(p.1)과 표 2(p.8)는 <b>41.8</b>, 본문 6.1절(p.8)은 <b>41.0</b>이라고 적어서 두 수치가 달라요.
+              <p class="warn">어느 쪽이 맞는지 이 판본만으로는 판단할 수 없어 둘 다 적어요.</p></li>
+            <li>영어 구문 분석(WSJ 23)에도 적용해 일반화 가능성을 보였다. (p.10, 표 4)</li>
+          </ul>
+
+          <h3>한계</h3>
+          <ul><li>논문이 명시한 한계를 추출한 본문에서 찾지 못했어요. 결론(p.10)은 향후 과제로 텍스트 외 입력(이미지·오디오·비디오)으로의 확장과, 큰 입력을 위한 국소·제한 어텐션 연구를 들어요.</li></ul>
+
+          <h3>다음에 읽을 것</h3>
+          <ul>
+            <li>2단계(구조 파악): 3 Model Architecture(p.2–3)의 그림 1과 3.1절을 먼저 보세요.</li>
+            <li>학습 순서 표의 3~6번(내적 → 소프트맥스 → 어텐션 → 스케일드 닷-프로덕트)을 p.4에서 한 번에 확인할 수 있어요.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider">6. 마무리: 전후 비교와 정리 방법 고르기</div>
+
+    <div class="msg msg-claude">
+      <span class="who">Claude · 복습 단계 마지막</span>
+      <div class="bubble">
+        <p>처음에 쓰신 가설과 다 읽은 뒤의 답을 나란히 놓아 볼게요.</p>
+        <div class="table-box">
+          <table>
+            <thead><tr><th>읽기 전</th><th>읽은 후</th></tr></thead>
+            <tbody><tr><td>가설: RNN이 느려서 병렬로 처리하는 방법을 제안했을 것 같아.</td><td>(사용자가 쓴 주장·증거 답)</td></tr></tbody>
+          </table>
+        </div>
+        <p>오늘 공부를 어떻게 정리할까요?</p>
+        <ol class="choices">
+          <li class="picked">1. 퀴즈로 확인하기 — 브라우저에서 풀고 바로 채점되는 HTML 퀴즈 (<code>solo-leveling-quiz</code>)</li>
+          <li>2. HTML 교재로 정리하기 — 오늘 공부한 내용을 다시 읽을 수 있는 교재 (<code>solo-leveling-textbook</code>)</li>
+          <li>3. 둘 다 — 교재를 먼저 만들고, 같은 범위로 퀴즈를 만들어요</li>
+          <li>4. 이번엔 넘어가기</li>
+        </ol>
+        <p>기록을 남기고 다음에 이어 하고 싶다면 Solo Leveling Paper MCP를 쓰면 돼요.</p>
+      </div>
+    </div>
+
+    <div class="msg msg-user">
+      <span class="who">사용자</span>
+      <p class="bubble">1번</p>
+    </div>
+
+    <div class="msg msg-claude">
+      <span class="who">Claude</span>
+      <div class="bubble">
+        <p>기본값대로 논문 전체에서 10문항(정의 4 · 관계 3 · 적용 3) 퀴즈를 만들었어요. <code>Attention-Is-All-You-Need-이해도-퀴즈.html</code>을 내려받아 브라우저로 열면 한 문항씩 풀고 바로 채점돼요.</p>
+        <p>정답이 파일 안에 들어 있으니 시험용이 아니라 스스로 점검하는 용도로 써 주세요.</p>
+      </div>
+    </div>
+  </main>
+
+</body>
+</html>

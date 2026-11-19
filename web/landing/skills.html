@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Solo Leveling Skill · 설치 없이 Claude로 논문 공부</title>
+  <meta name="description" content="Claude에 Skill만 올리면 논문 PDF로 학습 안내, 퀴즈, HTML 교재를 바로 만들 수 있어요.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="skills.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">본문으로 건너뛰기</a>
+
+  <!-- 상단 메뉴 -->
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <div class="header-left">
+        <a class="brand" href="index.html">
+          <span class="brand-name">Solo Leveling<span>.</span></span>
+          <span class="brand-sub">Skill · 설치 없이 체험</span>
+        </a>
+        <nav class="skill-nav" aria-label="Skill 페이지 메뉴">
+          <a class="nav-link" href="#skills">Skill 3개</a>
+          <a class="nav-link" href="#setup">올리는 방법</a>
+          <a class="nav-link" href="#samples">결과물 예시</a>
+        </nav>
+      </div>
+      <a class="btn btn-outline header-cta" href="#download">
+          Skill 받기
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>
+      </a>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- 히어로 -->
+    <section class="band band-white">
+      <div class="wrap hero">
+        <div class="hero-copy">
+          <span class="pill">MCP 설치 없이 바로 쓰는 체험판</span>
+          <h1 class="hero-title">Claude에 <span class="hl">Skill만 올리면</span><br>논문 공부를 바로 시작해요</h1>
+          <p class="hero-desc">논문 PDF를 올리고 “이 논문 공부하고 싶어”라고 말하세요. 읽는 순서 안내부터 원문 근거가 붙은 질의응답, 브라우저에서 푸는 퀴즈, 다시 읽는 HTML 교재까지 대화 안에서 만들어 줘요.</p>
+          <div class="actions">
+            <a class="btn btn-primary btn-lg" href="#download">Skill 3개 받기</a>
+            <a class="btn btn-outline btn-lg" href="#samples">결과물 먼저 보기</a>
+          </div>
+          <p class="hint">Claude 설정에서 코드 실행 기능을 켜야 써요. 기록은 대화가 끝나면 남지 않아요.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Skill 3개 -->
+    <section id="skills" class="band" aria-labelledby="skills-h">
+      <div class="wrap section">
+        <div class="section-head">
+          <span class="eyebrow">Skill 3개</span>
+          <h2 id="skills-h" class="section-title">공부하고, 확인하고, 정리하기</h2>
+          <p class="section-desc">세 Skill은 따로 써도 되고 이어서 써도 돼요. 학습 안내를 마치면 퀴즈와 교재 중에서 고를 수 있어요.</p>
+        </div>
+
+        <div class="skill-grid" id="download">
+          <article class="card skill-card">
+            <div class="skill-top">
+              <span class="icon-box"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2.5z"/><path d="M8 7h6"/><path d="M8 11h4"/></svg></span>
+              <code class="skill-name">solo-leveling-guide</code>
+            </div>
+            <h3>학습 안내</h3>
+            <p>목적(이해·구현·훑어보기)에 맞춰 읽는 순서를 잡고, 단계마다 핵심과 키워드를 설명해요. 질문하면 쪽 번호와 원문 인용을 붙여 답해요.</p>
+            <ul class="skill-points">
+              <li>목적별 읽는 순서와 읽기 전·후 질문</li>
+              <li>원문 근거가 붙은 질의응답, 요약</li>
+              <li>검수 논문 3편(Attention·BERT·ViT)은 개념 지도 학습 순서까지</li>
+            </ul>
+            <p class="say">“이 논문 공부하고 싶어. 목적은 이해야.”</p>
+            <a class="btn btn-primary" href="downloads/solo-leveling-guide.zip" download>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>
+              guide 받기 <span class="size">.zip · 29KB</span>
+            </a>
+          </article>
+
+          <article class="card skill-card">
+            <div class="skill-top">
+              <span class="icon-box"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/></svg></span>
+              <code class="skill-name">solo-leveling-quiz</code>
+            </div>
+            <h3>퀴즈</h3>
+            <p>논문 근거로 정답을 확인할 수 있는 문항만 내요. 브라우저에서 한 문항씩 풀면 바로 채점되고 해설과 원문 근거가 나와요.</p>
+            <ul class="skill-points">
+              <li>정의·관계·적용 수준, 기본 10문항</li>
+              <li>수준별 점수, 틀린 문항만 다시 풀기</li>
+              <li>원하면 인쇄용 문제지·정답지 PDF</li>
+            </ul>
+            <p class="say">“이 논문으로 퀴즈 만들어 줘.”</p>
+            <a class="btn btn-primary" href="downloads/solo-leveling-quiz.zip" download>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>
+              quiz 받기 <span class="size">.zip · 4.8MB</span>
+            </a>
+          </article>
+
+          <article class="card skill-card">
+            <div class="skill-top">
+              <span class="icon-box"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h7a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H3z"/><path d="M21 5h-7a2 2 0 0 0-2 2v13a2 2 0 0 1 2-2h7z"/></svg></span>
+              <code class="skill-name">solo-leveling-textbook</code>
+            </div>
+            <h3>HTML 교재</h3>
+            <p>대화에서 함께 공부한 내용을 정해진 형식의 교재 한 파일로 정리해요. 브라우저로 읽고 인쇄할 수 있어요.</p>
+            <ul class="skill-points">
+              <li>학습 목표, 학습 순서, 개념별 장</li>
+              <li>장마다 설명·수식·원문 근거·확인 문제</li>
+              <li>핵심 정리와 용어집</li>
+            </ul>
+            <p class="say">“오늘 내용 HTML 교재로 만들어 줘.”</p>
+            <a class="btn btn-primary" href="downloads/solo-leveling-textbook.zip" download>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>
+              textbook 받기 <span class="size">.zip · 16KB</span>
+            </a>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- 올리는 방법 -->
+    <section id="setup" class="band band-white band-lined" aria-labelledby="setup-h">
+      <div class="wrap section">
+        <div class="section-head">
+          <span class="eyebrow">올리는 방법</span>
+          <h2 id="setup-h" class="section-title">Claude에 Skill 올리기</h2>
+          <p class="section-desc">처음 한 번만 하면 돼요. 받은 zip 파일은 풀지 말고 그대로 올려요.</p>
+        </div>
+        <ol class="steps">
+          <li class="step">
+            <span class="step-no">STEP 1</span>
+            <h3>코드 실행 켜기</h3>
+            <p>Claude 설정에서 코드 실행 기능을 켜요. Skill이 PDF에서 글자를 뽑고 파일을 만들 때 필요해요.</p>
+          </li>
+          <li class="step">
+            <span class="step-no">STEP 2</span>
+            <h3>Skill zip 받기</h3>
+            <p>위에서 필요한 Skill을 받아요. 처음이면 세 개 모두 받는 걸 추천해요.</p>
+            <code class="tag tag-gray">solo-leveling-guide.zip</code>
+          </li>
+          <li class="step">
+            <span class="step-no">STEP 3</span>
+            <h3>Skills 메뉴에 업로드</h3>
+            <p>Claude 설정의 Skills 메뉴에서 zip 파일을 하나씩 업로드하고 켜 둬요.</p>
+          </li>
+          <li class="step">
+            <span class="step-no">STEP 4</span>
+            <h3>PDF 올리고 말하기</h3>
+            <p>새 대화에서 논문 PDF를 올리고 “이 논문 공부하고 싶어”라고 말해요. 필요한 Skill이 알아서 쓰여요.</p>
+            <span class="tag tag-quote">attention.pdf · “이 논문 공부하고 싶어”</span>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- 결과물 예시 -->
+    <section id="samples" class="band" aria-labelledby="samples-h">
+      <div class="wrap section">
+        <div class="section-head">
+          <span class="eyebrow">결과물 예시</span>
+          <h2 id="samples-h" class="section-title">Attention Is All You Need로 만든 결과물</h2>
+          <p class="section-desc">실제 논문 PDF에 Skill을 돌려 만든 파일이에요. 인용문은 모두 해당 쪽 원문과 대조했어요.</p>
+        </div>
+        <div class="sample-grid">
+          <a class="card sample" href="samples/guide-attention.html" target="_blank" rel="noopener">
+            <span class="sample-kind">학습 안내 · 대화 예시</span>
+            <span class="sample-title">이해 목적으로 읽는 대화 흐름</span>
+            <span class="sample-desc">목적 질문 → 학습 순서 → 읽기 전 질문 → 1단계 → 질의응답 → 요약.</span>
+            <span class="sample-open">새 탭에서 열기 →</span>
+          </a>
+          <a class="card sample" href="samples/quiz-attention.html" target="_blank" rel="noopener">
+            <span class="sample-kind">퀴즈 · HTML</span>
+            <span class="sample-title">풀어 보는 퀴즈 10문항</span>
+            <span class="sample-desc">정의 4 · 관계 3 · 적용 3. 답을 고르면 바로 채점되고 원문 근거가 나와요.</span>
+            <span class="sample-open">새 탭에서 열기 →</span>
+          </a>
+          <a class="card sample" href="samples/textbook-attention.html" target="_blank" rel="noopener">
+            <span class="sample-kind">교재 · HTML</span>
+            <span class="sample-title">Attention 논문 교재</span>
+            <span class="sample-desc">학습 순서, 개념별 장, 수식과 원문 근거, 확인 문제, 용어집.</span>
+            <span class="sample-open">새 탭에서 열기 →</span>
+          </a>
+        </div>
+        <p class="hint">실제 대화에서 Claude의 문장은 매번 조금씩 다르지만, 흐름·형식·근거 규칙은 예시와 같아요.</p>
+      </div>
+    </section>
+
+    <!-- 자주 묻는 질문 -->
+    <section class="band band-white band-lined" aria-labelledby="faq-h">
+      <div class="wrap wrap-narrow section">
+        <h2 id="faq-h" class="section-title">자주 묻는 질문</h2>
+        <div class="faq">
+          <details>
+            <summary>어떤 논문에 쓸 수 있나요?</summary>
+            <p>글자를 추출할 수 있는 논문 PDF라면 모두 써요. 팀이 검수한 3편(Attention·BERT·ViT)은 개념 지도로 학습 순서까지 보여 주고, 나머지 논문은 일반 읽기 전략으로 안내해요. 스캔본처럼 글자가 거의 없는 PDF는 읽을 수 있는 범위에서만 진행해요.</p>
+          </details>
+          <details>
+            <summary>Skill로 공부한 기록이 남나요?</summary>
+            <p>아니요. 대화가 끝나면 기록이 남지 않아요. 퀴즈와 교재는 파일로 받아 보관할 수 있어요. 기록을 저장하고 웹에서 다시 보려면 MCP를 써 주세요.</p>
+          </details>
+          <details>
+            <summary>퀴즈 파일로 시험을 볼 수 있나요?</summary>
+            <p>정답이 파일 안에 들어 있어서 시험용이 아니라 자기 점검용이에요. 인쇄용 문제지와 정답지는 따로 만들어 줘요.</p>
+          </details>
+          <details>
+            <summary>Skill이 동작하지 않아요.</summary>
+            <p>Claude 설정에서 코드 실행 기능이 켜져 있는지, Skills 메뉴에서 Skill이 켜져 있는지 확인해 주세요. PDF 읽는 도구가 없으면 Skill이 먼저 설치를 시도하는데, 막히면 코드 실행의 네트워크(패키지 설치) 허용을 확인해 주세요.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- 랜딩으로 돌아가기 -->
+    <section class="band" aria-labelledby="back-h">
+      <div class="wrap back-band">
+        <div class="back-copy">
+          <h2 id="back-h" class="back-title">기록까지 남기고 싶다면</h2>
+          <p class="section-desc">MCP를 쓰면 공부한 기록을 저장하고 웹에서 다시 볼 수 있어요. 랜딩 페이지에서 서비스 전체를 확인해 보세요.</p>
+        </div>
+        <div class="actions">
+          <a class="btn btn-primary btn-lg" href="index.html">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="m11 18-6-6 6-6"/></svg>
+            랜딩 페이지로 돌아가기
+          </a>
+          <a class="btn btn-outline btn-lg" href="index.html#mcp">MCP 알아보기</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <div class="footer-brand">
+        <span class="brand-name">Solo Leveling<span>.</span></span>
+        <span>학습은 Claude에서, 기록은 여기서 다시 봐요.</span>
+      </div>
+      <nav class="footer-nav" aria-label="푸터 링크">
+        <a href="index.html">랜딩 페이지</a>
+        <a href="index.html#mcp">MCP</a>
+        <a href="../#/papers">웹 아카이브</a>
+        <a href="https://github.com/soogwon/soloLevelingPaper/tree/main/skills" target="_blank" rel="noopener">Skill 소스</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>
