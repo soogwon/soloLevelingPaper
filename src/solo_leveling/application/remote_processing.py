@@ -176,7 +176,7 @@ class RemoteProcessingStages:
             raise ProcessingError('PROCESSING_TRANSLATION_INVALID') from None
         present_pages = {c.pdf_page for c in document.chunks}
         empty_pages = tuple(p for p in range(1, document.page_count + 1) if p not in present_pages)
-        if batch.failure_count:
+        if any(not item.indexable for item in batch.items):
             check('result')
             return ProcessingResult(source, document, settings, translations, None, empty_pages,
                                     'translation_incomplete')

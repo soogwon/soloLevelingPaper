@@ -23,7 +23,7 @@ class ProcessingStagesFactory:
 
     def __init__(self, authorization, *, service_config, model_dir, embedding_spec,
                  limits, retry_policy, policy_version, window_key, token_upper_bound,
-                 batch_size, post=None, model_factory=None, fragment_policy=None):
+                 batch_size, post=None, model_factory=None, fragment_policy=None, quality_retry_once=False):
         if (not isinstance(service_config, OpenAITranslationConfig)
                 or not callable(token_upper_bound)
                 or not service_config.allow_external_api or service_config.local_only):
@@ -35,6 +35,7 @@ class ProcessingStagesFactory:
         self.token_upper_bound, self.batch_size = token_upper_bound, batch_size
         self.post, self.model_factory = post, model_factory
         self.fragment_policy = fragment_policy
+        self.quality_retry_once = quality_retry_once
 
     def __call__(self, source, check_allowed):
         if check_allowed(source, 'parse') is not True:
@@ -78,7 +79,8 @@ class ProcessingStagesFactory:
         transport = GatedResponsesTransport(dispatch, unscoped, post=self.post)
         provider = OpenAITranslationProvider(config, transport=transport)
         translator = GatedProcessingTranslation(
-            TranslationService(provider, retry_policy=self.retry_policy), prepare_attempt=prepare,
+            TranslationService(provider, retry_policy=self.retry_policy,quality_retry_once=self.quality_retry_once),
+            prepare_attempt=prepare,
         )
         options = {} if self.model_factory is None else {'model_factory': self.model_factory}
         embedder = PyTorchProcessingEmbedder(model_dir=self.model_dir,

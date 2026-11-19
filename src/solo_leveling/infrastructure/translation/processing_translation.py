@@ -64,7 +64,7 @@ class GatedProcessingTranslation:
         service = self.service
         scoped = TranslationService(CheckedProvider(), lambda: source.translation_revision_id,
             retry_policy=service.retry_policy, sleep=service.sleep, clock=service.clock,
-            random_value=service.random_value)
+            random_value=service.random_value, quality_retry_once=service.quality_retry_once)
         inputs = tuple(Chunk(c.chunk_id, c.parse_revision_id, c.chunk_index, c.original_text,
                              printed_page_label=c.printed_page_label, pdf_page=c.pdf_page,
                              section_id=c.section_id) for c in chunks)

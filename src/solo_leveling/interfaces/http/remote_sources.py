@@ -40,7 +40,7 @@ class PostgresRemoteSourceReader:
             with self._pool.connection() as conn:
                 rows = conn.execute(
                     f"""SELECT c.chunk_id,c.ordinal,c.pdf_page,c.section_id,c.original_text,
-                               tc.translated_text
+                               tc.translated_text,tc.translation_status
                         FROM server_execution_contexts ec
                         JOIN server_papers p
                           ON p.owner_user_id=ec.owner_user_id AND p.paper_id=ec.paper_id
@@ -120,6 +120,7 @@ def _source(binding, row):
             None if row["section_id"] is None else str(row["section_id"]),
             row["original_text"],
             row["translated_text"],
+            translation_status=row.get('translation_status','translated'),
         )
     except Exception:
         raise RemoteRetrievalContractError("REMOTE_SOURCE_INVALID") from None
