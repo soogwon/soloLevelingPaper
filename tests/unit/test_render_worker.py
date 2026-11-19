@@ -255,3 +255,62 @@ def test_requested_shutdown_does_not_report_consumer_failure(capsys):
     stop = threading.Event(); stop.set()
     assert render_service.supervise(stop, ['unused'], monitor_continuous=True) == 0
     assert 'render_question_consumer_stopped' not in capsys.readouterr().out
+
+
+def test_quiz_worker_uses_fixed_bounded_cli(monkeypatch):
+    captured = {}
+    def run(stop, command, **kwargs):
+        captured.update(command=command, **kwargs)
+        return 0
+    monkeypatch.setattr(render_service, 'supervise', run)
+    assert render_service.main(['--mode', 'quiz-worker', '--max-jobs', '1']) == 0
+    assert captured['command'] == [sys.executable, '-m',
+        'solo_leveling.interfaces.cli.quiz_worker', '--execute', '--max-jobs', '1']
+    assert captured['monitor_continuous'] is False
+
+
+@pytest.mark.parametrize('extra', [
+    ['--runtime', 'arbitrary:factory'], ['--config', '/secret/config'],
+    ['--continuous'], ['--max-jobs', '0'], ['--max-jobs', '10001'],
+])
+def test_quiz_worker_rejects_unsupported_start_options(monkeypatch, extra):
+    monkeypatch.setattr(render_service, 'supervise', lambda *a, **k: pytest.fail('잘못된 설정 실행'))
+    with pytest.raises(SystemExit):
+        render_service.main(['--mode', 'quiz-worker', *extra])
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='Render POSIX 프로세스 계약')
+@pytest.mark.parametrize('exit_code', [0, 1])
+def test_quiz_main_returns_to_standby_without_retry(tmp_path, exit_code):
+    marker, output = tmp_path / 'calls', tmp_path / 'output'
+    child_code = f'open({str(marker)!r}, "a").write("once"); print("SECRET"); raise SystemExit({exit_code})'
+    code = f"""import sys
+from solo_leveling.workers import render_service as r
+original = r.subprocess.Popen
+def substitute(args, **kw):
+    if args[-1] == '/opt/worker/image_preflight.py':
+        return original([sys.executable, '-c', 'pass'], **kw)
+    assert args[2:] == ['solo_leveling.interfaces.cli.quiz_worker', '--execute', '--max-jobs', '1']
+    return original([sys.executable, '-c', {child_code!r}], **kw)
+r.subprocess.Popen = substitute
+raise SystemExit(r.main(['--mode', 'quiz-worker', '--max-jobs', '1']))
+"""
+    with output.open('w') as stream:
+        child = subprocess.Popen([sys.executable, '-c', code], stdout=stream, stderr=stream)
+        try:
+            deadline = time.monotonic() + 5
+            while 'render_standby' not in output.read_text() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            text = output.read_text()
+            assert 'render_standby' in text
+            assert ('render_verification_finished' if exit_code == 0 else 'render_verification_failed') in text
+            assert 'SECRET' not in text
+            assert marker.read_text().splitlines() == ['once']
+            assert child.poll() is None
+            child.send_signal(signal.SIGTERM)
+            assert child.wait(timeout=5) == 0
+            assert 'render_stopped' in output.read_text()
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait()

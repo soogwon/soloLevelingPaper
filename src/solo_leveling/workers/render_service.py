@@ -75,7 +75,7 @@ def supervise(stop, command=None, *, preflight=None, poll_seconds=0.2, grace_sec
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mode', choices=('standby', 'verify-once', 'question-worker'), default='standby')
+    parser.add_argument('--mode', choices=('standby', 'verify-once', 'question-worker', 'quiz-worker'), default='standby')
     parser.add_argument('--config')
     parser.add_argument('--runtime', help='검토한 질문 서버 runtime module:factory')
     lifetime = parser.add_mutually_exclusive_group()
@@ -90,6 +90,9 @@ def main(argv=None):
         import re
         if args.config or not args.runtime or not re.fullmatch(r'[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*:[a-zA-Z_]\w*', args.runtime) or not 1 <= max_jobs <= 10000:
             parser.error('질문 runtime과 유효한 작업 상한이 필요합니다.')
+    elif args.mode == 'quiz-worker':
+        if args.config or args.runtime or args.continuous or not 1 <= max_jobs <= 10000:
+            parser.error('퀴즈는 환경 설정과 유효한 작업 상한으로만 실행합니다.')
     elif args.runtime or args.max_jobs is not None or args.continuous:
         parser.error('질문 실행 설정은 question-worker 모드에서만 받습니다.')
     if args.mode == 'verify-once' and (not args.config or not os.path.isabs(args.config)):
@@ -107,6 +110,10 @@ def main(argv=None):
         command = [sys.executable, '-m', 'solo_leveling.interfaces.cli.question_worker',
                    '--execute', '--runtime', args.runtime]
         command += ['--continuous'] if args.continuous else ['--max-jobs', str(max_jobs)]
+    if args.mode == 'quiz-worker':
+        # 이미지 ENTRYPOINT를 유지하고 고정 CLI를 자식으로 실행한다.
+        command = [sys.executable, '-m', 'solo_leveling.interfaces.cli.quiz_worker',
+                   '--execute', '--max-jobs', str(max_jobs)]
     try:
         return supervise(stop, command, preflight=[sys.executable, '/opt/worker/image_preflight.py'],
                          grace_seconds=args.shutdown_grace_seconds,
