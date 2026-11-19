@@ -1,9 +1,11 @@
-# Claude Desktop 로컬 설치·배포 (#58)
+# Claude Desktop 로컬 MCP 설치·배포
+
+> 서버 설치 없이 Claude에 연결하려면 [원격 MCP 연결 가이드](remote-mcp-installation.md)를 사용한다. 원격 MCP 주소를 `claude_desktop_config.json`에 넣지 않는다.
 
 ## 범위
 
 Windows·Python 3.12를 우선 검증 대상으로 한다. 로컬 단일 사용자 stdio 서버이며,
-원격 인증·PDF 업로드·사용자별 접근 격리는 #77에서 별도로 설계한다.
+원격 인증·PDF 업로드·사용자별 접근 격리를 사용하는 원격 MCP와 별도로 유지한다.
 이 서버를 외부에 공개해서는 안 된다. 일반 사용자용 원클릭 설치 프로그램은 아니다.
 Python 메타데이터의 최소 버전은 기존 >=3.11을 유지하며 모든 버전·OS의 검증을 뜻하지 않는다.
 

@@ -18,7 +18,8 @@
 ## 시작하기
 
 - [개발 안내](setup/development.md)
-- [Claude Desktop 로컬 설치·배포 (#58)](setup/desktop-installation.md)
+- [원격 MCP 연결 가이드 (스테이징)](setup/remote-mcp-installation.md)
+- [Claude Desktop 로컬 MCP 설치·배포](setup/desktop-installation.md)
 - [로컬 MCP 서버 실행](setup/mcp-server.md)
 - [PDF 로컬 실행기](setup/local-paper-runner.md)
 - [팀원용 임베딩 모델 준비](setup/embedding-model-preparation.md)
