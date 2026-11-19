@@ -87,3 +87,29 @@ def test_direct_quiz_mutation_is_denied_and_short_answer_uses_local_grader(pool,
     assert saved['score']==1
     wrong=service.submit('alice',context,other,str(uuid4()),{0:'설명 문장'},consent)
     assert wrong['score']==0
+
+
+def test_quiz_storage_consent_is_explicit_pinned_and_idempotent(pool,db,stores):
+    service,context,quiz,questions,old=setup(pool,db,stores)
+    service.revoke_storage('alice',context,quiz)
+    view=service.consent('alice',context,quiz)
+    assert view['storage']=='missing'
+    assert 'questions' not in view and 'answer' not in view
+    with pytest.raises(RemoteExecutionConflict):
+        service.grant_storage('alice',context,quiz,NOTICE,'0'*64)
+    with pytest.raises(ValueError):
+        service.grant_storage('alice',context,quiz,'remote-question-v1',view['quiz_revision'])
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        rows=list(workers.map(lambda _:service.grant_storage('alice',context,quiz,NOTICE,view['quiz_revision']),range(4)))
+    assert all(r['consent_id']==rows[0]['consent_id'] for r in rows)
+    assert rows[0]['consent_id']!=old
+    key=str(uuid4());saved=service.submit('alice',context,quiz,key,{0:0},rows[0]['consent_id'])
+    assert service.revoke_storage('bob',context,quiz) is None
+    assert service.grant_storage('bob',context,quiz,NOTICE,view['quiz_revision']) is None
+    assert service.consent('bob',context,quiz) is None
+    service.revoke_storage('alice',context,quiz)
+    with pytest.raises(ValueError,match='consent_required'):
+        service.submit('alice',context,quiz,str(uuid4()),{0:0},rows[0]['consent_id'])
+    assert service.submit('alice',context,quiz,key,{0:0},rows[0]['consent_id'])==saved
+    other=str(uuid4());service.store_reviewed('alice',context,other,'preview',questions)
+    assert service.consent('alice',context,other)['storage']=='missing'
