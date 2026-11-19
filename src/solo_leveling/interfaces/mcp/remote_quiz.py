@@ -69,4 +69,4 @@ def register_remote_quiz(server,queries,service):
         return call('quizzes:read', 'generation_result', context_id, request_key)
 
     from .remote_quiz_cards import register_quiz_cards
-    register_quiz_cards(server, service, call, get_access_token)
+    register_quiz_cards(server, service, call, get_access_token, lambda *args: queries.evidence(*args))

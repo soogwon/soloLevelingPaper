@@ -23,3 +23,17 @@ test('다른 연결 결과는 표시하지 않음',async()=>{const x=setup(async
 test('철회된 저장 동의에서 제출 차단',async()=>{const x=setup();x.app.ontoolinput({arguments:{context_id:ctx,quiz_id:quiz}});x.app.ontoolresult(response({...scope,consent:{storage:'missing'}}));await x.submit();assert.equal(x.calls.length,0);});
 test('저장 복습 카드는 새 제출 없이 복원',()=>{const x=setup();x.app.ontoolinput({arguments:{context_id:ctx,attempt_id:aid}});x.app.ontoolresult(response({...scope,request_key:key,attempt}));assert.match(x.el('review').textContent,/정답 0\/1/);assert.equal(x.calls.length,0);assert.equal(x.el('submit').disabled,true);});
 test('미확인 결과는 자동 재제출 없음',async()=>{const x=setup(async()=>response({...scope,request_key:key,attempt:null}));await x.submit();await x.el('lookup').onclick();assert.equal(x.calls.filter(v=>v.name==='submit_remote_quiz_card').length,1);assert.match(x.el('status').textContent,/아직 없습니다/);});
+
+test('저장 시도에서 점수와 고정 오답 원문을 읽기 전용으로 연다',async()=>{
+ const x=setup(async args=>args.name==='get_remote_quiz_card_review'
+   ? response({...scope,attempt_id:aid,scores:[{step:'review',attempts:2,latest_score:.5,best_score:1}],
+     evidence:[{evidence_id:'fixed-evidence',pdf_page:1,quote_original:'합성 원문'}],evidence_count:1})
+   : response({...scope,request_key:key,attempt}));
+ assert.equal(x.el('details').hidden,true);
+ await x.submit();
+ await x.el('details').onclick();
+ assert.deepEqual(x.calls.map(c=>c.name),['submit_remote_quiz_card','get_remote_quiz_card_review']);
+ assert.equal(x.calls[1].arguments.attempt_id,aid);
+ assert.match(x.el('details-output').textContent,/최근 50%/);
+ assert.match(x.el('details-output').textContent,/합성 원문/);
+});
