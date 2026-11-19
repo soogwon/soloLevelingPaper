@@ -40,8 +40,8 @@ export default async function reprocessingReview({ view, params, query = {} }) {
         <p>제공자 ${c?.provider} · 모델 ${c?.model}</p>
         <p>작업 전체 최대 ${c?.max_calls}회 · 입력 ${c?.max_input_tokens}토큰 · 출력 ${c?.max_output_tokens}토큰</p>
         <p>설정 단가 기준 상한 $${c?.max_cost_usd} USD. 사용자·서비스 예산을 함께 예약합니다. 실제 비용 측정값이 아닙니다.</p>
-        <p>현재 실행 worker는 연결되지 않았습니다. 접수해도 외부 전송은 시작하지 않습니다. 실행 전 정확한 전송 본문·단가·동의를 다시 검증해야 합니다.</p>
-        <p>상태: ${value.state === 'queued' ? '접수됨·실행 연결 대기' : value.state} · 작업 ID: ${value.job_id || '없음'}</p>
+        <p>접수만으로 실행하지 않습니다. 별도 실행 승인 후 처리하며 재파싱은 원문 추출만 수행합니다. 저장 결과의 새 색인 게시·선택은 아직 연결되지 않았습니다. 취소해도 이미 전송한 요청의 비용은 반환하지 않습니다.</p>
+        <p>상태: ${({queued:'접수됨·실행 승인 대기',running:'처리 중',staged:'결과 저장됨·새 색인 게시 대기',failed:'처리 중단',cancelled:'취소됨'})[value.state] || value.state} · 작업 ID: ${value.job_id || '없음'}</p>
         <p>검토 만료: ${value.expires_at || '검토 저장 후 확정'}</p>
         ${valid() ? '' : html`<p>계약 또는 대상이 일치하지 않습니다. 변경 작업을 차단했습니다.</p>`}
         ${value.state === 'draft' ? html`<button data-prepare ${busy || !valid() ? 'disabled' : ''}>이 요청 키로 검토 저장</button>` : ''}
@@ -52,7 +52,7 @@ export default async function reprocessingReview({ view, params, query = {} }) {
           <button data-revoke="${purpose}" ${busy || value[purpose] !== 'current' ? 'disabled' : ''}>철회하고 접수 취소</button>
         </fieldset>`)}
         <button data-submit ${busy || !valid() || !value.active || value.state !== 'review' || value.storage !== 'current' || value.ai_provider !== 'current' ? 'disabled' : ''}>동의한 작업 접수</button>
-        <button data-cancel ${busy || !['review', 'queued'].includes(value.state) ? 'disabled' : ''}>취소·예약 반환</button>
+        <button data-cancel ${busy || !['review', 'queued', 'running'].includes(value.state) ? 'disabled' : ''}>취소·예약 반환</button>
       </section>` : ''}<button data-refresh ${busy ? 'disabled' : ''}>같은 요청 다시 조회</button>`);
     view.querySelector('[data-refresh]').onclick = () => run('GET', path);
     const prepare = view.querySelector('[data-prepare]');
@@ -67,7 +67,7 @@ export default async function reprocessingReview({ view, params, query = {} }) {
     const submit = view.querySelector('[data-submit]');
     if (submit) submit.onclick = () => { if (valid() && value.active && value.state === 'review' && value.storage === 'current' && value.ai_provider === 'current') return run('POST', `${path}/submit`); };
     const cancel = view.querySelector('[data-cancel]');
-    if (cancel) cancel.onclick = () => { if (['review', 'queued'].includes(value?.state)) return run('POST', `${path}/cancel`); };
+    if (cancel) cancel.onclick = () => { if (['review', 'queued', 'running'].includes(value?.state)) return run('POST', `${path}/cancel`); };
   }
   async function run(method, target, body) {
     if (closed || busy) return;
