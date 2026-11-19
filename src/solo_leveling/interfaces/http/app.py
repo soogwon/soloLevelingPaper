@@ -162,6 +162,19 @@ def create_app(
                 raise ValueError('question_settings_invalid')
             managed_question_store = PostgresDeviceStore.from_dsn(DatabaseSettings(dsn).dsn)
             remote_questions = PostgresQuestionReviews(managed_question_store.connection_pool,**question_settings)
+    managed_reflection_stores = []
+    remote_reflection_mcp = remote_reflections
+    from .remote_reflection_settings import load_reflection_settings
+    reflection_settings = load_reflection_settings()
+    if reflection_settings is not None:
+        if (not selected_remote_mcp.enabled or not selected_remote_mcp.product_reads_enabled
+                or remote_product_queries is None or remote_reflections is not None):
+            raise ValueError('reflection_settings_invalid')
+        from .remote_reflection import PostgresRemoteReflection
+        for dsn in (reflection_settings.web_dsn, reflection_settings.mcp_dsn):
+            managed_reflection_stores.append(PostgresDeviceStore.from_dsn(dsn))
+        remote_reflections, remote_reflection_mcp = (
+            PostgresRemoteReflection(store.connection_pool) for store in managed_reflection_stores)
     managed_annotation_stores = []
     from .remote_annotation_settings import load_annotation_settings
     annotation_settings = load_annotation_settings()
@@ -187,7 +200,7 @@ def create_app(
         remote_job_cancellations = PostgresProcessingCancellationStore(managed_cancel_store.connection_pool)
     if remote_job_cancellations is not None and (not selected_remote_mcp.enabled or not selected_remote_mcp.product_reads_enabled):
         raise ValueError('processing_cancel_settings_invalid')
-    remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries, question_service=remote_questions, summary_service=remote_summaries, reflection_service=remote_reflections, quiz_service=remote_quizzes, annotation_service=remote_mcp_annotations, cancellation_service=remote_job_cancellations)
+    remote_bundle = (create_remote_mcp(selected_remote_mcp, remote_mcp_verifier, product_queries=remote_product_queries, question_service=remote_questions, summary_service=remote_summaries, reflection_service=remote_reflection_mcp, quiz_service=remote_quizzes, annotation_service=remote_mcp_annotations, cancellation_service=remote_job_cancellations)
                      if selected_remote_mcp.enabled else None)
 
     @asynccontextmanager
@@ -202,6 +215,9 @@ def create_app(
             if managed_question_store is not None:
                 managed_question_store.open()
                 stack.callback(managed_question_store.close)
+            for store in managed_reflection_stores:
+                stack.callback(store.close)
+                store.open()
             for store in managed_annotation_stores:
                 stack.callback(store.close)
                 store.open()
