@@ -32,4 +32,8 @@ def create_summary_review_router(require_principal:Any,service):
         return call(principal,response,'revoke',str(key),purpose)
     @router.post('/{key}/submit')
     def submit(key:UUID,principal:Principal,response:Response):return call(principal,response,'submit',str(key))
+    @router.get('/{key}/result')
+    def result(key:UUID,principal:Principal,response:Response):return call(principal,response,'result',str(key))
+    @router.post('/{key}/cancel')
+    def cancel(key:UUID,principal:Principal,response:Response):return call(principal,response,'cancel',str(key))
     return router

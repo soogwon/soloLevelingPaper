@@ -80,3 +80,20 @@ def test_foreign_owner_and_changed_context_are_rejected(pool,db,stores):
     _,_,other_context = review(pool,db,stores)
     with pytest.raises(RemoteExecutionConflict):
         service.prepare('alice',key,other_context)
+
+
+def test_review_cancels_only_its_execution_without_new_generation(pool,db,stores):
+    service,key,_ = review(pool,db,stores)
+    assert service.cancel('alice', key)['state'] == 'not_submitted'
+    assert service.result('alice', key) is None
+    for purpose in ('storage','ai_provider'):
+        service.grant('alice',key,purpose,'remote-summary-v1')
+    submitted = service.submit('alice', key)
+    assert service.result('alice', key)['result'] is None
+    assert service.cancel('bob', key) is None
+    cancelled = service.cancel('alice', key)
+    assert cancelled['state'] == 'cancel_requested'
+    assert cancelled['execution_id'] == submitted['execution_id']
+    assert service.cancel('alice', key)['state'] == 'cancel_requested'
+    assert service.result('alice', key)['state'] == 'cancel_requested'
+    assert not db('SELECT 1 FROM server_provider_attempts WHERE execution_id=%s',(submitted['execution_id'],))

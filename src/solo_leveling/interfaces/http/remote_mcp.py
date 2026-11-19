@@ -90,7 +90,7 @@ class PublicBoundaryMiddleware:
 def create_remote_mcp(
     settings: RemoteMcpSettings,
     verifier: TokenVerifier | None = None,
-    *, product_queries=None, question_service=None, annotation_service=None, cancellation_service=None,
+    *, product_queries=None, question_service=None, annotation_service=None, cancellation_service=None, summary_service=None,
 ) -> RemoteMcpBundle:
     if not settings.enabled:
         raise ValueError("원격 MCP 설정이 활성화되어야 합니다.")
@@ -154,20 +154,26 @@ def create_remote_mcp(
             from solo_leveling.interfaces.mcp.remote_questions import register_question_tools
             register_question_tools(server,product_queries,question_service)
 
+        if summary_service is not None:
+            from solo_leveling.interfaces.mcp.remote_summaries import register_summary_tools
+            register_summary_tools(server, product_queries, summary_service)
+
         if annotation_service is not None:
             from solo_leveling.interfaces.mcp.remote_annotations import register_annotation_tools
             register_annotation_tools(server, product_queries, annotation_service)
 
-    if cancellation_service is not None and not settings.product_reads_enabled:
+    if (cancellation_service is not None or summary_service is not None) and not settings.product_reads_enabled:
         raise ValueError('processing_cancel_settings_invalid')
     app = server.streamable_http_app()
-    if cancellation_service is not None:
+    if cancellation_service is not None or summary_service is not None:
         # 지원 권한만 확장한다. 읽기 전용 토큰의 기존 MCP 접근은 유지한다.
         from mcp.server.auth.routes import create_protected_resource_routes
         metadata = create_protected_resource_routes(
             resource_url=server.settings.auth.resource_server_url,
             authorization_servers=[server.settings.auth.issuer_url],
-            scopes_supported=[*server.settings.auth.required_scopes, 'jobs:cancel'])
+            scopes_supported=[*server.settings.auth.required_scopes,
+                              *(['jobs:cancel'] if cancellation_service is not None else []),
+                              *(['summaries:write'] if summary_service is not None else [])])
         paths = {route.path for route in metadata}
         app.router.routes[:] = [route for route in app.router.routes if getattr(route,'path',None) not in paths] + metadata
     app.add_middleware(NoSessionMiddleware)
