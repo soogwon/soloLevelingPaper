@@ -289,3 +289,34 @@ def test_reprocessing_jobs_share_web_and_mcp_projection(db, pool, monkeypatch):
         assert http.get(path).status_code==404
         assert result(mcp,'get_remote_processing_job',get_args)=={'status':'not_found'}
         assert service.view(owner,key) is None
+
+
+def test_reprocessing_job_reads_need_only_projected_review_columns(db, pool):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from psycopg import sql
+    from tests.integration.test_reprocessing_publication_postgres import setup
+    from solo_leveling.interfaces.http.remote_job_queries import RemoteJobQueries
+
+    service, approval, _, _ = setup(pool, db)
+    owner = approval.owner
+    job = service.view(owner, approval.request_key)['job_id']
+    role = sql.Identifier('job_read_' + uuid4().hex)
+    with pool.connection() as conn:
+        with conn.transaction(force_rollback=True):
+            schema = sql.Identifier(conn.execute('SELECT current_schema() AS name').fetchone()['name'])
+            conn.execute(sql.SQL('CREATE ROLE {} NOLOGIN NOINHERIT').format(role))
+            conn.execute(sql.SQL('GRANT USAGE ON SCHEMA {} TO {}').format(schema, role))
+            for name in ('server_processing_jobs','server_papers','server_processing_job_authorizations',
+                         'server_remote_upload_intents','server_processing_publications','server_execution_contexts'):
+                conn.execute(sql.SQL('GRANT SELECT ON {}.{} TO {}').format(schema, sql.Identifier(name), role))
+            conn.execute(sql.SQL('''GRANT SELECT (owner_user_id,job_id,context_id,operation,state,created_at,
+                publication_id,request_key,selected_context_id) ON {}.server_reprocessing_reviews TO {}''').format(schema, role))
+            conn.execute(sql.SQL('SET LOCAL ROLE {}').format(role))
+            restricted = SimpleNamespace(connection=lambda: nullcontext(conn))
+            queries = RemoteJobQueries(restricted, lambda: owner, reprocessing_enabled=True)
+            assert queries.get(job)['result']['status'] == 'publication_pending'
+            assert len(queries.list()['jobs']) == 2
+            assert conn.execute("""SELECT has_column_privilege(current_user,'server_reprocessing_reviews',
+                'staged_result','SELECT') AS body,has_table_privilege(current_user,'server_reprocessing_reviews',
+                'UPDATE') AS write""").fetchone() == {'body': False, 'write': False}
