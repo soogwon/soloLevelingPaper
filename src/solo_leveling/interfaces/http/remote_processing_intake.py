@@ -20,6 +20,26 @@ class PostgresRemoteProcessingIntake:
     def __init__(self, pool):
         self._pool = pool
 
+    def find_source(self, owner_user_id: str, paper_id: str, version_id: str):
+        with self._pool.connection() as conn:
+            return conn.execute(
+                """SELECT i.intent_id, v.active_publication_id
+                   FROM server_remote_upload_intents i
+                   JOIN server_pdf_uploads u
+                     ON u.owner_user_id=i.owner_user_id AND u.paper_id=i.paper_id
+                    AND u.server_version_id=i.server_version_id AND u.upload_id=i.upload_id
+                   JOIN server_papers p
+                     ON p.owner_user_id=i.owner_user_id AND p.paper_id=i.paper_id
+                   JOIN server_processing_versions v
+                     ON v.owner_user_id=i.owner_user_id AND v.paper_id=i.paper_id
+                    AND v.server_version_id=i.server_version_id
+                   WHERE i.owner_user_id=%s AND i.paper_id=%s AND i.server_version_id=%s
+                     AND i.status='verified' AND u.status='ready' AND u.source_kind='remote'
+                     AND p.deleted_at IS NULL
+                   ORDER BY i.updated_at DESC, i.intent_id LIMIT 1""",
+                (owner_user_id, paper_id, version_id),
+            ).fetchone()
+
     def admit(
         self,
         owner_user_id: str,
@@ -153,6 +173,9 @@ def _existing(conn, owner_user_id, key, *, by_intent=False, lock=True):
 
 
 class UnavailableRemoteProcessingIntake:
+    def find_source(self, *args, **kwargs):
+        raise RuntimeError("remote_processing_unavailable")
+
     def admit(self, *args, **kwargs):
         raise RuntimeError("remote_processing_unavailable")
 

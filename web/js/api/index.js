@@ -96,12 +96,16 @@ export const api = {
   /** DELETE /v1/devices/{기기 ID} */
   disconnectDevice: (deviceId) => send('DELETE', `/devices/${id(deviceId)}`),
 
-  // #393: 등록 준비·동의·PDF 전송을 연결하며 AI 처리 접수는 노출하지 않는다.
+  // 원격 PDF 등록·동의·처리 접수
   createRemoteUploadIntent: (body, key) => send('POST', '/remote-uploads/intents', { body, idempotencyKey: key }),
   getRemoteUploadIntent: (intentId) => send('GET', `/remote-uploads/intents/${id(intentId)}`),
   prepareRemoteUpload: intentId => send('POST', `/remote-uploads/intents/${id(intentId)}/prepare`),
   completeRemoteUpload: intentId => send('POST', `/remote-uploads/intents/${id(intentId)}/complete`),
   putRemoteUpload,
+  getRemoteProcessingSource: (paper, version) => send('GET',
+    `/remote-uploads/intents/by-paper/${id(paper)}/${id(version)}`),
+  admitRemoteProcessing: (intentId, body, key) => send('POST',
+    `/remote-uploads/intents/${id(intentId)}/processing`, {body, idempotencyKey:key}),
   getRemoteProcessing: intentId => send('GET', `/remote-uploads/intents/${id(intentId)}/processing`),
   getRemoteUploadConsents: (intentId) => send('GET', `/remote-uploads/intents/${id(intentId)}/consents`),
   grantRemoteUploadConsent: (intentId, purpose, noticeVersion, key) => send('POST',

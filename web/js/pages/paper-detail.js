@@ -1,4 +1,5 @@
 // 3. 논문 상세 페이지 — GET /v1/papers/{id}, GET /v1/annotations, GET /v1/annotations/{id}, POST /v1/resume-requests
+import { remoteFirstLearning } from '../lib/remote-first-learning.js';
 import { remotePaperJobs } from '../lib/remote-paper-jobs.js';
 import { remotePaperDetail } from '../lib/remote-paper-detail.js';
 import { CONFIG } from '../config.js';
@@ -88,6 +89,7 @@ export default async function paperDetailPage({ view, params, query }) {
       <section class="card panel panel-main" data-slot="remote-summary"></section>
       <section class="card panel panel-side" data-slot="remote-notes"></section>
     </div>
+    <section class="card panel" data-slot="remote-first-learning" hidden></section>
     <section class="card panel" data-slot="remote-jobs"></section>
   `);
 
@@ -104,6 +106,12 @@ export default async function paperDetailPage({ view, params, query }) {
   const detailReady = CONFIG.USE_MOCK ? Promise.resolve()
     : remotePaperDetail(detailViews, paper.paper_id, versionId);
   const jobsReady = CONFIG.USE_MOCK ? Promise.resolve() : remotePaperJobs(view.querySelector('[data-slot="remote-jobs"]'), paper.paper_id, versionId);
+
+  if (!CONFIG.USE_MOCK && paper.file_access?.reason === 'file_ready') {
+    const firstLearning = view.querySelector('[data-slot="remote-first-learning"]');
+    firstLearning.hidden = false;
+    void remoteFirstLearning(firstLearning, paper.paper_id, versionId);
+  }
 
   // ---------- 버튼 ----------
   async function openPdf(button) {
