@@ -2,7 +2,7 @@
 from contextlib import nullcontext
 from dataclasses import asdict
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 import hashlib
 import json
 
@@ -65,6 +65,46 @@ class PostgresRemoteReflection:
             answers=[dict(r,updated_at=r['updated_at'].isoformat()) for r in answers],
             storage_input_hash=NOTICE+':'+revision,notice_version=NOTICE,
             notice='읽기 전후 답변과 변경 요청 이력을 현재 학습 맥락에 저장합니다. AI 전송·자동 평가는 없습니다.')
+
+    def consent(self,owner,context):
+        with self.pool.connection() as conn:
+            resolved = self._context(conn,owner,context)
+            if resolved is None:
+                return None
+            _,revision,_ = resolved
+            row = conn.execute('''SELECT consent_id FROM server_remote_consents WHERE owner_user_id=%s
+                AND purpose='storage' AND input_hash=%s AND notice_version=%s AND revoked_at IS NULL
+                ORDER BY consent_id LIMIT 1''',(owner,NOTICE+':'+revision,NOTICE)).fetchone()
+            return dict(context_id=str(UUID(context)),question_revision=revision,notice_version=NOTICE,
+                        storage='current' if row else 'missing',consent_id=row['consent_id'] if row else None,
+                        notice='성찰 답변과 변경 이력을 이 학습 맥락에 저장합니다. AI 전송은 없으며 철회·삭제할 수 있습니다.')
+
+    def grant_storage(self,owner,context,notice,question_revision):
+        if notice != NOTICE:
+            raise ValueError('reflection_notice_changed')
+        with self.pool.connection() as conn:
+            resolved = self._context(conn,owner,context,lock=True)
+            if resolved is None:
+                return None
+            if resolved[1] != question_revision:
+                raise RemoteExecutionConflict('reflection_question_changed')
+            current = conn.execute('''SELECT consent_id FROM server_remote_consents WHERE owner_user_id=%s
+                AND purpose='storage' AND input_hash=%s AND notice_version=%s AND revoked_at IS NULL
+                LIMIT 1''',(owner,NOTICE+':'+question_revision,NOTICE)).fetchone()
+            if current is None:
+                conn.execute('''INSERT INTO server_remote_consents(consent_id,owner_user_id,purpose,input_hash,notice_version)
+                    VALUES (%s,%s,'storage',%s,%s)''',(str(uuid4()),owner,NOTICE+':'+question_revision,NOTICE))
+        return self.consent(owner,context)
+
+    def revoke_storage(self,owner,context):
+        with self.pool.connection() as conn:
+            resolved = self._context(conn,owner,context,lock=True)
+            if resolved is None:
+                return None
+            conn.execute('''UPDATE server_remote_consents SET revoked_at=clock_timestamp()
+                WHERE owner_user_id=%s AND purpose='storage' AND input_hash=%s
+                AND notice_version=%s AND revoked_at IS NULL''',(owner,NOTICE+':'+resolved[1],NOTICE))
+        return self.consent(owner,context)
 
     def save(self,owner,context,key,*,question_revision,template_id,body,status,expected_revision,storage_consent_id):
         context,key = str(UUID(context)),str(UUID(key))
