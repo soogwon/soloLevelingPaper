@@ -72,3 +72,5 @@ def register_summary_tools(server, queries, reviews):
             return export_summary(saved)
         except (ValueError, KeyError, TypeError):
             return {'status': 'unavailable', 'message': '저장 요약을 다시 조회하세요.'}
+
+    return get_latest_remote_summary

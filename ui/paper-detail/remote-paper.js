@@ -17,16 +17,14 @@ export function mountRemotePaper(app, doc) {
     el('summary-export').disabled = true;
     el('summary-markdown').value = ''; el('summary-markdown').hidden = true;
   }
-  async function loadSummary(expected) {
-    const current = generation;
-    resetSummary('저장 요약을 조회합니다.');
+  function displaySummary(value, expected) {
+    resetSummary('저장 요약을 확인합니다.');
     try {
-      const reply = await app.callServerTool({name:'get_latest_remote_summary',arguments:{context_id:expected.context_id}});
-      if (current !== generation) return;
-      const value = reply?.structuredContent, result = value?.result, b = result?.binding;
+      const result = value?.result, b = result?.binding;
+      if (value?.status === 'unsupported') {resetSummary('이 연결에서는 저장 요약 조회를 지원하지 않습니다.'); return;}
       if (value?.status === 'not_found') {resetSummary('저장된 요약이 없습니다. 자동 생성하지 않습니다.'); return;}
       if (value?.status === 'not_authorized') {resetSummary('요약 조회 권한을 확인해 주세요.'); return;}
-      if (reply?.isError || value?.state !== 'completed' || value.context_id !== expected.context_id
+      if (value?.state !== 'completed' || value.context_id !== expected.context_id
           || !uuid(value.request_key) || result?.context_id !== expected.context_id || b?.context_id !== expected.context_id
           || b.publication_id !== expected.publication_id || b.parse_revision_id !== expected.parse_revision_id
           || b.server_version_id !== expected.version_id || b.paper_id !== expected.paper_id
@@ -39,7 +37,7 @@ export function mountRemotePaper(app, doc) {
       el('summary').textContent = `범위: ${result.scope === 'paper' ? '논문 전체' : '섹션 ' + result.section_id}\n판본: ${b.server_version_id}\n생성: ${result.generated_at}\n구조·근거 ID 검증 결과이며 의미적 정확성은 별도 확인이 필요합니다.\n\n` +
         result.items.map(i=>`${i.kind}: ${i.text}\n근거 ID: ${i.evidence_ids.join(', ')}`).join('\n\n');
       el('summary-export').disabled = false;
-    } catch {if (current === generation) resetSummary('요약을 조회하지 못했습니다. 새로고침하거나 채팅에서 같은 맥락의 요약을 조회하세요.');}
+    } catch {resetSummary('요약을 조회하지 못했습니다. 새로고침하거나 채팅에서 같은 맥락의 요약을 조회하세요.');}
   }
   el('summary-export').onclick = async () => {
     if (!summaryKey || !scope) return;
@@ -91,7 +89,7 @@ export function mountRemotePaper(app, doc) {
     el('sections-more').disabled = scope.nextSection === null;
     el('records-more').disabled = scope.nextRecord === null;
     el('refresh').disabled = false;
-    void loadSummary(d);
+    displaySummary(r.saved_summary, d);
   }
   async function load(kind) {
     if (!scope || busy || (kind === 'sections' && scope.nextSection === null) || (kind === 'records' && scope.nextRecord === null)) return;
