@@ -74,3 +74,11 @@ test('원격 학습 상태의 근거와 기준 판본을 함께 표시한다', (
     reading_status_source: 'remote_learning', reading_basis_version_id: 'version-1'}));
   assert.match(output, /상태 근거: 원격 학습 기록 · 기준 버전: version-1/);
 });
+
+test('읽기 상태 갱신 시각을 한국 시간으로 표시하고 누락을 구분한다', () => {
+  const updated = String(paperRow({
+    ...paper, reading_status_updated_at: '2026-11-19T16:05:00Z',
+  }));
+  assert.match(updated, /갱신 시각: 2026\.11\.20 01:05/);
+  assert.match(String(paperRow(paper)), /갱신 시각 미확인/);
+});

@@ -35,6 +35,9 @@ READ_ONLY = (
     "server_translation_revisions",
     "server_embedding_sets",
     "server_dispatch_controls",
+    "server_remote_learning_records",
+    "server_context_annotations",
+    "server_execution_contexts",
 )
 
 

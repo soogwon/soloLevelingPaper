@@ -32,6 +32,11 @@ export function formatDateTime(value) {
   return p ? `${p.year}.${p.month}.${p.day} ${p.hour}:${p.minute}` : '';
 }
 
+export function readingStatusUpdatedLabel(value) {
+  const updatedAt = formatDateTime(value);
+  return updatedAt ? `갱신 시각: ${updatedAt}` : '갱신 시각 미확인';
+}
+
 export function formatTime(value) {
   const p = parts(value);
   return p ? `${p.hour}:${p.minute}` : '';
