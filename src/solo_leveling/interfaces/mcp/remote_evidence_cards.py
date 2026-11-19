@@ -10,7 +10,7 @@ READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                             idempotentHint=True, openWorldHint=False)
 
 
-def register_evidence_cards(server, queries, service, call, context, binding):
+def register_evidence_cards(server, queries, service, call, context, binding, *, latest_summary=None):
     @server.resource(CARD_URI, mime_type='text/html;profile=mcp-app')
     def remote_evidence_detail_card():
         return Path(__file__).with_name('assets').joinpath('remote-evidence-detail.html').read_text(encoding='utf-8')
@@ -74,6 +74,7 @@ def register_evidence_cards(server, queries, service, call, context, binding):
                 return None
             return {'context_id': ctx, 'binding': current, 'detail': detail['result'],
                     'section_offset': section_offset, 'after': after,
+                    'saved_summary': latest_summary(ctx) if latest_summary is not None else {'status': 'unsupported'},
                     'annotation_page': {'items': [asdict(item) for item in page['items']],
                                         'next_cursor': page['next_cursor']}}
         return call(False, operation)

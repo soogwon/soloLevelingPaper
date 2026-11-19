@@ -21,7 +21,7 @@ from solo_leveling.interfaces.http.remote_annotations import (
 )
 
 
-def register_annotation_tools(server, queries, service):
+def register_annotation_tools(server, queries, service, *, latest_summary=None):
     def call(write, operation):
         try:
             token = get_access_token()
@@ -222,4 +222,4 @@ def register_annotation_tools(server, queries, service):
     register_annotation_cards(server, service, call, context, binding)
 
     from .remote_evidence_cards import register_evidence_cards
-    register_evidence_cards(server, queries, service, call, context, binding)
+    register_evidence_cards(server, queries, service, call, context, binding, latest_summary=latest_summary)

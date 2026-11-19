@@ -156,9 +156,10 @@ def create_remote_mcp(
             from solo_leveling.interfaces.mcp.remote_questions import register_question_tools
             register_question_tools(server,product_queries,question_service)
 
+        latest_summary = None
         if summary_service is not None:
             from solo_leveling.interfaces.mcp.remote_summaries import register_summary_tools
-            register_summary_tools(server, product_queries, summary_service)
+            latest_summary = register_summary_tools(server, product_queries, summary_service)
 
         if reflection_service is not None:
             from solo_leveling.interfaces.mcp.remote_reflection import register_remote_reflection
@@ -172,7 +173,7 @@ def create_remote_mcp(
 
         if annotation_service is not None:
             from solo_leveling.interfaces.mcp.remote_annotations import register_annotation_tools
-            register_annotation_tools(server, product_queries, annotation_service)
+            register_annotation_tools(server, product_queries, annotation_service, latest_summary=latest_summary)
 
     if (cancellation_service is not None or summary_service is not None or reflection_service is not None or quiz_service is not None or quiz_review_service is not None) and not settings.product_reads_enabled:
         raise ValueError('processing_cancel_settings_invalid')
