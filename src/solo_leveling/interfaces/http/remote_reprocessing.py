@@ -185,4 +185,4 @@ class PostgresReprocessingReviews:
                 cid=row['storage_consent_id' if purpose=='storage' else 'ai_consent_id']
                 conn.execute('UPDATE server_remote_consents SET revoked_at=COALESCE(revoked_at,clock_timestamp()) WHERE owner_user_id=%s AND consent_id=%s',(owner,cid))
             row=conn.execute("UPDATE server_reprocessing_reviews SET state='cancelled',budget_reserved=false WHERE owner_user_id=%s AND request_key=%s RETURNING *",(owner,key)).fetchone()
-        return self._receipt(row)
+        return self.view(owner,key)

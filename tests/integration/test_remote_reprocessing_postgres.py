@@ -56,7 +56,9 @@ def test_web_intake_concurrent_replay_cancel_and_no_dispatch(db,stores,pool):
     assert service.view('other',key) is None
     assert service.submit('other',key) is None
     assert service.cancel('other',key) is None
-    assert service.cancel(owner,key,'ai_provider')['state']=='cancelled'
+    revoked=service.cancel(owner,key,'ai_provider')
+    assert revoked['state']=='cancelled' and revoked['ai_provider']=='revoked'
+    assert not revoked['active']
     assert service.cancel(owner,key)['job_id']==results[0]['job_id']
     assert service.submit(owner,key)['state']=='cancelled'
     assert all(r['n']==0 for r in db('SELECT reserved_input_tokens n FROM server_dispatch_budget_limits WHERE window_key=%s',(service.contract['window_key'],)))
