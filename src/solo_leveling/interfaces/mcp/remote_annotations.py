@@ -57,10 +57,10 @@ def register_annotation_tools(server, queries, service):
         except Exception:
             return {'status': 'unavailable', 'message': '기존 요청 키로 조회하세요. 자동 재제출하지 마세요.'}
 
-    def binding(owner, context_id):
+    def binding(owner, context_id, purpose="annotation-card-v1"):
         # 인증 토큰은 반환하지 않으며 갱신·계정 변경 시 과거 카드의 확인을 차단한다.
         token = get_access_token()
-        payload = f"annotation-card-v1:{service.service_id}:{owner}:{context_id}"
+        payload = f"{purpose}:{service.service_id}:{owner}:{context_id}"
         return hmac.new(token.token.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
     card_uri = "ui://remote-annotations/recovery.html"
@@ -117,7 +117,8 @@ def register_annotation_tools(server, queries, service):
                                              idempotentHint=True, openWorldHint=False))
     def get_remote_learning_dashboard(after: str | None = None, limit: int = 20) -> dict[str, Any]:
         """내 고정 원격 맥락의 읽기 상태·메모 건수를 조회한다. 게시 완료는 학습 완료가 아니다.
-        새 학습·AI 호출은 없으며 위치는 고정 PDF 판본 기준이며 퀴즈·성찰은 미지원이다. 다음 페이지는 반환 커서를 그대로 쓴다.
+        새 학습·AI 호출은 없으며 위치는 고정 PDF 판본 기준이다. 다음 페이지는 반환 커서를 쓴다.
+        개별 맥락의 읽기 상태를 카드에서 조작하려면 show_remote_reading_progress를 연다.
         """
         return call(False, lambda owner: service.learning.dashboard(owner, after=after, limit=limit))
 
@@ -137,6 +138,45 @@ def register_annotation_tools(server, queries, service):
         """
         return call(True, lambda owner: service.learning.set_progress(owner, context(context_id),
             request_key=request_key, status=status, pdf_page=pdf_page, expected_revision=expected_revision))
+
+    reading_uri = "ui://remote-learning/reading-progress.html"
+    reading_purpose = "reading-progress-card-v1"
+
+    @server.resource(reading_uri, mime_type="text/html;profile=mcp-app")
+    def remote_reading_progress_card():
+        return Path(__file__).with_name('assets').joinpath('remote-reading-progress.html').read_text(encoding='utf-8')
+
+    @server.tool(meta={"ui": {"resourceUri": reading_uri}},
+                 annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                             idempotentHint=True, openWorldHint=False))
+    def show_remote_reading_progress(context_id: str, expected_binding: str | None = None) -> dict[str, Any]:
+        """고정 학습 맥락의 읽기 상태·최근 PDF 위치를 카드와 텍스트로 조회한다. 기록을 만들지 않는다."""
+        def operation(owner):
+            ctx = context(context_id)
+            current = binding(owner, ctx, reading_purpose)
+            if expected_binding is not None and not hmac.compare_digest(current, expected_binding):
+                return {'connection_changed': True}
+            state = service.learning.reading_state(owner, ctx)
+            if state is None:
+                return None
+            return {'state': state, 'binding': current,
+                    'can_write': 'annotations:write' in get_access_token().scopes}
+        return call(False, operation)
+
+    @server.tool(meta={"ui": {"visibility": ["app"]}},
+                 annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                             idempotentHint=True, openWorldHint=False))
+    def save_remote_reading_progress_card(context_id: str, request_key: str, status: str,
+                                          pdf_page: StrictInt | None, expected_revision: StrictInt,
+                                          expected_binding: str) -> dict[str, Any]:
+        """카드의 명시적 조작을 같은 키·revision으로 저장한다. 학습 시작과 AI 호출은 하지 않는다."""
+        def operation(owner):
+            ctx = context(context_id)
+            if not hmac.compare_digest(binding(owner, ctx, reading_purpose), expected_binding):
+                return {'connection_changed': True}
+            return service.learning.set_progress(owner, ctx, request_key=request_key, status=status,
+                                                 pdf_page=pdf_page, expected_revision=expected_revision)
+        return call(True, operation)
 
     @server.tool()
     def create_remote_annotation(context_id: str, request_key: str, value: dict) -> dict:

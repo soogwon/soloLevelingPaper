@@ -59,3 +59,56 @@ def test_revision_payload_page_and_owner_fail_without_writes(pool, db, context):
     assert store.get(owner,key)['revision']==2
     db('UPDATE server_papers SET deleted_at=CURRENT_TIMESTAMP WHERE owner_user_id=%s',(owner,))
     assert store.set_progress(owner,key,**args) is None
+
+
+
+def test_reading_card_mcp_conflict_replay_and_binding(pool, db, context, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from mcp.server.fastmcp import FastMCP
+    from solo_leveling.interfaces.mcp import remote_annotations as tools
+    from tests.unit.test_remote_annotation_tools import token
+
+    store, owner, key = setup(pool, db, context)
+    current = token(['annotations:read'])
+    monkeypatch.setattr(tools, 'get_access_token', lambda: current)
+    service = SimpleNamespace(learning=store, service_id='remote-paper')
+    server = FastMCP('읽기 카드')
+    tools.register_annotation_tools(server, SimpleNamespace(owner=lambda: owner), service)
+
+    async def verify():
+        registered = {tool.name: tool for tool in await server.list_tools()}
+        read = registered['show_remote_reading_progress']
+        save = registered['save_remote_reading_progress_card']
+        assert read.meta['ui']['resourceUri'] == 'ui://remote-learning/reading-progress.html'
+        assert save.meta['ui']['visibility'] == ['app']
+        resources = await server.read_resource(read.meta['ui']['resourceUri'])
+        assert '최근 위치 저장' in resources[0].content
+        _, opened = await server.call_tool(read.name, {'context_id': key})
+        assert opened['result']['can_write'] is False
+        binding = opened['result']['binding']
+        args = dict(context_id=key, request_key=str(uuid4()), status='completed', pdf_page=1,
+                    expected_revision=1, expected_binding=binding)
+        _, denied = await server.call_tool(save.name, args)
+        assert denied['status'] == 'not_authorized'
+        current.scopes.append('annotations:write')
+        _, completed = await server.call_tool(save.name, args)
+        assert completed['result']['state']['last_pdf_page'] == 1
+        assert completed['result']['applied_revision'] == 2
+        _, replay = await server.call_tool(save.name, args)
+        assert replay['result']['replayed'] is True
+
+        args.update(request_key=str(uuid4()), status='reading')
+        _, conflict = await server.call_tool(save.name, args)
+        assert conflict['status'] == 'conflict'
+        _, refreshed = await server.call_tool(read.name, {'context_id': key, 'expected_binding': binding})
+        assert refreshed['result']['state']['reading_status'] == 'completed'
+        assert refreshed['result']['state']['revision'] == 2
+
+        current.token = 'renewed'
+        args['expected_revision'] = 2
+        _, changed = await server.call_tool(save.name, args)
+        assert changed['result'] == {'connection_changed': True}
+        assert service.learning.reading_state(owner, key)['revision'] == 2
+
+    asyncio.run(verify())
