@@ -56,7 +56,7 @@ def register_summary_tools(server, queries, reviews):
         """저장된 요약이 실제 인용한 근거의 고정 원문·번역·페이지를 재조회한다. 새 검색·생성은 없다."""
         return call('evidence', request_key, evidence_id)
 
-    @server.tool()
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def get_latest_remote_summary(context_id: str) -> dict:
         """해당 맥락의 가장 최근 성공 요약을 읽는다. 실패한 재생성은 이전 성공 요약을 덮어쓰지 않는다."""
         return call('latest', context_id)

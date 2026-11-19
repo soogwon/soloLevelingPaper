@@ -19,6 +19,7 @@ def export_summary(saved):
     for label, value in [('논문',b['paper_id']),('판본',b['server_version_id']),('게시',b['publication_id']),
                          ('파싱 리비전',b['parse_revision_id']),('번역 리비전',b['translation_revision_id']),
                          ('범위',result['scope']),('섹션',result['section_id']),('모델',result['model']),
+                         ('제공자',result['provider']),('언어',result['language']),('입력 지문',result['input_hash']),
                          ('프롬프트',result['prompt_version']),('생성 시각',result['generated_at'])]:
         lines.append(f'{label}: {safe(value)}')
     lines += ['', '검증 범위: 구조·근거 ID 소속 확인. 의미적 정확성은 별도 검증이 필요합니다.', '']
