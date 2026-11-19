@@ -1,5 +1,6 @@
 // 3. 논문 상세 페이지 — GET /v1/papers/{id}, GET /v1/annotations, GET /v1/annotations/{id}, POST /v1/resume-requests
-import { remoteFirstLearning } from '../lib/remote-first-learning.js';
+import { hasFirstLearningSource } from '../lib/remote-first-learning.js';
+import { buildHash } from '../router.js';
 import { remotePaperJobs } from '../lib/remote-paper-jobs.js';
 import { remotePaperDetail } from '../lib/remote-paper-detail.js';
 import { CONFIG } from '../config.js';
@@ -60,6 +61,9 @@ export default async function paperDetailPage({ view, params, query }) {
   document.title = `${title} · Solo Leveling`;
   const versionId = paper.selected_version_id;
   const recordId = paper.selected_learning_record_id;
+  const starting = paper.reading_status === 'not_started';
+  const canStart = !CONFIG.USE_MOCK && hasFirstLearningSource(paper);
+  const startHref = buildHash(`/papers/${encodeURIComponent(paper.paper_id)}/start-learning`, {version:versionId});
   const readingSource = {
     explicit: '연결 PC에서 저장한 상태',
     remote_learning: '원격 학습 기록',
@@ -79,7 +83,11 @@ export default async function paperDetailPage({ view, params, query }) {
       </div>
       <div class="actions">
         ${actionButton({ label: '원문 보기', action: 'open-pdf', iconHtml: icons.external(), available: paper.file_access?.available, message: paper.file_access?.message ?? '원문을 열 수 없어요' })}
-        ${actionButton({ label: 'Claude에서 이어서 학습', action: 'resume', primary: true, available: paper.resume?.available, message: paper.resume?.message ?? '이어하기를 할 수 없어요' })}
+        ${starting ? (canStart
+          ? html`<div class="action"><a class="btn btn-primary" href="${startHref}">Claude에서 학습 시작</a></div>`
+          : actionButton({label:'Claude에서 학습 시작', action:'start-learning', primary:true,
+            available:false, message:'서버에서 검증을 마친 PDF가 필요해요.'}))
+          : actionButton({ label: 'Claude에서 이어서 학습', action: 'resume', primary: true, available: paper.resume?.available, message: paper.resume?.message ?? '이어하기를 할 수 없어요' })}
       </div>
     </div>
 
@@ -89,8 +97,11 @@ export default async function paperDetailPage({ view, params, query }) {
       <section class="card panel panel-main" data-slot="remote-summary"></section>
       <section class="card panel panel-side" data-slot="remote-notes"></section>
     </div>
-    <section class="card panel" data-slot="remote-first-learning" hidden></section>
-    <section class="card panel" data-slot="remote-jobs"></section>
+    ${CONFIG.USE_MOCK ? '' : html`
+      <details class="card panel processing-jobs">
+        <summary class="panel-title">처리 작업</summary>
+        <div class="processing-jobs-body" data-slot="remote-jobs"></div>
+      </details>`}
   `);
 
   const detailViews = {
@@ -105,12 +116,14 @@ export default async function paperDetailPage({ view, params, query }) {
   }
   const detailReady = CONFIG.USE_MOCK ? Promise.resolve()
     : remotePaperDetail(detailViews, paper.paper_id, versionId);
-  const jobsReady = CONFIG.USE_MOCK ? Promise.resolve() : remotePaperJobs(view.querySelector('[data-slot="remote-jobs"]'), paper.paper_id, versionId);
-
-  if (!CONFIG.USE_MOCK && paper.file_access?.reason === 'file_ready') {
-    const firstLearning = view.querySelector('[data-slot="remote-first-learning"]');
-    firstLearning.hidden = false;
-    void remoteFirstLearning(firstLearning, paper.paper_id, versionId);
+  const jobs = view.querySelector('.processing-jobs');
+  if (jobs) {
+    const loadJobs = () => {
+      if (closed || !jobs.open || !jobs.isConnected) return;
+      jobs.removeEventListener('toggle', loadJobs);
+      void remotePaperJobs(jobs.querySelector('[data-slot="remote-jobs"]'), paper.paper_id, versionId);
+    };
+    jobs.addEventListener('toggle', loadJobs);
   }
 
   // ---------- 버튼 ----------
@@ -200,5 +213,5 @@ export default async function paperDetailPage({ view, params, query }) {
     }
   });
 
-  await Promise.all([detailReady, jobsReady]);
+  await detailReady;
 }

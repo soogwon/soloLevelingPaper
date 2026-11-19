@@ -12,6 +12,7 @@ const ROUTES = [
   { pattern: /^\/summaries\/([^/]+)$/, keys: ['requestKey'], nav: 'papers', parent: '/papers', load: () => import('./pages/summary-review.js') },
   { pattern: /^\/uploads$/, nav: 'papers', parent: '/papers', load: () => import('./pages/upload.js') },
   { pattern: /^\/papers$/, nav: 'papers', parent: null, load: () => import('./pages/papers.js') },
+  { pattern: /^\/papers\/([^/]+)\/start-learning$/, keys: ['paperId'], nav: 'papers', parent: '/papers', load: () => import('./pages/paper-learning-start.js') },
   { pattern: /^\/papers\/([^/]+)$/, keys: ['paperId'], nav: 'papers', parent: '/papers', load: () => import('./pages/paper-detail.js') },
   { pattern: /^\/notes$/, nav: 'notes', parent: '/papers', load: () => import('./pages/notes.js') },
   { pattern: /^\/collections$/, nav: 'collections', parent: '/papers', load: () => import('./pages/collections.js') },
