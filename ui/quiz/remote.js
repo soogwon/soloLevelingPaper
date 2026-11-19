@@ -1,15 +1,16 @@
 const uuid=v=>typeof v==='string'&&/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(v);
 export function mountRemoteQuiz(app,doc,crypto=doc.defaultView.crypto){
  const el=id=>doc.getElementById(id);
- let generation=0,input=null,scope=null,key=null,busy=false;
- function reset(message){++generation;input=null;scope=null;key=null;busy=false;el('questions').replaceChildren();el('review').textContent='';el('confirm').checked=false;for(const id of ['confirm','submit','lookup'])el(id).disabled=true;el('status').textContent=message;}
+ let generation=0,input=null,scope=null,key=null,busy=false,attemptId=null;
+ function reset(message){++generation;attemptId=null;el('details').hidden=true;el('details').disabled=false;el('details-output').textContent='';input=null;scope=null;key=null;busy=false;el('questions').replaceChildren();el('review').textContent='';el('confirm').checked=false;for(const id of ['confirm','submit','lookup'])el(id).disabled=true;el('status').textContent=message;}
  function result(v){
   if(!scope||v?.context_id!==scope.context_id||v.quiz_id!==scope.quiz_id||v.binding!==scope.binding||v.request_key!==key)throw Error();
   const a=v.attempt;
   if(a===null){el('status').textContent='같은 키의 저장 결과가 아직 없습니다. 자동 재제출하지 않습니다.';return;}
   if(!uuid(a?.attempt_id)||a.context_id!==scope.context_id||a.quiz_id!==scope.quiz_id||a.request_key!==key||!Array.isArray(a.results)||!Number.isInteger(a.correct_count)||!Number.isInteger(a.total_count))throw Error();
   el('review').textContent=`정답 ${a.correct_count}/${a.total_count}\n`+a.results.filter(r=>!r.is_correct).map(r=>`${r.position+1}. ${r.prompt}\n정답: ${r.correct_answer}\n채점 기준: ${r.grading_criteria}\n고정 근거: ${r.evidence_ids.join(', ')}`).join('\n\n');
-  el('status').textContent='저장된 제출 결과입니다. 오답 근거는 표시된 ID로 조회하세요. 새 생성·재채점하지 않았습니다.';
+  attemptId=a.attempt_id;el('details').hidden=false;el('details-output').textContent='';
+  el('status').textContent='저장된 제출 결과입니다.';
  }
  async function send(name,args){
   if(!scope||busy)return;const gen=generation;busy=true;el('submit').disabled=el('lookup').disabled=el('confirm').disabled=true;
@@ -27,6 +28,30 @@ export function mountRemoteQuiz(app,doc,crypto=doc.defaultView.crypto){
   await send('submit_remote_quiz_card',{context_id:scope.context_id,quiz_id:scope.quiz_id,expected_binding:scope.binding,request_key:key,answers,storage_consent_id:scope.consent.consent_id});
  };
  el('lookup').onclick=()=>key&&scope&&send('get_remote_quiz_submission',{context_id:scope.context_id,quiz_id:scope.quiz_id,expected_binding:scope.binding,request_key:key});
+ el('details').onclick=async()=>{
+  if(!scope||!attemptId||el('details').disabled)return;
+  const current=generation, id=attemptId;
+  el('details').disabled=true;
+  try{
+   const reply=await app.callServerTool({name:'get_remote_quiz_card_review',arguments:{
+    context_id:scope.context_id,quiz_id:scope.quiz_id,attempt_id:id,expected_binding:scope.binding}});
+   if(current!==generation||id!==attemptId)return;
+   const v=reply?.structuredContent?.result;
+   if(reply?.isError||reply?.structuredContent?.status!=='ok'||v?.context_id!==scope.context_id||
+      v.quiz_id!==scope.quiz_id||v.attempt_id!==id||v.binding!==scope.binding||
+      !Array.isArray(v.scores)||!Array.isArray(v.evidence))throw Error();
+   const score=v.scores.filter(s=>s.attempts>0).map(s=>
+    `${s.step}: 최근 ${Math.round(s.latest_score*100)}%, 최고 ${Math.round(s.best_score*100)}% (${s.attempts}회)`);
+   const excerpts=v.evidence.map(e=>`PDF ${e.pdf_page}페이지 · ${e.evidence_id}\n${e.quote_original}`);
+   const rest=v.evidence_count-excerpts.length;
+   el('details-output').textContent=[...score,...excerpts,...(rest>0?[`표시하지 못한 근거 ${rest}건은 위 근거 ID로 확인하세요.`]:[])].join('\n\n');
+  }catch{
+   if(current===generation&&id===attemptId)el('details-output').textContent='점수 또는 근거를 불러오지 못했습니다.';
+  }finally{
+   if(current===generation)el('details').disabled=false;
+  }
+ };
+ app.ontoolinputpartial=()=>reset('퀴즈를 확인하는 중입니다.');
  app.ontoolinput=e=>{reset('퀴즈를 확인하는 중입니다.');input=e?.arguments;};
  app.ontoolcancelled=()=>reset('취소됐습니다. 카드를 다시 열어 주세요.');
  app.ontoolresult=r=>{

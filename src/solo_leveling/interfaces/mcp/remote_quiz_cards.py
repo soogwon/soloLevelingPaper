@@ -6,11 +6,11 @@ from typing import Any
 from uuid import UUID
 from mcp.types import ToolAnnotations
 
-URI = 'ui://remote-quiz/attempt.html'
+URI = 'ui://remote-quiz/attempt-v2.html'
 READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
 
-def register_quiz_cards(server, service, call, access_token):
+def register_quiz_cards(server, service, call, access_token, read_evidence):
     def binding(owner, context, quiz):
         return hmac.new(access_token().token.encode(),
                         f'remote-quiz-card-v1:{owner}:{context}:{quiz}'.encode(), hashlib.sha256).hexdigest()
@@ -76,4 +76,27 @@ def register_quiz_cards(server, service, call, access_token):
             quiz = str(UUID(attempt['quiz_id']))
             return dict(context_id=ctx, quiz_id=quiz, binding=binding(owner, ctx, quiz), attempt=attempt,
                         request_key=attempt['request_key'])
+        return call('quizzes:read', operation)
+
+
+    @server.tool(meta={'ui': {'visibility': ['app']}}, annotations=READ)
+    def get_remote_quiz_card_review(context_id: str, quiz_id: str, attempt_id: str,
+                                    expected_binding: str) -> dict:
+        """저장 시도의 단계별 점수와 고정 오답 근거를 읽습니다."""
+        def operation(owner):
+            ctx, quiz, bound = scoped(owner, context_id, quiz_id, expected_binding)
+            attempt = service.attempt(owner, ctx, str(UUID(attempt_id)))
+            if attempt is None or attempt['quiz_id'] != quiz:
+                return None
+            ids = list(dict.fromkeys(evidence_id for row in attempt['results'] if not row['is_correct']
+                                     for evidence_id in row['evidence_ids']))
+            excerpts = []
+            for evidence_id in ids[:20]:
+                result = read_evidence(ctx, evidence_id)
+                value = result.get('result')
+                if (result.get('status') == 'ok' and value and value.get('context_id') == ctx
+                        and value.get('evidence_id') == evidence_id):
+                    excerpts.append(value)
+            return dict(context_id=ctx, quiz_id=quiz, attempt_id=attempt['attempt_id'], binding=bound,
+                        scores=service.scores(owner, ctx), evidence=excerpts, evidence_count=len(ids))
         return call('quizzes:read', operation)

@@ -113,3 +113,36 @@ def test_quiz_storage_consent_is_explicit_pinned_and_idempotent(pool,db,stores):
     assert service.submit('alice',context,quiz,key,{0:0},rows[0]['consent_id'])==saved
     other=str(uuid4());service.store_reviewed('alice',context,other,'preview',questions)
     assert service.consent('alice',context,other)['storage']=='missing'
+
+
+def test_saved_quiz_card_links_submission_score_and_exact_source(pool, db, stores, monkeypatch):
+    from types import SimpleNamespace
+    from solo_leveling.interfaces.http.remote_evidence_read import PostgresRemoteEvidenceReader
+    from solo_leveling.interfaces.mcp import remote_quiz
+    from tests.unit.test_remote_annotation_tools import Server, token
+
+    service, context, quiz, questions, consent = setup(pool, db, stores)
+    owner = 'alice'
+    reader = PostgresRemoteEvidenceReader(pool)
+    def evidence(ctx, eid):
+        value = reader.get(owner, ctx, eid)
+        return {'status': 'ok', 'result': value} if value else {'status': 'not_found'}
+
+    monkeypatch.setattr(remote_quiz, 'get_access_token', lambda: token(['quizzes:read', 'quizzes:write']))
+    server = Server()
+    remote_quiz.register_remote_quiz(server, SimpleNamespace(owner=lambda: owner, evidence=evidence), service)
+    opened = server.tools['show_remote_quiz'](context, quiz)['result']
+    assert 'correct_answer' not in opened['quiz']['questions'][0]
+    key = str(uuid4())
+    bound = opened['binding']
+    submit = server.tools['submit_remote_quiz_card']
+    saved = submit(context, quiz, key, {'0': 1}, consent, bound)['result']['attempt']
+    assert submit(context, quiz, key, {'0': 1}, consent, bound)['result']['attempt'] == saved
+    review = server.tools['get_remote_quiz_card_review']
+    value = review(context, quiz, saved['attempt_id'], bound)['result']
+    assert value['scores'][0]['attempts'] == 1 and value['scores'][0]['latest_score'] == 0
+    assert value['evidence'][0]['evidence_id'] == questions[0].evidence_ids[0]
+    assert value['evidence'][0]['quote_original']
+    assert review(context, str(uuid4()), saved['attempt_id'], bound)['status'] == 'invalid_argument'
+    owner = 'bob'
+    assert review(context, quiz, saved['attempt_id'], bound)['status'] == 'invalid_argument'
