@@ -164,14 +164,14 @@ def create_app(
             managed_question_store = PostgresDeviceStore.from_dsn(DatabaseSettings(dsn).dsn)
             remote_questions = PostgresQuestionReviews(managed_question_store.connection_pool,**question_settings)
     managed_summary_store = None
-    from .remote_summary_settings import load_summary_settings
+    from .remote_summary_settings import load_summary_settings, summary_connection_dsn
     summary_settings = load_summary_settings()
     if summary_settings is not None:
         if (not selected_remote_mcp.enabled or not selected_remote_mcp.product_reads_enabled
                 or remote_product_queries is None or remote_summaries is not None):
             raise ValueError('summary_settings_invalid')
         from .remote_summary_reviews import PostgresSummaryReviews
-        managed_summary_store = PostgresDeviceStore.from_dsn(summary_settings.dsn)
+        managed_summary_store = PostgresDeviceStore.from_dsn(summary_connection_dsn(summary_settings))
         remote_summaries = PostgresSummaryReviews(managed_summary_store.connection_pool, **summary_settings.arguments)
     managed_reflection_stores = []
     remote_reflection_mcp = remote_reflections

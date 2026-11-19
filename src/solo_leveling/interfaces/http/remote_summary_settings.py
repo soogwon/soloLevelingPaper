@@ -48,3 +48,12 @@ def load_summary_settings(env=None):
         return SummarySettings(dsn,data)
     except (KeyError,TypeError,ValueError,AttributeError):
         raise ValueError('summary_settings_invalid') from None
+
+
+def summary_connection_dsn(settings):
+    """요약 TLS 풀에만 배포 패키지의 CA를 지정하고 전역 DB 설정은 유지한다."""
+    if dict(parse_qsl(urlsplit(settings.dsn).query)).get('sslmode') != 'verify-full':
+        return settings.dsn
+    import certifi
+    from psycopg.conninfo import make_conninfo
+    return make_conninfo(settings.dsn, sslrootcert=certifi.where())
