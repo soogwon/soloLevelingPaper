@@ -191,3 +191,12 @@ GRANT EXECUTE ON FUNCTION slp_staging.server_link_verified_mcp_account(text, tex
 GRANT SELECT (owner_user_id, linked_at, revoked_at)
 ON slp_staging.server_remote_identities TO slp_staging_web;
 ```
+
+일회용 연결 확인을 배포하기 전에 migration 0070을 적용하고 전용 역할에
+다음 권한을 추가합니다. 확인 코드는 발급 응답에만 포함되며 DB에는 해시로 저장합니다.
+
+```sql
+GRANT SELECT, INSERT, UPDATE ON slp_staging.server_remote_connection_checks TO slp_staging_web;
+GRANT SELECT (owner_user_id, code_hash, expires_at, verified_at), UPDATE (verified_at)
+ON slp_staging.server_remote_connection_checks TO slp_staging_mcp;
+```
