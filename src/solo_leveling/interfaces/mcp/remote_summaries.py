@@ -49,7 +49,7 @@ def register_summary_tools(server, queries, reviews):
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def prepare_remote_chat_summary(request_key: str, context_id: str, items: list[ChatSummaryItem]) -> dict:
-        """사용자가 확인한 채팅 요약을 웹 저장 검토용으로 준비한다. PDF 페이지 본문 조회에서 받은
+        """기본 채팅 요약을 사용자가 저장해 달라고 요청했을 때 웹 저장 검토용으로 준비한다. PDF 페이지 본문 조회에서 받은
         chunk_id로 각 항목의 근거를 지정한다. claim은 연구 질문, method는 핵심 접근, result는 주요 결과다.
         항목별 한국어 한 문장을 전달하고 근거가 없는 항목은 생략한다. 같은 요청에는 같은 UUID를 쓴다.
         반환된 웹 검토 링크를 사용자에게 보여준다. 확정 저장은 인증 웹에서만 가능하며 외부 AI 호출은 없다."""
@@ -57,7 +57,9 @@ def register_summary_tools(server, queries, reviews):
 
     @server.tool()
     def prepare_remote_summary(request_key: str, context_id: str, scope: str = 'paper', section_id: str | None = None) -> dict:
-        """요약 검토를 준비하고 UUID 키를 보관한다. AI 호출 없이 웹에서 저장·AI 전송 동의를 각각 받아야 한다."""
+        """유료 서버 생성 전용이다. 사용자가 서버 생성과 외부 AI 전송을 명시적으로 요청한 경우에만 검토를 준비한다.
+        일반 요약 요청은 Claude 채팅에서 답하고 저장 요청 시 prepare_remote_chat_summary를 사용한다.
+        서버 생성에는 별도의 저장·AI 전송 동의와 서버 예산이 필요하다."""
         return call('prepare', request_key, context_id, scope=scope, section_id=section_id)
 
     @server.tool()
@@ -67,7 +69,8 @@ def register_summary_tools(server, queries, reviews):
 
     @server.tool()
     def submit_remote_summary(request_key: str) -> dict:
-        """웹에서 두 목적 동의를 마친 기존 요청만 접수한다. 모델의 동의 주장은 허용하지 않는다."""
+        """사용자가 유료 서버 실행을 명시적으로 요청하고 웹에서 두 목적에 동의한 기존 요청만 접수한다.
+        동의 완료 알림이나 요약 상태 확인만 요청받으면 조회 도구를 쓰고 제출하지 않는다."""
         return call('submit', request_key)
 
     @server.tool()

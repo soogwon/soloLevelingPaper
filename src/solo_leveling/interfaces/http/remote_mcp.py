@@ -101,6 +101,15 @@ def create_remote_mcp(
         raise ValueError("원격 MCP 설정이 활성화되어야 합니다.")
     server = FastMCP(
         "solo-leveling-remote-spike",
+        instructions=(
+            "‘요약해줘’, ‘요약 생성’, ‘이 논문 요약’은 기본적으로 Claude 채팅에서 답한다. "
+            "현재 학습 맥락의 고정 판본을 read_remote_paper_page로 읽고, "
+            "연구 질문·핵심 접근·주요 결과를 각 한 문장과 확인한 PDF 쪽으로 보여준다. "
+            "사용자가 저장을 요청하면 prepare_remote_chat_summary로 인증 웹 검토 링크를 만든다. "
+            "prepare_remote_summary와 submit_remote_summary는 사용자가 유료 서버 생성을 명시적으로 "
+            "요청했을 때만 사용한다. ‘동의했어’나 ‘요약 확인해줘’는 새 접수 요청이 아니다. "
+            "기존 요청의 상태나 저장된 결과를 조회하고, 예산 거절이면 자동 재제출하지 않는다."
+        ) if settings.product_reads_enabled and summary_service is not None else None,
         stateless_http=True,
         json_response=True,
         streamable_http_path="/mcp",
