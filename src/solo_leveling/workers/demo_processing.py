@@ -211,7 +211,8 @@ def run(config_path, stop, *, environment=None, pool_factory=_pool, client_facto
             service_config=service, model_dir=Path(raw['model_dir']), embedding_spec=plan.spec,
             limits=plan.limits, retry_policy=retry, policy_version=raw['policy_version'],
             window_key=raw['window_key'], token_upper_bound=budget.upper_bound,
-            validate_limits=lambda limits: not stop.is_set() and budget.allows_limits(limits), batch_size=raw['batch_size'], fragment_policy=fragment_policy,
+            validate_limits=lambda limits: not stop.is_set() and budget.allows_limits(limits),
+            allow_partial=automatic_only, batch_size=raw['batch_size'], fragment_policy=fragment_policy,
         )
         return run_processing_queue(worker, DemoStop(stop, budget), max_jobs=budget.settings['max_jobs'],
                                     settle_failed=jobs.settle_failed)

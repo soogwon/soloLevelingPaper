@@ -633,3 +633,21 @@ def test_real_parser_configuration_is_immutable():
     parser = ProcessingPdfParser()
     with pytest.raises(FrozenInstanceError):
         parser.chunk_size = 1
+
+
+@pytest.mark.parametrize('mixed', [True, False])
+def test_automatic_partial_processing_embeds_only_indexable_chunks(setup, mixed):
+    stages, _, _, ledger, post, response, _ = setup
+    stages.allow_partial = True
+    response.json.side_effect = [envelope(''), envelope('나머지 합성 문장입니다.' if mixed else '')]
+    result = run(setup)
+    assert post.call_count == len(ledger.observed) == 2
+    assert result.translations[0].failure_code.value == 'empty_translation'
+    if mixed:
+        assert result.status == 'prepared'
+        assert result.embeddings.chunk_ids == (result.document.chunks[1].chunk_id,)
+        embedded, _ = stages.embedder.embed.call_args.args
+        assert embedded == (result.translations[1],)
+    else:
+        assert result.status == 'translation_incomplete' and result.embeddings is None
+        stages.embedder.embed.assert_not_called()
