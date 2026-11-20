@@ -53,6 +53,6 @@ def _principal_from_claims(claims: dict[str, Any]) -> AuthenticatedPrincipal:
     if device_id is not None and not isinstance(device_id, str):
         raise AccessTokenRejected
     try:
-        return AuthenticatedPrincipal(subject, credential_type, device_id)  # type: ignore[arg-type]
+        return AuthenticatedPrincipal(subject, credential_type, device_id, issuer=claims.get("iss"))  # type: ignore[arg-type]
     except ValueError:
         raise AccessTokenRejected from None

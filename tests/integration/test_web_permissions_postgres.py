@@ -414,3 +414,30 @@ def test_web_can_only_check_migration_history(web_pool):
     assert not migrate(dsn, migrations, check=True).pending
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         migrate(dsn, migrations)
+
+
+def test_verified_web_login_records_provenance_with_insert_only(pool, db, web_pool):
+    import psycopg
+    from psycopg import sql
+    from solo_leveling.interfaces.http.web_auth import PostgresWebSessionStore, WebIdentity
+
+    with web_pool.connection() as conn:
+        role = conn.execute('SELECT current_user AS role').fetchone()['role']
+    with pool.connection() as conn:
+        schema = conn.execute('SELECT current_schema() AS schema').fetchone()['schema']
+        conn.execute(sql.SQL('GRANT INSERT (issuer,subject) ON {}.server_verified_web_identities TO {}')
+                     .format(sql.Identifier(schema),sql.Identifier(role)))
+    issuer = 'https://issuer.example/'
+    owner = new_id()
+    store = PostgresWebSessionStore(web_pool,mcp_link_issuer=issuer)
+    identity = WebIdentity(owner,'검증 사용자',None,issuer)
+    for _ in range(2):
+        store.create_session(identity,datetime.now(timezone.utc))
+    assert db('SELECT subject FROM server_verified_web_identities WHERE issuer=%s AND subject=%s',
+              (issuer,owner))==[{'subject':owner}]
+    for statement in ('SELECT * FROM server_verified_web_identities',
+                      'DELETE FROM server_verified_web_identities',
+                      'SELECT server_link_verified_mcp_account(NULL,NULL)'):
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with web_pool.connection() as conn:
+                conn.execute(statement)

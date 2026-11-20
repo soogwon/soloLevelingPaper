@@ -54,8 +54,11 @@ class RemoteMcpSettings:
     clock_skew_seconds: int = 0
     allowed_client_ids: tuple[str, ...] = ()
     product_reads_enabled: bool = False
+    auto_account_link_enabled: bool = False
 
     def __post_init__(self) -> None:
+        if self.auto_account_link_enabled and not (self.enabled and self.product_reads_enabled):
+            raise ValueError("remote_mcp_auto_account_link_requires_product_reads")
         if not self.enabled:
             return
         for name, value in (("REMOTE_MCP_RESOURCE_URL", self.resource_url),
@@ -217,6 +220,8 @@ def load_remote_mcp_settings(source: Mapping[str, str] | None = None) -> RemoteM
     return RemoteMcpSettings(
         enabled=True,
         product_reads_enabled=_parse_bool("REMOTE_MCP_PRODUCT_READS_ENABLED", values.get("REMOTE_MCP_PRODUCT_READS_ENABLED", "false")),
+        auto_account_link_enabled=_parse_bool("REMOTE_MCP_AUTO_ACCOUNT_LINK_ENABLED",
+                                              values.get("REMOTE_MCP_AUTO_ACCOUNT_LINK_ENABLED", "false")),
         resource_url=resource_url,
         issuer=values.get("REMOTE_MCP_OIDC_ISSUER", "").strip(),
         audience=values.get("REMOTE_MCP_OIDC_AUDIENCE", "").strip(),

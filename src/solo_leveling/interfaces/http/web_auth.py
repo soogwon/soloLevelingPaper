@@ -32,6 +32,7 @@ class WebIdentity:
     user_id: str
     display_name: str
     email: str | None
+    issuer: str | None = None
 
 
 @dataclass(frozen=True)
@@ -43,9 +44,10 @@ class WebSession:
 
 
 class PostgresWebSessionStore:
-    def __init__(self, pool: Any, *, automatic_pdf_budget=None):
+    def __init__(self, pool: Any, *, automatic_pdf_budget=None, mcp_link_issuer: str | None = None):
         self._pool = pool
         self._automatic_pdf_budget = automatic_pdf_budget
+        self._mcp_link_issuer = mcp_link_issuer
 
     def begin_login(self, state: str, verifier: str, return_to: str, expires_at: datetime) -> None:
         with _connection(self._pool) as conn:
@@ -77,6 +79,9 @@ class PostgresWebSessionStore:
                    email=excluded.email, updated_at=CURRENT_TIMESTAMP""",
                 (identity.user_id, identity.display_name, identity.email),
             )
+            if self._mcp_link_issuer is not None and identity.issuer == self._mcp_link_issuer:
+                conn.execute("""INSERT INTO server_verified_web_identities(issuer,subject)
+                    VALUES (%s,%s) ON CONFLICT DO NOTHING""", (identity.issuer,identity.user_id))
             if self._automatic_pdf_budget is not None:
                 self._automatic_pdf_budget.provision(conn, identity.user_id)
             conn.execute(
@@ -183,7 +188,7 @@ class OidcWebAuthFlow:
                 raise WebAuthenticationRejected
             if email is not None and (not isinstance(email, str) or len(email) > 320):
                 raise WebAuthenticationRejected
-            identity = WebIdentity(principal.user_id, name.strip(), email)
+            identity = WebIdentity(principal.user_id, name.strip(), email, issuer=principal.issuer)
             return self.store.create_session(identity, self.now()), return_to
         except (WebAuthenticationRejected, AccessTokenRejected):
             raise WebAuthenticationRejected from None

@@ -14,11 +14,11 @@ from solo_leveling.interfaces.mcp.remote_recovery import restored_guidance
 
 
 class RemoteProductQueries:
-    def __init__(self, pool):
+    def __init__(self, pool, *, auto_link_issuer=None):
         self.pool = pool
         self.insights_enabled = False
         self.evidences = PostgresRemoteEvidenceReader(pool)
-        self.owners = PostgresRemoteOwnerResolver(pool)
+        self.owners = PostgresRemoteOwnerResolver(pool, auto_link_issuer=auto_link_issuer)
         self.contexts = PostgresRemoteContextResolver(pool)
         self.executions = PostgresRemoteExecutionStore(pool)
 

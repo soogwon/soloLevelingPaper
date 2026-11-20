@@ -149,13 +149,27 @@ def test_limited_database_role_can_pin_and_cannot_modify_other_data(db,stores,po
         conn.execute(sql.SQL('CREATE TRIGGER mcp_read_lock_guard BEFORE UPDATE ON {}.server_papers FOR EACH ROW EXECUTE FUNCTION {}.mcp_read_lock_guard({})').format(sql.Identifier(schema),sql.Identifier(schema),sql.Literal(role)))
     restricted=ConnectionPool(make_conninfo(DSN,user=role,password='local-mcp-only'),kwargs={'row_factory':dict_row,'options':f'-c search_path={schema}'},open=True)
     try:
-        queries=RemoteProductQueries(restricted)
+        from solo_leveling.interfaces.http.web_auth import PostgresWebSessionStore, WebIdentity
+        from datetime import datetime, timezone
+        account = 'link-'+uuid4().hex
+        issuer = SETTINGS.issuer
+        PostgresWebSessionStore(pool,mcp_link_issuer=issuer).create_session(
+            WebIdentity(account,'검증 계정',None,issuer),datetime.now(timezone.utc))
+        queries=RemoteProductQueries(restricted,auto_link_issuer=issuer)
+        identity = VerifiedRemoteIdentity(issuer,account)
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            queries.owners.resolve_owner(identity)
+        with pool.connection() as conn:
+            conn.execute(sql.SQL('GRANT EXECUTE ON FUNCTION {}.server_link_verified_mcp_account(text,text) TO {}')
+                         .format(sql.Identifier(schema),sql.Identifier(role)))
+        assert queries.owners.resolve_owner(identity)==account
         pinned=queries.contexts.pin(remote.owner,str(uuid4()),first.paper,'v1')
         assert pinned.publication_id==first.publication
         assert queries.contexts.resolve(remote.owner,pinned.context_id)==pinned
         queries.owner=lambda: remote.owner
         assert queries.detail(pinned.context_id)['result']['publication_id']==first.publication
         for statement in ('SELECT * FROM web_sessions','SELECT * FROM server_device_credentials',
+            'SELECT * FROM server_verified_web_identities','DELETE FROM server_remote_identities',
             'DELETE FROM server_execution_contexts','UPDATE server_papers SET paper_id=paper_id',
             "UPDATE server_dispatch_controls SET dispatch_enabled=true"):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
@@ -323,3 +337,50 @@ def test_reprocessing_job_reads_need_only_projected_review_columns(db, pool):
             assert conn.execute("""SELECT has_column_privilege(current_user,'server_reprocessing_reviews',
                 'staged_result','SELECT') AS body,has_table_privilege(current_user,'server_reprocessing_reviews',
                 'UPDATE') AS write""").fetchone() == {'body': False, 'write': False}
+
+
+def test_first_mcp_read_links_verified_web_subject_only(db, stores, pool):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timezone
+    from solo_leveling.interfaces.http.web_auth import PostgresWebSessionStore, WebIdentity
+
+    issuer = SETTINGS.issuer
+    suffix = str(uuid4())
+    first, second = "account-a"+suffix, "account-b"+suffix
+    now = datetime.now(timezone.utc)
+    web = PostgresWebSessionStore(pool, mcp_link_issuer=issuer)
+    web.create_session(WebIdentity(first,'계정 A','same@example.test',issuer),now)
+    web.create_session(WebIdentity(second,'계정 B','same@example.test','https://other.example/'),now)
+    remote = PgvectorContractStore(db,stores,pool)
+    remote.owner = first
+    published = remote.publish()
+    queries = RemoteProductQueries(pool,auto_link_issuer=issuer)
+    identity = VerifiedRemoteIdentity(issuer,first)
+    assert not db('SELECT 1 FROM server_remote_identities WHERE issuer=%s AND subject=%s',
+                  (issuer,first))
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        assert list(workers.map(lambda _:queries.owners.resolve_owner(identity),range(4))) == [first] * 4
+    assert len(db('SELECT 1 FROM server_remote_identities WHERE issuer=%s AND subject=%s',
+                  (issuer,first))) == 1
+    assert queries.owners.resolve_owner(VerifiedRemoteIdentity('https://other.example/',first)) is None
+
+    settings = replace(SETTINGS,product_reads_enabled=True)
+    with TestClient(create_app(remote_mcp_settings=settings,remote_mcp_verifier=Verifier(suffix),
+                              remote_product_queries=queries),base_url=SETTINGS.resource_url[:-4]) as client:
+        assert result(client,'list_remote_papers')['papers'][0]['paper_id'] == published.paper
+        assert result(client,'list_remote_papers',token='account-b') == {'status':'not_found'}
+        web.create_session(WebIdentity(second,'계정 B','same@example.test',issuer),now)
+        assert result(client,'list_remote_papers',token='account-b') == {
+            'status':'ok','papers':[],'next_offset':None}
+        assert result(client,'open_remote_paper',{'paper_id':published.paper,'version_id':'v1',
+                      'context_key':str(uuid4())},token='account-b') == {'status':'not_found'}
+        assert queries.owners.revoke_identity(first,identity)
+        web.create_session(WebIdentity(first,'계정 A','same@example.test',issuer),now)
+        assert result(client,'list_remote_papers') == {'status':'not_found'}
+    assert len(db('SELECT 1 FROM server_remote_identities WHERE issuer=%s AND subject=%s AND revoked_at IS NOT NULL',
+                  (issuer,first))) == 1
+    unrelated = str(uuid4())
+    web.create_session(WebIdentity(unrelated,'다른 기존 연결',None,issuer),now)
+    queries.owners.link_identity(second,VerifiedRemoteIdentity(issuer,unrelated))
+    assert db('SELECT server_link_verified_mcp_account(%s,%s) AS owner',(issuer,unrelated))==[{'owner':None}]
+    assert queries.owners.resolve_owner(VerifiedRemoteIdentity(issuer,unrelated))==second
