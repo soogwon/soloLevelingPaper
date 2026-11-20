@@ -86,11 +86,14 @@ class PostgresChatSummaries:
             if row is None:
                 return None
             if row['saved_at'] is None:
-                if not row['active']:
-                    raise RemoteExecutionConflict('chat_summary_expired')
+                # 행 잠금을 기다리는 중에도 검토 시간이 끝날 수 있다.
                 row = conn.execute("""UPDATE server_chat_summaries SET saved_at=clock_timestamp()
-                    WHERE owner_user_id=%s AND request_key=%s RETURNING *,true AS active""",
-                    (owner, str(UUID(key)))).fetchone()
+                    WHERE owner_user_id=%s AND request_key=%s
+                      AND clock_timestamp() < created_at + make_interval(secs=>%s)
+                    RETURNING *,true AS active""",
+                    (owner, str(UUID(key)), self.seconds)).fetchone()
+                if row is None:
+                    raise RemoteExecutionConflict('chat_summary_expired')
             return self._view(row)
 
     def _completed(self, row):
