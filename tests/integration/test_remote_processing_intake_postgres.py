@@ -111,3 +111,55 @@ def test_legacy_control_insert_defaults_to_intake_blocked(pool, db):
           VALUES ('provider_dispatch',1,true)""")
     row = db('SELECT intake_enabled,dispatch_enabled FROM server_dispatch_controls')[0]
     assert row == {'intake_enabled': False, 'dispatch_enabled': True}
+
+
+def test_explicit_followup_preserves_old_job_and_replays_both_keys(pool, db):
+    owner, intent, storage, ai = admitted_source(pool, db)
+    intake = PostgresRemoteProcessingIntake(pool)
+    first = intake.admit(owner, intent, 'original', storage, ai, NOTICE_VERSION)
+    args = (owner, intent, 'followup', storage, ai, NOTICE_VERSION)
+    assert intake.admit(*args, previous_job_id=first.job_id) is None
+    db("""UPDATE server_processing_jobs
+          SET status='failed', retryable=false, finished_at=CURRENT_TIMESTAMP, error_code='translation_incomplete' WHERE job_id=%s""", (first.job_id,))
+
+    def followup(key):
+        return intake.admit(owner, intent, key, storage, ai, NOTICE_VERSION,
+                            previous_job_id=first.job_id)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        results = list(workers.map(followup, ('followup', 'another-followup')))
+    second, = [result for result in results if result is not None]
+    assert second.job_id != first.job_id and second.status == 'queued'
+    assert intake.get(owner, intent) == second
+    winning_key = 'followup' if results[0] is not None else 'another-followup'
+    assert followup(winning_key) == second
+    with pytest.raises(RemoteProcessingConflict):
+        intake.admit(owner, intent, winning_key, storage, ai, NOTICE_VERSION)
+    assert intake.admit(owner, intent, 'original', storage, ai, NOTICE_VERSION).status == 'failed'
+    assert intake.admit(owner, intent, 'unrelated-key', storage, ai, NOTICE_VERSION) == second
+    assert len(db('SELECT job_id FROM server_processing_jobs WHERE owner_user_id=%s', (owner,))) == 2
+
+
+def test_followup_blocks_unsettled_usage_and_revoked_consent(pool, db):
+    owner, intent, storage, ai = admitted_source(pool, db)
+    intake = PostgresRemoteProcessingIntake(pool)
+    first = intake.admit(owner, intent, 'original', storage, ai, NOTICE_VERSION)
+    db("""UPDATE server_processing_jobs
+          SET status='failed', retryable=false, finished_at=CURRENT_TIMESTAMP, error_code='translation_incomplete' WHERE job_id=%s""", (first.job_id,))
+    db("""INSERT INTO server_processing_provider_attempts
+          (attempt_id, owner_user_id, execution_id, lease_token, input_hash,
+           storage_consent_id, ai_consent_id, notice_version, dispatch_key, stage,
+           policy_version, window_key, control_generation, reserved_input_tokens,
+           reserved_output_tokens, status)
+          SELECT %s, owner_user_id, job_id::text, 'old-lease', input_hash, storage_consent_id,
+                 ai_consent_id, notice_version, 'old-key', 'translation', 'old-policy',
+                 'old-window', 1, 10, 10, 'reserved'
+          FROM server_processing_job_authorizations WHERE job_id=%s""", (new_id(), first.job_id))
+    args = (owner, intent, 'followup', storage, ai, NOTICE_VERSION)
+    assert intake.admit(*args, previous_job_id=first.job_id) is None
+    db("""UPDATE server_processing_provider_attempts
+          SET status='observed', actual_input_tokens=5, actual_output_tokens=5,
+              settled_at=CURRENT_TIMESTAMP WHERE execution_id=%s""", (first.job_id,))
+    db('UPDATE server_remote_consents SET revoked_at=CURRENT_TIMESTAMP WHERE consent_id=%s', (ai,))
+    assert intake.admit(*args, previous_job_id=first.job_id) is None
+    assert intake.get(owner, intent).status == 'failed'
