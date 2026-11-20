@@ -41,14 +41,12 @@ export default async function accountPage({ view }) {
       <button type="button" class="btn" data-action="logout">로그아웃</button>
     </section>
 
-    <section class="card panel" aria-labelledby="dev-h">
-      <div>
-        <h2 id="dev-h" class="panel-title">연결된 PC</h2>
-        <p class="meta" style="margin-top:6px">이 계정으로 기록을 저장·조회하는 로컬 MCP 환경이에요. 새 PC는 MCP 설정에서 ‘계정 연결’을 실행하면 추가돼요.</p>
-      </div>
-      <div data-slot="devices">${loadingBlock()}</div>
-      <p class="hint">연결을 해제한 PC는 더 이상 기록을 읽거나 저장할 수 없어요. 서버에 저장된 기록은 지워지지 않아요.</p>
+    <section class="card panel" aria-labelledby="remote-mcp-h">
+      <h2 id="remote-mcp-h" class="panel-title">원격 MCP 연결</h2>
+      <div data-slot="remote-connections">${loadingBlock()}</div>
     </section>
+
+    <div data-slot="devices"></div>
 
     <section class="card panel" aria-labelledby="up-h">
       <div>
@@ -67,12 +65,34 @@ export default async function accountPage({ view }) {
       </div>
     </section>`);
 
+  const remoteEl = view.querySelector('[data-slot="remote-connections"]');
+
+  async function loadRemoteConnections() {
+    setHTML(remoteEl, loadingBlock());
+    try {
+      const connections = await api.listRemoteConnections();
+      setHTML(remoteEl, connections.length
+        ? html`<ul class="device-list">${connections.map((connection) => html`<li class="device">
+            <div>
+              <div class="device-name">원격 MCP</div>
+              <div class="meta">연결됨 · ${formatDateTime(connection.linked_at)}</div>
+            </div>
+          </li>`)}</ul>`
+        : emptyBlock('원격 MCP 연결이 없어요', 'Claude에서 원격 MCP에 연결하고 첫 논문 조회를 실행해 주세요.'));
+    } catch (error) {
+      setHTML(remoteEl, errorBlock(error, 'reload-remote-connections'));
+    }
+  }
+
   const devicesEl = view.querySelector('[data-slot="devices"]');
   let devices = [];
 
   function renderDevices() {
+    const wasOpen = devicesEl.querySelector('details')?.open;
     setHTML(devicesEl, devices.length
-      ? html`<ul class="device-list">${devices.map((d) => html`<li class="device">
+      ? html`<details class="card panel processing-jobs" ${wasOpen ? html`open` : ''}>
+        <summary class="panel-title">로컬 기기 (${devices.length})</summary>
+        <ul class="device-list">${devices.map((d) => html`<li class="device">
           <div class="profile-main">
             ${icons.laptop()}
             <div>
@@ -85,23 +105,28 @@ export default async function accountPage({ view }) {
             </div>
           </div>
           <button type="button" class="btn btn-outline-danger" data-action="disconnect" data-device-id="${d.device_id}" data-device-name="${d.name}">연결 해제</button>
-        </li>`)}</ul>`
-      : emptyBlock('연결된 PC가 없어요', 'MCP 설정에서 계정 연결을 실행해 주세요.'));
+        </li>`)}</ul>
+        <p class="hint">연결을 해제해도 서버에 저장된 기록은 남아요.</p>
+      </details>` : '');
   }
 
   async function loadDevices() {
-    setHTML(devicesEl, loadingBlock());
+    setHTML(devicesEl, '');
     try {
       devices = (await api.listDevices()).items;
       renderDevices();
     } catch (error) {
-      setHTML(devicesEl, errorBlock(error, 'reload-devices'));
+      setHTML(devicesEl, html`<section class="card panel">
+        <h2 class="panel-title">로컬 기기 조회 실패</h2>
+        ${errorBlock(error, 'reload-devices')}
+      </section>`);
     }
   }
 
   view.addEventListener('click', async (e) => {
     const el = e.target.closest('[data-action]');
     if (!el) return;
+    if (el.dataset.action === 'reload-remote-connections') loadRemoteConnections();
     if (el.dataset.action === 'reload-devices') loadDevices();
     if (el.dataset.action === 'disconnect') {
       const ok = await confirmDialog({
@@ -133,5 +158,5 @@ export default async function accountPage({ view }) {
     }
   });
 
-  await loadDevices();
+  await Promise.all([loadRemoteConnections(), loadDevices()]);
 }

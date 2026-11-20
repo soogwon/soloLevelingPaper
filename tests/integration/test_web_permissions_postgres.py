@@ -293,11 +293,21 @@ def test_web_remote_upload_consent_admission_deletion(web, db):
     path = "/v1/remote-uploads/intents/" + intent["intent_id"]
     source_path = f"/v1/remote-uploads/intents/by-paper/{intent['paper_id']}/{intent['version_id']}"
     call(client, "GET", source_path, expected=404)
+    paper_id = intent["paper_id"]
+    collection = call(client, "POST", "/v1/collections", {"name": new_id()}, 201)["collection_id"]
+    collection_path = f"/v1/collections/{collection}"
+    for state in ("created", "uploading", "expired", "failed"):
+        db("UPDATE server_remote_upload_intents SET status=%s WHERE intent_id=%s", (state, intent["intent_id"]))
+        assert paper_id not in {item["paper_id"] for item in call(client, "GET", "/v1/papers")["items"]}
+        call(client, "GET", f"/v1/papers/{paper_id}", expected=404)
+        call(client, "PUT", f"{collection_path}/papers/{paper_id}", expected=404)
+    db("UPDATE server_remote_upload_intents SET status='created' WHERE intent_id=%s", (intent["intent_id"],))
     call(client, "GET", path)
     call(client, "GET", path + "/consents")
     storage = call(client, "POST", path + "/consents/storage", {"notice_version": NOTICE_VERSION})
     call(client, "POST", path + "/prepare")
-    call(client, "POST", path + "/complete")
+    completed = call(client, "POST", path + "/complete")
+    assert call(client, "POST", path + "/complete") == completed
     assert call(client, "GET", source_path) == {
         "intent_id": intent["intent_id"], "paper_id": intent["paper_id"],
         "version_id": intent["version_id"], "active_publication_id": None,
@@ -312,9 +322,6 @@ def test_web_remote_upload_consent_admission_deletion(web, db):
     assert access["status"] == "ready" and access["file_name"] == "synthetic.pdf"
     detail = call(client, "GET", f"/v1/papers/{intent['paper_id']}")
     assert detail["file_access"]["available"] and detail["selected_learning_record_id"] is None
-    paper_id = intent["paper_id"]
-    collection = call(client, "POST", "/v1/collections", {"name": new_id()}, 201)["collection_id"]
-    collection_path = f"/v1/collections/{collection}"
     call(client, "PUT", f"{collection_path}/papers/{paper_id}")
     for status, sha in (("pending", "b" * 64), ("failed", "c" * 64)):
         other_version = new_id()
@@ -416,7 +423,7 @@ def test_web_can_only_check_migration_history(web_pool):
         migrate(dsn, migrations)
 
 
-def test_verified_web_login_records_provenance_with_insert_only(pool, db, web_pool):
+def test_verified_web_login_records_provenance_with_insert_only(pool, db, web_pool, web):
     import psycopg
     from psycopg import sql
     from solo_leveling.interfaces.http.web_auth import PostgresWebSessionStore, WebIdentity
@@ -441,3 +448,18 @@ def test_verified_web_login_records_provenance_with_insert_only(pool, db, web_po
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             with web_pool.connection() as conn:
                 conn.execute(statement)
+
+    client, sessions, _ = web
+    with pool.connection() as conn:
+        conn.execute(sql.SQL('GRANT SELECT (owner_user_id, linked_at, revoked_at) ON {}.server_remote_identities TO {}')
+                     .format(sql.Identifier(schema), sql.Identifier(role)))
+    client.cookies.set("slp_session", sessions.create_session(identity, datetime.now(timezone.utc)).token)
+    assert call(client, "GET", "/v1/devices/remote-mcp") == []
+    db("""INSERT INTO server_remote_identities(issuer, subject, owner_user_id, revoked_at)
+          VALUES (%s, %s, %s, NULL), (%s, %s, %s, CURRENT_TIMESTAMP)""",
+       (issuer, owner, owner, issuer, new_id(), owner))
+    active, = call(client, "GET", "/v1/devices/remote-mcp")
+    assert set(active) == {"linked_at"}
+    other = WebIdentity(new_id(), "다른 합성", None)
+    client.cookies.set("slp_session", sessions.create_session(other, datetime.now(timezone.utc)).token)
+    assert call(client, "GET", "/v1/devices/remote-mcp") == []

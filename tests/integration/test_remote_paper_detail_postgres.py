@@ -25,10 +25,12 @@ def test_remote_pdf_without_learning_record_is_visible_and_owned(pool, db):
     files = PostgresFileUploadStore(pool)
     def detail(version=None):
         return papers.get_paper(owner, intent.paper_id, learning_record_id=None, version_id=version).paper
-    assert detail().selected_version_id is None
+    with pytest.raises(PaperNotFound):
+        detail()
     PostgresRemoteUploadConsentStore(pool).grant(owner, intent.intent_id, 'storage', 'consent')
     uploads.reserve_upload(owner, intent.intent_id)
-    assert detail().selected_version_id is None
+    with pytest.raises(PaperNotFound):
+        detail()
     uploads.mark_verified(owner, intent.intent_id, 'private/files/synthetic.pdf')
     for version in (None, intent.server_version_id):
         item = detail(version)

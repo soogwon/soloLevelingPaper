@@ -8,6 +8,8 @@ import json
 from typing import Any, Protocol
 from uuid import uuid4
 
+from .paper_visibility import VISIBLE_PAPER
+
 @dataclass(frozen=True)
 class PaperMetadata:
     source_instance_id: str
@@ -342,7 +344,7 @@ class PostgresPaperStore:
                     reading_status: str | None, page: int, limit: int,
                     collection_id: str | None = None, unassigned: bool = False) -> PaperPage:
         """웹 목록용 offset 페이지를 소유권 범위에서 안정적인 순서로 조회한다."""
-        filters = ["p.owner_user_id = %s", "p.deleted_at IS NULL"]
+        filters = ["p.owner_user_id = %s", VISIBLE_PAPER]
         params: list[Any] = [owner_user_id]
         if query is not None:
             filters.append("p.title ILIKE %s ESCAPE '\\'")
@@ -767,11 +769,11 @@ class PostgresPaperStore:
         with _connection(self._pool) as conn:
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             paper = conn.execute(
-                """SELECT p.paper_id, p.title, p.authors, p.publication_year, p.origin,
+                f"""SELECT p.paper_id, p.title, p.authors, p.publication_year, p.origin,
                           s.status AS reading_status, s.basis_version_id AS reading_basis_version_id,
                           s.revision AS reading_state_revision, s.updated_at AS reading_status_updated_at
                    FROM server_papers p LEFT JOIN server_paper_reading_states s ON s.paper_id=p.paper_id
-                   WHERE p.paper_id=%s AND p.owner_user_id=%s AND p.deleted_at IS NULL""", (paper_id, owner_user_id),
+                   WHERE p.paper_id=%s AND p.owner_user_id=%s AND {VISIBLE_PAPER}""", (paper_id, owner_user_id),
             ).fetchone()
             if paper is None:
                 raise PaperNotFound

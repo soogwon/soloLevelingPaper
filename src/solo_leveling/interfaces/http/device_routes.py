@@ -31,6 +31,9 @@ def create_device_router(require_principal: Any, store: DeviceStore):
         display_name: str
         created_at: datetime
 
+    class RemoteConnectionView(BaseModel):
+        linked_at: datetime
+
     class TokenView(BaseModel):
         token_type: str = "Bearer"
         access_token: str
@@ -64,6 +67,14 @@ def create_device_router(require_principal: Any, store: DeviceStore):
     def list_devices(principal: Principal):
         try:
             return [view(item) for item in store.list_active(web_user(principal))]
+        except DeviceStoreUnavailable:
+            raise _unavailable(HTTPException, status.HTTP_503_SERVICE_UNAVAILABLE) from None
+
+    @router.get("/remote-mcp", response_model=list[RemoteConnectionView])
+    def list_remote_connections(principal: Principal):
+        try:
+            return [RemoteConnectionView(linked_at=linked_at)
+                    for linked_at in store.list_remote_link_times(web_user(principal))]
         except DeviceStoreUnavailable:
             raise _unavailable(HTTPException, status.HTTP_503_SERVICE_UNAVAILABLE) from None
 
