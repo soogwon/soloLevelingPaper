@@ -48,6 +48,8 @@ class PostgresRemoteProcessingIntake:
         storage_consent_id: str,
         ai_consent_id: str,
         notice_version: str,
+        *,
+        previous_job_id: str | None = None,
     ) -> ProcessingAdmission | None:
         if not all(
             isinstance(value, str) and value.strip()
@@ -70,6 +72,8 @@ class PostgresRemoteProcessingIntake:
             existing = _existing(conn, owner_user_id, request_key)
             if existing is not None:
                 _validate_existing(existing, upload_intent_id, storage_consent_id, ai_consent_id, notice_version)
+                if _previous_job_id(existing) != previous_job_id:
+                    raise RemoteProcessingConflict("remote_processing_request_conflict")
                 return _view(existing)
             source = conn.execute(
                 """SELECT i.intent_id,i.paper_id,i.server_version_id,i.payload_hash
@@ -86,9 +90,12 @@ class PostgresRemoteProcessingIntake:
             ).fetchone()
             if source is None:
                 return None
-            # 같은 업로드의 다른 요청 키도 원본 의도 잠금 이후 기존 작업을 재사용한다.
+            # 업로드 잠금으로 새 키의 동시 접수와 명시적 후속 접수를 직렬화한다.
             existing = _existing(conn, owner_user_id, upload_intent_id, by_intent=True)
-            if existing is not None:
+            if previous_job_id is not None:
+                if not _can_readmit(conn, owner_user_id, previous_job_id, source, existing):
+                    return None
+            elif existing is not None:
                 _validate_existing(existing, upload_intent_id, storage_consent_id, ai_consent_id, notice_version)
                 return _view(existing)
             # 전송 원장과 동일하게 논문을 잠근 뒤 운영 제어를 잠근다.
@@ -130,8 +137,8 @@ class PostgresRemoteProcessingIntake:
             conn.execute(
                 """INSERT INTO server_processing_job_authorizations
                        (owner_user_id,job_id,upload_intent_id,storage_consent_id,
-                        ai_consent_id,notice_version,input_hash)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                        ai_consent_id,notice_version,input_hash,previous_job_id)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (
                     owner_user_id,
                     job_id,
@@ -140,6 +147,7 @@ class PostgresRemoteProcessingIntake:
                     ai_consent_id,
                     notice_version,
                     source["payload_hash"],
+                    previous_job_id,
                 ),
             )
         return _view(row)
@@ -157,19 +165,58 @@ class PostgresRemoteProcessingIntake:
 
 def _existing(conn, owner_user_id, key, *, by_intent=False, lock=True):
     column = "a.upload_intent_id" if by_intent else "j.request_key"
+    order = " ORDER BY (a.previous_job_id IS NOT NULL) DESC LIMIT 1" if by_intent else ""
     suffix = " FOR UPDATE OF j,a" if lock else ""
     return conn.execute(
         f"""SELECT j.job_id,j.paper_id,j.server_version_id,j.status,j.payload_hash,
-                  a.upload_intent_id,a.storage_consent_id,a.ai_consent_id,a.notice_version
+                  a.upload_intent_id,a.storage_consent_id,a.ai_consent_id,a.notice_version,
+                  a.previous_job_id,j.job_kind,j.error_code
            FROM server_processing_jobs j
            JOIN server_processing_job_authorizations a
              ON a.owner_user_id=j.owner_user_id AND a.job_id=j.job_id
            WHERE j.owner_user_id=%s AND {column}=%s
              AND EXISTS (SELECT 1 FROM server_papers p
                  WHERE p.owner_user_id=j.owner_user_id AND p.paper_id=j.paper_id
-                   AND p.deleted_at IS NULL){suffix}""",
+                   AND p.deleted_at IS NULL){order}{suffix}""",
         (owner_user_id, key),
     ).fetchone()
+
+
+def _previous_job_id(row):
+    value = row.get("previous_job_id")
+    return str(value) if value is not None else None
+
+
+def _can_readmit(conn, owner_user_id, previous_job_id, source, existing):
+    if (
+        existing is None
+        or str(existing["job_id"]) != previous_job_id
+        or _previous_job_id(existing) is not None
+        or existing["job_kind"] != "full_processing"
+        or existing["status"] != "failed"
+        or existing["error_code"] != "translation_incomplete"
+        or existing["payload_hash"] != source["payload_hash"]
+    ):
+        return False
+    # 기존 게시본, 복구할 결과 또는 미확정 사용량이 있으면 새 전송을 접수하지 않는다.
+    return conn.execute(
+        """SELECT 1 FROM server_processing_versions v
+           WHERE v.owner_user_id=%s AND v.paper_id=%s AND v.server_version_id=%s
+             AND v.active_publication_id IS NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM server_processing_result_staging s
+                 WHERE s.owner_user_id=v.owner_user_id AND s.job_id=%s
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM server_processing_provider_attempts a
+                 WHERE a.owner_user_id=v.owner_user_id AND a.execution_id=%s
+                   AND (a.status<>'observed'
+                        OR a.actual_input_tokens>a.reserved_input_tokens
+                        OR a.actual_output_tokens>a.reserved_output_tokens)
+             )""",
+        (owner_user_id, source["paper_id"], source["server_version_id"],
+         previous_job_id, previous_job_id),
+    ).fetchone() is not None
 
 
 class UnavailableRemoteProcessingIntake:
