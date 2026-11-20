@@ -144,3 +144,21 @@ ON slp_staging.server_embedding_fragments TO slp_staging_worker;
 
 `UPDATE (embedding)`은 동일한 조각의 멱등 삽입에 사용됩니다. 삭제·DDL 권한은
 필요하지 않습니다. 이 권한의 운영 적용과 worker 활성화는 별도 승인 범위입니다.
+
+## 일반 계정의 자동 게시 준비
+
+웹의 `REMOTE_AUTOMATIC_PDF_BUDGET_JSON`에 `policy_version`(`pdf-auto-` 접두사),
+`window_key`, 시간대가 포함된 `starts_at`·`expires_at`, 계정별 `input_tokens`·`output_tokens`를 설정합니다.
+같은 정책·기간의 서비스 예산 행은 운영자가 미리 설정합니다. 인증된 첫 웹 로그인에서
+계정 예산이 생성되고, 이미 로그인한 계정은 접수 시 생성됩니다. 로그인·재접수는 기존
+한도와 사용량을 초기화하지 않습니다.
+
+worker의 기존 처리 설정에 동일한 정책·기간·시간 범위를 사용하고
+`SLP_AUTOMATIC_PDF_PROCESSING_ENABLED=true`로 설정합니다.
+worker는 해당 정책과 기간으로 명시 접수된 작업만 소비합니다.
+비용 제한은 전송 시 계정과 서비스 원장 행을 모두 잠근 뒤 각각 적용합니다.
+기간이 끝나면 다음 승인 기간·서비스 예산을 준비하고 웹과 worker를 함께 전환합니다.
+
+스테이징 적용은 migration 0068을 먼저 반영한 뒤 두 서비스를 배포합니다.
+웹 역할은 예산 조회·계정 예산 삽입만 필요하며 사용량 갱신은 worker 역할에서 수행합니다.
+별도 자동 게시 허용 없이 기존 접수 계약을 사용하는 환경은 두 설정을 비워 둡니다.

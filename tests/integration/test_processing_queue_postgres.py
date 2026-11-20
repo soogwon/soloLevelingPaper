@@ -112,3 +112,84 @@ def test_demo_queue_publishes_eligible_owners_and_pauses_intake(pool, db, monkey
                  WHERE scope_type='service' AND policy_version='demo' AND window_key='window' ''') == [
         {'reserved_input_tokens':0, 'consumed_input_tokens':200, 'consumed_output_tokens':100},
     ]
+
+
+def test_automatic_signup_concurrent_admission_service_cap_and_owner_isolation(pool, db):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timedelta, timezone
+    from threading import Barrier
+
+    from solo_leveling.application.provider_dispatch import DispatchError, ProviderDispatch, ProviderResponse
+    from solo_leveling.interfaces.http.automatic_pdf_budgets import AutomaticPdfBudget
+    from solo_leveling.interfaces.http.web_auth import PostgresWebSessionStore, WebIdentity
+    from solo_leveling.workers.processing_authorization import PostgresProcessingAuthorization
+    from solo_leveling.workers.demo_processing import DemoBudget, DemoJobs
+    from tests.unit.test_demo_processing import active_settings
+
+    now = datetime.now(timezone.utc)
+    policy, window = 'pdf-auto-test', 'concurrent'
+    budget = AutomaticPdfBudget(policy,window,now-timedelta(minutes=5),now+timedelta(minutes=5),100,50)
+    sessions = PostgresWebSessionStore(pool, automatic_pdf_budget=budget)
+    intake = PostgresRemoteProcessingIntake(pool,automatic_pdf_budget=budget)
+    owners = [admitted_source(pool,db) for _ in range(2)]
+    legacy = admitted_source(pool,db)
+    legacy_job = PostgresRemoteProcessingIntake(pool).admit(*legacy[:2],new_id(),*legacy[2:],NOTICE_VERSION)
+
+    # 서비스 상한이 준비되기 전에는 로그인해도 새 예산이 생기지 않는다.
+    fresh = WebIdentity(new_id(),'신규 가입자',None)
+    sessions.create_session(fresh,now)
+    assert intake.admit(*owners[0][:2],new_id(),*owners[0][2:],NOTICE_VERSION) is None
+    assert not db('SELECT 1 FROM server_dispatch_budget_limits WHERE policy_version=%s',(policy,))
+    db("""INSERT INTO server_dispatch_budget_limits
+          (scope_type,scope_id,policy_version,window_key,max_input_tokens,max_output_tokens)
+          VALUES ('service','service',%s,%s,100,50)""",(policy,window))
+    with ThreadPoolExecutor(max_workers=2) as threads:
+        list(threads.map(lambda _:sessions.create_session(fresh,now),range(2)))
+    assert db("""SELECT max_input_tokens, max_output_tokens FROM server_dispatch_budget_limits
+                 WHERE scope_id=%s AND policy_version=%s""",(fresh.user_id,policy))==[
+        {'max_input_tokens':100,'max_output_tokens':50}]
+    # 예산이 있어도 자동 정책에 접수하지 않은 과거 작업은 가져오지 않는다.
+    sessions.create_session(WebIdentity(legacy[0],'기존 사용자',None),now)
+
+    def admit(source):
+        return intake.admit(*source[:2],new_id(),*source[2:],NOTICE_VERSION)
+
+    with ThreadPoolExecutor(max_workers=3) as threads:
+        first, second, duplicate = list(threads.map(admit,[owners[0],owners[1],owners[0]]))
+    assert first.job_id==duplicate.job_id and second.job_id!=first.job_id
+    assert intake.get(owners[0][0],owners[1][1]) is None
+    assert intake.admit(owners[0][0],owners[1][1],new_id(),*owners[1][2:],NOTICE_VERSION) is None
+
+    demo = DemoBudget(active_settings(),'fixed-model',50)
+    barrier = Barrier(2)
+
+    def execute(index):
+        queue = DemoJobs(pool,demo,policy,window,automatic_only=True)
+        job = queue.claim(f'worker-{index}')
+        assert job is not None
+        authorization = PostgresProcessingAuthorization(pool)
+        source = authorization.load(job).source
+        ledger = authorization.ledger(source,authorization.allowed,policy_version=policy,window_key=window,
+                                      validate_limits=demo.allows_limits)
+        dispatch = ProviderDispatch(ledger,authorization.dispatch_intent(source))
+        barrier.wait(timeout=10)
+        try:
+            dispatch.send('translation',100,50,lambda _:ProviderResponse({},100,50),dispatch_key='concurrent')
+        except DispatchError:
+            return job.job_id,False
+        return job.job_id,True
+
+    with ThreadPoolExecutor(max_workers=2) as threads:
+        outcomes = list(threads.map(execute,range(2)))
+    assert {job_id for job_id,_ in outcomes}=={first.job_id,second.job_id}
+    assert sum(admitted for _,admitted in outcomes)==1
+    assert db('SELECT status FROM server_processing_jobs WHERE job_id=%s',(legacy_job.job_id,))==[{'status':'queued'}]
+    winning_id = next(job_id for job_id,sent in outcomes if sent)
+    winner = next(row[0] for row,job in zip(owners,(first,second),strict=True) if job.job_id==winning_id)
+    sessions.create_session(WebIdentity(winner,'재로그인',None),now)
+    assert db("""SELECT scope_type,scope_id,consumed_input_tokens,consumed_output_tokens
+                 FROM server_dispatch_budget_limits WHERE policy_version=%s AND consumed_input_tokens>0
+                 ORDER BY scope_type""",(policy,))==[
+        {'scope_type':'owner','scope_id':winner,'consumed_input_tokens':100,'consumed_output_tokens':50},
+        {'scope_type':'service','scope_id':'service','consumed_input_tokens':100,'consumed_output_tokens':50},
+    ]

@@ -71,10 +71,11 @@ class DemoBudget:
 class DemoJobs(PostgresProcessingJobStore):
     """기존 대기 작업과 다른 worker의 작업을 건드리지 않는다."""
 
-    def __init__(self, pool, budget, policy, window):
+    def __init__(self, pool, budget, policy, window, *, automatic_only=False):
         super().__init__(pool)
         self.budget, self.policy, self.window = budget, policy, window
         self.current = None
+        self.automatic_only = automatic_only
 
     def claim(self, worker_id, *, lease_seconds=60):
         self.current = None
@@ -88,6 +89,8 @@ class DemoJobs(PostgresProcessingJobStore):
                        JOIN server_papers p ON p.owner_user_id=j.owner_user_id AND p.paper_id=j.paper_id
                        WHERE j.status='queued' AND j.attempt=0 AND j.job_kind='full_processing'
                          AND j.created_at >= %s AND j.created_at < %s AND CURRENT_TIMESTAMP < %s
+                         AND ((%s AND a.processing_policy_version=%s AND a.processing_window_key=%s)
+                              OR (NOT %s AND a.processing_policy_version IS NULL))
                          AND p.deleted_at IS NULL
                          AND EXISTS (SELECT 1 FROM server_dispatch_controls
                                      WHERE control_id='provider_dispatch' AND dispatch_enabled)
@@ -108,6 +111,7 @@ class DemoJobs(PostgresProcessingJobStore):
                    FROM candidate c WHERE j.owner_user_id=c.owner_user_id AND j.job_id=c.job_id
                    RETURNING j.*""",
                 (self.budget.starts_at, self.budget.expires_at, self.budget.expires_at,
+                 self.automatic_only, self.policy, self.window, self.automatic_only,
                  self.policy, self.window, self.policy, self.window, worker_id, str(uuid4()), lease_seconds),
             ).fetchone()
         self.current = None if row is None else _job(row)
@@ -157,6 +161,9 @@ def run(config_path, stop, *, environment=None, pool_factory=_pool, client_facto
             raise ValueError('demo_config_invalid')
         raw = read_json(config_path)
     budget_settings = raw.pop('demo_budget')
+    automatic_only = source.get('SLP_AUTOMATIC_PDF_PROCESSING_ENABLED') == 'true'
+    if automatic_only != raw['policy_version'].startswith('pdf-auto-'):
+        raise ValueError('automatic_pdf_policy_mismatch')
     schema = raw.pop('database_schema')
     database = raw.pop('database_name')
     if not re.fullmatch(r'[a-zA-Z_][a-zA-Z_0-9]{0,62}', schema):
@@ -196,7 +203,7 @@ def run(config_path, stop, *, environment=None, pool_factory=_pool, client_facto
                 raise ValueError('demo_database_invalid')
         client = client_factory(raw['r2'], key, secret)
         resources.callback(client.close)
-        jobs = DemoJobs(pool, budget, raw['policy_version'], raw['window_key'])
+        jobs = DemoJobs(pool, budget, raw['policy_version'], raw['window_key'], automatic_only=automatic_only)
         worker = worker_factory(
             pool, S3ObjectStorage(client, raw['r2']['bucket']),
             worker_id='demo-' + str(uuid4()), lease_seconds=90, max_staging_bytes=25_000_000,
