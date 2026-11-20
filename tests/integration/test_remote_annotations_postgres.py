@@ -246,3 +246,33 @@ def test_replay_and_delete_converge_without_deadlock(pool, context):
         assert first.result(timeout=10) and second.result(timeout=10)
     with pytest.raises(RemoteAnnotationDeleted):
         store.create(owner, "paper-detail", context_id, "race-key", value)
+
+
+def test_find_original_without_saved_evidence_and_store_highlight_note_together(pool, context):
+    from solo_leveling.interfaces.http.remote_highlight_lookup import find_highlight_candidates
+
+    owner, context_id, _ = context
+    results = find_highlight_candidates(pool, owner, context_id, "synthetic")
+    assert results
+    selected = results[0]
+    assert selected["segment"]["quote_snapshot"] == "synthetic"
+    assert find_highlight_candidates(pool, owner, context_id, "synthetic", selected["pdf_page"]) == results
+    assert find_highlight_candidates(pool, owner, context_id, "missing quote") == []
+    assert find_highlight_candidates(pool, new_id(), context_id, "synthetic") == []
+    value = RemoteAnnotationInput("highlight", "12개의 신호라는 것은 매우 중요하다. 더 확인할 필요 있음",
+                                  (SegmentInput(**selected["segment"]),), creation_origin="user")
+    store = PostgresRemoteAnnotationStore(pool)
+    assert store.list_annotations(owner, context_id)["items"] == []
+    first = store.create(owner, "paper-detail", context_id, "quote-note", value)
+    second = store.create(owner, "paper-detail", context_id, "quote-note", value)
+    assert second.reused and second.annotation.annotation_id == first.annotation.annotation_id
+    saved, = store.list_annotations(owner, context_id)["items"]
+    assert saved.kind == "highlight" and saved.body == value.body
+    assert saved.segments[0]["quote_snapshot"] == "synthetic"
+    updated = store.update_annotation(owner, context_id, saved.annotation_id, body="", step=None,
+                                      expected_revision=saved.revision)
+    assert updated.body == "" and updated.segments == saved.segments
+    paired = store.update_annotation(owner, context_id, updated.annotation_id, body=value.body, step=None,
+                                     expected_revision=updated.revision)
+    store.delete_annotation(owner, context_id, paired.annotation_id, expected_revision=paired.revision)
+    assert store.list_annotations(owner, context_id)["items"] == []

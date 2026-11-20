@@ -1,3 +1,4 @@
+import { remoteAnnotationKind } from './annotation.js';
 import { request } from '../api/client.js';
 import { html, setHTML } from './html.js';
 
@@ -22,8 +23,9 @@ export async function remotePaperNotes(view, paper, version) {
         aria-pressed="${String(c.context_id === selected)}">학습 맥락 ${c.context_id}</button>`)}
       ${next ? html`<button data-context-more ${busy ? 'disabled' : ''}>학습 맥락 더 보기</button>` : ''}
       ${selected ? html`<a href="#/remote-learning/${selected}">이 맥락의 저장 동의·수정·삭제</a>` : ''}
-      ${items.map(a => html`<section class="card panel"><p>${a.kind === 'note' ? '메모' : '하이라이트'} · revision ${a.revision}</p>
-        <p>${a.body}</p>${a.segments.map(s => html`<blockquote><span>${s.target === 'translation' ? '번역' : '원문'}</span> ${s.quote_snapshot}</blockquote>`)}</section>`)}
+      ${items.map(a => html`<section class="card panel"><p>${remoteAnnotationKind(a)} · revision ${a.revision}</p>
+        ${a.segments.map(s => html`<blockquote><span>${s.target === 'translation' ? '번역' : '원문'}</span> ${s.quote_snapshot}</blockquote>`)}
+        ${a.body ? html`<p>${a.kind === 'highlight' ? '메모 · ' : ''}${a.body}</p>` : ''}</section>`)}
       ${more ? html`<button data-more ${busy ? 'disabled' : ''}>기록 더 보기</button>` : ''}
       <button data-refresh ${busy ? 'disabled' : ''}>원격 기록 다시 조회</button>`);
     view.querySelectorAll('[data-context]').forEach(el => { el.onclick = () => loadItems(el.dataset.context, false); });

@@ -20,6 +20,15 @@ function storageOriginBadge(value) {
   return html`<span class="badge b-gray">${label}</span>`;
 }
 
+export function remoteAnnotationKind(a) {
+  return a.kind === 'note' ? '메모' : a.body?.trim() ? '메모가 연결된 하이라이트' : '하이라이트';
+}
+
+export function remoteAnnotationBadge(a) {
+  if (a.kind !== 'highlight' || !a.body?.trim()) return kindBadge(a.kind);
+  return html`<span class="badge b-src">${remoteAnnotationKind(a)}</span>`;
+}
+
 function firstPosition(annotation) {
   for (const s of annotation.segments ?? []) {
     const text = formatPosition(s.position);
@@ -60,11 +69,11 @@ export function compactAnnotationCard(a, { focused = false } = {}) {
   return html`<article class="note-card ${focused ? 'is-focus' : ''}" data-annotation-id="${a.annotation_id}" ${focused ? html`tabindex="-1"` : ''}>
     ${focused ? html`<span class="focus-label">메모 페이지에서 선택한 기록</span>` : ''}
     <div class="note-top">
-      <span class="note-tags">${kindBadge(a.kind)}${creationOriginBadge(a.creation_origin)}${storageOriginBadge(a.storage_origin)}</span>
+      <span class="note-tags">${a.storage_origin === 'remote' ? remoteAnnotationBadge(a) : kindBadge(a.kind)}${creationOriginBadge(a.creation_origin)}${storageOriginBadge(a.storage_origin)}</span>
       <span class="note-pos">${firstPosition(a) ?? '위치 연결 없음'}</span>
     </div>
     ${quotes(a)}
-    ${a.body ? html`<p class="note-body">${a.body}</p>` : ''}
+    ${a.body ? html`<p class="note-body">${a.storage_origin === 'remote' && a.kind === 'highlight' ? '메모 · ' : ''}${a.body}</p>` : ''}
     <span class="note-date">${dateText(a, true)}</span>
   </article>`;
 }
@@ -73,11 +82,11 @@ export function compactAnnotationCard(a, { focused = false } = {}) {
 export function fullAnnotationCard(a, { showDate = false } = {}) {
   return html`<article class="note-card lg">
     <div class="note-top">
-      <span class="note-tags">${kindBadge(a.kind)}${creationOriginBadge(a.creation_origin)}${storageOriginBadge(a.storage_origin)}</span>
+      <span class="note-tags">${a.storage_origin === 'remote' ? remoteAnnotationBadge(a) : kindBadge(a.kind)}${creationOriginBadge(a.creation_origin)}${storageOriginBadge(a.storage_origin)}</span>
       <span class="note-date">${dateText(a, showDate)}</span>
     </div>
     ${quotes(a)}
-    ${a.body ? html`<p class="note-body">${a.body}</p>` : ''}
+    ${a.body ? html`<p class="note-body">${a.storage_origin === 'remote' && a.kind === 'highlight' ? '메모 · ' : ''}${a.body}</p>` : ''}
     <div class="note-foot">
       <div class="note-paper">
         ${icons.file(18)}

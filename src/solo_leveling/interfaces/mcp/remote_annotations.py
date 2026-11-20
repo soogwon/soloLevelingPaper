@@ -219,7 +219,7 @@ def register_annotation_tools(server, queries, service, *, latest_summary=None):
         return call(True, lambda owner: {'confirmed': service.confirm(owner, context(context_id), request_key, context(annotation_id), revision)})
 
     from .remote_annotation_cards import register_annotation_cards
-    register_annotation_cards(server, service, call, context, binding)
+    register_annotation_cards(server, service, call, context, binding, queries)
 
     from .remote_evidence_cards import register_evidence_cards
     register_evidence_cards(server, queries, service, call, context, binding, latest_summary=latest_summary)

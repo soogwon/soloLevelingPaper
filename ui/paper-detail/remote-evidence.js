@@ -1,3 +1,4 @@
+import { remoteRecordText } from './remote-record-text.js';
 const uuid = v => typeof v === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(v);
 export function mountRemoteEvidence(app, doc) {
   const el = id => doc.getElementById(id);
@@ -39,7 +40,7 @@ export function mountRemoteEvidence(app, doc) {
     scope = {context_id:r.context_id, evidence_id:r.evidence_id, binding:r.binding};
     items = [...previous, ...p.items]; cursor = p.next_cursor; busy = false;
     el('evidence').textContent = `원문\n${e.quote_original}\n\n번역\n${e.quote_ko ?? '저장된 번역 인용이 없습니다.'}\n\nPDF 페이지: ${e.pdf_page}\n인쇄 페이지: ${e.printed_page_label ?? '없음'}\n판본: ${e.version_id}\n파싱: ${e.parse_revision_id}\n번역 리비전: ${e.translation_revision_id}\n게시: ${e.publication_id}\n${e.page_notice}`;
-    el('records').textContent = items.length ? items.map(a => `${a.kind} · revision ${a.revision}\n${a.body}\n` + a.segments.map(s => `${s.target === 'translation' ? '번역' : '원문'}: ${s.quote_snapshot}`).join('\n')).join('\n\n') : '이 근거에 연결된 기록이 없습니다.';
+    el('records').textContent = items.length ? items.map(remoteRecordText).join('\n\n') : '이 근거에 연결된 기록이 없습니다.';
     el('status').textContent = '같은 고정 청크에 연결된 기록입니다. 인용문과 정확히 겹치는 구간만의 목록은 아닙니다.';
     el('more').disabled = cursor === null; el('refresh').disabled = false;
   }

@@ -1,6 +1,7 @@
+import { remoteAnnotationBadge } from './annotation.js';
 import { request, ApiError } from '../api/client.js';
 import { html, setHTML } from './html.js';
-import { emptyBlock, errorBlock, kindBadge, loadingBlock } from './ui.js';
+import { emptyBlock, errorBlock, loadingBlock } from './ui.js';
 import { formatDate, formatDateTime, formatPosition, SUMMARY_KINDS } from './format.js';
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -46,14 +47,14 @@ function remoteAnnotationCard(annotation) {
     ?? '확인되지 않음';
   return html`<article class="note-card" data-annotation-id="${annotation.annotation_id}">
     <div class="note-top">
-      <span class="note-tags">${kindBadge(annotation.kind)}<span class="badge b-gray">${origin}</span></span>
+      <span class="note-tags">${remoteAnnotationBadge(annotation)}<span class="badge b-gray">${origin}</span></span>
       <span class="note-pos">revision ${annotation.revision}</span>
     </div>
     ${(annotation.segments ?? []).map(segment => html`<div class="quote">
       <span class="badge b-src">${segment.target === 'translation' ? '한국어 번역' : '원문'} · 저장 당시 인용</span>
       <p class="quote-text">${segment.quote_snapshot}</p>
     </div>`)}
-    ${annotation.body ? html`<p class="note-body">${annotation.body}</p>` : ''}
+    ${annotation.body ? html`<p class="note-body">${annotation.kind === 'highlight' ? '메모 · ' : ''}${annotation.body}</p>` : ''}
     <span class="note-date">${annotation.updated_at ? `${formatDateTime(annotation.updated_at)} 저장` : '저장 시각 미확인'}</span>
   </article>`;
 }
