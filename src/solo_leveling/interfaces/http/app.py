@@ -146,7 +146,9 @@ def create_app(
                           else UnavailableObjectStorage())
     selected_remote_mcp = (remote_mcp_settings if remote_mcp_settings is not None
                            else load_remote_mcp_settings())
-    mcp_link_issuer = selected_remote_mcp.issuer if selected_remote_mcp.auto_account_link_enabled else None
+    mcp_link_issuer = None
+    if getattr(selected_remote_mcp, "auto_account_link_enabled", False):
+        mcp_link_issuer = selected_remote_mcp.issuer
     if mcp_link_issuer is not None:
         web_oidc = load_oidc_settings()
         if web_oidc is None or web_oidc.issuer != mcp_link_issuer or load_web_auth_settings() is None:
