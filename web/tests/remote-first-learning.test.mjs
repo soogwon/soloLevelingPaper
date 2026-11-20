@@ -2,9 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const listeners = new Map();
+const timers = new Map();
+let timerId = 0;
 globalThis.window = {
   location: {origin:'https://example.test', search:''},
   addEventListener: (name, handler) => listeners.set(name, handler),
+  setTimeout: handler => { const id = ++timerId; timers.set(id, handler); return id; },
+  clearTimeout: id => timers.delete(id),
   removeEventListener: name => listeners.delete(name),
 };
 globalThis.document = {cookie:''};
@@ -66,7 +70,10 @@ test('기존 등록본 동의, 같은 키 접수, 게시 후 Claude 첫 학습 �
   assert.equal(keys[0], keys[1]);
   assert.match(target.innerHTML, /처리 대기 중/);
   publication = id(7);
-  await target.querySelector('[data-check]').onclick();
+  const [timer, tick] = [...timers.entries()].at(-1);
+  timers.delete(timer);
+  await tick();
+  assert.equal(timers.size, 0);
   assert.match(target.innerHTML, /open_remote_paper.*start_remote_learning/);
   assert.match(target.innerHTML, new RegExp(version));
   listeners.get('pagehide')();

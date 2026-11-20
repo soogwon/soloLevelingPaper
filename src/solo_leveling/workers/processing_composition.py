@@ -24,7 +24,7 @@ class ProcessingStagesFactory:
     def __init__(self, authorization, *, service_config, model_dir, embedding_spec,
                  limits, retry_policy, policy_version, window_key, token_upper_bound,
                  batch_size, post=None, model_factory=None, fragment_policy=None, quality_retry_once=False,
-                 reuse_translations=None):
+                 reuse_translations=None, validate_limits=None):
         if (not isinstance(service_config, OpenAITranslationConfig)
                 or not callable(token_upper_bound)
                 or not service_config.allow_external_api or service_config.local_only):
@@ -38,6 +38,7 @@ class ProcessingStagesFactory:
         self.fragment_policy = fragment_policy
         self.quality_retry_once = quality_retry_once
         self.reuse_translations = reuse_translations
+        self.validate_limits = validate_limits
 
     def __call__(self, source, check_allowed):
         if check_allowed(source, 'parse') is not True:
@@ -47,8 +48,9 @@ class ProcessingStagesFactory:
         if (intent.owner_user_id, intent.execution_id, intent.lease_token) != (
                 source.owner_user_id, source.job_id, source.lease_token):
             raise ProcessingError('PROCESSING_TRANSLATION_CONFIG_MISMATCH')
+        ledger_options = {} if self.validate_limits is None else {'validate_limits': self.validate_limits}
         ledger = auth.ledger(source, check_allowed, policy_version=self.policy_version,
-                             window_key=self.window_key)
+                             window_key=self.window_key, **ledger_options)
         dispatch = ProviderDispatch(ledger, intent)
         chunks = {}
 

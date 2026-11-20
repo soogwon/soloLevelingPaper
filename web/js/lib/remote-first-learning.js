@@ -18,11 +18,13 @@ export async function remoteFirstLearning(view, paper, version, client = api) {
   if (!view || !uuid(paper) || !uuid(version)) return;
   let closed = false, busy = false, source = null, job = null, checkedJob = false;
   let approved = false, pendingRequest = null, requestIntent = null, message = '';
+  let poll = null;
   const events = ['auth:logout', 'auth:expired', 'hashchange', 'pagehide'];
   const current = () => !closed && view.isConnected;
   const consents = createUploadConsents({api:client, changed: draw});
   const close = () => {
     closed = true;
+    if (poll !== null) window.clearTimeout(poll);
     consents.close();
     view.textContent = '';
     events.forEach(event => window.removeEventListener(event, close));
@@ -88,6 +90,15 @@ export async function remoteFirstLearning(view, paper, version, client = api) {
     return value;
   }
 
+  function scheduleRefresh() {
+    if (poll !== null) window.clearTimeout(poll);
+    poll = null;
+    if (current() && !source?.active_publication_id
+        && ['queued', 'running', 'succeeded'].includes(job?.status)) {
+      poll = window.setTimeout(() => { poll = null; return refresh(); }, 5000);
+    }
+  }
+
   async function refresh() {
     if (!current() || busy || consents.snapshot().busy) return;
     source = null;
@@ -129,7 +140,7 @@ export async function remoteFirstLearning(view, paper, version, client = api) {
         ? '이 판본에 처리할 수 있는 서버 PDF가 없어요.'
         : '처리 준비 상태를 확인하지 못했어요. 다시 조회해 주세요.';
     } finally {
-      if (current()) { busy = false; draw(); }
+      if (current()) { busy = false; draw(); scheduleRefresh(); }
     }
   }
 
@@ -166,7 +177,7 @@ export async function remoteFirstLearning(view, paper, version, client = api) {
         }
       }
     } finally {
-      if (current()) { busy = false; draw(); }
+      if (current()) { busy = false; draw(); scheduleRefresh(); }
     }
   }
 
