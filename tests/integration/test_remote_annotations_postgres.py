@@ -255,12 +255,12 @@ def test_find_original_without_saved_evidence_and_store_highlight_note_together(
     results = find_highlight_candidates(pool, owner, context_id, "synthetic")
     assert results
     selected = results[0]
-    assert selected["segment"]["quote_snapshot"] == "synthetic"
+    assert selected["segments"][0]["quote_snapshot"] == "synthetic"
     assert find_highlight_candidates(pool, owner, context_id, "synthetic", selected["pdf_page"]) == results
     assert find_highlight_candidates(pool, owner, context_id, "missing quote") == []
     assert find_highlight_candidates(pool, new_id(), context_id, "synthetic") == []
     value = RemoteAnnotationInput("highlight", "12개의 신호라는 것은 매우 중요하다. 더 확인할 필요 있음",
-                                  (SegmentInput(**selected["segment"]),), creation_origin="user")
+                                  (SegmentInput(**selected["segments"][0]),), creation_origin="user")
     store = PostgresRemoteAnnotationStore(pool)
     assert store.list_annotations(owner, context_id)["items"] == []
     first = store.create(owner, "paper-detail", context_id, "quote-note", value)

@@ -56,9 +56,10 @@ export function mountRemoteCompose(app,doc,crypto=doc.defaultView.crypto) {
  function matchesInput(v, expected) {
   if (!v.quote_request) return canonical(v.value) === canonical(expected.value);
   if (typeof expected.quote !== 'string' || v.value?.kind !== 'highlight'
-      || v.value.body !== (expected.note ?? '') || v.value.segments?.length !== 1
+      || v.value.body !== (expected.note ?? '') || !Array.isArray(v.value.segments) || !v.value.segments.length
+      || !v.value.segments.every(s => typeof s?.quote_snapshot === 'string')
       || !Number.isSafeInteger(v.quote_location?.pdf_page) || v.quote_location.pdf_page < 1) return false;
-  const quote = v.value.segments[0]?.quote_snapshot;
+  const quote = v.value.segments.map(segment => segment.quote_snapshot).join('');
   return typeof quote === 'string'
     && quote.trim().replace(/\s+/gu, ' ') === expected.quote.trim().replace(/\s+/gu, ' ')
     && canonical(v.quote_request) === canonical({quote: expected.quote, pdf_page: expected.pdf_page ?? null,
@@ -83,7 +84,7 @@ export function mountRemoteCompose(app,doc,crypto=doc.defaultView.crypto) {
   scope=v;
   const loc = v.quote_location;
   el('input').textContent = loc
-    ? `PDF ${loc.pdf_page}페이지${loc.section_title ? ` · ${loc.section_title}` : ''}\n${v.value.segments[0].quote_snapshot}${v.value.body ? `\n메모 · ${v.value.body}` : ''}`
+    ? `PDF ${loc.pdf_page}페이지${loc.section_title ? ` · ${loc.section_title}` : ''}\n${v.value.segments.map(segment => segment.quote_snapshot).join('')}${v.value.body ? `\n메모 · ${v.value.body}` : ''}`
     : JSON.stringify(v.value,null,2);
   if(v.existing!==null){
    if(typeof v.existing?.request_key!=='string'||v.existing.recovery!=='unique_unconfirmed'){reset('복구 결과가 불명확합니다.');return;}

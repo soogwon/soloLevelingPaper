@@ -46,11 +46,11 @@ def register_annotation_cards(server, service, call, context, binding, queries):
             selected = (candidates[0] if candidate_id is None and len(candidates) == 1 else
                         next((item for item in candidates if item['candidate_id'] == candidate_id), None))
             if selected is None:
-                public = [{k: v for k, v in item.items() if k != 'segment'} for item in candidates]
+                public = [{k: v for k, v in item.items() if k != 'segments'} for item in candidates]
                 return {'context_id': ctx, 'candidates': public,
                         'outcome': 'choose_candidate' if public else 'quote_not_found'}
             value = {'kind': 'highlight', 'body': note,
-                     'segments': [selected['segment']], 'creation_origin': 'user'}
+                     'segments': selected['segments'], 'creation_origin': 'user'}
             parsed = RecoveryInput.model_validate(value).domain()
             existing = service.recover(owner, ctx, parsed)
             return {'context_id': ctx, 'value': value, 'binding': binding(owner, ctx),
