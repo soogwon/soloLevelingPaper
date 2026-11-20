@@ -45,3 +45,24 @@ test('수신 확정은 사용자 클릭 때만 호출한다',async()=>{
  const t=setup(()=>ok({confirmed:true}));t.show(saved);assert.equal(t.calls.length,0);await t.el('confirm').onclick();
  assert.equal(t.calls[0].name,'confirm_remote_annotation_card');assert.equal(t.calls[0].arguments.revision,1);assert.match(t.el('status').textContent,/확정했습니다/);
 });
+test('복사한 원문과 메모, 페이지·섹션을 보여준 뒤에만 한 항목을 저장한다', async () => {
+ const input = { context_id: ctx, quote: 'Observers recorded 12 signals.', note: '더 확인할 필요 있음' };
+ const segments = [
+  { chunk_id: id, start_offset: 0, end_offset: 18, quote_snapshot: 'Observers recorded' },
+  { chunk_id: ctx, start_offset: 4, end_offset: 16, quote_snapshot: '\n12 signals.' },
+ ];
+ const value = { kind: 'highlight', body: input.note, segments, creation_origin: 'user' };
+ const t = setup(() => ok({ ...saved, annotation: { ...saved.annotation, ...value } }));
+ t.app.ontoolinput({ arguments: input });
+ t.app.ontoolresult(ok({ context_id: ctx, value, binding: 'a'.repeat(64), existing: null,
+  quote_request: { quote: input.quote, note: input.note, pdf_page: null, candidate_id: null },
+  quote_location: { pdf_page: 2, section_title: 'Methods' } }));
+ assert.match(t.el('input').textContent, /PDF 2페이지 · Methods\nObservers recorded\n12 signals\.\n메모 · 더 확인할 필요 있음/);
+ await t.el('save').onclick();
+ assert.equal(t.calls.length, 0);
+ t.el('new').checked = true;
+ t.el('new').onchange();
+ await t.el('save').onclick();
+ assert.equal(t.calls.length, 1);
+ assert.deepEqual(t.calls[0].arguments.value, value);
+});

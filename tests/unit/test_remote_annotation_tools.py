@@ -88,7 +88,8 @@ def test_real_mcp_registration_serializes_nested_records(monkeypatch):
         assert 'list_remote_annotations' in names
         assert 'show_remote_paper_detail' in names
         assert {'show_remote_reading_progress', 'save_remote_reading_progress_card'} <= names
-        assert len(names) == 22
+        assert len(names) == 23
+        assert 'prepare_remote_highlight_from_quote' in names
         result = await server.call_tool('list_remote_annotations', {'context_id': CONTEXT})
         assert '합성 메모' in str(result)
         assert 'annotation_id' in str(result)

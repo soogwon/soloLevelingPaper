@@ -53,14 +53,39 @@ export function mountRemoteCompose(app,doc,crypto=doc.defaultView.crypto) {
  };
  app.ontoolinput=e=>{reset('입력을 확인하는 중입니다.');incoming=e?.arguments;};
  app.ontoolcancelled=()=>reset('취소됐습니다. 새 입력으로 카드를 다시 열어 주세요.');
+ function matchesInput(v, expected) {
+  if (!v.quote_request) return canonical(v.value) === canonical(expected.value);
+  if (typeof expected.quote !== 'string' || v.value?.kind !== 'highlight'
+      || v.value.body !== (expected.note ?? '') || !Array.isArray(v.value.segments) || !v.value.segments.length
+      || !v.value.segments.every(s => typeof s?.quote_snapshot === 'string')
+      || !Number.isSafeInteger(v.quote_location?.pdf_page) || v.quote_location.pdf_page < 1) return false;
+  const quote = v.value.segments.map(segment => segment.quote_snapshot).join('');
+  return typeof quote === 'string'
+    && quote.trim().replace(/\s+/gu, ' ') === expected.quote.trim().replace(/\s+/gu, ' ')
+    && canonical(v.quote_request) === canonical({quote: expected.quote, pdf_page: expected.pdf_page ?? null,
+      candidate_id: expected.candidate_id ?? null, note: expected.note ?? ''});
+ }
  app.ontoolresult=r=>{
   const expected=incoming;incoming=null;
   const v=r?.structuredContent?.result;
+  if (expected && v?.context_id === expected.context_id && typeof expected.quote === 'string'
+      && r?.structuredContent?.status === 'ok' && v.outcome === 'choose_candidate') {
+   reset('일치하는 위치가 여러 곳입니다. 채팅에서 페이지와 인용을 비교해 하나를 선택해 주세요.');
+   el('input').textContent = v.candidates.map(c => `PDF ${c.pdf_page}페이지${c.section_title ? ` · ${c.section_title}` : ''}\n${c.excerpt}`).join('\n\n');
+   return;
+  }
+  if (expected && v?.context_id === expected.context_id && v.outcome === 'quote_not_found') {
+   reset('일치하는 원문을 찾지 못했습니다. 채팅에서 더 긴 인용이나 정확한 페이지를 알려 주세요.');return;
+  }
   if(!expected||r?.isError||r?.structuredContent?.status!=='ok'||!uuid(v?.context_id)
-    ||v.context_id!==expected.context_id||canonical(v.value)!==canonical(expected.value)
+    ||v.context_id!==expected.context_id||!matchesInput(v,expected)
     ||!['note','highlight'].includes(v.value?.kind)||typeof v.value?.body!=='string'
     ||!/^[a-f0-9]{64}$/.test(v.binding??'')){reset('입력을 확인할 수 없습니다. 새 기록을 만들지 않았습니다.');return;}
-  scope=v;el('input').textContent=JSON.stringify(v.value,null,2);
+  scope=v;
+  const loc = v.quote_location;
+  el('input').textContent = loc
+    ? `PDF ${loc.pdf_page}페이지${loc.section_title ? ` · ${loc.section_title}` : ''}\n${v.value.segments.map(segment => segment.quote_snapshot).join('')}${v.value.body ? `\n메모 · ${v.value.body}` : ''}`
+    : JSON.stringify(v.value,null,2);
   if(v.existing!==null){
    if(typeof v.existing?.request_key!=='string'||v.existing.recovery!=='unique_unconfirmed'){reset('복구 결과가 불명확합니다.');return;}
    key=v.existing.request_key;el('lookup').disabled=false;showRecord(v.existing,v.existing.state);

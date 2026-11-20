@@ -1,3 +1,4 @@
+import { remoteAnnotationKind } from '../lib/annotation.js';
 import { request } from '../api/client.js';
 import { html, setHTML } from '../lib/html.js';
 
@@ -47,8 +48,9 @@ export default async function remoteLearning({ view, params }) {
         <button data-grant disabled>동의 저장</button>
         <button data-revoke ${busy || !consent.granted ? 'disabled' : ''}>동의 철회</button></section>` : ''}
       <h2>저장된 메모·하이라이트</h2>
-      ${items.map(item => html`<section class="card panel"><p>${item.kind} · revision ${item.revision}</p>
-        <p>${item.body}</p>${item.segments.map(s => html`<blockquote>${s.quote_snapshot}</blockquote>`)}
+      ${items.map(item => html`<section class="card panel"><p>${remoteAnnotationKind(item)} · revision ${item.revision}</p>
+        ${item.segments.map(s => html`<blockquote>${s.quote_snapshot}</blockquote>`)}
+        ${item.body ? html`<p>${item.kind === 'highlight' ? '메모 · ' : ''}${item.body}</p>` : ''}
         <textarea data-body="${item.annotation_id}" maxlength="5000" ${busy || !consent?.granted ? 'disabled' : ''}>${item.body}</textarea>
         <button data-update="${item.annotation_id}" ${busy || !consent?.granted ? 'disabled' : ''}>본문 수정</button>
         <button data-delete="${item.annotation_id}" ${busy ? 'disabled' : ''}>기록 삭제</button></section>`)}

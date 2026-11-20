@@ -1,3 +1,4 @@
+import { remoteRecordText } from './remote-record-text.js';
 const uuid = v => typeof v === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(v);
 export function mountRemotePaper(app, doc) {
   const el = id => doc.getElementById(id);
@@ -102,7 +103,7 @@ ${item.text}
     busy = false;
     el('paper').textContent = `${d.title ?? '제목 없음'}\n판본: ${d.version_id}\n게시: ${d.publication_id}\n${d.page_notice}\n\n${d.generation_notice}`;
     el('sections').textContent = d.section_catalog.length ? d.section_catalog.map(s=>`${s.title} · PDF ${s.start_pdf_page}–${s.end_pdf_page}페이지`).join('\n') : '저장된 목차가 없습니다.';
-    el('records').textContent = p.items.length ? p.items.map(a=>`${a.kind} · revision ${a.revision}\n${a.body}\n${a.segments.map(s=>`${s.target === 'translation' ? '번역' : '원문'}: ${s.quote_snapshot}`).join('\n')}`).join('\n\n') : '저장된 기록이 없습니다.';
+    el('records').textContent = p.items.length ? p.items.map(remoteRecordText).join('\n\n') : '저장된 기록이 없습니다.';
     el('status').textContent = '현재 페이지의 기록입니다. 근거에 연결되지 않은 메모도 포함합니다.';
     el('sections-more').disabled = scope.nextSection === null;
     el('records-more').disabled = scope.nextRecord === null;
