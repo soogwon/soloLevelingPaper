@@ -1,11 +1,19 @@
 """요약 준비·기존 결과 조회 도구. 동의는 인증 웹에서만 기록한다."""
 import time
+from typing import Literal
+from typing_extensions import TypedDict
 from mcp.types import ToolAnnotations
 from mcp.server.auth.middleware.auth_context import get_access_token
 from solo_leveling.application.summary.remote_contract import RemoteSummaryError
 from solo_leveling.interfaces.http.remote_mcp_auth import RemoteIdentityAccessToken
 from solo_leveling.interfaces.http.remote_executions import RemoteExecutionConflict
 from solo_leveling.interfaces.http.remote_summary_intake import SUMMARY_ADMISSION_MESSAGES, SummaryAdmissionDenied
+
+
+class ChatSummaryItem(TypedDict):
+    kind: Literal['claim', 'method', 'result']
+    text: str
+    chunk_ids: list[str]
 
 
 def register_summary_tools(server, queries, reviews):
@@ -30,10 +38,22 @@ def register_summary_tools(server, queries, reviews):
                 return {'status': 'summary_source_too_large',
                         'message': '현재 입력 한도로 요약을 준비할 수 없어요. 더 작은 섹션을 선택하세요.'}
             return {'status': 'review_required', 'message': '인증 웹에서 요약 동의와 상태를 확인하세요. 자동 재제출하지 마세요.'}
-        except ValueError:
+        except ValueError as error:
+            if str(error) == 'chat_summary_evidence_invalid':
+                return {'status': 'invalid_evidence', 'message': '현재 학습 맥락의 PDF 본문에서 근거 청크를 다시 확인하세요.'}
+            if method == 'prepare_chat':
+                return {'status': 'invalid_argument', 'message': '항목별 한 문장과 근거 청크 ID를 확인하세요.'}
             return {'status': 'review_required', 'message': '인증 웹에서 요약 동의와 상태를 확인하세요. 자동 재제출하지 마세요.'}
         except Exception:
             return {'status': 'unavailable', 'message': '같은 요청 키로 다시 조회하세요. 자동 생성하지 마세요.'}
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+    def prepare_remote_chat_summary(request_key: str, context_id: str, items: list[ChatSummaryItem]) -> dict:
+        """사용자가 확인한 채팅 요약을 웹 저장 검토용으로 준비한다. PDF 페이지 본문 조회에서 받은
+        chunk_id로 각 항목의 근거를 지정한다. claim은 연구 질문, method는 핵심 접근, result는 주요 결과다.
+        항목별 한국어 한 문장을 전달하고 근거가 없는 항목은 생략한다. 같은 요청에는 같은 UUID를 쓴다.
+        반환된 웹 검토 링크를 사용자에게 보여준다. 확정 저장은 인증 웹에서만 가능하며 외부 AI 호출은 없다."""
+        return call('prepare_chat', request_key, context_id, items)
 
     @server.tool()
     def prepare_remote_summary(request_key: str, context_id: str, scope: str = 'paper', section_id: str | None = None) -> dict:

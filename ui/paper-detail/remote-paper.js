@@ -34,7 +34,8 @@ export function mountRemotePaper(app, doc) {
           || !Array.isArray(result.items) || !result.items.length || result.items.length > 100
           || !result.items.every(i=>['claim','method','result','limitation'].includes(i?.kind) && typeof i.text === 'string'
             && Array.isArray(i.evidence_ids) && i.evidence_ids.length && i.evidence_ids.every(uuid))) throw new Error();
-      const brief = result.prompt_version === 'remote-summary-v2';
+      const fromChat = result.prompt_version === 'remote-chat-summary-v1';
+      const brief = fromChat || result.prompt_version === 'remote-summary-v2';
       const range = result.scope === 'paper' ? '논문 전체' : '섹션 ' + result.section_id;
       const sampled = brief && result.source_count < result.total_scope_chunks
         ? `\n선택 근거: ${result.source_count} / ${result.total_scope_chunks}` : '';
@@ -48,7 +49,7 @@ export function mountRemotePaper(app, doc) {
           const item = result.items.find(i => i.kind === kind);
           return `${label}: ${item ? formatItem(item) : '요약에 포함된 근거가 없어요.'}`;
         }) : result.items.map(i => `${i.kind}: ${formatItem(i)}`);
-      el('summary').textContent = `범위: ${range}${sampled}\n판본: ${b.server_version_id}\n생성: ${result.generated_at}\n구조·근거 ID 검증 결과이며 의미적 정확성은 별도 확인이 필요합니다.\n\n`
+      el('summary').textContent = `범위: ${range}${sampled}\n판본: ${b.server_version_id}\n${fromChat ? '저장' : '생성'}: ${result.generated_at}\n구조·근거 ID 검증 결과이며 의미적 정확성은 별도 확인이 필요합니다.\n\n`
         + items.join('\n\n');
       if (markdown?.status === 'ok' && markdown.context_id === expected.context_id
           && markdown.request_key === value.request_key && markdown.publication_id === expected.publication_id

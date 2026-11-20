@@ -48,4 +48,10 @@ def create_summary_review_router(require_principal:Any,service):
     @router.get('/contexts/{context}/latest')
     def latest(context:UUID,principal:Principal,response:Response):
         return call(principal,response,'latest',str(context))
+    @router.get('/chat-reviews/{key}')
+    def review_chat(key:UUID,principal:Principal,response:Response):
+        return call(principal,response,'review_chat',str(key))
+    @router.post('/chat-reviews/{key}/save')
+    def save_chat(key:UUID,principal:Principal,response:Response):
+        return call(principal,response,'save_chat',str(key))
     return router

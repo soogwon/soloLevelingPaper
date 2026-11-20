@@ -32,7 +32,7 @@ function remoteSummaryContent(summary, metadata = {}) {
   if (!summary?.items?.length) {
     return emptyBlock('저장된 요약이 없어요', 'Claude에서 원격 요약을 저장하면 여기에 보여요.');
   }
-  const brief = summary.prompt_version === 'remote-summary-v2';
+  const brief = ['remote-summary-v2', 'remote-chat-summary-v1'].includes(summary.prompt_version);
   const kinds = brief
     ? [['claim', '연구 질문'], ['method', '핵심 접근'], ['result', '주요 결과']]
     : SUMMARY_KINDS;
