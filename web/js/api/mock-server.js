@@ -257,6 +257,7 @@ export async function mockRequest(method, path, { query = {}, body, idempotencyK
 
   switch (route) {
     case 'GET /me': return { ...db.me };
+    case 'GET /devices/remote-mcp': return [{ linked_at: '2026-01-12T09:00:00Z' }];
     case 'GET /devices': return { items: db.devices.map((d) => ({ ...d })) };
     case 'DELETE /devices/:id': {
       const i = db.devices.findIndex((d) => d.device_id === seg[1]);

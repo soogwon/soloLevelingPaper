@@ -183,3 +183,11 @@ GRANT EXECUTE ON FUNCTION slp_staging.server_link_verified_mcp_account(text, tex
 
 중단하려면 플래그를 끄고 웹을 재배포한 뒤 신규 권한을 회수합니다.
 이미 기록된 계정 연결과 폐기 이력은 그대로 둡니다.
+
+웹 연결 관리 화면에서 원격 MCP의 활성 연결을 표시하려면 웹 역할에
+필터와 날짜 표시에 사용하는 세 열의 조회 권한을 추가합니다.
+
+```sql
+GRANT SELECT (owner_user_id, linked_at, revoked_at)
+ON slp_staging.server_remote_identities TO slp_staging_web;
+```

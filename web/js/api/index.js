@@ -92,6 +92,7 @@ export const api = {
   mockLogin: () => send('POST', '/auth/mock-login'),
 
   /** GET /v1/devices → 배열 또는 { items }; 화면용 필드로 정규화한다. */
+  listRemoteConnections: () => send('GET', '/devices/remote-mcp'),
   listDevices: async () => normalizeDevices(await send('GET', '/devices')),
   /** DELETE /v1/devices/{기기 ID} */
   disconnectDevice: (deviceId) => send('DELETE', `/devices/${id(deviceId)}`),

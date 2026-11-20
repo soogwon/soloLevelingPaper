@@ -30,6 +30,7 @@ class DeviceRecord:
 class DeviceStore(DeviceRegistry, Protocol):
     def register(self, owner_user_id: str, display_name: str) -> DeviceRecord: ...
     def list_active(self, owner_user_id: str) -> tuple[DeviceRecord, ...]: ...
+    def list_remote_link_times(self, owner_user_id: str) -> tuple[datetime, ...]: ...
     def revoke(self, owner_user_id: str, device_id: str) -> None: ...
     def issue_credentials(self, owner_user_id: str, device_id: str) -> DeviceTokenPair: ...
     def rotate_credentials(self, refresh_token: str) -> DeviceTokenPair: ...
@@ -48,6 +49,9 @@ class UnavailableDeviceStore:
         raise DeviceStoreUnavailable
 
     def list_active(self, owner_user_id: str) -> tuple[DeviceRecord, ...]:
+        raise DeviceStoreUnavailable
+
+    def list_remote_link_times(self, owner_user_id: str) -> tuple[datetime, ...]:
         raise DeviceStoreUnavailable
 
     def revoke(self, owner_user_id: str, device_id: str) -> None:
@@ -127,6 +131,16 @@ class PostgresDeviceStore:
                 (owner_user_id,),
             ).fetchall()
         return tuple(_record(row) for row in rows)
+
+    def list_remote_link_times(self, owner_user_id: str) -> tuple[datetime, ...]:
+        with _connection(self._pool) as conn:
+            rows = conn.execute(
+                """SELECT linked_at FROM server_remote_identities
+                   WHERE owner_user_id = %s AND revoked_at IS NULL
+                   ORDER BY linked_at DESC""",
+                (owner_user_id,),
+            ).fetchall()
+        return tuple(row["linked_at"] for row in rows)
 
     def revoke(self, owner_user_id: str, device_id: str) -> None:
         with _connection(self._pool) as conn:

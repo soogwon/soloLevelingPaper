@@ -8,6 +8,8 @@ import json
 from typing import Any, Protocol
 from uuid import uuid4
 
+from .paper_visibility import VISIBLE_PAPER
+
 
 @dataclass(frozen=True)
 class CollectionItem:
@@ -113,12 +115,12 @@ class PostgresCollectionStore:
             ).fetchone()["total_count"])
             pages = (total + limit - 1) // limit
             rows = [] if page > pages else conn.execute(
-                """SELECT c.collection_id, c.name, c.created_at, c.updated_at,
+                f"""SELECT c.collection_id, c.name, c.created_at, c.updated_at,
                           count(p.paper_id) AS paper_count
                    FROM server_collections c LEFT JOIN server_collection_papers cp
                      ON cp.collection_id=c.collection_id AND cp.owner_user_id=c.owner_user_id
                    LEFT JOIN server_papers p ON p.owner_user_id=cp.owner_user_id AND p.paper_id=cp.paper_id
-                     AND p.deleted_at IS NULL
+                     AND {VISIBLE_PAPER}
                    WHERE c.owner_user_id=%s
                    GROUP BY c.collection_id
                    ORDER BY c.created_at DESC, c.collection_id DESC LIMIT %s OFFSET %s""",
@@ -168,12 +170,12 @@ class PostgresCollectionStore:
     def get_collection(self, owner_user_id: str, collection_id: str) -> CollectionItem:
         with _connection(self._pool) as conn:
             row = conn.execute(
-                """SELECT c.collection_id, c.name, c.created_at, c.updated_at,
+                f"""SELECT c.collection_id, c.name, c.created_at, c.updated_at,
                           count(p.paper_id) AS paper_count
                    FROM server_collections c LEFT JOIN server_collection_papers cp
                      ON cp.collection_id=c.collection_id AND cp.owner_user_id=c.owner_user_id
                    LEFT JOIN server_papers p ON p.owner_user_id=cp.owner_user_id AND p.paper_id=cp.paper_id
-                     AND p.deleted_at IS NULL
+                     AND {VISIBLE_PAPER}
                    WHERE c.owner_user_id=%s AND c.collection_id=%s GROUP BY c.collection_id""",
                 (owner_user_id, collection_id),
             ).fetchone()
@@ -188,14 +190,14 @@ class PostgresCollectionStore:
         with _connection(self._pool) as conn:
             try:
                 row = conn.execute(
-                    """UPDATE server_collections c SET name=%s, normalized_name=%s,
+                    f"""UPDATE server_collections c SET name=%s, normalized_name=%s,
                               updated_at=CURRENT_TIMESTAMP
                        WHERE c.owner_user_id=%s AND c.collection_id=%s
                        RETURNING c.collection_id, c.name, c.created_at, c.updated_at,
                          (SELECT count(*) FROM server_collection_papers cp
                           JOIN server_papers p ON p.owner_user_id=cp.owner_user_id AND p.paper_id=cp.paper_id
                           WHERE cp.owner_user_id=c.owner_user_id AND cp.collection_id=c.collection_id
-                            AND p.deleted_at IS NULL) AS paper_count""",
+                            AND {VISIBLE_PAPER}) AS paper_count""",
                     (name, normalized_name, owner_user_id, collection_id),
                 ).fetchone()
             except UniqueViolation:
@@ -224,14 +226,14 @@ class PostgresCollectionStore:
             if exists is None:
                 raise CollectionNotFound
             total = int(conn.execute(
-                """SELECT count(*) AS total_count FROM server_collection_papers cp
+                f"""SELECT count(*) AS total_count FROM server_collection_papers cp
                    JOIN server_papers p ON p.owner_user_id=cp.owner_user_id AND p.paper_id=cp.paper_id
-                   WHERE cp.owner_user_id=%s AND cp.collection_id=%s AND p.deleted_at IS NULL""",
+                   WHERE cp.owner_user_id=%s AND cp.collection_id=%s AND {VISIBLE_PAPER}""",
                 (owner_user_id, collection_id),
             ).fetchone()["total_count"])
             pages = (total + limit - 1) // limit
             rows = [] if page > pages else conn.execute(
-                """SELECT p.paper_id, p.title, p.authors, p.publication_year, cp.added_at,
+                f"""SELECT p.paper_id, p.title, p.authors, p.publication_year, cp.added_at,
                           CASE WHEN r.learning_record_id IS NULL THEN remote_file.file_name
                                ELSE r.file_name END AS file_name
                    FROM server_collection_papers cp JOIN server_papers p
@@ -249,7 +251,7 @@ class PostgresCollectionStore:
                          AND u.owner_user_id=p.owner_user_id AND u.paper_id=p.paper_id
                        ORDER BY u.updated_at DESC, u.upload_id ASC LIMIT 1
                    ) remote_file ON TRUE
-                   WHERE cp.owner_user_id=%s AND cp.collection_id=%s AND p.deleted_at IS NULL
+                   WHERE cp.owner_user_id=%s AND cp.collection_id=%s AND {VISIBLE_PAPER}
                    ORDER BY cp.added_at DESC, cp.paper_id DESC LIMIT %s OFFSET %s""",
                 (owner_user_id, collection_id, limit, (page - 1) * limit),
             ).fetchall()
@@ -269,18 +271,19 @@ class PostgresCollectionStore:
             ).fetchone() is None:
                 raise CollectionNotFound
             row = conn.execute(
-                """INSERT INTO server_collection_papers(paper_id, collection_id, owner_user_id)
+                f"""INSERT INTO server_collection_papers(paper_id, collection_id, owner_user_id)
                    SELECT p.paper_id, c.collection_id, c.owner_user_id
                    FROM server_papers p JOIN server_collections c ON c.owner_user_id=p.owner_user_id
-                   WHERE p.owner_user_id=%s AND p.paper_id=%s AND c.collection_id=%s
+                   WHERE p.owner_user_id=%s AND p.paper_id=%s AND c.collection_id=%s AND {VISIBLE_PAPER}
                    ON CONFLICT(paper_id) DO NOTHING
                    RETURNING collection_id, paper_id""",
                 (owner_user_id, paper_id, collection_id),
             ).fetchone()
             if row is None:
                 current = conn.execute(
-                    """SELECT collection_id, paper_id FROM server_collection_papers
-                       WHERE owner_user_id=%s AND paper_id=%s""",
+                    f"""SELECT cp.collection_id, cp.paper_id FROM server_collection_papers cp
+                       JOIN server_papers p ON p.owner_user_id=cp.owner_user_id AND p.paper_id=cp.paper_id
+                       WHERE cp.owner_user_id=%s AND cp.paper_id=%s AND {VISIBLE_PAPER}""",
                     (owner_user_id, paper_id),
                 ).fetchone()
                 if current is not None:
@@ -290,9 +293,9 @@ class PostgresCollectionStore:
                 else:
                     raise CollectionPaperNotFound
             count = conn.execute(
-                """SELECT count(*) AS paper_count FROM server_collection_papers cp
+                f"""SELECT count(*) AS paper_count FROM server_collection_papers cp
                    JOIN server_papers p ON p.owner_user_id=cp.owner_user_id AND p.paper_id=cp.paper_id
-                   WHERE cp.owner_user_id=%s AND cp.collection_id=%s AND p.deleted_at IS NULL""",
+                   WHERE cp.owner_user_id=%s AND cp.collection_id=%s AND {VISIBLE_PAPER}""",
                 (owner_user_id, collection_id),
             ).fetchone()["paper_count"]
         return CollectionMembership(str(row["collection_id"]), str(row["paper_id"]), int(count))
@@ -314,9 +317,9 @@ class PostgresCollectionStore:
             if row is None:
                 raise CollectionPaperNotFound
             count = conn.execute(
-                """SELECT count(*) AS paper_count FROM server_collection_papers cp
+                f"""SELECT count(*) AS paper_count FROM server_collection_papers cp
                    JOIN server_papers p ON p.owner_user_id=cp.owner_user_id AND p.paper_id=cp.paper_id
-                   WHERE cp.owner_user_id=%s AND cp.collection_id=%s AND p.deleted_at IS NULL""",
+                   WHERE cp.owner_user_id=%s AND cp.collection_id=%s AND {VISIBLE_PAPER}""",
                 (owner_user_id, collection_id),
             ).fetchone()["paper_count"]
         return CollectionMembership(collection_id, paper_id, int(count))
