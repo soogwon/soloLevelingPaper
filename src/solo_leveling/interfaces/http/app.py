@@ -357,7 +357,10 @@ def create_app(
             "device_id": principal.device_id,
         }
 
-    app.include_router(create_device_router(require_principal, selected_store))
+    verification_pool = (managed_store.connection_pool if managed_store is not None
+                         and remote_product_queries is not None
+                         and selected_remote_mcp.enabled and selected_remote_mcp.product_reads_enabled else None)
+    app.include_router(create_device_router(require_principal, selected_store, verification_pool))
     app.include_router(create_device_token_router(selected_store))
     app.include_router(create_paper_router(require_principal, selected_paper_store))
     app.include_router(create_web_paper_router(

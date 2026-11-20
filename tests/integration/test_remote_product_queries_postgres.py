@@ -11,6 +11,7 @@ from tests.fixtures.pgvector_retrieval_contract import PgvectorContractStore
 from tests.integration.test_remote_mcp_product_boundary import SETTINGS,call
 from solo_leveling.application.evidence_qa.remote_contract import VerifiedRemoteIdentity
 from solo_leveling.interfaces.http import create_app
+from solo_leveling.interfaces.http.remote_connection_verification import check_status, issue_check
 from solo_leveling.interfaces.http.remote_mcp_auth import RemoteIdentityAccessToken
 from solo_leveling.interfaces.mcp.remote_product import RemoteProductQueries
 
@@ -45,7 +46,21 @@ def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool):
     with TestClient(create_app(remote_mcp_settings=settings,remote_mcp_verifier=Verifier(),
                               remote_product_queries=queries),base_url=SETTINGS.resource_url[:-4]) as client:
         names={v['name'] for v in call(client,'tools/list').json()['result']['tools']}
-        assert names=={'whoami','probe_card','probe_delay','list_remote_papers','open_remote_paper','get_remote_question','get_remote_evidence','get_remote_paper_detail','get_learning_path','get_prerequisites','list_remote_processing_jobs','get_remote_processing_job','preview_remote_reprocessing','open_remote_pdf_registration'}
+        assert names=={'whoami','probe_card','probe_delay','list_remote_papers','open_remote_paper','get_remote_question','get_remote_evidence','get_remote_paper_detail','get_learning_path','get_prerequisites','list_remote_processing_jobs','get_remote_processing_job','preview_remote_reprocessing','open_remote_pdf_registration','verify_remote_connection'}
+        other_owner = str(uuid4())
+        db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'다른 합성 계정')", (other_owner,))
+        queries.owners.link_identity(other_owner, VerifiedRemoteIdentity(SETTINGS.issuer, 'account-b'))
+        with pool.connection() as conn:
+            challenge = issue_check(conn, remote.owner)
+        verify_args = {'code': challenge['code']}
+        assert result(client, 'verify_remote_connection', verify_args, token='account-b') == {'status': 'not_found'}
+        with pool.connection() as conn:
+            assert check_status(conn, remote.owner, challenge['check_id'])['status'] == 'pending'
+        assert result(client, 'verify_remote_connection', verify_args) == {'status': 'ok'}
+        assert result(client, 'verify_remote_connection', verify_args) == {'status': 'not_found'}
+        with pool.connection() as conn:
+            verified = check_status(conn, remote.owner, challenge['check_id'])
+        assert verified['status'] == 'verified' and verified['verified_at'] is not None
         registration = result(client, 'open_remote_pdf_registration')
         assert registration['upload_url'] == SETTINGS.resource_url[:-4] + '/#/uploads'
         assert registration['upload_url'] in registration['message']

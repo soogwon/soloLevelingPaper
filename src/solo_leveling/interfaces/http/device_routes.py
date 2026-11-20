@@ -6,10 +6,11 @@ from uuid import UUID
 
 from .auth import AuthenticatedPrincipal
 from .device_tokens import DeviceCredentialRejected, DeviceTokenPair
-from .devices import DeviceRecord, DeviceStore, DeviceStoreUnavailable
+from .devices import DeviceRecord, DeviceStore, DeviceStoreUnavailable, _connection
 
+from .remote_connection_verification import check_status, issue_check
 
-def create_device_router(require_principal: Any, store: DeviceStore):
+def create_device_router(require_principal: Any, store: DeviceStore, connection_pool=None):
     from fastapi import APIRouter, Depends, HTTPException, Response, status
     from pydantic import BaseModel, Field, field_validator
 
@@ -77,6 +78,30 @@ def create_device_router(require_principal: Any, store: DeviceStore):
                     for linked_at in store.list_remote_link_times(web_user(principal))]
         except DeviceStoreUnavailable:
             raise _unavailable(HTTPException, status.HTTP_503_SERVICE_UNAVAILABLE) from None
+
+    if connection_pool is not None:
+        @router.post("/remote-mcp/checks", status_code=201)
+        def create_remote_check(principal: Principal, response: Response):
+            owner = web_user(principal)
+            response.headers["Cache-Control"] = "no-store"
+            try:
+                with _connection(connection_pool) as conn:
+                    return issue_check(conn, owner)
+            except DeviceStoreUnavailable:
+                raise _unavailable(HTTPException, status.HTTP_503_SERVICE_UNAVAILABLE) from None
+
+        @router.get("/remote-mcp/checks/{check_id}")
+        def remote_check_status(check_id: UUID, principal: Principal, response: Response):
+            owner = web_user(principal)
+            response.headers["Cache-Control"] = "no-store"
+            try:
+                with _connection(connection_pool) as conn:
+                    result = check_status(conn, owner, check_id)
+            except DeviceStoreUnavailable:
+                raise _unavailable(HTTPException, status.HTTP_503_SERVICE_UNAVAILABLE) from None
+            if result is None:
+                raise HTTPException(status_code=404, detail={"code": "connection_check_not_found"})
+            return result
 
     @router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
     def revoke(device_id: UUID, principal: Principal):

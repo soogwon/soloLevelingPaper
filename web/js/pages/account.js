@@ -44,6 +44,7 @@ export default async function accountPage({ view }) {
     <section class="card panel" aria-labelledby="remote-mcp-h">
       <h2 id="remote-mcp-h" class="panel-title">원격 MCP 연결</h2>
       <div data-slot="remote-connections">${loadingBlock()}</div>
+      <div data-slot="remote-check" aria-live="polite"></div>
     </section>
 
     <div data-slot="devices"></div>
@@ -77,10 +78,58 @@ export default async function accountPage({ view }) {
               <div class="device-name">원격 MCP</div>
               <div class="meta">연결됨 · ${formatDateTime(connection.linked_at)}</div>
             </div>
-          </li>`)}</ul>`
+          </li>`)}</ul>
+          <button type="button" class="btn" data-action="issue-remote-check">이 Claude 연결 확인</button>`
         : emptyBlock('원격 MCP 연결이 없어요', 'Claude에서 원격 MCP에 연결하고 첫 논문 조회를 실행해 주세요.'));
     } catch (error) {
       setHTML(remoteEl, errorBlock(error, 'reload-remote-connections'));
+    }
+  }
+
+  const checkEl = view.querySelector('[data-slot="remote-check"]');
+  let currentCheck = null;
+
+  async function issueRemoteCheck(button) {
+    button.disabled = true;
+    currentCheck = null;
+    setHTML(checkEl, loadingBlock());
+    try {
+      const issued = await api.createRemoteConnectionCheck();
+      if (!view.isConnected) return;
+      currentCheck = issued.check_id;
+      setHTML(checkEl, html`
+        <p>확인할 Claude 대화에서 아래 요청을 보내세요. 코드는 5분 동안 사용할 수 있어요.</p>
+        <p><code>Solo Leveling 원격 MCP의 verify_remote_connection에 코드 ${issued.code}를 보내 주세요.</code></p>
+        <button type="button" class="btn" data-action="remote-check-status">확인 결과 새로고침</button>
+        <p data-slot="check-status"></p>`);
+    } catch (error) {
+      setHTML(checkEl, html`<p>${errorMessage(error)}</p>`);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function refreshRemoteCheck(button) {
+    const checkId = currentCheck;
+    if (!checkId) return;
+    const statusEl = checkEl.querySelector('[data-slot="check-status"]');
+    button.disabled = true;
+    try {
+      const check = await api.remoteConnectionCheckStatus(checkId);
+      if (currentCheck !== checkId) return;
+      if (check.status === 'verified') {
+        currentCheck = null;
+        setHTML(checkEl, html`<p>이 Claude에서 연결 확인됨 · ${formatDateTime(check.verified_at)}</p>`);
+      } else if (check.status === 'expired') {
+        currentCheck = null;
+        setHTML(checkEl, html`<p>코드가 만료됐어요. 연결 확인을 다시 시작해 주세요.</p>`);
+      } else {
+        setHTML(statusEl, '아직 확인 요청을 받지 못했어요.');
+      }
+    } catch (error) {
+      if (currentCheck === checkId) setHTML(statusEl, errorMessage(error));
+    } finally {
+      button.disabled = false;
     }
   }
 
@@ -126,6 +175,8 @@ export default async function accountPage({ view }) {
   view.addEventListener('click', async (e) => {
     const el = e.target.closest('[data-action]');
     if (!el) return;
+    if (el.dataset.action === 'issue-remote-check') await issueRemoteCheck(el);
+    if (el.dataset.action === 'remote-check-status') await refreshRemoteCheck(el);
     if (el.dataset.action === 'reload-remote-connections') loadRemoteConnections();
     if (el.dataset.action === 'reload-devices') loadDevices();
     if (el.dataset.action === 'disconnect') {

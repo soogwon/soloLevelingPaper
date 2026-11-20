@@ -30,6 +30,23 @@ class RemoteProductQueries:
             return None
         return self.owners.resolve_owner(token.verified_identity())
 
+    def verify_connection(self, code):
+        from solo_leveling.interfaces.http.remote_connection_verification import confirm_check
+
+        token = get_access_token()
+        if not isinstance(token, RemoteIdentityAccessToken):
+            return {'status': 'not_authorized'}
+        identity = token.verified_identity()
+        if (identity is None or type(token.expires_at) is not int or token.expires_at <= time.time()
+                or 'papers:read' not in token.scopes):
+            return {'status': 'not_authorized'}
+        try:
+            with self.pool.connection() as conn:
+                checked_at = confirm_check(conn, identity.issuer, identity.subject, code)
+        except Exception:
+            return {'status': 'unavailable'}
+        return {'status': 'not_found'} if checked_at is None else {'status': 'ok'}
+
     def list_papers(self, offset=0):
         if type(offset) is not int or not 0 <= offset <= 100000:
             return {'status':'invalid_argument'}
@@ -234,6 +251,12 @@ def register_product_queries(server, queries, *, cancellation_enabled=False, rep
     def get_remote_processing_job(job_id: str) -> dict:
         """내 작업의 안전한 상태·게시본을 조회한다. 복구 작업의 web_path는 기존 검토 화면을 연다. 처리 완료는 학습 완료가 아니며 취소는 별도 확인 절차를 거친다."""
         return RemoteJobQueries(queries.pool, queries.owner, can_cancel(), reprocessing_enabled=reprocessing_enabled).get(job_id)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                             idempotentHint=False, openWorldHint=False))
+    def verify_remote_connection(code: str) -> dict:
+        """Solo Leveling 웹에서 발급한 일회용 코드로 현재 원격 연결을 확인한다. 사용자에게 코드 원문을 반복하지 않는다."""
+        return queries.verify_connection(code)
 
     @server.tool()
     def list_remote_papers(offset: int = 0) -> dict:
