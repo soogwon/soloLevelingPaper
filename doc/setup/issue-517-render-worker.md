@@ -163,3 +163,23 @@ worker는 해당 정책과 기간으로 명시 접수된 작업만 소비합니�
 스테이징 적용은 migration 0068을 먼저 반영한 뒤 두 서비스를 배포합니다.
 웹 역할은 예산 조회·계정 예산 삽입만 필요하며 사용량 갱신은 worker 역할에서 수행합니다.
 별도 자동 게시 허용 없이 기존 접수 계약을 사용하는 환경은 두 설정을 비워 둡니다.
+
+## 첫 원격 MCP 계정 연결
+
+migration 0069는 검증된 웹 로그인 식별자와 제한된 연결 함수를 추가합니다.
+웹과 원격 MCP의 OIDC issuer가 정확히 같고 제품 조회가 활성화된 환경에서만
+`REMOTE_MCP_AUTO_ACCOUNT_LINK_ENABLED=true`를 설정합니다. 기존 웹 계정은 활성화 후
+웹에서 한 번 다시 로그인하면 이전 OAuth 로그인에 누락됐던 검증 기록이 생성됩니다.
+이후 Claude에서 `papers:read`로 첫 논문 조회를 하면 계정 연결이 자동으로 생성됩니다.
+토큰의 이메일이나 표시 이름은 연결에 사용하지 않습니다.
+
+승인된 환경의 스키마 소유자가 해당 웹 역할에 증거 행 삽입만, MCP 역할에는 연결 함수의
+실행 권한만 추가합니다. MCP 역할은 웹 인증 증거 테이블을 직접 읽거나 쓸 필요가 없습니다.
+
+```sql
+GRANT INSERT (issuer, subject) ON slp_staging.server_verified_web_identities TO slp_staging_web;
+GRANT EXECUTE ON FUNCTION slp_staging.server_link_verified_mcp_account(text, text) TO slp_staging_mcp;
+```
+
+중단하려면 플래그를 끄고 웹을 재배포한 뒤 신규 권한을 회수합니다.
+이미 기록된 계정 연결과 폐기 이력은 그대로 둡니다.

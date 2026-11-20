@@ -24,8 +24,9 @@ def _validated_identity(identity: VerifiedRemoteIdentity) -> tuple[str, str]:
 class PostgresRemoteOwnerResolver:
     """issuer와 불투명 raw subject의 저장된 연결만 사용한다."""
 
-    def __init__(self, connection_pool):
+    def __init__(self, connection_pool, *, auto_link_issuer=None):
         self._pool = connection_pool
+        self._auto_link_issuer = auto_link_issuer
 
     def resolve_owner(self, identity: VerifiedRemoteIdentity) -> str | None:
         issuer, subject = _validated_identity(identity)
@@ -36,7 +37,12 @@ class PostgresRemoteOwnerResolver:
                    WHERE issuer=%s AND subject=%s AND revoked_at IS NULL""",
                 (issuer, subject),
             ).fetchone()
-        return None if row is None else str(row["owner_user_id"])
+            if row is None and issuer == self._auto_link_issuer:
+                row = conn.execute(
+                    "SELECT server_link_verified_mcp_account(%s,%s) AS owner_user_id",
+                    (issuer,subject),
+                ).fetchone()
+        return None if row is None or row["owner_user_id"] is None else str(row["owner_user_id"])
 
     def link_identity(
         self,

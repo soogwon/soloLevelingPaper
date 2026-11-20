@@ -146,6 +146,11 @@ def create_app(
                           else UnavailableObjectStorage())
     selected_remote_mcp = (remote_mcp_settings if remote_mcp_settings is not None
                            else load_remote_mcp_settings())
+    mcp_link_issuer = selected_remote_mcp.issuer if selected_remote_mcp.auto_account_link_enabled else None
+    if mcp_link_issuer is not None:
+        web_oidc = load_oidc_settings()
+        if web_oidc is None or web_oidc.issuer != mcp_link_issuer or load_web_auth_settings() is None:
+            raise ValueError("remote_mcp_auto_account_link_requires_matching_web_issuer")
     if selected_remote_mcp.enabled and selected_remote_mcp.product_reads_enabled and remote_product_queries is None:
         from os import environ
         from .settings import DatabaseSettings
@@ -154,7 +159,8 @@ def create_app(
         if dsn:
             database = DatabaseSettings(dsn)
             managed_remote_store = PostgresDeviceStore.from_dsn(database.dsn)
-            remote_product_queries = RemoteProductQueries(managed_remote_store.connection_pool)
+            remote_product_queries = RemoteProductQueries(managed_remote_store.connection_pool,
+                                                         auto_link_issuer=mcp_link_issuer)
     managed_insight_store = None
     insights_enabled = os.environ.get('REMOTE_INSIGHT_IMPORTS_ENABLED') == 'true'
     if insights_enabled:
@@ -316,7 +322,8 @@ def create_app(
             allow_headers=["Content-Type", "X-CSRF-Token", "Idempotency-Key"],
         )
     if web_session_store is None and managed_store is not None and web_settings is not None:
-        web_session_store = PostgresWebSessionStore(managed_store.connection_pool, automatic_pdf_budget=automatic_pdf_budget)
+        web_session_store = PostgresWebSessionStore(managed_store.connection_pool, automatic_pdf_budget=automatic_pdf_budget,
+                                                 mcp_link_issuer=mcp_link_issuer)
     if web_auth_flow is None and web_session_store is not None and web_settings is not None:
         web_auth_flow = OidcWebAuthFlow.create(web_settings, web_session_store, web_access_verifier)
     token_verifier = RoutingAccessTokenVerifier(token_verifier, OpaqueDeviceTokenVerifier(selected_store))

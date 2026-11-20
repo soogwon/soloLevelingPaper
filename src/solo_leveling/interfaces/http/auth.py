@@ -14,6 +14,7 @@ class AuthenticatedPrincipal:
     user_id: str
     credential_type: CredentialType
     device_id: str | None = None
+    issuer: str | None = None
 
     def __post_init__(self) -> None:
         if not self.user_id.strip():
