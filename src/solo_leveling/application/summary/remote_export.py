@@ -22,9 +22,14 @@ def export_summary(saved):
                          ('제공자',result['provider']),('언어',result['language']),('입력 지문',result['input_hash']),
                          ('프롬프트',result['prompt_version']),('생성 시각',result['generated_at'])]:
         lines.append(f'{label}: {safe(value)}')
+    brief = result['prompt_version'] == 'remote-summary-v2'
+    if brief:
+        lines.append(f"선택 근거: {result['source_count']} / {result['total_scope_chunks']}")
     lines += ['', '검증 범위: 구조·근거 ID 소속 확인. 의미적 정확성은 별도 검증이 필요합니다.', '']
+    labels = {'claim': '연구 질문', 'method': '핵심 접근', 'result': '주요 결과'} if brief else {}
     for item in result['items']:
-        lines += [f"## {safe(item['kind'])}", '', safe(item['text']), '',
+        label = labels.get(item['kind'], item['kind'])
+        lines += [f"## {safe(label)}", '', safe(item['text']), '',
                   '근거 ID: '+', '.join(safe(e) for e in item['evidence_ids']), '']
     return dict(status='ok',context_id=context,request_key=key,publication_id=b['publication_id'],
                 media_type='text/markdown',filename=f'summary-{key}.md',markdown='\n'.join(lines))

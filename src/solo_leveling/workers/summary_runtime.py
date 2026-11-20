@@ -5,7 +5,7 @@ import os
 import re
 from urllib.parse import urlsplit, unquote, parse_qsl
 
-from solo_leveling.application.summary.remote_contract import _load as load
+from solo_leveling.application.summary.remote_contract import PROMPT_VERSIONS, _load as load
 from solo_leveling.application.remote_execution_policy import RemoteExecutionPolicy
 from solo_leveling.infrastructure.generation.openai_generator import OpenAIGenerationSettings
 from .verification_bootstrap import ApprovedPayloadBounds
@@ -32,7 +32,7 @@ def load_plan(path):
     require(type(raw) is dict and set(raw) == {'schema_version','database_name','schema_name','database_role',
         'policy','generation','window_key','requests','prompt_version'})
     require(type(raw['schema_version']) is int and raw['schema_version']==1
-            and raw['prompt_version']=='remote-summary-v1')
+            and raw['prompt_version'] in PROMPT_VERSIONS)
     for field in ('database_name','schema_name','database_role'):
         require(type(raw[field]) is str and re.fullmatch(r'[a-z_][a-z0-9_]{0,62}',raw[field]))
     require(type(raw['window_key']) is str and 1 <= len(raw['window_key'].strip()) <= 200)

@@ -80,3 +80,21 @@ test('로그아웃 뒤 늦은 맥락 응답은 이전 계정 화면에 표시하
   assert.equal(views.summary.textContent, '');
   assert.equal(views.notes.textContent, '');
 });
+
+test('짧은 요약은 선택 범위, 근거 페이지와 비어 있는 항목을 표시한다', async t => {
+  const brief = { ...summary, source_count: 3, total_scope_chunks: 98,
+    evidence_pages: { [id(6)]: 7 }, result: { ...summary.result, prompt_version: 'remote-summary-v2' } };
+  t.mock.method(globalThis, 'fetch', async url => {
+    const value = String(url);
+    if (value.includes('/contexts?')) return response(contexts);
+    if (value.includes('/remote-summaries/')) return response(brief);
+    return response(annotations);
+  });
+  const views = { progress: view(), summary: view(), notes: view() };
+  await remotePaperDetail(views, paper, version);
+  for (const label of ['연구 질문', '핵심 접근', '주요 결과', 'PDF 7쪽', '전체 근거 98개',
+    '선택한 3개', '요약에 포함된 근거가 없어요']) {
+    assert.ok(views.summary.innerHTML.includes(label), label);
+  }
+  listeners.get('pagehide')();
+});

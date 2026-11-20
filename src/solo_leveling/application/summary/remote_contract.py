@@ -12,6 +12,8 @@ from solo_leveling.application.evidence_qa.remote_contract import RemoteSearchBi
 from solo_leveling.domain.paper_summary import SUMMARY_KINDS
 
 NOTICE_VERSION = 'remote-summary-v1'
+BRIEF_PROMPT_VERSION = 'remote-summary-v2'
+PROMPT_VERSIONS = (NOTICE_VERSION, BRIEF_PROMPT_VERSION)
 OPERATION = 'generate_paper_summary'
 
 
@@ -111,9 +113,11 @@ class RemoteSummaryInput:
                  and ((value['scope'] == 'paper' and value['section_id'] is None)
                       or (value['scope'] == 'section' and _text(value['section_id'])
                           and all(s.section_id == value['section_id'] for s in sources))))
-        # 선두 일부만 읽고 논문 전체 요약으로 표시하지 않는다. 범위 개수는 서버가 계산한다.
+        # 이전 프롬프트는 전체 범위를 요구하고 짧은 요약은 선택 범위를 고정한다.
         _require(type(value['total_scope_chunks']) is int
-                 and value['total_scope_chunks'] == len(sources)
+                 and (len(sources) <= value['total_scope_chunks']
+                      if value['prompt_version'] == BRIEF_PROMPT_VERSION
+                      else value['total_scope_chunks'] == len(sources))
                  and len({s.chunk_id for s in sources}) == len(sources)
                  and len({s.evidence_id for s in sources}) == len(sources))
         _require(all(_text(value[k]) for k in (
@@ -133,6 +137,7 @@ class RemoteSummaryInput:
             paper_id=binding.paper_id, server_version_id=binding.server_version_id,
             publication_id=binding.publication_id, scope=value['scope'],
             section_id=value['section_id'], source_count=len(sources),
+            total_scope_chunks=value['total_scope_chunks'],
             provider=value['provider'], model=value['model'],
             storage_notice='요약 요청·결과·근거 연결을 현재 계정에 저장합니다.',
             ai_notice='선택 범위의 원문·번역·근거 ID와 요약 지시를 지정한 AI 제공자에 전송합니다. 별도 비용·호출 한도 확인이 필요합니다.',
@@ -186,10 +191,20 @@ def validated_summary_payload(request, items, *, generated_at):
                  and type(item['evidence_ids']) is list and bool(item['evidence_ids'])
                  and all(type(e) is str and e in known for e in item['evidence_ids'])
                  and len(set(item['evidence_ids'])) == len(item['evidence_ids']))
+    if settings['prompt_version'] == BRIEF_PROMPT_VERSION:
+        kinds = {item['kind'] for item in items}
+        _require(kinds <= {'claim', 'method', 'result'} and len(kinds) == len(items)
+                 and all(_text(item['text'], 240) and len(item['text'].splitlines()) == 1
+                         for item in items))
     result = dict(schema_version=1, operation=OPERATION, input_hash=request.input_hash,
         binding=asdict(binding), scope=settings['scope'], section_id=settings['section_id'],
         provider=settings['provider'], model=settings['model'], prompt_version=settings['prompt_version'],
         language=settings['language'], generated_at=generated_at.astimezone(timezone.utc).isoformat(),
         verification_level='structural_only', items=items)
+    if settings['prompt_version'] == BRIEF_PROMPT_VERSION:
+        cited = {evidence_id for item in items for evidence_id in item['evidence_ids']}
+        result.update(source_count=len(sources), total_scope_chunks=settings['total_scope_chunks'],
+                      evidence_pages={source.evidence_id: source.pdf_page for source in sources
+                                      if source.evidence_id in cited})
     # 호출자가 원본 목록을 바꿔 저장 결과를 변조하지 못하도록 독립 복사한다.
     return _load(_encode(result))

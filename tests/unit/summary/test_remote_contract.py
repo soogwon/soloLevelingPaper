@@ -133,3 +133,34 @@ def test_result_keeps_revision_and_defensive_copy():
 def test_partial_publication_cannot_be_presented_as_complete_summary_scope():
     with pytest.raises(RemoteSummaryError):
         make(binding=replace(BINDING, publication_policy='partial'))
+
+
+def test_brief_summary_freezes_sample_and_validates_three_field_contract():
+    request = make(prompt_version='remote-summary-v2', total_scope_chunks=98)
+    notice = request.transfer_notice()
+    assert (notice['source_count'], notice['total_scope_chunks']) == (1, 98)
+    assert request.input_hash != make(prompt_version='remote-summary-v2').input_hash
+    assert validated_summary_payload(request, items(), generated_at=NOW)['items'] == items()
+    for invalid in (items() * 2, [dict(items()[0], kind='limitation')],
+                    [dict(items()[0], evidence_ids=['outside'])]):
+        with pytest.raises(RemoteSummaryError):
+            validated_summary_payload(request, invalid, generated_at=NOW)
+
+
+def test_brief_selection_uses_bounded_payload_and_preserves_document_order():
+    from solo_leveling.application.summary.prompt import build_summary_payload
+    from solo_leveling.interfaces.http.remote_summary_sources import select_brief_sources
+
+    sources = tuple(SummarySource(f'e{i}', f'c{i}', i + 1, None, 'Synthetic evidence. ' * 19, None)
+                    for i in range(98))
+    config = make(prompt_version='remote-summary-v2').unpack()[2]
+    selected = select_brief_sources(sources, config, max_input_tokens=4000, max_output_tokens=1024)
+    assert 1 < len(selected) < len(sources)
+    assert (selected[0], selected[-1]) == (sources[0], sources[-1])
+    assert selected == tuple(source for source in sources if source in selected)
+    payload = build_summary_payload(selected, config, 1024)
+    assert len(json.dumps(payload, ensure_ascii=False).encode('utf-8')) + 256 <= 4000
+    assert all(source.evidence_id in {s['evidence_id'] for s in json.loads(
+        payload['input'][1]['content'])['sources']} for source in selected)
+    with pytest.raises(RemoteSummaryError, match='REMOTE_SUMMARY_SOURCE_TOO_LARGE'):
+        select_brief_sources(sources, config, max_input_tokens=500, max_output_tokens=1024)

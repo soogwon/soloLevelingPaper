@@ -3,6 +3,7 @@ from typing import Annotated,Any,Literal
 from uuid import UUID
 from .auth import AuthenticatedPrincipal
 from .remote_executions import RemoteExecutionConflict
+from .remote_summary_intake import SUMMARY_ADMISSION_MESSAGES, SummaryAdmissionDenied
 
 
 def create_summary_review_router(require_principal:Any,service):
@@ -19,6 +20,9 @@ def create_summary_review_router(require_principal:Any,service):
         if principal.credential_type!='web_session':raise HTTPException(403,detail={'code':'web_session_required'},headers=headers)
         if service is None:raise HTTPException(503,detail={'code':'summary_unavailable'},headers=headers)
         try:value=getattr(service,method)(principal.user_id,*args)
+        except SummaryAdmissionDenied as error:
+            raise HTTPException(409, detail={'code': error.code, 'message': SUMMARY_ADMISSION_MESSAGES[error.code]},
+                                headers=headers) from None
         except (ValueError,RemoteExecutionConflict):raise HTTPException(409,detail={'code':'summary_review_conflict'},headers=headers) from None
         except Exception:raise HTTPException(503,detail={'code':'summary_unavailable'},headers=headers) from None
         if value is None:raise HTTPException(404,detail={'code':'summary_not_found'},headers=headers)

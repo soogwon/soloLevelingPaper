@@ -97,3 +97,27 @@ def test_review_cancels_only_its_execution_without_new_generation(pool,db,stores
     assert service.cancel('alice', key)['state'] == 'cancel_requested'
     assert service.result('alice', key)['state'] == 'cancel_requested'
     assert not db('SELECT 1 FROM server_provider_attempts WHERE execution_id=%s',(submitted['execution_id'],))
+
+
+def test_current_consents_with_insufficient_budget_explain_denial_and_rollback(pool, db, stores):
+    from solo_leveling.interfaces.http.remote_summary_intake import SummaryAdmissionDenied
+
+    service, key, _ = review(pool, db, stores)
+    for purpose in ('storage', 'ai_provider'):
+        service.grant('alice', key, purpose, 'remote-summary-v1')
+    db("""UPDATE server_dispatch_budget_limits SET consumed_input_tokens=1
+          WHERE policy_version=%s AND scope_type='service'""", (service.policy.version,))
+    before = service.view('alice', key)
+    assert before['storage'] == before['ai_provider'] == 'current'
+    with pytest.raises(SummaryAdmissionDenied, match='summary_budget_unavailable'):
+        service.submit('alice', key)
+    assert service.view('alice', key)['execution_id'] is None
+    assert not db('SELECT 1 FROM server_remote_executions WHERE request_key=%s', (key,))
+    assert not db("""SELECT 1 FROM server_dispatch_budget_limits
+                     WHERE policy_version=%s AND reserved_input_tokens<>0""", (service.policy.version,))
+    db("UPDATE server_dispatch_controls SET intake_enabled=false WHERE control_id='provider_dispatch'")
+    try:
+        with pytest.raises(SummaryAdmissionDenied, match='summary_intake_closed'):
+            service.submit('alice', key)
+    finally:
+        db("UPDATE server_dispatch_controls SET intake_enabled=true WHERE control_id='provider_dispatch'")

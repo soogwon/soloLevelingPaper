@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field
 import os
 from urllib.parse import urlsplit, parse_qsl
-from solo_leveling.application.summary.remote_contract import _load
+from solo_leveling.application.summary.remote_contract import PROMPT_VERSIONS, _load
 from solo_leveling.application.remote_execution_policy import RemoteExecutionPolicy
 from .remote_summary_reviews import PostgresSummaryReviews
 
@@ -30,7 +30,7 @@ def load_summary_settings(env=None):
         data['policy'] = RemoteExecutionPolicy(**data['policy'])
         config = data['settings']
         # 기존 요청의 프롬프트를 다른 실행 계약으로 자동 전환하지 않는다.
-        if (config['provider'] != 'openai' or config['prompt_version'] != 'remote-summary-v1'
+        if (config['provider'] != 'openai' or config['prompt_version'] not in PROMPT_VERSIONS
                 or config['language'] != 'ko'):
             raise ValueError()
         PostgresSummaryReviews(None, **data)

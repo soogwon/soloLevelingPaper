@@ -17,6 +17,7 @@ export async function remotePaperSummary(view, paper, version) {
       ${contexts.map(c=>html`<button data-summary-context="${c.context_id}" ${busy?'disabled':''} aria-pressed="${String(c.context_id===selected)}">학습 맥락 ${c.context_id}</button>`)}
       ${next?html`<button data-summary-more ${busy?'disabled':''}>학습 맥락 더 보기</button>`:''}
       ${summary?html`<p>범위: ${summary.scope==='paper'?'논문 전체':`섹션 ${summary.section_id}`} · 판본: ${summary.binding.server_version_id}</p>
+        ${summary.source_count < summary.total_scope_chunks ? html`<p>선택 근거 ${summary.source_count} / ${summary.total_scope_chunks}</p>` : ''}
         <p>게시: ${summary.binding.publication_id} · 생성: ${summary.generated_at}</p>
         <p>구조·근거 ID 검증 결과이며 의미적 정확성은 별도 확인이 필요합니다.</p>
         ${summary.items.map(i=>html`<section><h3>${({claim:'핵심 주장',method:'방법',result:'결과',limitation:'한계'})[i.kind]}</h3><p>${i.text}</p><p>근거 ID: ${i.evidence_ids.join(', ')}</p></section>`)}`:''}

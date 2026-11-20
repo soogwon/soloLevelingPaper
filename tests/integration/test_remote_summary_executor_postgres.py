@@ -22,13 +22,14 @@ from solo_leveling.workers.remote_summary import PersistedSummaryExecutor, Remot
 pytestmark = pytest.mark.skipif(not os.environ.get('SOLO_TEST_POSTGRES_DSN'), reason='격리 PostgreSQL 필요')
 
 
-def setup(db, stores, pool, *, response='ok', timeout=120):
+def setup(db, stores, pool, *, response='ok', timeout=120, prompt='remote-summary-v1'):
     _, _, binding = seed(db, stores, pool, 'alice')
     db("INSERT INTO server_users(owner_user_id,display_name) VALUES ('alice','합성 사용자') ON CONFLICT DO NOTHING")
-    policy = RemoteExecutionPolicy(str(uuid4()), timeout, min(60, timeout), 1, 1000, 100)
-    config = dict(provider='openai', model='synthetic', prompt_version='remote-summary-v1',
+    max_input = 4000 if prompt == 'remote-summary-v2' else 1000
+    policy = RemoteExecutionPolicy(str(uuid4()), timeout, min(60, timeout), 1, max_input, 100)
+    config = dict(provider='openai', model='synthetic', prompt_version=prompt,
                   language='ko', budget_policy_version=policy.version)
-    request = PostgresSummaryPreparation(pool, **config).prepare('alice', binding.context_id)
+    request = PostgresSummaryPreparation(pool, **config).prepare('alice', binding.context_id, policy=policy)
     storage, ai, key = str(uuid4()), str(uuid4()), str(uuid4())
     for cid, purpose in ((storage, 'storage'), (ai, 'ai_provider')):
         db("""INSERT INTO server_remote_consents(consent_id,owner_user_id,purpose,input_hash,notice_version)
@@ -38,7 +39,7 @@ def setup(db, stores, pool, *, response='ok', timeout=120):
         SET dispatch_enabled=true,intake_enabled=true""")
     for kind, owner in [('owner','alice'),('service','service')]:
         db("""INSERT INTO server_dispatch_budget_limits(scope_type,scope_id,policy_version,window_key,
-            max_input_tokens,max_output_tokens) VALUES (%s,%s,%s,'test',1000,100)""", (kind,owner,policy.version))
+            max_input_tokens,max_output_tokens) VALUES (%s,%s,%s,'test',%s,100)""", (kind,owner,policy.version,max_input))
     saved = PostgresSummaryIntake(pool,settings=config).submit('alice',key,request,storage,ai,
         policy=policy,window_key='test')
     evidence = request.unpack()[1][0].evidence_id
@@ -115,3 +116,18 @@ def test_revocation_during_response_prevents_completion(pool, db, stores):
     assert runner.run('alice', row.execution_id) == 'not_claimed'
     assert post.call_count == 1
     assert PostgresSummaryResults(pool).get('alice', context, key)['result'] is None
+
+
+
+def test_brief_summary_persists_scoped_pages_and_progress(pool, db, stores):
+    row, key, context, post, executor, _ = setup(db, stores, pool, prompt='remote-summary-v2')
+    assert RemoteSummaryRunner(pool, executor).run('alice', row.execution_id) == 'finished'
+    assert post.call_count == 1
+    payload = post.call_args.kwargs['json']
+    sent = json.loads(payload['input'][1]['content'])['sources']
+    saved = PostgresSummaryResults(pool).latest('alice', context)
+    assert saved['request_key'] == key
+    result = saved['result']
+    assert result['source_count'] == len(sent) <= result['total_scope_chunks']
+    assert result['evidence_pages'] == {sent[0]['evidence_id']: sent[0]['pdf_page']}
+    assert PostgresSummaryResults(pool).latest('bob', context) is None

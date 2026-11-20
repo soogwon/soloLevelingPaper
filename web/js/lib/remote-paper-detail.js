@@ -28,18 +28,30 @@ function contextButtons(contexts, selected) {
   </div>`;
 }
 
-function remoteSummaryContent(summary) {
+function remoteSummaryContent(summary, metadata = {}) {
   if (!summary?.items?.length) {
     return emptyBlock('저장된 요약이 없어요', 'Claude에서 원격 요약을 저장하면 여기에 보여요.');
   }
-  const groups = SUMMARY_KINDS
-    .map(([kind, label]) => ({ kind, label, items: summary.items.filter(item => item.kind === kind) }))
-    .filter(group => group.items.length);
-  return html`${groups.map(group => html`<div class="sum-item">
-    <div class="sum-item-head"><h3>${group.label}</h3></div>
-    <ul>${group.items.map(item => html`<li>${item.text}</li>`)}</ul>
-    <p class="hint">근거 ID ${new Set(group.items.flatMap(item => item.evidence_ids)).size}개 저장됨 · 상세 인용은 아직 불러오지 않음</p>
-  </div>`)}`;
+  const brief = summary.prompt_version === 'remote-summary-v2';
+  const kinds = brief
+    ? [['claim', '연구 질문'], ['method', '핵심 접근'], ['result', '주요 결과']]
+    : SUMMARY_KINDS;
+  const sampled = metadata.total_scope_chunks > metadata.source_count;
+  return html`${sampled ? html`<p class="hint">전체 근거 ${metadata.total_scope_chunks}개 중
+    선택한 ${metadata.source_count}개를 바탕으로 요약했어요.</p>` : ''}
+  ${kinds.map(([kind, label]) => {
+    const items = summary.items.filter(item => item.kind === kind);
+    if (!brief && !items.length) return '';
+    return html`<div class="sum-item">
+      <div class="sum-item-head"><h3>${label}</h3></div>
+      ${items.length ? html`<ul>${items.map(item => {
+        const pages = [...new Set(item.evidence_ids.map(id => metadata.evidence_pages?.[id])
+          .filter(page => Number.isSafeInteger(page) && page > 0))].sort((a, b) => a - b);
+        return html`<li>${item.text}<p class="hint">${pages.length ? `PDF ${pages.join(', ')}쪽 · ` : ''}
+          근거 ${item.evidence_ids.length}개</p></li>`;
+      })}</ul>` : html`<p class="hint">요약에 포함된 근거가 없어요.</p>`}
+    </div>`;
+  })}`;
 }
 
 function remoteAnnotationCard(annotation) {
@@ -139,7 +151,7 @@ export async function remotePaperDetail(views, paper, version) {
           || result.items.some(item => !SUMMARY_KINDS.some(([kind]) => kind === item?.kind)
             || typeof item.text !== 'string' || !Array.isArray(item.evidence_ids)
             || !item.evidence_ids.every(id => UUID.test(id)))) throw Error('scope');
-      drawSummary(remoteSummaryContent(result));
+      drawSummary(remoteSummaryContent(result, value));
     } catch (error) {
       if (!active(n) || selected !== contextId) return;
       if (error instanceof ApiError && error.status === 404) drawSummary(remoteSummaryContent(null));
