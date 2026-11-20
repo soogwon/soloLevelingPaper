@@ -95,3 +95,52 @@ verify-full 연결은 이미지의 CA 경로를 `PGSSLROOTCERT`로 지정한다.
 실제 실행에서는 worker 준비 전에 작업을 접수해 120초 기한을 소진하지 않도록 한다.
 Live 표시는 생성 성공을 의미하지 않으므로 실행·provider attempt·사용량 원장을 확인한다.
 실제 재생성은 별도 승인 없이 자동으로 재시도하지 않는다.
+
+## 데모 PDF 상시 처리
+
+Render 이미지 기본 명령은 standby입니다. 데모를 승인한 뒤에만
+`--mode demo-pdf-worker`와 `SLP_DEMO_PROCESSING_ENABLED=true`를 함께 사용합니다.
+Render에는 배포한 이미지와 모델 지문을 고정한 JSON을
+`SLP_DEMO_PROCESSING_CONFIG_JSON`으로 설정합니다. 로컬에서는 같은 JSON 파일의 절대 경로를
+`SLP_DEMO_PROCESSING_CONFIG`로 지정할 수 있습니다.
+기존 단발 runtime 설정의 `scope_sha256`과 `requests` 대신 다음 항목을 넣습니다.
+
+- `database_name`, `database_schema`와 데모 전용 `policy_version`, `window_key`.
+- `demo_budget`에 시간대가 포함된 `starts_at`, `expires_at`, 프로세스당 `max_jobs`를 지정합니다.
+- 같은 객체에서 `input_token_limit`, `input_overhead_tokens`, 입력·출력 각각의
+  `*_microusd_per_million_tokens`, `owner_budget_microusd`, `service_budget_microusd`를 지정합니다.
+  실제 활성화 전에 고정 번역 모델의 요율과 전체 요청 기준 입력 상한을 검증합니다.
+  현재 구현은 직렬화된 요청의 UTF-8 바이트와 승인된 오버헤드로 예약하며,
+  모델과 요청 형식에 대한 실제 상한 검증을 배포 전에 별도로 수행해야 합니다.
+- 참가자별 owner 행과 service 행을 동일 정책·기간으로 준비합니다. 두 토큰 한도에
+  각각의 단가를 곱한 합이 금액 상한을 넘으면 전송을 허용하지 않습니다.
+- Render에 데모 전용 `SLP_DEMO_DATABASE_URL`, `SLP_DEMO_R2_ACCESS_KEY_ID`,
+  `SLP_DEMO_R2_SECRET_ACCESS_KEY`, `SLP_DEMO_OPENAI_API_KEY`를 준비합니다.
+  DB URL은 검증된 TLS와 제한 worker 역할, R2는 승인된 bucket의 읽기 자격을 사용합니다.
+
+worker는 해당 기간에 접수된 미실행 작업만 가져옵니다. 이전 작업은 별도 실행 범위에서
+처리합니다. 게시 성공 뒤 웹에서 해당 판본의 Claude 첫 학습 요청을 복사할 수 있습니다.
+
+신규 접수를 중지하려면 운영자가 현재 generation을 확인한 뒤
+`python -m solo_leveling.interfaces.cli.processing_intake_stop --schema <schema> --expected-generation <generation>`
+을 실행합니다. 공용 접수 스위치이므로 질문·퀴즈 등 같은 제어를 사용하는 접수도
+일시 중지됩니다. 기존 접수와 전송 제어는 별도로 유지됩니다. 이미 전송된 요청은
+회수할 수 없으며, 신규 전송까지 멈춰야 하면 별도의 dispatch 제어를 사용합니다.
+데모 종료 시 설정을 끄고 worker를 standby로 복원합니다.
+
+분할 임베딩을 게시하는 제한 worker 역할에는 기존 게시 권한에 더해
+`server_embedding_fragments`의 다음 열 권한이 필요합니다. 아래의 스키마와 역할은
+대상 환경의 제한 계정에 맞게 지정하고, 배포 전에 해당 역할로 게시까지 리허설합니다.
+
+```sql
+GRANT SELECT (owner_user_id, embedding_set_id, embedding_fragment_id, chunk_id,
+              token_start, token_end, parent_token_count, dimension, embedding),
+      INSERT (owner_user_id, paper_id, server_version_id, parse_revision_id,
+              translation_revision_id, embedding_set_id, chunk_id, embedding_fragment_id,
+              token_start, token_end, parent_token_count, dimension, embedding),
+      UPDATE (embedding)
+ON slp_staging.server_embedding_fragments TO slp_staging_worker;
+```
+
+`UPDATE (embedding)`은 동일한 조각의 멱등 삽입에 사용됩니다. 삭제·DDL 권한은
+필요하지 않습니다. 이 권한의 운영 적용과 worker 활성화는 별도 승인 범위입니다.

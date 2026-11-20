@@ -75,7 +75,7 @@ def supervise(stop, command=None, *, preflight=None, poll_seconds=0.2, grace_sec
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mode', choices=('standby', 'verify-once', 'question-worker', 'quiz-worker'), default='standby')
+    parser.add_argument('--mode', choices=('standby', 'verify-once', 'question-worker', 'quiz-worker', 'demo-pdf-worker'), default='standby')
     parser.add_argument('--config')
     parser.add_argument('--runtime', help='검토한 질문 서버 runtime module:factory')
     lifetime = parser.add_mutually_exclusive_group()
@@ -97,6 +97,8 @@ def main(argv=None):
         parser.error('질문 실행 설정은 question-worker 모드에서만 받습니다.')
     if args.mode == 'verify-once' and (not args.config or not os.path.isabs(args.config)):
         parser.error('검증 설정의 절대 경로가 필요합니다.')
+    if args.mode == 'demo-pdf-worker' and args.config:
+        parser.error('데모 설정은 SLP_DEMO_PROCESSING_CONFIG 환경변수로 받습니다.')
     if args.mode == 'standby' and args.config:
         parser.error('대기 모드에서는 검증 설정을 받지 않습니다.')
     stop = threading.Event()
@@ -110,6 +112,8 @@ def main(argv=None):
         command = [sys.executable, '-m', 'solo_leveling.interfaces.cli.question_worker',
                    '--execute', '--runtime', args.runtime]
         command += ['--continuous'] if args.continuous else ['--max-jobs', str(max_jobs)]
+    if args.mode == 'demo-pdf-worker':
+        command = [sys.executable, '-m', 'solo_leveling.workers.demo_processing']
     if args.mode == 'quiz-worker':
         # 이미지 ENTRYPOINT를 유지하고 고정 CLI를 자식으로 실행한다.
         command = [sys.executable, '-m', 'solo_leveling.interfaces.cli.quiz_worker',

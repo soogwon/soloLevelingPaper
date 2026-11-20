@@ -56,7 +56,7 @@ class PostgresProcessingAuthorization(PostgresRemoteProcessingInputStore):
                               row['input_hash'], row['storage_consent_id'], row['ai_consent_id'],
                               row['notice_version'])
 
-    def ledger(self, source, check_allowed, *, policy_version, window_key):
+    def ledger(self, source, check_allowed, *, policy_version, window_key, validate_limits=None):
         """check_allowed는 worker가 공급한 해당 실행의 heartbeat 포함 callback이다."""
         if not _valid(source) or not callable(check_allowed):
             raise ValueError('processing_authorization_invalid')
@@ -94,4 +94,4 @@ class PostgresProcessingAuthorization(PostgresRemoteProcessingInputStore):
                     return None
                 return super().authorize(request)
 
-        return BoundLedger(self._pool, policy_version, window_key, validate)
+        return BoundLedger(self._pool, policy_version, window_key, validate, validate_limits=validate_limits)

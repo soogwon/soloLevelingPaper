@@ -9,7 +9,7 @@ class QueueRunResult:
     processed: int
 
 
-def run_processing_queue(worker, stop, *, max_jobs: int, idle_seconds: float = 5.0):
+def run_processing_queue(worker, stop, *, max_jobs: int, idle_seconds: float = 5.0, settle_failed=None):
     """새 접수·재시도 설정·예산을 만들지 않고 기존 claim/lease 경계를 사용한다.
 
     stop은 다음 claim을 막는다. 진행 중인 요청의 물리 취소나 미과금은 보장하지 않는다.
@@ -27,13 +27,17 @@ def run_processing_queue(worker, stop, *, max_jobs: int, idle_seconds: float = 5
         try:
             result = worker.run_once()
         except Exception:
-            # 불확실한 처리 뒤 자동 반복·provider 재전송을 시작하지 않는다.
-            return QueueRunResult('failed',processed)
+            # 데모는 실패한 실행을 먼저 종결한 경우에만 다음 작업을 가져온다.
+            if settle_failed is None or not settle_failed():
+                return QueueRunResult('failed',processed)
+            processed += 1
+            continue
         if result is None:
             if stop.wait(idle_seconds):
                 return QueueRunResult('stopped',processed)
             continue
         processed += 1
         if getattr(result,'published',None) is None:
-            return QueueRunResult('not_published',processed)
+            if settle_failed is None or not settle_failed():
+                return QueueRunResult('not_published',processed)
     return QueueRunResult('limit_reached',processed)

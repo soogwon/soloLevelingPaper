@@ -86,17 +86,21 @@ class Plan:
 
 
 def load_plan(config, path):
-    raw = read_json(path)
+    return validate_plan(config, read_json(path))
+
+
+def validate_plan(config, raw, *, demo=False):
     require(type(raw) is dict)
     fragmented = type(raw.get('schema_version')) is int and raw['schema_version'] in (2,3)
     quality_recovery = type(raw.get('schema_version')) is int and raw['schema_version'] == 3
-    require(set(raw) == {'schema_version', 'scope_sha256', 'runtime_image',
+    require(set(raw) == {'schema_version', 'runtime_image',
         'runtime_lock_path', 'model_lock_path', 'model_dir', 'embedding_spec', 'limits', 'translation',
-        'batch_size', 'policy_version', 'window_key', 'r2', 'requests'}
+        'batch_size', 'policy_version', 'window_key', 'r2'}
+        | (set() if demo else {'scope_sha256', 'requests'})
         | ({'embedding_split_policy'} if fragmented else set())
         | ({'translation_recovery_policy'} if quality_recovery else set()))
     require(type(raw['schema_version']) is int and raw['schema_version'] in (1, 2, 3)
-            and raw['scope_sha256'] == scope_digest(config))
+            and (demo or raw['scope_sha256'] == scope_digest(config)))
     if quality_recovery:
         require(raw['translation_recovery_policy'] == 'layout-aware-v1')
     if fragmented:
@@ -125,7 +129,8 @@ def load_plan(config, path):
     require(type(r2['endpoint']) is str and re.fullmatch(r'https://[0-9a-f]{32}\.r2\.cloudflarestorage\.com', r2['endpoint']))
     require(type(r2['bucket']) is str and re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]', r2['bucket']))
     require(r2['region'] == 'auto')
-    ApprovedPayloadBounds(translation.model, tr['max_output_tokens'], raw['requests'])
+    if not demo:
+        ApprovedPayloadBounds(translation.model, tr['max_output_tokens'], raw['requests'])
     return Plan(raw, spec, limits, translation)
 
 
