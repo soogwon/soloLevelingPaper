@@ -176,3 +176,22 @@ def test_revoked_consent_cannot_be_reactivated(pool,db,stores,restricted):
             with conn.transaction():
                 conn.execute("UPDATE server_remote_consents SET revoked_at=NULL WHERE consent_id=(SELECT ai_consent_id FROM server_summary_reviews WHERE request_key=%s)",(key,))
     assert service.view('alice',key)['ai_provider']=='revoked'
+
+
+def test_restricted_chat_summary_save_leaves_worker_without_access(pool, db, stores, restricted):
+    import psycopg
+
+    runtimes, _, _ = restricted
+    service, _, context, request, _ = review(db, stores, pool, runtimes[0])
+    key = str(uuid4())
+    source = request.unpack()[1][0]
+    service.prepare_chat('alice', key, context, [
+        dict(kind='claim', text='합성 연구 질문입니다.', chunk_ids=[source.chunk_id]),
+    ])
+    assert service.latest('alice', context) is None
+    assert service.save_chat('alice', key)['saved']
+    assert service.latest('alice', context)['evidence_pages'] == {source.chunk_id: source.pdf_page}
+    with pytest.raises(psycopg.errors.InsufficientPrivilege), runtimes[1].connection() as conn:
+        conn.execute('SELECT * FROM server_chat_summaries')
+    with pytest.raises(psycopg.errors.InsufficientPrivilege), runtimes[0].connection() as conn:
+        conn.execute('UPDATE server_chat_summaries SET snapshot=snapshot')

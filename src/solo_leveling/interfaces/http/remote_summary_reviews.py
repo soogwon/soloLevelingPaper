@@ -8,6 +8,7 @@ import json
 from solo_leveling.application.remote_execution_policy import RemoteExecutionPolicy
 from solo_leveling.application.summary.remote_contract import NOTICE_VERSION, OPERATION, RemoteSummaryInput
 from .remote_executions import PostgresRemoteExecutionStore, RemoteExecutionConflict
+from .remote_chat_summaries import PostgresChatSummaries
 from .remote_summary_sources import PostgresSummaryPreparation
 from .remote_summary_intake import PostgresSummaryIntake, SummaryAdmissionDenied
 
@@ -26,6 +27,7 @@ class PostgresSummaryReviews:
             raise ValueError('summary_review_policy_invalid')
         self.pool, self.settings, self.policy = pool, dict(settings), policy
         self.window, self.seconds, self.origin = window_key, review_seconds, web_origin.rstrip('/')
+        self.chat = PostgresChatSummaries(pool, web_origin=self.origin, review_seconds=review_seconds)
 
     def prepare(self, owner, key, context, *, scope='paper', section_id=None):
         key, context = str(UUID(key)), str(UUID(context))
@@ -140,23 +142,31 @@ class PostgresSummaryReviews:
         from .remote_summary_results import PostgresSummaryResults
         with self.pool.connection() as conn:
             row = self._row(conn, owner, key)
-            if row is None:
-                return None
-            context = str(row['context_id'])
+        if row is None:
+            return self.chat.get(owner, key)
+        context = str(row['context_id'])
         return PostgresSummaryResults(self.pool).get(owner, context, key)
 
     def evidence(self, owner, key, evidence_id):
         from .remote_summary_results import PostgresSummaryResults
         with self.pool.connection() as conn:
             row = self._row(conn, owner, key)
-            if row is None:
-                return None
-            context = str(row['context_id'])
-        return PostgresSummaryResults(self.pool).evidence(owner, context, key, evidence_id)
+        if row is None:
+            return self.chat.evidence(owner, key, evidence_id)
+        return PostgresSummaryResults(self.pool).evidence(owner, str(row['context_id']), key, evidence_id)
 
     def latest(self, owner, context):
         from .remote_summary_results import PostgresSummaryResults
-        return PostgresSummaryResults(self.pool).latest(owner, context)
+        return self.chat.latest(owner, context, PostgresSummaryResults(self.pool).latest(owner, context))
+
+    def prepare_chat(self, owner, key, context, items):
+        return self.chat.prepare(owner, key, context, items)
+
+    def review_chat(self, owner, key):
+        return self.chat.review(owner, key)
+
+    def save_chat(self, owner, key):
+        return self.chat.save(owner, key)
 
     def cancel(self, owner, key):
         with self.pool.connection() as conn:

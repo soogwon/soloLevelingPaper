@@ -22,7 +22,7 @@ def grant_summary_role(conn, schema, role, *, worker=False):
              'server_dispatch_controls','server_dispatch_budget_limits','server_question_budget_reservations',
              'server_provider_attempts','server_summary_inputs'}
     inserts = {'server_provider_attempts'} if worker else {
-        'server_summary_reviews','server_remote_consents','server_remote_executions',
+        'server_summary_reviews','server_chat_summaries','server_remote_consents','server_remote_executions',
         'server_summary_inputs','server_question_budget_reservations'}
     locks = {'server_papers':'paper_id','server_dispatch_controls':'control_id'}
     updates = {
@@ -36,8 +36,9 @@ def grant_summary_role(conn, schema, role, *, worker=False):
         updates['server_provider_attempts'] = ['status','actual_input_tokens','actual_output_tokens','settled_at']
         updates['server_dispatch_budget_limits'] += ['consumed_input_tokens','consumed_output_tokens']
     else:
-        reads.update({'server_summary_reviews','server_processing_publications','server_embedding_sets',
+        reads.update({'server_summary_reviews','server_chat_summaries','server_processing_publications','server_embedding_sets',
                       'server_processing_chunks','server_translation_chunks'})
+        updates['server_chat_summaries'] = ['saved_at']
         updates['server_summary_reviews'] = ['storage_consent_id','ai_consent_id']
         updates['server_remote_consents'] = ['revoked_at']
     updates.update({table:[column] for table,column in locks.items()})

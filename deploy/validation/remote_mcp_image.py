@@ -132,7 +132,7 @@ summary_app = create_app(remote_mcp_settings=settings)
 assert any(getattr(route,'path','')=='/v1/remote-summaries/contexts/{context}/latest' for route in summary_app.routes)
 summary_bundle = create_remote_mcp(settings,product_queries=Queries(),
     summary_service=PostgresSummaryReviews(None,**summary_settings.arguments))
-assert {'prepare_remote_summary','get_latest_remote_summary','export_remote_summary'} <= {
+assert {'prepare_remote_summary','prepare_remote_chat_summary','get_latest_remote_summary','export_remote_summary'} <= {
     tool.name for tool in asyncio.run(summary_bundle.server.list_tools())}
 assert callable(export_summary)
 print('REMOTE_SUMMARY_IMAGE_OK; no database or provider calls')
