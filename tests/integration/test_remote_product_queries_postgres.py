@@ -36,7 +36,7 @@ def result(client,name,args=None,token='account-a'):
     return json.loads(value['content'][0]['text'])
 
 
-def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool):
+def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool,monkeypatch):
     remote=PgvectorContractStore(db,stores,pool)
     first=remote.publish()
     db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'합성 계정')",(remote.owner,))
@@ -46,7 +46,7 @@ def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool):
     with TestClient(create_app(remote_mcp_settings=settings,remote_mcp_verifier=Verifier(),
                               remote_product_queries=queries),base_url=SETTINGS.resource_url[:-4]) as client:
         names={v['name'] for v in call(client,'tools/list').json()['result']['tools']}
-        assert names=={'whoami','probe_card','probe_delay','list_remote_papers','open_remote_paper','get_remote_question','get_remote_evidence','get_remote_paper_detail','get_learning_path','get_prerequisites','list_remote_processing_jobs','get_remote_processing_job','preview_remote_reprocessing','open_remote_pdf_registration','verify_remote_connection'}
+        assert names=={'whoami','probe_card','probe_delay','list_remote_papers','open_remote_paper','get_remote_question','get_remote_evidence','get_remote_paper_detail','get_learning_path','get_prerequisites','list_remote_processing_jobs','get_remote_processing_job','preview_remote_reprocessing','open_remote_pdf_registration','verify_remote_connection','read_remote_paper_page'}
         other_owner = str(uuid4())
         db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'다른 합성 계정')", (other_owner,))
         queries.owners.link_identity(other_owner, VerifiedRemoteIdentity(SETTINGS.issuer, 'account-b'))
@@ -77,12 +77,41 @@ def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool):
         detail_args={'context_id':pinned['context_id']}
         assert result(client,'get_remote_paper_detail',detail_args)['result']['publication_id']==first.publication
         assert result(client,'get_remote_paper_detail',detail_args,token='account-b')=={'status':'not_found'}
+        first_page = db('SELECT min(pdf_page) AS page FROM server_processing_chunks WHERE parse_revision_id=%s',
+                        (queries.contexts.resolve(remote.owner, pinned['context_id']).parse_revision_id,))[0]['page']
+        page_args = {**detail_args, 'pdf_page': first_page}
+        assert result(client, 'read_remote_paper_page', {**detail_args, 'pdf_page': 1})['result']['page_status'] == 'empty'
+        owned_page = result(client, 'read_remote_paper_page', page_args)
+        assert owned_page['status'] == 'ok'
+        assert owned_page['result']['publication_id'] == first.publication
+        assert owned_page['result']['chunks'][0]['original_text']
+        assert owned_page['result']['chunks'][0]['translated_text'] is None
+        translated_page = result(client, 'read_remote_paper_page', {**page_args, 'include_translation': True})
+        assert translated_page['result']['chunks'][0]['translated_text']
+        with monkeypatch.context() as patch:
+            from solo_leveling.interfaces.http import remote_paper_pages
+
+            patch.setattr(remote_paper_pages, 'TEXT_LIMIT', 4)
+            first_slice = result(client, 'read_remote_paper_page', page_args)['result']
+            assert first_slice['chunks'][0]['original_truncated']
+            cursor = first_slice['next_cursor']
+            second_slice = result(client, 'read_remote_paper_page', {**page_args, 'cursor': cursor})['result']
+            first_chunk, second_chunk = first_slice['chunks'][0], second_slice['chunks'][0]
+            assert first_chunk['chunk_id'] == second_chunk['chunk_id']
+            assert second_chunk['text_offset'] == 4
+            assert first_chunk['original_text'] + second_chunk['original_text'] == owned_page['result']['chunks'][0]['original_text'][:8]
+            assert result(client, 'read_remote_paper_page', {**page_args, 'cursor': cursor},
+                          token='account-b') == {'status': 'not_found'}
+        assert result(client, 'read_remote_paper_page', page_args, token='account-b') == {'status': 'not_found'}
+        assert result(client, 'read_remote_paper_page', {**page_args, 'cursor': str(uuid4())}) == {'status': 'not_found'}
+        assert result(client, 'read_remote_paper_page', {**page_args, 'pdf_page': 999}) == {'status': 'page_out_of_range'}
         path = result(client,'get_learning_path',detail_args)
         assert path['result']['graph_status'] == 'no_graph'
         assert path['result']['steps'] == []
         assert result(client,'get_learning_path',detail_args,token='account-b')['status']=='not_found'
         assert result(client,'get_prerequisites',{**detail_args,'concept':'attention'},token='account-b')['status']=='not_found'
         remote.publish(100,base=first)
+        assert result(client, 'read_remote_paper_page', page_args) == owned_page
         assert result(client,'open_remote_paper',args)==pinned
         assert result(client,'open_remote_paper',args,token='account-b')=={'status':'not_found'}
         assert result(client,'get_remote_question',{'request_key':'missing'})=={'status':'not_found'}

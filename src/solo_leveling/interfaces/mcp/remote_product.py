@@ -68,6 +68,22 @@ class RemoteProductQueries:
         except Exception:
             return {'status':'unavailable'}
 
+    def read_page(self, context_id, pdf_page, cursor=None, include_translation=False):
+        from solo_leveling.interfaces.http.remote_paper_pages import read_paper_page, valid_page_arguments
+
+        try:
+            context_id, cursor = valid_page_arguments(context_id, pdf_page, cursor)
+        except (ValueError, TypeError, AttributeError):
+            return {'status': 'invalid_argument'}
+        try:
+            owner = self.owner()
+            binding = self.contexts.resolve(owner, context_id) if owner else None
+            if binding is None:
+                return {'status': 'not_found'}
+            return read_paper_page(self.pool, binding, pdf_page, cursor, include_translation)
+        except Exception:
+            return {'status': 'unavailable'}
+
     def open_paper(self, paper_id, version_id, context_key):
         try:
             if not isinstance(version_id,str) or not version_id.strip() or len(version_id)>512:
@@ -262,6 +278,13 @@ def register_product_queries(server, queries, *, cancellation_enabled=False, rep
     def list_remote_papers(offset: int = 0) -> dict:
         """현재 계정의 서버 처리 논문을 20개씩 조회한다. PDF·로컬 파일을 열지 않는다."""
         return queries.list_papers(offset)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                                             idempotentHint=True, openWorldHint=False))
+    def read_remote_paper_page(context_id: str, pdf_page: StrictInt, cursor: str | None = None,
+                               include_translation: bool = False) -> dict:
+        """고정 PDF 판본의 지정 페이지를 읽는다. next_cursor는 같은 페이지에서 사용한다. 성공한 본문만 읽었다고 설명한다. 이 도구는 읽기 위치를 저장하지 않으며 위치 저장은 사용자의 명시 요청으로 별도 실행한다."""
+        return queries.read_page(context_id, pdf_page, cursor, include_translation)
 
     @server.tool()
     def open_remote_paper(paper_id: str, version_id: str, context_key: str) -> dict:
