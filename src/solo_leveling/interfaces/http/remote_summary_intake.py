@@ -11,8 +11,18 @@ from .remote_executions import PostgresRemoteExecutionStore, RemoteExecutionConf
 from .remote_summary_sources import PostgresSummaryPreparation
 
 
-class _Denied(Exception):
-    pass
+class SummaryAdmissionDenied(ValueError):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+SUMMARY_ADMISSION_MESSAGES = {
+    'summary_consent_required': '요약 저장과 AI 전송 동의를 웹에서 다시 확인하세요.',
+    'summary_intake_closed': '현재 새 요약 접수가 중지돼 있어요.',
+    'summary_budget_unavailable': '현재 계정 또는 서비스의 예산으로 새 요약을 접수할 수 없어요.',
+    'summary_review_required': '요약 검토 범위와 유효 기간을 웹에서 다시 확인하세요.',
+}
 
 
 class PostgresSummaryIntake:
@@ -24,7 +34,7 @@ class PostgresSummaryIntake:
         self.pool = pool
         self.settings = dict(settings)
 
-    def submit(self, owner, request_key, request, storage_id, ai_id, *, policy, window_key):
+    def submit(self, owner, request_key, request, storage_id, ai_id, *, policy, window_key, report_denial=False):
         """인증 owner와 서버 정책을 전달한다. 전송·생성·자동 재시도는 수행하지 않는다."""
         if (type(request) is not RemoteSummaryInput or type(policy) is not RemoteExecutionPolicy
                 or policy.max_calls != 1 or not isinstance(window_key, str)
@@ -53,24 +63,24 @@ class PostgresSummaryIntake:
                     WHERE c.owner_user_id=%s AND c.context_id=%s AND p.deleted_at IS NULL
                     FOR UPDATE OF p''', (owner, binding.context_id)).fetchone()
                 if parent is None:
-                    raise _Denied()
+                    raise SummaryAdmissionDenied('summary_review_required')
                 existing = store.lookup(owner, OPERATION, key)
                 if existing is None:
                     preparation = PostgresSummaryPreparation(scoped, **self.settings)
                     current = preparation.prepare(owner, binding.context_id,
-                                                  scope=config['scope'], section_id=config['section_id'])
+                                                  scope=config['scope'], section_id=config['section_id'], policy=policy)
                     if current is None or current.input_hash != request.input_hash:
-                        raise _Denied()
+                        raise SummaryAdmissionDenied('summary_review_required')
                     # DB 원장의 목적 이름은 공통 storage/ai_provider이다. 요약 전용 해시와 고지로 분리한다.
                     if _question_consent(conn, owner, storage_id, ai_id, request.input_hash, NOTICE_VERSION) is None:
-                        raise _Denied()
+                        raise SummaryAdmissionDenied('summary_consent_required')
                     control = conn.execute('''SELECT intake_enabled FROM server_dispatch_controls
                         WHERE control_id='provider_dispatch' FOR SHARE''').fetchone()
                     if control is None or not control['intake_enabled']:
-                        raise _Denied()
+                        raise SummaryAdmissionDenied('summary_intake_closed')
                 saved = store.create(lookup, storage_id, ai_id, NOTICE_VERSION, policy=policy)
                 if saved is None:
-                    raise _Denied()
+                    raise SummaryAdmissionDenied('summary_review_required')
                 if existing is not None:
                     row = conn.execute('''SELECT s.input_snapshot,r.policy_version,r.window_key,e.policy_snapshot
                         FROM server_summary_inputs s JOIN server_question_budget_reservations r
@@ -92,7 +102,7 @@ class PostgresSummaryIntake:
                         r['reserved_input_tokens'] + r['consumed_input_tokens'] + policy.max_input_tokens > r['max_input_tokens']
                         or r['reserved_output_tokens'] + r['consumed_output_tokens'] + policy.max_output_tokens > r['max_output_tokens']
                         for r in limits)):
-                    raise _Denied()
+                    raise SummaryAdmissionDenied('summary_budget_unavailable')
                 # 기존 전체 실행 예산 원장을 공유한다. 물리 전송 예약은 이 예약 안에서만 소비한다.
                 conn.execute('''INSERT INTO server_question_budget_reservations
                     (owner_user_id,execution_id,policy_version,window_key,remaining_input_tokens,remaining_output_tokens)
@@ -104,5 +114,7 @@ class PostgresSummaryIntake:
                      ((scope_type='service' AND scope_id='service') OR (scope_type='owner' AND scope_id=%s))''',
                     (policy.max_input_tokens, policy.max_output_tokens, policy.version, window_key, owner))
                 return saved
-        except _Denied:
+        except SummaryAdmissionDenied:
+            if report_denial:
+                raise
             return None

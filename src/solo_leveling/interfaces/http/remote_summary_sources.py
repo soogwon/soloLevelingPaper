@@ -6,9 +6,40 @@ import hashlib
 import json
 
 from solo_leveling.application.summary.remote_contract import (
-    RemoteSummaryError, RemoteSummaryInput, SummarySource,
+    BRIEF_PROMPT_VERSION, RemoteSummaryError, RemoteSummaryInput, SummarySource,
 )
+from solo_leveling.application.summary.prompt import build_summary_payload
 from .remote_retrieval import PostgresRemoteContextResolver
+
+
+def select_brief_sources(sources, config, *, max_input_tokens, max_output_tokens):
+    """처음과 끝, 중간 구간 순으로 후보를 고르고 원문 순서로 고정한다."""
+    def fits(selected):
+        payload = build_summary_payload(selected, config, max_output_tokens)
+        size = len(json.dumps(payload, ensure_ascii=False).encode('utf-8'))
+        return size + 256 <= max_input_tokens
+
+    if fits(sources):
+        return sources
+    selected = {}
+    intervals = [(0, len(sources) - 1)]
+    candidates = [0, len(sources) - 1]
+    while intervals:
+        next_intervals = []
+        for first, last in intervals:
+            if last - first > 1:
+                middle = (first + last) // 2
+                candidates.append(middle)
+                next_intervals.extend(((first, middle), (middle, last)))
+        intervals = next_intervals
+    for index in dict.fromkeys(candidates):
+        source = sources[index]
+        candidate = {**selected, index: source}
+        if fits(tuple(candidate.values())):
+            selected = candidate
+    if not selected:
+        raise RemoteSummaryError('REMOTE_SUMMARY_SOURCE_TOO_LARGE')
+    return tuple(selected[index] for index in sorted(selected))
 
 
 class PostgresSummaryPreparation:
@@ -17,7 +48,7 @@ class PostgresSummaryPreparation:
         self.settings = dict(provider=provider, model=model, prompt_version=prompt_version,
                              language=language, budget_policy_version=budget_policy_version)
 
-    def prepare(self, owner, context, *, scope='paper', section_id=None):
+    def prepare(self, owner, context, *, scope='paper', section_id=None, policy=None):
         """owner는 검증된 인증 계층에서 전달한다. 조회만으로 동의나 실행을 만들지 않는다."""
         if (not isinstance(owner, str) or not owner.strip() or scope not in ('paper', 'section')
                 or (scope == 'paper' and section_id is not None)
@@ -64,5 +95,10 @@ class PostgresSummaryPreparation:
                 sources.append(SummarySource(evidence_id, str(row['chunk_id']), row['pdf_page'],
                     row['section_id'], row['original_text'],
                     row['translated_text'] if row['translation_status'] == 'translated' else None))
+            if self.settings['prompt_version'] == BRIEF_PROMPT_VERSION:
+                if policy is None:
+                    raise RemoteSummaryError('REMOTE_SUMMARY_INVALID')
+                sources = select_brief_sources(tuple(sources), dict(self.settings, scope=scope, section_id=section_id),
+                    max_input_tokens=policy.max_input_tokens, max_output_tokens=policy.max_output_tokens)
             return RemoteSummaryInput.create(binding, tuple(sources), scope=scope, section_id=section_id,
                 total_scope_chunks=rows[0]['total_scope_chunks'], **self.settings)

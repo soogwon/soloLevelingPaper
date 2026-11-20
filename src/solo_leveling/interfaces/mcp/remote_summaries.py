@@ -2,8 +2,10 @@
 import time
 from mcp.types import ToolAnnotations
 from mcp.server.auth.middleware.auth_context import get_access_token
+from solo_leveling.application.summary.remote_contract import RemoteSummaryError
 from solo_leveling.interfaces.http.remote_mcp_auth import RemoteIdentityAccessToken
 from solo_leveling.interfaces.http.remote_executions import RemoteExecutionConflict
+from solo_leveling.interfaces.http.remote_summary_intake import SUMMARY_ADMISSION_MESSAGES, SummaryAdmissionDenied
 
 
 def register_summary_tools(server, queries, reviews):
@@ -21,6 +23,13 @@ def register_summary_tools(server, queries, reviews):
             return {'status': 'not_found'} if result is None else result
         except RemoteExecutionConflict:
             return {'status': 'conflict', 'message': '같은 요청 키의 요약 범위를 변경할 수 없습니다.'}
+        except SummaryAdmissionDenied as error:
+            return {'status': error.code, 'message': SUMMARY_ADMISSION_MESSAGES[error.code]}
+        except RemoteSummaryError as error:
+            if str(error) == 'REMOTE_SUMMARY_SOURCE_TOO_LARGE':
+                return {'status': 'summary_source_too_large',
+                        'message': '현재 입력 한도로 요약을 준비할 수 없어요. 더 작은 섹션을 선택하세요.'}
+            return {'status': 'review_required', 'message': '인증 웹에서 요약 동의와 상태를 확인하세요. 자동 재제출하지 마세요.'}
         except ValueError:
             return {'status': 'review_required', 'message': '인증 웹에서 요약 동의와 상태를 확인하세요. 자동 재제출하지 마세요.'}
         except Exception:

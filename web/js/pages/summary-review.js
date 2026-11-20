@@ -1,4 +1,4 @@
-import { request } from '../api/client.js';
+import { ApiError, request } from '../api/client.js';
 import { html, setHTML } from '../lib/html.js';
 
 export default async function summaryReview({ view, params }) {
@@ -28,7 +28,8 @@ export default async function summaryReview({ view, params }) {
       ${value ? html`<section class="card panel">
         <p>실행 상태: ${value.state || '미접수'} · 실행 ID: ${value.execution_id || '없음'}</p><h2>요약 전송 범위</h2>
         <p>논문 판본: ${value.server_version_id} · 게시: ${value.publication_id}</p>
-        <p>범위: ${value.scope === 'paper' ? '논문 전체' : '선택 섹션'} · 섹션: ${value.section_id || '전체'} · 근거 ${value.source_count}개</p>
+        <p>범위: ${value.scope === 'paper' ? '논문 전체' : '선택 섹션'} · 섹션: ${value.section_id || '전체'} · 근거 ${value.source_count}개
+          ${value.total_scope_chunks > value.source_count ? `(전체 ${value.total_scope_chunks}개 중 선택)` : ''}</p>
         <p>제공자: ${value.provider} · 생성 모델: ${value.model}</p>
         <p>최대 ${value.policy?.max_calls}회 · 입력 ${value.policy?.max_input_tokens}토큰 · 출력 ${value.policy?.max_output_tokens}토큰</p>
         <p>서비스 예산을 사용하며 비용이 발생합니다. 자동 생성·자동 재전송은 하지 않습니다.</p>
@@ -83,9 +84,17 @@ export default async function summaryReview({ view, params }) {
         draw(saved ? '기존 결과를 조회했습니다. 새 생성은 하지 않았습니다.' : '저장 완료된 요약이 없습니다.');
       }
       else { value = result; draw(); }
-    } catch {
+    } catch (error) {
       if (closed || seq !== generation || !view.isConnected) return;
-      busy = false; draw('확인하지 못했습니다. 같은 요청을 다시 조회하세요. 자동 재제출하지 않습니다.');
+      busy = false;
+      const reasons = {
+        summary_consent_required: '요약 저장과 AI 전송 동의를 웹에서 다시 확인해 주세요.',
+        summary_intake_closed: '현재 새 요약 접수가 중지돼 있어요.',
+        summary_budget_unavailable: '현재 계정 또는 서비스의 예산으로 새 요약을 접수할 수 없어요.',
+        summary_review_required: '요약 검토 범위와 유효 기간을 다시 확인해 주세요.',
+      };
+      draw(error instanceof ApiError && Object.hasOwn(reasons, error.code) ? reasons[error.code]
+        : '확인하지 못했습니다. 같은 요청을 다시 조회하세요. 자동 재제출하지 않습니다.');
     }
   }
   await run('GET', '');

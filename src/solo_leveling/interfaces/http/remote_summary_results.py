@@ -65,7 +65,7 @@ class PostgresSummaryResults:
             store.complete(intent.owner_user_id, intent.execution_id, intent.lease_token, payload)
             return payload
 
-    def get(self, owner, context, request_key):
+    def get(self, owner, context, request_key, *, include_citations=False):
         context, key = str(UUID(context)), str(UUID(request_key))
         with self.pool.connection() as conn:
             row = conn.execute('''SELECT e.execution_id,e.context_id,e.state,e.payload_json,e.payload_sha256,
@@ -94,8 +94,16 @@ class PostgresSummaryResults:
                     raise ValueError()
             except (TypeError, ValueError, KeyError, AttributeError):
                 raise ValueError('remote_summary_result_invalid') from None
-        return dict(execution_id=row['execution_id'], context_id=context, request_key=key,
-                    state=row['state'], result=payload)
+        result = dict(execution_id=row['execution_id'], context_id=context, request_key=key,
+                      state=row['state'], result=payload)
+        if include_citations and payload is not None:
+            _, sources, config = request.unpack()
+            cited = {evidence_id for item in payload['items'] for evidence_id in item['evidence_ids']}
+            result['evidence_pages'] = {source.evidence_id: source.pdf_page
+                                        for source in sources if source.evidence_id in cited}
+            result['source_count'] = len(sources)
+            result['total_scope_chunks'] = config['total_scope_chunks']
+        return result
 
     def evidence(self,owner,context,request_key,evidence_id):
         # 같은 조회 transaction의 고정 결과·입력만 읽고 별도 검색이나 생성은 하지 않는다.
@@ -128,7 +136,7 @@ class PostgresSummaryResults:
                 ORDER BY finished_at DESC,execution_id DESC LIMIT 1''',(owner,str(UUID(context)),OPERATION)).fetchone()
             if row is None:
                 return None
-            return PostgresSummaryResults(SimpleNamespace(connection=lambda:nullcontext(conn))).get(owner,context,str(row['request_key']))
+            return PostgresSummaryResults(SimpleNamespace(connection=lambda:nullcontext(conn))).get(owner,context,str(row['request_key']), include_citations=True)
 
     def contexts(self, owner, paper, version, after=None):
         paper = str(UUID(paper))

@@ -43,3 +43,19 @@ test('상한 불일치면 접수를 막고 취소와 조회는 유지한다',asy
  const v=view();await page({view:v,params:{requestKey:key}});await v.querySelector('[data-submit]').onclick();assert.equal(calls.length,1);
  await v.querySelector('[data-cancel]').onclick();assert.match(calls[1][0],/\/cancel$/);assert.equal(calls[1][1],'POST');listeners.get('pagehide')();
 });
+
+test('두 동의가 있어도 예산 부족이면 접수 오류를 구분하고 한 번만 제출한다', async t => {
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push(options.method);
+    if (options.method === 'POST') return { ok: false, status: 409, headers: new Headers(),
+      json: async () => ({ detail: { code: 'summary_budget_unavailable' } }) };
+    return { ok: true, status: 200, json: async () => ({ ...value, storage: 'current', ai_provider: 'current' }) };
+  });
+  const v = view();
+  await page({ view: v, params: { requestKey: key } });
+  await v.querySelector('[data-submit]').onclick();
+  assert.match(v.innerHTML, /계정 또는 서비스의 예산/);
+  assert.deepEqual(calls, ['GET', 'POST']);
+  listeners.get('pagehide')();
+});

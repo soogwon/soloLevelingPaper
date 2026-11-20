@@ -9,7 +9,7 @@ from solo_leveling.application.remote_execution_policy import RemoteExecutionPol
 from solo_leveling.application.summary.remote_contract import NOTICE_VERSION, OPERATION, RemoteSummaryInput
 from .remote_executions import PostgresRemoteExecutionStore, RemoteExecutionConflict
 from .remote_summary_sources import PostgresSummaryPreparation
-from .remote_summary_intake import PostgresSummaryIntake
+from .remote_summary_intake import PostgresSummaryIntake, SummaryAdmissionDenied
 
 
 class PostgresSummaryReviews:
@@ -34,7 +34,7 @@ class PostgresSummaryReviews:
                          (f'{owner}\x1fsummary-review\x1f{key}',))
             scoped = SimpleNamespace(connection=lambda: nullcontext(conn))
             request = PostgresSummaryPreparation(scoped, **self.settings).prepare(
-                owner, context, scope=scope, section_id=section_id)
+                owner, context, scope=scope, section_id=section_id, policy=self.policy)
             if request is None:
                 return None
             old = conn.execute('SELECT input_hash FROM server_summary_reviews WHERE owner_user_id=%s AND request_key=%s', (owner, key)).fetchone()
@@ -128,10 +128,10 @@ class PostgresSummaryReviews:
                 return dict(execution_id=old.execution_id,state=old.state,request_key=key)
             self._active(row)
             if not row['storage_consent_id'] or not row['ai_consent_id']:
-                raise ValueError('summary_consent_required')
+                raise SummaryAdmissionDenied('summary_consent_required')
             saved = PostgresSummaryIntake(scoped,settings=self.settings).submit(owner,key,
                 RemoteSummaryInput(json.dumps(row['input_snapshot'])),row['storage_consent_id'],
-                row['ai_consent_id'],policy=self.policy,window_key=self.window)
+                row['ai_consent_id'],policy=self.policy,window_key=self.window,report_denial=True)
             if saved is None:
                 raise ValueError('summary_admission_denied')
             return dict(execution_id=saved.execution_id,state=saved.state,request_key=key)
