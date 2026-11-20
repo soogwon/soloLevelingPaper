@@ -33,46 +33,71 @@ def read_paper_page(pool, binding, pdf_page, cursor, include_translation):
             return {"status": "not_ready"}
         if pdf_page > page_count:
             return {"status": "page_out_of_range"}
-        ordinal = -1
+        ordinal, offset = -1, 0
         if cursor is not None:
+            chunk_id, offset = cursor
             anchor = conn.execute("""
                 SELECT ordinal FROM server_processing_chunks
                 WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s AND parse_revision_id=%s
                   AND pdf_page=%s AND chunk_id=%s
-                """, (*scope, pdf_page, cursor)).fetchone()
+                """, (*scope, pdf_page, chunk_id)).fetchone()
             if anchor is None:
                 return {"status": "not_found"}
             ordinal = anchor["ordinal"]
-        rows = conn.execute("""
-            SELECT ch.chunk_id, ch.ordinal, ch.section_id, ch.printed_page_label,
-                   left(ch.original_text, %s) AS original_text,
-                   length(ch.original_text) > %s AS original_truncated,
-                   left(t.translated_text, %s) AS translated_text,
-                   COALESCE(length(t.translated_text) > %s, false) AS translation_truncated,
-                   t.translation_status
-            FROM server_processing_chunks ch
-            LEFT JOIN server_translation_revisions tr ON %s AND tr.owner_user_id=ch.owner_user_id
+        translation_columns = """
+            substring(t.translated_text FROM ch.text_offset + 1 FOR %s) AS translated_text,
+            COALESCE(length(t.translated_text), 0) AS translation_length,
+            t.translation_status
+        """ if include_translation else "NULL AS translated_text, 0 AS translation_length, NULL AS translation_status"
+        translation_join = """
+            LEFT JOIN server_translation_revisions tr ON tr.owner_user_id=ch.owner_user_id
               AND tr.paper_id=ch.paper_id AND tr.server_version_id=ch.server_version_id
               AND tr.parse_revision_id=ch.parse_revision_id AND tr.translation_revision_id=%s AND tr.status='ready'
             LEFT JOIN server_translation_chunks t ON t.owner_user_id=tr.owner_user_id
               AND t.translation_revision_id=tr.translation_revision_id AND t.chunk_id=ch.chunk_id
-            WHERE ch.owner_user_id=%s AND ch.paper_id=%s AND ch.server_version_id=%s AND ch.parse_revision_id=%s
-              AND ch.pdf_page=%s AND ch.ordinal>%s
-            ORDER BY ch.ordinal LIMIT %s
-            """, (TEXT_LIMIT, TEXT_LIMIT, TEXT_LIMIT, TEXT_LIMIT, include_translation,
-                  binding.translation_revision_id, *scope, pdf_page, ordinal, CHUNKS_PER_RESPONSE + 1)).fetchall()
-    chunks = [dict(row, chunk_id=str(row["chunk_id"])) for row in rows[:CHUNKS_PER_RESPONSE]]
-    for chunk in chunks:
-        if chunk["translation_status"] not in ("translated", "reference_content"):
-            chunk["translated_text"] = None
-            chunk["translation_truncated"] = False
+              AND t.translation_status IN ('translated', 'reference_content')
+        """ if include_translation else ""
+        translation_params = (TEXT_LIMIT, binding.translation_revision_id) if include_translation else ()
+        rows = conn.execute(f"""
+            WITH page_chunks AS (
+                SELECT ch.*, CASE WHEN ordinal=%s THEN %s ELSE 0 END AS text_offset
+                FROM server_processing_chunks ch
+                WHERE owner_user_id=%s AND paper_id=%s AND server_version_id=%s AND parse_revision_id=%s
+                  AND pdf_page=%s AND ordinal>%s
+                ORDER BY ordinal LIMIT %s
+            )
+            SELECT ch.chunk_id, ch.ordinal, ch.section_id, ch.printed_page_label, ch.text_offset,
+                   substring(ch.original_text FROM ch.text_offset + 1 FOR %s) AS original_text,
+                   length(ch.original_text) AS original_length, {translation_columns}
+            FROM page_chunks ch
+            {translation_join}
+            ORDER BY ch.ordinal
+            """, (ordinal, offset, *scope, pdf_page, ordinal - bool(offset),
+                  CHUNKS_PER_RESPONSE + 1, TEXT_LIMIT, *translation_params)).fetchall()
+    chunks = []
+    next_cursor = None
+    for row in rows[:CHUNKS_PER_RESPONSE]:
+        chunk = dict(row, chunk_id=str(row["chunk_id"]))
+        next_offset = chunk["text_offset"] + TEXT_LIMIT
+        original_length = chunk.pop("original_length")
+        translation_length = chunk.pop("translation_length")
+        if offset and not chunks and offset >= max(original_length, translation_length):
+            return {"status": "not_found"}
+        chunk["original_truncated"] = original_length > next_offset
+        chunk["translation_truncated"] = translation_length > next_offset
+        chunks.append(chunk)
+        if chunk["original_truncated"] or chunk["translation_truncated"]:
+            next_cursor = f'{chunk["chunk_id"]}:{next_offset}'
+            break
+    if next_cursor is None and len(rows) > CHUNKS_PER_RESPONSE:
+        next_cursor = chunks[-1]["chunk_id"]
     return {"status": "ok", "result": {
         "context_id": binding.context_id, "paper_id": binding.paper_id,
         "version_id": binding.server_version_id, "publication_id": binding.publication_id,
         "parse_revision_id": binding.parse_revision_id, "publication_policy": binding.publication_policy,
         "pdf_page": pdf_page, "page_count": page_count,
         "page_status": "empty" if not chunks and cursor is None else "available",
-        "chunks": chunks, "next_cursor": chunks[-1]["chunk_id"] if len(rows) > CHUNKS_PER_RESPONSE else None,
+        "chunks": chunks, "next_cursor": next_cursor,
         "page_notice": PAGE_NOTICE,
     }}
 
@@ -80,4 +105,11 @@ def read_paper_page(pool, binding, pdf_page, cursor, include_translation):
 def valid_page_arguments(context_id, pdf_page, cursor):
     if type(pdf_page) is not int or not 1 <= pdf_page <= 2147483647:
         raise ValueError("invalid_pdf_page")
-    return str(UUID(context_id)), str(UUID(cursor)) if cursor is not None else None
+    context_id = str(UUID(context_id))
+    if cursor is None:
+        return context_id, None
+    chunk_id, separator, raw_offset = cursor.partition(":")
+    offset = int(raw_offset) if separator and raw_offset.isascii() and raw_offset.isdecimal() and len(raw_offset) <= 10 else 0
+    if separator and (offset < TEXT_LIMIT or offset > 2147483647 - TEXT_LIMIT or offset % TEXT_LIMIT):
+        raise ValueError("invalid_page_cursor")
+    return context_id, (str(UUID(chunk_id)), offset)

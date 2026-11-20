@@ -200,3 +200,11 @@ GRANT SELECT, INSERT, UPDATE ON slp_staging.server_remote_connection_checks TO s
 GRANT SELECT (owner_user_id, code_hash, expires_at, verified_at), UPDATE (verified_at)
 ON slp_staging.server_remote_connection_checks TO slp_staging_mcp;
 ```
+
+원격 PDF 페이지 본문은 기존 MCP 원문 조회 권한을 사용합니다. 저장 번역도
+제공하려면 해당 역할에 번역 리비전의 상태·결합 열만 추가로 허용합니다.
+
+```sql
+GRANT SELECT (owner_user_id, paper_id, server_version_id, parse_revision_id, translation_revision_id, status)
+ON slp_staging.server_translation_revisions TO slp_staging_mcp;
+```

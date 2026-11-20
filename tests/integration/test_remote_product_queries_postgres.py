@@ -36,7 +36,7 @@ def result(client,name,args=None,token='account-a'):
     return json.loads(value['content'][0]['text'])
 
 
-def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool):
+def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool,monkeypatch):
     remote=PgvectorContractStore(db,stores,pool)
     first=remote.publish()
     db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'합성 계정')",(remote.owner,))
@@ -88,6 +88,20 @@ def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool):
         assert owned_page['result']['chunks'][0]['translated_text'] is None
         translated_page = result(client, 'read_remote_paper_page', {**page_args, 'include_translation': True})
         assert translated_page['result']['chunks'][0]['translated_text']
+        with monkeypatch.context() as patch:
+            from solo_leveling.interfaces.http import remote_paper_pages
+
+            patch.setattr(remote_paper_pages, 'TEXT_LIMIT', 4)
+            first_slice = result(client, 'read_remote_paper_page', page_args)['result']
+            assert first_slice['chunks'][0]['original_truncated']
+            cursor = first_slice['next_cursor']
+            second_slice = result(client, 'read_remote_paper_page', {**page_args, 'cursor': cursor})['result']
+            first_chunk, second_chunk = first_slice['chunks'][0], second_slice['chunks'][0]
+            assert first_chunk['chunk_id'] == second_chunk['chunk_id']
+            assert second_chunk['text_offset'] == 4
+            assert first_chunk['original_text'] + second_chunk['original_text'] == owned_page['result']['chunks'][0]['original_text'][:8]
+            assert result(client, 'read_remote_paper_page', {**page_args, 'cursor': cursor},
+                          token='account-b') == {'status': 'not_found'}
         assert result(client, 'read_remote_paper_page', page_args, token='account-b') == {'status': 'not_found'}
         assert result(client, 'read_remote_paper_page', {**page_args, 'cursor': str(uuid4())}) == {'status': 'not_found'}
         assert result(client, 'read_remote_paper_page', {**page_args, 'pdf_page': 999}) == {'status': 'page_out_of_range'}
