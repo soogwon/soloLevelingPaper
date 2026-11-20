@@ -63,9 +63,12 @@ class RemoteProductQueries:
             binding = self.contexts.pin(owner,ids[2],ids[0],ids[1]) if owner else None
             if binding is None:
                 return {'status':'not_found'}
+            message = '추천 페이지와 근거는 이 PDF 판본 기준입니다. 다른 판본은 페이지가 다를 수 있습니다.'
+            if binding.publication_policy == 'partial':
+                message += ' 부분 번역 게시본이며 색인된 구간에서 학습할 수 있습니다.'
             return {'status':'ok', 'context_id':binding.context_id, 'paper_id':binding.paper_id,
                     'version_id':binding.server_version_id, 'publication_id':binding.publication_id,
-                    'message':'추천 페이지와 근거는 이 PDF 판본 기준입니다. 다른 판본은 페이지가 다를 수 있습니다.'}
+                    'publication_policy':binding.publication_policy, 'message':message}
         except ValueError as error:
             return {'status':'conflict' if str(error)=='remote_context_key_conflict' else 'unavailable'}
         except Exception:

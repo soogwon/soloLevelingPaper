@@ -68,15 +68,16 @@ class RemoteProcessingStages:
     def __init__(self, parser: ProcessingParser, translator: ProcessingTranslator,
                  embedder: ProcessingEmbedder, *, limits: ProcessingLimits,
                  translation_settings: TranslationSettings, embedding_spec: EmbeddingSpec,
-                 check_allowed: Callable[[ProcessingSource, str], bool]):
+                 check_allowed: Callable[[ProcessingSource, str], bool], allow_partial: bool = False):
         validate_processing_configuration(limits, translation_settings, embedding_spec)
         spec = embedding_spec
-        _require(callable(check_allowed) and callable(getattr(parser, 'parse', None))
+        _require(type(allow_partial) is bool and callable(check_allowed) and callable(getattr(parser, 'parse', None))
                  and callable(getattr(translator, 'translate', None))
                  and callable(getattr(embedder, 'embed', None)), 'PROCESSING_CONFIG_INVALID')
         self.parser, self.translator, self.embedder = parser, translator, embedder
         self.limits, self.settings, self.spec = limits, translation_settings, spec
         self.check_allowed = check_allowed
+        self.allow_partial = allow_partial
 
     def _check(self, source, stage, check_allowed):
         try:
@@ -129,6 +130,7 @@ class RemoteProcessingStages:
         # 같은 객체가 재설정돼도 이 실행의 정책·adapter·검사 포트는 바뀌지 않는다.
         parser, translator, embedder = self.parser, self.translator, self.embedder
         limits, settings, spec, check_allowed = self.limits, self.settings, self.spec, self.check_allowed
+        allow_partial = self.allow_partial
 
         def check(stage):
             self._check(source, stage, check_allowed)
@@ -176,13 +178,14 @@ class RemoteProcessingStages:
             raise ProcessingError('PROCESSING_TRANSLATION_INVALID') from None
         present_pages = {c.pdf_page for c in document.chunks}
         empty_pages = tuple(p for p in range(1, document.page_count + 1) if p not in present_pages)
-        if any(not item.indexable for item in batch.items):
+        indexable = tuple(item for item, checked in zip(translations, batch.items) if checked.indexable)
+        if not indexable or (not allow_partial and len(indexable) != len(translations)):
             check('result')
             return ProcessingResult(source, document, settings, translations, None, empty_pages,
                                     'translation_incomplete')
         check('embedding')
         try:
-            embeddings = embedder.embed(translations, spec)
+            embeddings = embedder.embed(indexable, spec)
         except ProcessingError:
             raise
         except Exception:
@@ -190,7 +193,7 @@ class RemoteProcessingStages:
         _require(isinstance(embeddings, EmbeddingBatch) and embeddings.spec == spec,
                  'PROCESSING_EMBEDDING_INVALID')
         from solo_leveling.application.embedding_fragments import validate_embedding_mapping
-        validate_embedding_mapping(embeddings, tuple(c.chunk_id for c in document.chunks), source.embedding_set_id)
+        validate_embedding_mapping(embeddings, tuple(item.chunk_id for item in indexable), source.embedding_set_id)
         for vector in embeddings.vectors:
             _require(type(vector) is tuple and len(vector) == spec.dimension
                      and all(_finite(v) for v in vector),

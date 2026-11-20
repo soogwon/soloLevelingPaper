@@ -84,13 +84,14 @@ class PostgresStagedProcessingPublisher:
                 result = self.staging.restore(data)
                 args = (source.owner_user_id, source.paper_id, source.version_id, source.parse_revision_id,
                         source.translation_revision_id, source.embedding_set_id, source.job_id, source.lease_token)
+                policy = 'partial' if len(result.embeddings.chunk_ids) < len(result.document.chunks) else 'complete'
                 if previous is not None:
-                    replay = publications._replay(conn, *args, 'complete')
+                    replay = publications._replay(conn, *args, policy)
                     if replay is None: raise ProcessingPublishError('processing_publication_conflict')
                     return replay
                 self._materialize(conn, tx, result)
                 self.staging._live(conn, source)
-                publication = publications.publish(*args, policy='complete')
+                publication = publications.publish(*args, policy=policy)
                 self._record_provenance(conn, source, publication.publication_id, payload_sha256)
                 valid = conn.execute('SELECT %s>clock_timestamp() AS valid', (job['lease_expires_at'],)).fetchone()
                 if valid['valid'] is not True:
@@ -122,6 +123,9 @@ class PostgresStagedProcessingPublisher:
         prefix = (source.owner_user_id, source.paper_id, source.version_id)
         generation = (source.job_id, source.lease_token)
         size = len(result.document.chunks)
+        indexed = set(result.embeddings.chunk_ids)
+        omissions = [{'chunk_id': item.chunk_id, 'reason': item.failure_code.value}
+                     for item in result.translations if item.chunk_id not in indexed]
         fingerprint = asdict(result.embeddings.spec)
         if result.embeddings.split_policy is not None:
             fingerprint['split_policy'] = result.embeddings.split_policy
@@ -138,26 +142,29 @@ class PostgresStagedProcessingPublisher:
                 (*prefix, source.parse_revision_id, size, *generation, json.dumps(metadata)))
         conn.execute('''INSERT INTO server_translation_revisions
             (owner_user_id,paper_id,server_version_id,parse_revision_id,translation_revision_id,status,
-             source_chunk_count,translated_chunk_count,source_job_id,source_lease_token,translation_settings)
-            VALUES (%s,%s,%s,%s,%s,'building',%s,%s,%s,%s,%s::jsonb)''',
-            (*prefix, source.parse_revision_id, source.translation_revision_id, size, size, *generation,
-             json.dumps(asdict(result.translation_settings))))
+             source_chunk_count,translated_chunk_count,source_job_id,source_lease_token,translation_settings,omissions)
+            VALUES (%s,%s,%s,%s,%s,'building',%s,%s,%s,%s,%s::jsonb,%s::jsonb)''',
+            (*prefix, source.parse_revision_id, source.translation_revision_id, size, len(indexed), *generation,
+             json.dumps(asdict(result.translation_settings)),json.dumps(omissions)))
         conn.execute('''INSERT INTO server_embedding_sets
             (owner_user_id,paper_id,server_version_id,parse_revision_id,translation_revision_id,embedding_set_id,
              status,indexed_chunk_count,model_fingerprint,source_job_id,source_lease_token)
             VALUES (%s,%s,%s,%s,%s,%s,'building',%s,%s::jsonb,%s,%s)''',
             (*prefix, source.parse_revision_id, source.translation_revision_id, source.embedding_set_id,
-             size, json.dumps(fingerprint), *generation))
+             len(indexed), json.dumps(fingerprint), *generation))
         writer = PostgresEmbeddingVectorWriter(tx)
         scope = EmbeddingWriteScope(*prefix, source.parse_revision_id, source.translation_revision_id,
                                     source.embedding_set_id, result.embeddings.spec.dimension)
-        for index, (chunk, translation) in enumerate(zip(result.document.chunks, result.translations)):
+        vectors = {} if result.embeddings.fragments else dict(zip(result.embeddings.chunk_ids, result.embeddings.vectors))
+        for chunk, translation in zip(result.document.chunks, result.translations):
             if not reuse_parse:
                 conn.execute('''INSERT INTO server_processing_chunks
                     (owner_user_id,paper_id,server_version_id,parse_revision_id,chunk_id,ordinal,pdf_page,
                      original_text,section_id,printed_page_label) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
                     (*prefix, source.parse_revision_id, chunk.chunk_id, chunk.chunk_index, chunk.pdf_page,
                      chunk.original_text, chunk.section_id, chunk.printed_page_label))
+            if chunk.chunk_id not in indexed:
+                continue
             conn.execute('''INSERT INTO server_translation_chunks
                 (owner_user_id,paper_id,server_version_id,parse_revision_id,translation_revision_id,chunk_id,
                  translated_text,translation_status,translation_failure_code)
@@ -165,10 +172,10 @@ class PostgresStagedProcessingPublisher:
                 (*prefix, source.parse_revision_id, source.translation_revision_id, chunk.chunk_id,
                  translation.text, translation.status.value,
                  None if translation.failure_code is None else translation.failure_code.value))
-            if not result.embeddings.fragments:
-                writer.put(scope, chunk.chunk_id, result.embeddings.vectors[index])
+            if vectors:
+                writer.put(scope, chunk.chunk_id, vectors[chunk.chunk_id])
         table = 'server_embedding_vectors'
-        expected_count = size
+        expected_count = len(indexed)
         if result.embeddings.fragments:
             fragments = PostgresEmbeddingFragmentWriter(tx)
             for fragment, vector in zip(result.embeddings.fragments, result.embeddings.vectors):

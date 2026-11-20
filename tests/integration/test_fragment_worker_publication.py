@@ -102,3 +102,47 @@ def test_original_only_keeps_failure_reason_and_is_searchable(pool,db):
     rows = PostgresRemoteSourceReader(pool).read_chunks(binding,tuple(h.chunk_id for h in hits))
     assert len(rows) == 1 and rows[0].to_chunk().text is None
     assert rows[0].to_chunk().original_text == original
+
+
+@pytest.mark.parametrize('use_fragments', [False, True])
+def test_partial_publication_preserves_failure_and_allows_mcp_learning(pool, db, restricted, use_fragments):
+    from solo_leveling.domain.remote_processing import ProcessedTranslation
+    from solo_leveling.interfaces.http.remote_learning import PostgresRemoteLearningStore
+    from solo_leveling.interfaces.mcp.remote_product import RemoteProductQueries
+
+    _, value = setup(pool, db)
+    store = make_store(restricted[0])
+    if use_fragments:
+        value = fragmented(value)
+    source = value.source
+    missing = replace(value.document.chunks[0], chunk_id=str(uuid4()), chunk_index=1,
+                      original_text='Untranslated text.', section_id=None)
+    value = replace(value, document=replace(value.document,chunks=(*value.document.chunks,missing)),
+        translations=(*value.translations, ProcessedTranslation(missing.chunk_id, None,
+                     TranslationFailureCode.TARGET_LANGUAGE_MISMATCH, TranslationStatus.TRANSLATION_FAILED)))
+    receipt = store.save(value)
+    assert store.restore(store.load(source)) == value
+    publisher = PostgresStagedProcessingPublisher(store)
+    published = publisher.publish(source,receipt.payload_sha256,expected_active_publication_id=None)
+    assert publisher.publish(source,receipt.payload_sha256,expected_active_publication_id=None) == published
+    assert published.policy == 'partial'
+    assert published.manifest == dict(chunk_count=2,translated_chunk_count=1,indexed_chunk_count=1,
+        omissions=[dict(chunk_id=missing.chunk_id,reason='target_language_mismatch')],policy='partial')
+    assert db('SELECT 1 FROM server_processing_chunks WHERE parse_revision_id=%s AND chunk_id=%s',
+              (source.parse_revision_id,missing.chunk_id))
+    assert not db('SELECT 1 FROM server_translation_chunks WHERE chunk_id=%s',(missing.chunk_id,))
+    table = 'server_embedding_fragments' if use_fragments else 'server_embedding_vectors'
+    assert db(f'SELECT DISTINCT chunk_id::text FROM {table} WHERE embedding_set_id=%s',
+              (source.embedding_set_id,)) == [{'chunk_id':value.document.chunks[0].chunk_id}]
+    assert db('SELECT document_metadata FROM server_parse_revisions WHERE parse_revision_id=%s',
+              (source.parse_revision_id,))[0]['document_metadata']['translation_status_counts'] == {
+                  'translated': 1, 'translation_failed': 1,
+              }
+    queries = RemoteProductQueries(pool)
+    queries.owner = lambda: source.owner_user_id
+    context = str(uuid4())
+    opened = queries.open_paper(source.paper_id,source.version_id,context)
+    assert opened['status'] == 'ok' and opened['publication_policy'] == 'partial'
+    learning = PostgresRemoteLearningStore(pool)
+    assert learning.start(source.owner_user_id,context)['status'] == 'reading'
+    assert learning.get('other-owner',context) is None

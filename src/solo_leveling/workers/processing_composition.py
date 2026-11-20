@@ -24,7 +24,7 @@ class ProcessingStagesFactory:
     def __init__(self, authorization, *, service_config, model_dir, embedding_spec,
                  limits, retry_policy, policy_version, window_key, token_upper_bound,
                  batch_size, post=None, model_factory=None, fragment_policy=None, quality_retry_once=False,
-                 reuse_translations=None, validate_limits=None):
+                 reuse_translations=None, validate_limits=None, allow_partial=False):
         if (not isinstance(service_config, OpenAITranslationConfig)
                 or not callable(token_upper_bound)
                 or not service_config.allow_external_api or service_config.local_only):
@@ -39,6 +39,7 @@ class ProcessingStagesFactory:
         self.quality_retry_once = quality_retry_once
         self.reuse_translations = reuse_translations
         self.validate_limits = validate_limits
+        self.allow_partial = allow_partial
 
     def __call__(self, source, check_allowed):
         if check_allowed(source, 'parse') is not True:
@@ -92,7 +93,7 @@ class ProcessingStagesFactory:
             fragment_policy=self.fragment_policy, embedding_set_id=source.embedding_set_id, **options)
         return RemoteProcessingStages(Parser(), translator, embedder, limits=self.limits,
             translation_settings=config.translation_settings, embedding_spec=self.spec,
-            check_allowed=check_allowed)
+            check_allowed=check_allowed, allow_partial=self.allow_partial)
 
 
 def create_processing_worker(pool, objects, *, worker_id, lease_seconds,

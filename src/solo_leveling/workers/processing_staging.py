@@ -71,17 +71,18 @@ class PostgresProcessingResultStaging:
             ids = tuple(c.chunk_id for c in chunks)
             _require(all(_uuid(value) for value in ids))
             _require(type(result.translations) is tuple and len(result.translations) == len(chunks))
+            indexed_ids = []
             for chunk, item in zip(chunks, result.translations):
                 _require(type(item) is ProcessedTranslation and item.chunk_id == chunk.chunk_id
-                         and isinstance(item.status, TranslationStatus)
-                         and type(item.text) is str and item.text.strip())
-                checked = ChunkTranslationResult(TranslationRequest(chunk.chunk_id,chunk.parse_revision_id,
-                    chunk.original_text),item.text,item.failure_code,item.status)
-                _require(checked.indexable)
+                         and isinstance(item.status, TranslationStatus))
+                if self._translation(chunk, asdict(item)).indexable:
+                    indexed_ids.append(item.chunk_id)
+            _require(bool(indexed_ids))
             batch = result.embeddings
             from solo_leveling.application.embedding_fragments import validate_embedding_mapping
-            validate_embedding_mapping(batch, ids, source.embedding_set_id)
-            _require(type(batch) is EmbeddingBatch and batch.spec == self.spec and batch.chunk_ids == ids
+            validate_embedding_mapping(batch, tuple(indexed_ids), source.embedding_set_id)
+            _require(type(batch) is EmbeddingBatch and batch.spec == self.spec
+                     and batch.chunk_ids == tuple(indexed_ids)
                      and type(batch.chunk_ids) is tuple and type(batch.vectors) is tuple
                      and type(self.spec.dimension) is int
                      and 1 <= self.spec.dimension <= 4096 and self.spec.normalization == 'l2'
