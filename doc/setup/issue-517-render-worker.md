@@ -149,6 +149,7 @@ ON slp_staging.server_embedding_fragments TO slp_staging_worker;
 
 웹의 `REMOTE_AUTOMATIC_PDF_BUDGET_JSON`에 `policy_version`(`pdf-auto-` 접두사),
 `window_key`, 시간대가 포함된 `starts_at`·`expires_at`, 계정별 `input_tokens`·`output_tokens`를 설정합니다.
+제한 검증에서는 `allowed_owner_ids`와 `max_jobs_per_owner`로 검증 대상을 고정합니다.
 같은 정책·기간의 서비스 예산 행은 운영자가 미리 설정합니다. 인증된 첫 웹 로그인에서
 계정 예산이 생성되고, 이미 로그인한 계정은 접수 시 생성됩니다. 로그인·재접수는 기존
 한도와 사용량을 초기화하지 않습니다.

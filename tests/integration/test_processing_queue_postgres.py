@@ -128,15 +128,17 @@ def test_automatic_signup_concurrent_admission_service_cap_and_owner_isolation(p
 
     now = datetime.now(timezone.utc)
     policy, window = 'pdf-auto-test', 'concurrent'
-    budget = AutomaticPdfBudget(policy,window,now-timedelta(minutes=5),now+timedelta(minutes=5),100,50)
-    sessions = PostgresWebSessionStore(pool, automatic_pdf_budget=budget)
-    intake = PostgresRemoteProcessingIntake(pool,automatic_pdf_budget=budget)
     owners = [admitted_source(pool,db) for _ in range(2)]
     legacy = admitted_source(pool,db)
+    fresh = WebIdentity(new_id(),'신규 가입자',None)
+    allowed = (owners[0][0],owners[1][0],legacy[0],fresh.user_id)
+    budget = AutomaticPdfBudget(policy,window,now-timedelta(minutes=5),now+timedelta(minutes=5),100,50,
+                                allowed_owner_ids=allowed,max_jobs_per_owner=1)
+    sessions = PostgresWebSessionStore(pool, automatic_pdf_budget=budget)
+    intake = PostgresRemoteProcessingIntake(pool,automatic_pdf_budget=budget)
     legacy_job = PostgresRemoteProcessingIntake(pool).admit(*legacy[:2],new_id(),*legacy[2:],NOTICE_VERSION)
 
     # 서비스 상한이 준비되기 전에는 로그인해도 새 예산이 생기지 않는다.
-    fresh = WebIdentity(new_id(),'신규 가입자',None)
     sessions.create_session(fresh,now)
     assert intake.admit(*owners[0][:2],new_id(),*owners[0][2:],NOTICE_VERSION) is None
     assert not db('SELECT 1 FROM server_dispatch_budget_limits WHERE policy_version=%s',(policy,))
@@ -148,6 +150,11 @@ def test_automatic_signup_concurrent_admission_service_cap_and_owner_isolation(p
     assert db("""SELECT max_input_tokens, max_output_tokens FROM server_dispatch_budget_limits
                  WHERE scope_id=%s AND policy_version=%s""",(fresh.user_id,policy))==[
         {'max_input_tokens':100,'max_output_tokens':50}]
+    excluded = admitted_source(pool,db)
+    sessions.create_session(WebIdentity(excluded[0],'범위 밖 사용자',None),now)
+    assert intake.admit(*excluded[:2],new_id(),*excluded[2:],NOTICE_VERSION) is None
+    assert not db('SELECT 1 FROM server_dispatch_budget_limits WHERE scope_id=%s AND policy_version=%s',
+                  (excluded[0],policy))
     # 예산이 있어도 자동 정책에 접수하지 않은 과거 작업은 가져오지 않는다.
     sessions.create_session(WebIdentity(legacy[0],'기존 사용자',None),now)
 
