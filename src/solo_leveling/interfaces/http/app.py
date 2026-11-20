@@ -79,6 +79,7 @@ def create_app(
         PostgresRemoteUploadConsentStore,
         UnavailableRemoteUploadConsentStore,
     )
+    from .automatic_pdf_budgets import load_automatic_pdf_budget
     from .remote_processing_intake import (
         PostgresRemoteProcessingIntake,
         UnavailableRemoteProcessingIntake,
@@ -101,6 +102,7 @@ def create_app(
     from .web_auth_routes import create_web_auth_router
 
     selected = settings or load_http_settings()
+    automatic_pdf_budget = load_automatic_pdf_budget()
     managed_store = None
     managed_remote_store = None
     if device_store is None:
@@ -134,7 +136,7 @@ def create_app(
     selected_remote_consent_store = (remote_consent_store if remote_consent_store is not None
                                      else UnavailableRemoteUploadConsentStore())
     if remote_processing_intake is None and managed_store is not None:
-        remote_processing_intake = PostgresRemoteProcessingIntake(managed_store.connection_pool)
+        remote_processing_intake = PostgresRemoteProcessingIntake(managed_store.connection_pool, automatic_pdf_budget=automatic_pdf_budget)
     selected_remote_processing_intake = (
         remote_processing_intake if remote_processing_intake is not None
         else UnavailableRemoteProcessingIntake())
@@ -314,7 +316,7 @@ def create_app(
             allow_headers=["Content-Type", "X-CSRF-Token", "Idempotency-Key"],
         )
     if web_session_store is None and managed_store is not None and web_settings is not None:
-        web_session_store = PostgresWebSessionStore(managed_store.connection_pool)
+        web_session_store = PostgresWebSessionStore(managed_store.connection_pool, automatic_pdf_budget=automatic_pdf_budget)
     if web_auth_flow is None and web_session_store is not None and web_settings is not None:
         web_auth_flow = OidcWebAuthFlow.create(web_settings, web_session_store, web_access_verifier)
     token_verifier = RoutingAccessTokenVerifier(token_verifier, OpaqueDeviceTokenVerifier(selected_store))

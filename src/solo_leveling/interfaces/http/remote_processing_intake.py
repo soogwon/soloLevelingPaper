@@ -17,8 +17,9 @@ class ProcessingAdmission:
 
 
 class PostgresRemoteProcessingIntake:
-    def __init__(self, pool):
+    def __init__(self, pool, *, automatic_pdf_budget=None):
         self._pool = pool
+        self._automatic_pdf_budget = automatic_pdf_budget
 
     def find_source(self, owner_user_id: str, paper_id: str, version_id: str):
         with self._pool.connection() as conn:
@@ -119,6 +120,9 @@ class PostgresRemoteProcessingIntake:
                 or consents[ai_consent_id]["input_hash"] != source["payload_hash"]
             ):
                 return None
+            budget = self._automatic_pdf_budget
+            if budget is not None and not budget.allows_admission(conn, owner_user_id):
+                return None
             row = conn.execute(
                 """INSERT INTO server_processing_jobs
                        (job_id,owner_user_id,paper_id,server_version_id,job_kind,
@@ -137,8 +141,9 @@ class PostgresRemoteProcessingIntake:
             conn.execute(
                 """INSERT INTO server_processing_job_authorizations
                        (owner_user_id,job_id,upload_intent_id,storage_consent_id,
-                        ai_consent_id,notice_version,input_hash,previous_job_id)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        ai_consent_id,notice_version,input_hash,previous_job_id,
+                        processing_policy_version,processing_window_key)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (
                     owner_user_id,
                     job_id,
@@ -148,6 +153,8 @@ class PostgresRemoteProcessingIntake:
                     notice_version,
                     source["payload_hash"],
                     previous_job_id,
+                    budget.policy_version if budget else None,
+                    budget.window_key if budget else None,
                 ),
             )
         return _view(row)

@@ -43,8 +43,9 @@ class WebSession:
 
 
 class PostgresWebSessionStore:
-    def __init__(self, pool: Any):
+    def __init__(self, pool: Any, *, automatic_pdf_budget=None):
         self._pool = pool
+        self._automatic_pdf_budget = automatic_pdf_budget
 
     def begin_login(self, state: str, verifier: str, return_to: str, expires_at: datetime) -> None:
         with _connection(self._pool) as conn:
@@ -76,6 +77,8 @@ class PostgresWebSessionStore:
                    email=excluded.email, updated_at=CURRENT_TIMESTAMP""",
                 (identity.user_id, identity.display_name, identity.email),
             )
+            if self._automatic_pdf_budget is not None:
+                self._automatic_pdf_budget.provision(conn, identity.user_id)
             conn.execute(
                 """INSERT INTO web_sessions(session_hash, csrf_hash, owner_user_id, expires_at)
                    VALUES (%s, %s, %s, %s)""",
