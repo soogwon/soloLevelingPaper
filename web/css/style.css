@@ -299,6 +299,7 @@ dialog.dialog::backdrop { background: rgba(22, 22, 29, 0.45); }
 .device { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; border-top: 1px solid var(--line-soft); }
 .device:first-child { border-top: 0; }
 .device-name { font-size: 15px; font-weight: 500; }
+[data-slot="remote-check"]:empty { display: none; }
 .scope-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
 .scope { border: 1px solid var(--line-soft); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
 .scope ul { margin: 0; padding-left: 18px; font-size: 14px; line-height: 1.8; color: #2B2B36; }
