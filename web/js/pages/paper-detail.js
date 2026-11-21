@@ -43,6 +43,12 @@ export function summarySection(summary) {
   })}`;
 }
 
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
+export function remoteResumePrompt(paperId, versionId) {
+  return `연결된 Solo Leveling 원격 MCP에서 논문 ID ${paperId}, PDF 판본 ID ${versionId}의 기존 학습 맥락을 open_remote_paper로 열어 이어서 학습해 줘. 새 학습 맥락은 만들지 말고, get_remote_learning으로 마지막 학습 위치를 확인해서 저장된 페이지가 있으면 그 페이지부터 read_remote_paper_page로 읽어 줘.`;
+}
+
 function actionButton({ label, primary, available, message, action, iconHtml }) {
   return html`<div class="action">
     <button type="button" class="btn ${primary ? 'btn-primary' : ''}" data-action="${action}" ${available ? '' : html`disabled aria-describedby="${action}-why"`}>${label}${iconHtml ?? ''}</button>
@@ -64,6 +70,11 @@ export default async function paperDetailPage({ view, params, query }) {
   const starting = paper.reading_status === 'not_started';
   const canStart = !CONFIG.USE_MOCK && hasFirstLearningSource(paper);
   const startHref = buildHash(`/papers/${encodeURIComponent(paper.paper_id)}/start-learning`, {version:versionId});
+  const remoteVersion = UUID.test(paper.reading_basis_version_id ?? '') ? paper.reading_basis_version_id : versionId;
+  // 원격 학습은 로컬 학습 기록(이어하기 코드)이 없으므로 원격 MCP 요청 문장으로 이어간다.
+  const remoteResume = !CONFIG.USE_MOCK && !paper.resume?.available
+    && paper.reading_status_source === 'remote_learning'
+    && UUID.test(paper.paper_id) && UUID.test(remoteVersion ?? '');
   const readingSource = {
     explicit: '연결 PC에서 저장한 상태',
     remote_learning: '원격 학습 기록',
@@ -87,7 +98,7 @@ export default async function paperDetailPage({ view, params, query }) {
           ? html`<div class="action"><a class="btn btn-primary" href="${startHref}">Claude에서 학습 시작</a></div>`
           : actionButton({label:'Claude에서 학습 시작', action:'start-learning', primary:true,
             available:false, message:'서버에서 검증을 마친 PDF가 필요해요.'}))
-          : actionButton({ label: 'Claude에서 이어서 학습', action: 'resume', primary: true, available: paper.resume?.available, message: paper.resume?.message ?? '이어하기를 할 수 없어요' })}
+          : actionButton({ label: 'Claude에서 이어서 학습', action: remoteResume ? 'remote-resume' : 'resume', available: remoteResume || paper.resume?.available, primary: true, message: paper.resume?.message ?? '이어하기를 할 수 없어요' })}
       </div>
     </div>
 
@@ -195,12 +206,33 @@ export default async function paperDetailPage({ view, params, query }) {
     });
   }
 
+  function openRemoteResume() {
+    const prompt = remoteResumePrompt(paper.paper_id, remoteVersion);
+    const dialog = openDialog({
+      title: 'Claude에서 이어서 학습하기',
+      body: html`
+        <p class="dialog-text">아래 요청을 복사해서 Solo Leveling 원격 MCP가 연결된 Claude 대화에 붙여넣으세요. 이 판본의 기존 학습 맥락을 열고, 저장된 위치가 있으면 그 페이지부터 이어가요.</p>
+        <div class="codebox"><p>${prompt}</p></div>
+        <div class="dialog-actions">
+          <button type="button" class="btn" data-dialog-close>닫기</button>
+          <button type="button" class="btn btn-primary" data-copy>요청 복사</button>
+        </div>
+        <p class="hint">학습 위치는 Claude에게 "지금 페이지 위치 저장해 줘"라고 요청하면 저장돼요.</p>`,
+    });
+    const copyButton = dialog.querySelector('[data-copy]');
+    copyButton.addEventListener('click', async () => {
+      const ok = await copyText(prompt);
+      copyButton.textContent = ok ? '복사됨' : '복사하지 못했어요';
+    });
+  }
+
   view.addEventListener('click', (e) => {
     const el = e.target.closest('[data-action]');
     if (!el) return;
     switch (el.dataset.action) {
       case 'open-pdf': openPdf(el); break;
       case 'resume': openResume(el); break;
+      case 'remote-resume': openRemoteResume(); break;
       case 'toggle-evidence': {
         const panel = view.querySelector(`#${el.getAttribute('aria-controls')}`);
         const open = el.getAttribute('aria-expanded') !== 'true';
