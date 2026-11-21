@@ -34,6 +34,8 @@ class RemoteProductQueries:
         self.owners = PostgresRemoteOwnerResolver(pool, auto_link_issuer=auto_link_issuer)
         self.contexts = PostgresRemoteContextResolver(pool)
         self.executions = PostgresRemoteExecutionStore(pool)
+        # 메모·학습 쓰기 도구가 켜진 서버에서만 연결된다. (owner, context_id, pdf_page) -> 저장 여부
+        self.page_viewed = None
 
     def owner(self):
         token = get_access_token()
@@ -96,9 +98,16 @@ class RemoteProductQueries:
             binding = self.contexts.resolve(owner, context_id) if owner else None
             if binding is None:
                 return {'status': 'not_found'}
-            return read_paper_page(self.pool, binding, pdf_page, cursor, include_translation)
+            result = read_paper_page(self.pool, binding, pdf_page, cursor, include_translation)
         except Exception:
             return {'status': 'unavailable'}
+        if result.get('status') == 'ok' and cursor is None and self.page_viewed is not None:
+            # 위치 자동 저장 실패가 본문 읽기를 막지 않는다.
+            try:
+                result['position_saved'] = bool(self.page_viewed(owner, context_id, pdf_page))
+            except Exception:
+                result['position_saved'] = False
+        return result
 
     def open_paper(self, paper_id, version_id, context_key, *, start_new=False):
         try:
@@ -301,7 +310,7 @@ def register_product_queries(server, queries, *, cancellation_enabled=False, rep
                                              idempotentHint=True, openWorldHint=False))
     def read_remote_paper_page(context_id: str, pdf_page: StrictInt, cursor: str | None = None,
                                include_translation: bool = False) -> dict:
-        """고정 PDF 판본의 지정 페이지를 읽는다. next_cursor는 같은 페이지에서 사용한다. 성공한 본문만 읽었다고 설명한다. 이 도구는 읽기 위치를 저장하지 않으며 위치 저장은 사용자의 명시 요청으로 별도 실행한다."""
+        """고정 PDF 판본의 지정 페이지를 읽는다. next_cursor는 같은 페이지에서 사용한다. 성공한 본문만 읽었다고 설명한다. 학습을 시작한 맥락이면 페이지 첫 부분을 읽을 때 그 페이지를 최근 위치로 자동 저장하고 position_saved로 알린다. 학습 시작·완료 상태는 바꾸지 않는다."""
         return queries.read_page(context_id, pdf_page, cursor, include_translation)
 
     @server.tool()
