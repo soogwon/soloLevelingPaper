@@ -13,6 +13,19 @@ from solo_leveling.application.remote_replay import read_existing_execution
 from solo_leveling.interfaces.mcp.remote_recovery import restored_guidance
 
 
+CONNECTION_CHECK_MESSAGES = {
+    'ok': '이 Claude가 코드를 발급한 Solo Leveling 웹 계정과 같은 계정으로 연결돼 있음을 확인했어요.',
+    'different_account': ('코드는 유효하지만, 이 Claude는 코드를 발급한 웹 계정과 다른 Solo Leveling 계정으로 '
+                          '연결돼 있어요. Claude 커넥터에 로그인한 계정으로 웹에 로그인해 코드를 다시 발급하거나, '
+                          'Claude 커넥터를 웹과 같은 계정으로 다시 연결해 주세요.'),
+    'expired': '코드의 5분 사용 시간이 지났어요. 웹에서 코드를 다시 발급해 주세요.',
+    'already_used': '이미 확인에 사용한 코드예요. 웹의 확인 결과를 새로고침하거나 코드를 다시 발급해 주세요.',
+    'not_found': ('이 서버에서 발급된 코드를 찾지 못했어요. 코드를 다시 발급한 뒤 그대로 복사했는지, '
+                  '같은 환경(스테이징·운영)의 웹에서 발급했는지 확인해 주세요. '
+                  '웹에서 코드를 다시 누르면 이전 코드는 무효가 돼요.'),
+}
+
+
 class RemoteProductQueries:
     def __init__(self, pool, *, auto_link_issuer=None):
         self.pool = pool
@@ -41,11 +54,14 @@ class RemoteProductQueries:
                 or 'papers:read' not in token.scopes):
             return {'status': 'not_authorized'}
         try:
+            # 이 Claude의 첫 요청이 확인 코드여도 다른 도구와 같은 자동 계정 연결을 거친다.
+            self.owners.resolve_owner(identity)
             with self.pool.connection() as conn:
-                checked_at = confirm_check(conn, identity.issuer, identity.subject, code)
+                status = confirm_check(conn, identity.issuer, identity.subject, code)['status']
         except Exception:
             return {'status': 'unavailable'}
-        return {'status': 'not_found'} if checked_at is None else {'status': 'ok'}
+        message = CONNECTION_CHECK_MESSAGES.get(status)
+        return {'status': status} if message is None else {'status': status, 'message': message}
 
     def list_papers(self, offset=0):
         if type(offset) is not int or not 0 <= offset <= 100000:
@@ -102,7 +118,8 @@ class RemoteProductQueries:
                 message += ' 부분 번역 게시본이며 색인된 구간에서 학습할 수 있습니다.'
             return {'status':'ok', 'context_id':binding.context_id, 'paper_id':binding.paper_id,
                     'version_id':binding.server_version_id, 'publication_id':binding.publication_id,
-                    'publication_policy':binding.publication_policy, 'message':message}
+                    'publication_policy':binding.publication_policy, 'message':message,
+                    'web_path':f'/#/remote-learning/{binding.context_id}'}
         except ValueError as error:
             return {'status':'conflict' if str(error)=='remote_context_key_conflict' else 'unavailable'}
         except Exception:
@@ -272,7 +289,7 @@ def register_product_queries(server, queries, *, cancellation_enabled=False, rep
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                              idempotentHint=False, openWorldHint=False))
     def verify_remote_connection(code: str) -> dict:
-        """Solo Leveling 웹에서 발급한 일회용 코드로 현재 원격 연결을 확인한다. 사용자에게 코드 원문을 반복하지 않는다."""
+        """Solo Leveling 웹에서 발급한 일회용 코드로 현재 원격 연결을 확인한다. 사용자에게 코드 원문을 반복하지 않는다. 결과의 message를 그대로 안내하고 원인을 추측해 덧붙이지 않는다."""
         return queries.verify_connection(code)
 
     @server.tool()
@@ -291,7 +308,8 @@ def register_product_queries(server, queries, *, cancellation_enabled=False, rep
     def open_remote_paper(paper_id: str, version_id: str, context_key: str, start_new: bool = False) -> dict:
         """같은 PDF 판본의 기존 학습 맥락을 우선 열고 없을 때 UUID context_key로 만든다.
         사용자가 별도 학습 기록을 명시적으로 원할 때만 start_new=true로 새 맥락을 만든다.
-        후속 도구에는 응답의 context_id를 사용한다. 응답 유실 시 같은 키를 사용한다."""
+        후속 도구에는 응답의 context_id를 사용한다. 응답 유실 시 같은 키를 사용한다.
+        web_url은 이 맥락의 웹 학습 페이지 전체 주소이며 주소를 물으면 그대로 링크로 준다."""
         return queries.open_paper(paper_id,version_id,context_key,start_new=start_new)
 
     @server.tool()

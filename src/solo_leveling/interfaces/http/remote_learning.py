@@ -130,7 +130,7 @@ class PostgresRemoteLearningStore:
             'last_position': {'pdf_page': row['last_pdf_page']} if row['last_pdf_page'] is not None else None,
             'note_count': row['note_count'], 'highlight_count': row['highlight_count'],
             'quiz_summary': None, 'reflection_summary': None,
-            'web_path': '/#/remote-learning/' + str(row['context_id']) if row['status'] else None}
+            'web_path': '/#/remote-learning/' + str(row['context_id'])}
             for row in rows[:limit]]
         return {'items': items, 'next_cursor': items[-1]['context_id'] if len(rows) > limit else None,
                 'limitations': ['remote_quiz_not_available',

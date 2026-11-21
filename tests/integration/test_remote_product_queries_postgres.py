@@ -53,11 +53,12 @@ def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool,monke
         with pool.connection() as conn:
             challenge = issue_check(conn, remote.owner)
         verify_args = {'code': challenge['code']}
-        assert result(client, 'verify_remote_connection', verify_args, token='account-b') == {'status': 'not_found'}
+        assert result(client, 'verify_remote_connection', verify_args, token='account-b')['status'] == 'different_account'
         with pool.connection() as conn:
             assert check_status(conn, remote.owner, challenge['check_id'])['status'] == 'pending'
-        assert result(client, 'verify_remote_connection', verify_args) == {'status': 'ok'}
-        assert result(client, 'verify_remote_connection', verify_args) == {'status': 'not_found'}
+        assert result(client, 'verify_remote_connection', verify_args)['status'] == 'ok'
+        assert result(client, 'verify_remote_connection', verify_args)['status'] == 'already_used'
+        assert result(client, 'verify_remote_connection', {'code': 'A' * 32})['status'] == 'not_found'
         with pool.connection() as conn:
             verified = check_status(conn, remote.owner, challenge['check_id'])
         assert verified['status'] == 'verified' and verified['verified_at'] is not None
@@ -75,6 +76,7 @@ def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool,monke
         pinned=result(client,'open_remote_paper',args)
         assert pinned['publication_id']==first.publication
         assert pinned['context_id'] == first.context
+        assert pinned['web_url'] == SETTINGS.resource_url[:-4] + f'/#/remote-learning/{first.context}'
         detail_args={'context_id':pinned['context_id']}
         assert result(client,'get_remote_paper_detail',detail_args)['result']['publication_id']==first.publication
         assert result(client,'get_remote_paper_detail',detail_args,token='account-b')=={'status':'not_found'}
@@ -323,8 +325,11 @@ def test_reprocessing_jobs_share_web_and_mcp_projection(db, pool, monkeypatch):
         staged = result(mcp,'get_remote_processing_job',get_args)['result']
         assert staged['status']=='publication_pending'
         assert staged['web_path']==f'/#/reprocessing/{context}/reparse?key={key}'
+        assert staged['web_url']==SETTINGS.resource_url[:-4]+staged['web_path']
         assert staged['revision'] is None and not staged['cancellation_available']
-        assert http.get(path).json()['result']==staged
+        # MCP는 같은 투영에 바로 열 수 있는 전체 web_url만 덧붙인다.
+        with_url=lambda view:{**view,'web_url':SETTINGS.resource_url[:-4]+view['web_path']} if view['web_path'] else view
+        assert with_url(http.get(path).json()['result'])==staged
         # 상태 투영은 실제 실행 없이 원장의 전이를 재현한다.
         for state, expected in (('queued','queued'),('running','processing'),('failed','failed'),('cancelled','cancelled')):
             db('''UPDATE server_reprocessing_reviews SET state=%s,
@@ -334,7 +339,7 @@ def test_reprocessing_jobs_share_web_and_mcp_projection(db, pool, monkeypatch):
                 WHERE owner_user_id=%s AND request_key=%s''',(state,state,state,state,owner,key))
             projected=http.get(path).json()['result']
             assert projected['status']==expected
-            assert projected==result(mcp,'get_remote_processing_job',get_args)['result']
+            assert with_url(projected)==result(mcp,'get_remote_processing_job',get_args)['result']
         db("UPDATE server_reprocessing_reviews SET state='staged' WHERE owner_user_id=%s AND request_key=%s",(owner,key))
         assert result(mcp,'get_remote_processing_job',get_args,token='account-b')=={'status':'not_found'}
         assert result(mcp,'list_remote_processing_jobs',token='account-b')['jobs']==[]
@@ -348,7 +353,7 @@ def test_reprocessing_jobs_share_web_and_mcp_projection(db, pool, monkeypatch):
         assert len(listed)==2 and sum(j['job_id']==job for j in listed)==1 and second['next_after'] is None
         published=http.get(path).json()['result']
         assert published['status']=='published' and published['publication_id']==pub
-        assert http.get(f'/v1/papers/{old.paper_id}/processing-jobs',params={'version_id':old.server_version_id}).json()['jobs']==listed
+        assert http.get(f'/v1/papers/{old.paper_id}/processing-jobs',params={'version_id':old.server_version_id}).json()['jobs']==[{k:v for k,v in j.items() if k!='web_url'} for j in listed]
         selected=service.select(owner,key,pub)['publication']['selected_context_id']
         assert http.get(path).json()['result']['selected_context_id']==selected
         assert RemoteJobQueries(pool,lambda:owner).get(job)['result']['job_kind']=='embed'

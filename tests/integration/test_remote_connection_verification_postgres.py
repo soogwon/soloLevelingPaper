@@ -24,17 +24,19 @@ def test_connection_check_is_owner_scoped_expires_and_consumes_once(pool, db):
         check_id = issued["check_id"]
         assert check_status(conn, owner, check_id)["status"] == "pending"
         assert check_status(conn, other, check_id) is None
-        assert confirm_check(conn, issuer, other, code) is None
-        assert confirm_check(conn, "https://other.example/", owner, code) is None
+        assert confirm_check(conn, issuer, other, code) == {"status": "different_account"}
+        assert confirm_check(conn, "https://other.example/", owner, code) == {"status": "different_account"}
+        assert confirm_check(conn, issuer, owner, "A" * 32) == {"status": "not_found"}
+        assert confirm_check(conn, issuer, owner, code[:-1]) == {"status": "not_found"}
     digest, = db("SELECT code_hash FROM server_remote_connection_checks WHERE owner_user_id=%s", (owner,))
     assert digest["code_hash"] == sha256(code.encode()).hexdigest()
 
     def use_code():
         with pool.connection() as conn:
-            return confirm_check(conn, issuer, owner, code)
+            return confirm_check(conn, issuer, owner, code)["status"]
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        assert sum(value is not None for value in executor.map(lambda _: use_code(), range(2))) == 1
+        assert sorted(executor.map(lambda _: use_code(), range(2))) == ["already_used", "ok"]
     with pool.connection() as conn:
         status = check_status(conn, owner, check_id)
         assert status["status"] == "verified" and status["verified_at"] is not None
@@ -43,7 +45,7 @@ def test_connection_check_is_owner_scoped_expires_and_consumes_once(pool, db):
         conn.execute("UPDATE server_remote_connection_checks SET expires_at=clock_timestamp() WHERE owner_user_id=%s",
                      (owner,))
         assert check_status(conn, owner, expired["check_id"])["status"] == "expired"
-        assert confirm_check(conn, issuer, owner, expired["code"]) is None
+        assert confirm_check(conn, issuer, owner, expired["code"]) == {"status": "expired"}
         revoked = issue_check(conn, owner)
         conn.execute("UPDATE server_remote_identities SET revoked_at=clock_timestamp() WHERE subject=%s", (owner,))
-        assert confirm_check(conn, issuer, owner, revoked["code"]) is None
+        assert confirm_check(conn, issuer, owner, revoked["code"]) == {"status": "different_account"}
