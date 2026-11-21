@@ -1,6 +1,8 @@
 """owner 범위의 원격 실행 context를 게시된 revision 집합으로 해석한다."""
 
+from contextlib import nullcontext
 import json
+from types import SimpleNamespace
 
 from solo_leveling.application.evidence_qa.remote_contract import RemoteSearchBinding
 
@@ -35,6 +37,32 @@ class PostgresRemoteContextResolver:
         if binding is not None and (binding.paper_id != paper_id or binding.server_version_id != version_id):
             raise ValueError("remote_context_key_conflict")
         return binding
+
+    def resume_or_pin(self, owner, context, paper, version):
+        """같은 판본의 기존 학습을 고르고, 최초 열기만 직렬화해 맥락을 만든다."""
+        with self._pool.connection() as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                         (json.dumps(['resume_learning', owner, paper, version]),))
+            scoped = PostgresRemoteContextResolver(SimpleNamespace(connection=lambda: nullcontext(conn)))
+            existing = scoped.resolve(owner, context)
+            if existing is not None:
+                if (existing.paper_id, existing.server_version_id) != (paper, version):
+                    raise ValueError("remote_context_key_conflict")
+                return existing
+            row = conn.execute("""
+                SELECT c.context_id
+                FROM server_execution_contexts c
+                JOIN server_papers p ON p.owner_user_id=c.owner_user_id
+                  AND p.paper_id=c.paper_id AND p.deleted_at IS NULL
+                LEFT JOIN server_remote_learning_records r
+                  ON r.owner_user_id=c.owner_user_id AND r.context_id=c.context_id
+                WHERE c.owner_user_id=%s AND c.paper_id=%s AND c.server_version_id=%s
+                ORDER BY r.updated_at DESC NULLS LAST, c.created_at, c.context_id
+                LIMIT 1
+                """, (owner, paper, version)).fetchone()
+            if row is not None:
+                return scoped.resolve(owner, str(row["context_id"]))
+            return scoped.pin(owner, context, paper, version)
 
     def resolve(self, owner_user_id: str, context_id: str) -> RemoteSearchBinding | None:
         if not all(isinstance(value, str) and value.strip() for value in (owner_user_id, context_id)):

@@ -74,6 +74,7 @@ def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool,monke
         args={'paper_id':first.paper,'version_id':'v1','context_key':str(uuid4())}
         pinned=result(client,'open_remote_paper',args)
         assert pinned['publication_id']==first.publication
+        assert pinned['context_id'] == first.context
         detail_args={'context_id':pinned['context_id']}
         assert result(client,'get_remote_paper_detail',detail_args)['result']['publication_id']==first.publication
         assert result(client,'get_remote_paper_detail',detail_args,token='account-b')=={'status':'not_found'}
@@ -113,6 +114,11 @@ def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool,monke
         remote.publish(100,base=first)
         assert result(client, 'read_remote_paper_page', page_args) == owned_page
         assert result(client,'open_remote_paper',args)==pinned
+        explicit = {**args, 'context_key': str(uuid4()), 'start_new': True}
+        newly_opened = result(client, 'open_remote_paper', explicit)
+        assert newly_opened['context_id'] == explicit['context_key']
+        assert newly_opened['publication_id'] != pinned['publication_id']
+        assert result(client, 'open_remote_paper', explicit) == newly_opened
         assert result(client,'open_remote_paper',args,token='account-b')=={'status':'not_found'}
         assert result(client,'get_remote_question',{'request_key':'missing'})=={'status':'not_found'}
         assert result(client,'get_remote_question',{'request_key':'missing'},token='account-b')=={'status':'not_found'}
