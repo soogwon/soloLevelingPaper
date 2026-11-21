@@ -236,6 +236,29 @@ function createResume(body) {
   };
 }
 
+// ---------- 서버 논문 삭제 (#368, deletion_routes.py와 같은 규칙) ----------
+function requestDeletion(paperId, requestKey, body) {
+  if (!/^[A-Za-z0-9._:-]{16,128}$/.test(requestKey)) throw fail(422, 'invalid_argument', '요청 키가 올바르지 않아요.');
+  if (body?.confirmed !== true || body?.notice_version !== 'server-paper-deletion-v1') {
+    throw fail(422, 'explicit_confirmation_required', '삭제 확인이 필요해요.');
+  }
+  const existing = db.deletions.get(requestKey);
+  if (existing) {
+    if (existing.paper_id !== paperId) throw fail(409, 'deletion_request_conflict', '이미 다른 삭제 요청이 있어요.');
+    return { ...existing }; // 같은 키 재전송은 기존 요청을 돌려준다.
+  }
+  for (const r of db.deletions.values()) {
+    if (r.paper_id === paperId) throw fail(409, 'deletion_request_conflict', '이미 삭제를 요청한 논문이에요.');
+  }
+  if (!db.papers.some((p) => p.paper_id === paperId)) throw notFound();
+  // 실제 서버처럼 접수 즉시 목록·상세에서 숨긴다. 물리 정리는 worker 몫이라 blocking으로 둔다.
+  db.papers = db.papers.filter((p) => p.paper_id !== paperId);
+  db.membership.delete(paperId);
+  const r = { request_id: randomId('del'), paper_id: paperId, status: 'blocking', backup_erasure_confirmed: false };
+  db.deletions.set(requestKey, r);
+  return { ...r };
+}
+
 // ---------- 라우팅 ----------
 function withIdempotency(key, fn) {
   if (!key) return fn();
@@ -282,6 +305,12 @@ export async function mockRequest(method, path, { query = {}, body, idempotencyK
     case 'GET /papers': return listPapers(clean);
     case 'GET /papers/:id': return getPaper(seg[1], clean);
     case 'GET /papers/:id/versions/:id/file-access': return getFileAccess(seg[1], seg[3]);
+    case 'GET /papers/:id/deletion-requests/:id': {
+      const r = db.deletions.get(seg[3]);
+      if (!r || r.paper_id !== seg[1]) throw fail(404, 'deletion_not_found', '삭제 요청을 찾을 수 없어요.');
+      return { ...r };
+    }
+    case 'PUT /papers/:id/deletion-requests/:id': return requestDeletion(seg[1], seg[3], body);
     case 'GET /annotations': return listAnnotations(clean);
     case 'GET /annotations/:id': {
       const a = db.annotations.find((x) => x.annotation_id === seg[1]);

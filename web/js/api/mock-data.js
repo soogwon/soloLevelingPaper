@@ -191,5 +191,5 @@ export function createMockDb() {
 
   const me = { user_id: 'usr_demo', display_name: '예시 사용자', email: 'demo@example.com' };
 
-  return { papers, annotations, collections, membership, devices, me, idempotency: new Map() };
+  return { papers, annotations, collections, membership, devices, me, idempotency: new Map(), deletions: new Map() };
 }

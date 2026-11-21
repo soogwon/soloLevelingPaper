@@ -173,6 +173,14 @@ body.bare .view { max-width: none; padding: 0; }
 .row-sub { font-size: 13.5px; color: var(--muted); }
 .row-line { font-size: 13.5px; color: var(--text-2); margin-top: 6px; }
 @media (max-width: 600px) { .row { padding: 16px; flex-wrap: wrap; } .row-icon { display: none; } }
+/* 논문 목록 행: 링크 안에 버튼을 넣을 수 없어서 링크와 메뉴를 형제로 둔다. */
+.row-item { display: flex; align-items: center; border-top: 1px solid var(--line-soft); }
+.row-item:first-child { border-top: 0; }
+.row-item:hover { background: #FAFAFD; }
+.row-item > .row { flex: 1 1 auto; min-width: 0; border-top: 0; }
+.row-item > .row:hover { background: none; }
+.row-menu { flex: none; margin-right: 16px; }
+.row-item[aria-busy="true"] { opacity: 0.5; pointer-events: none; }
 
 /* ---------- 논문 상세 ---------- */
 .detail-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 20px; }
@@ -279,6 +287,9 @@ dialog.dialog::backdrop { background: rgba(22, 22, 29, 0.45); }
 .dialog-title { margin: 0; font-size: 21px; font-weight: 700; }
 .dialog-text { margin: 0; font-size: 14.5px; line-height: 1.6; color: var(--text-2); }
 .dialog-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.dialog-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14.5px; line-height: 1.6; color: var(--text-2); }
+.check-row { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; font-weight: 500; line-height: 1.5; cursor: pointer; }
+.check-row input { flex: none; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--danger); }
 .field { display: flex; flex-direction: column; gap: 8px; }
 .field label { font-size: 14px; font-weight: 500; }
 .input { height: 46px; border: 1.5px solid var(--line-input); border-radius: 10px; padding: 0 14px; font-size: 15px; background: #fff; width: 100%; }
