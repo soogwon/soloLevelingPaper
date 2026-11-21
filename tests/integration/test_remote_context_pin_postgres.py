@@ -29,3 +29,33 @@ def test_context_pin_preserves_old_publication_and_rejects_other_scope(db, store
         remote.resolver.pin(remote.owner, context, binding.paper_id, 'wrong-version')
     db('UPDATE server_papers SET deleted_at=CURRENT_TIMESTAMP WHERE paper_id=%s', (binding.paper_id,))
     assert remote.resolver.pin(remote.owner, context, binding.paper_id, binding.server_version_id) is None
+
+
+def test_default_open_reuses_existing_learning_and_explicit_new_keeps_both(db, stores, pool):
+    from concurrent.futures import ThreadPoolExecutor
+
+    remote = PgvectorContractStore(db, stores, pool)
+    first = remote.publish()
+    binding = remote.resolver.resolve(remote.owner, first.context)
+
+    def default_open(_):
+        return remote.resolver.resume_or_pin(
+            remote.owner, str(uuid4()), binding.paper_id, binding.server_version_id)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        assert list(executor.map(default_open, range(8))) == [binding] * 8
+    new_key = str(uuid4())
+    separate = remote.resolver.pin(remote.owner, new_key, binding.paper_id, binding.server_version_id)
+    assert separate.context_id == new_key
+    assert remote.resolver.resolve(remote.owner, first.context) == binding
+    assert remote.resolver.resume_or_pin('other', str(uuid4()), binding.paper_id, binding.server_version_id) is None
+
+    untouched = remote.publish(100)
+    db('DELETE FROM server_execution_contexts WHERE owner_user_id=%s AND context_id=%s',
+       (remote.owner, untouched.context))
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        opened = list(executor.map(lambda _: remote.resolver.resume_or_pin(
+            remote.owner, str(uuid4()), untouched.paper, untouched.version), range(8)))
+    assert len({entry.context_id for entry in opened}) == 1
+    assert len(db('SELECT context_id FROM server_execution_contexts WHERE owner_user_id=%s AND paper_id=%s',
+                  (remote.owner, untouched.paper))) == 1

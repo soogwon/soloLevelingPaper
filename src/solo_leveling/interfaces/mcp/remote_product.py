@@ -84,16 +84,17 @@ class RemoteProductQueries:
         except Exception:
             return {'status': 'unavailable'}
 
-    def open_paper(self, paper_id, version_id, context_key):
+    def open_paper(self, paper_id, version_id, context_key, *, start_new=False):
         try:
-            if not isinstance(version_id,str) or not version_id.strip() or len(version_id)>512:
+            if type(start_new) is not bool or not isinstance(version_id,str) or not version_id.strip() or len(version_id)>512:
                 return {'status':'invalid_argument'}
             ids = [str(UUID(paper_id)),version_id,str(UUID(context_key))]
         except (ValueError,TypeError,AttributeError):
             return {'status':'invalid_argument'}
         try:
             owner = self.owner()
-            binding = self.contexts.pin(owner,ids[2],ids[0],ids[1]) if owner else None
+            open_context = self.contexts.pin if start_new else self.contexts.resume_or_pin
+            binding = open_context(owner,ids[2],ids[0],ids[1]) if owner else None
             if binding is None:
                 return {'status':'not_found'}
             message = '추천 페이지와 근거는 이 PDF 판본 기준입니다. 다른 판본은 페이지가 다를 수 있습니다.'
@@ -287,9 +288,11 @@ def register_product_queries(server, queries, *, cancellation_enabled=False, rep
         return queries.read_page(context_id, pdf_page, cursor, include_translation)
 
     @server.tool()
-    def open_remote_paper(paper_id: str, version_id: str, context_key: str) -> dict:
-        """UUID context_key로 판본·게시를 고정한다. 응답 유실 시 같은 키를 사용한다. AI 호출은 없다."""
-        return queries.open_paper(paper_id,version_id,context_key)
+    def open_remote_paper(paper_id: str, version_id: str, context_key: str, start_new: bool = False) -> dict:
+        """같은 PDF 판본의 기존 학습 맥락을 우선 열고 없을 때 UUID context_key로 만든다.
+        사용자가 별도 학습 기록을 명시적으로 원할 때만 start_new=true로 새 맥락을 만든다.
+        후속 도구에는 응답의 context_id를 사용한다. 응답 유실 시 같은 키를 사용한다."""
+        return queries.open_paper(paper_id,version_id,context_key,start_new=start_new)
 
     @server.tool()
     def get_remote_question(request_key: str) -> dict:
