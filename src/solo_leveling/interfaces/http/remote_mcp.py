@@ -15,12 +15,20 @@ from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl
 from starlette.responses import JSONResponse
 
+from solo_leveling.interfaces.mcp.web_links import attach_web_urls
+
 from .remote_mcp_auth import Auth0McpTokenVerifier
 from .settings import RemoteMcpSettings
 
 
 CARD_URI = "ui://remote-spike/card.html"
 PDF_REGISTRATION_URI = "ui://remote-paper/register-pdf.html"
+WEB_LINK_INSTRUCTIONS = (
+    "웹 화면이나 학습 페이지 주소를 안내할 때는 응답의 web_url·review_web_url·upload_url 같은 "
+    "전체 https 주소를 그대로 링크로 보여준다. /#/로 시작하는 경로만 따로 주거나 "
+    "도메인을 붙여 달라고 하지 않는다. 지금 학습 맥락의 주소는 open_remote_paper나 "
+    "get_remote_learning_dashboard의 web_url을 쓰고, 응답에 없는 주소는 짐작하지 않는다."
+)
 TOOLS = frozenset({"whoami", "probe_card", "probe_delay"})
 
 
@@ -111,8 +119,9 @@ def create_remote_mcp(
             "확정 저장은 사용자가 인증 웹에서 확인 버튼을 누를 때만 이루어진다. "
             "prepare_remote_summary와 submit_remote_summary는 사용자가 유료 서버 생성을 명시적으로 "
             "요청했을 때만 사용한다. ‘동의했어’나 ‘요약 확인해줘’는 새 접수 요청이 아니다. "
-            "기존 요청의 상태나 저장된 결과를 조회하고, 예산 거절이면 자동 재제출하지 않는다."
-        ) if settings.product_reads_enabled and summary_service is not None else None,
+            "기존 요청의 상태나 저장된 결과를 조회하고, 예산 거절이면 자동 재제출하지 않는다. "
+            if summary_service is not None else ""
+        ) + WEB_LINK_INSTRUCTIONS if settings.product_reads_enabled else None,
         stateless_http=True,
         json_response=True,
         streamable_http_path="/mcp",
@@ -209,6 +218,9 @@ def create_remote_mcp(
         if annotation_service is not None:
             from solo_leveling.interfaces.mcp.remote_annotations import register_annotation_tools
             register_annotation_tools(server, product_queries, annotation_service, latest_summary=latest_summary)
+
+        # 모든 도구를 등록한 뒤 감싸야 web_path 옆에 전체 web_url이 붙는다.
+        attach_web_urls(server, web_origin)
 
     if (cancellation_service is not None or summary_service is not None or reflection_service is not None or quiz_service is not None or quiz_review_service is not None) and not settings.product_reads_enabled:
         raise ValueError('processing_cancel_settings_invalid')

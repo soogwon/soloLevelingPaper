@@ -102,7 +102,8 @@ class RemoteProductQueries:
                 message += ' 부분 번역 게시본이며 색인된 구간에서 학습할 수 있습니다.'
             return {'status':'ok', 'context_id':binding.context_id, 'paper_id':binding.paper_id,
                     'version_id':binding.server_version_id, 'publication_id':binding.publication_id,
-                    'publication_policy':binding.publication_policy, 'message':message}
+                    'publication_policy':binding.publication_policy, 'message':message,
+                    'web_path':f'/#/remote-learning/{binding.context_id}'}
         except ValueError as error:
             return {'status':'conflict' if str(error)=='remote_context_key_conflict' else 'unavailable'}
         except Exception:
@@ -291,7 +292,8 @@ def register_product_queries(server, queries, *, cancellation_enabled=False, rep
     def open_remote_paper(paper_id: str, version_id: str, context_key: str, start_new: bool = False) -> dict:
         """같은 PDF 판본의 기존 학습 맥락을 우선 열고 없을 때 UUID context_key로 만든다.
         사용자가 별도 학습 기록을 명시적으로 원할 때만 start_new=true로 새 맥락을 만든다.
-        후속 도구에는 응답의 context_id를 사용한다. 응답 유실 시 같은 키를 사용한다."""
+        후속 도구에는 응답의 context_id를 사용한다. 응답 유실 시 같은 키를 사용한다.
+        web_url은 이 맥락의 웹 학습 페이지 전체 주소이며 주소를 물으면 그대로 링크로 준다."""
         return queries.open_paper(paper_id,version_id,context_key,start_new=start_new)
 
     @server.tool()
