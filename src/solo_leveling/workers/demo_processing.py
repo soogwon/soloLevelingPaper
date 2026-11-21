@@ -22,18 +22,21 @@ from solo_leveling.workers.processing_queue import QueueRunResult, run_processin
 from solo_leveling.workers.verification_bootstrap import _client, _pool, preflight, read_json, validate_plan
 
 
-# 같은 버킷 읽기 키와 OpenAI 키는 재처리 worker와 공유할 수 있다. 전용 이름이 우선이다.
+# 같은 버킷 읽기 키와 OpenAI 키는 검증·재처리 worker와 공유할 수 있다. 전용 이름이 우선이다.
 # DB 주소는 역할 권한이 달라 공유하지 않는다. 다른 역할로 게시하다 실패하면 작업이 재시도 없이 끝난다.
 SHARED_SECRETS = {
-    'SLP_DEMO_R2_ACCESS_KEY_ID': 'REPROCESSING_R2_ACCESS_KEY_ID',
-    'SLP_DEMO_R2_SECRET_ACCESS_KEY': 'REPROCESSING_R2_SECRET_ACCESS_KEY',
-    'SLP_DEMO_OPENAI_API_KEY': 'REPROCESSING_OPENAI_API_KEY',
+    'SLP_DEMO_R2_ACCESS_KEY_ID': ('SLP_VERIFY_R2_ACCESS_KEY_ID', 'REPROCESSING_R2_ACCESS_KEY_ID'),
+    'SLP_DEMO_R2_SECRET_ACCESS_KEY': ('SLP_VERIFY_R2_SECRET_ACCESS_KEY', 'REPROCESSING_R2_SECRET_ACCESS_KEY'),
+    'SLP_DEMO_OPENAI_API_KEY': ('SLP_VERIFY_OPENAI_API_KEY', 'REPROCESSING_OPENAI_API_KEY'),
 }
 
 
 def shared_secret(source, name):
-    value = source.get(name, '')
-    return value if value.strip() else source.get(SHARED_SECRETS[name], '')
+    for candidate in (name, *SHARED_SECRETS[name]):
+        value = source.get(candidate, '')
+        if value.strip():
+            return value
+    return ''
 
 
 class DemoBudget:

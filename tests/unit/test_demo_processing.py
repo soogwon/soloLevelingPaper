@@ -125,3 +125,6 @@ def test_bucket_and_openai_keys_fall_back_to_reprocessing_names():
     assert shared_secret(env, 'SLP_DEMO_R2_ACCESS_KEY_ID') == 'shared-id'
     assert shared_secret(env, 'SLP_DEMO_R2_SECRET_ACCESS_KEY') == 'own'
     assert shared_secret(env, 'SLP_DEMO_OPENAI_API_KEY') == ''
+    env['SLP_VERIFY_OPENAI_API_KEY'] = 'verify-key'
+    env['REPROCESSING_OPENAI_API_KEY'] = 'reprocessing-key'
+    assert shared_secret(env, 'SLP_DEMO_OPENAI_API_KEY') == 'verify-key'
