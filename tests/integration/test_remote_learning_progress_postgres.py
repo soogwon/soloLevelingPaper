@@ -112,3 +112,41 @@ def test_reading_card_mcp_conflict_replay_and_binding(pool, db, context, monkeyp
         assert service.learning.reading_state(owner, key)['revision'] == 2
 
     asyncio.run(verify())
+
+
+def test_page_view_saves_position_only_for_started_learning(pool, db, context):
+    owner, key, _ = context
+    store = PostgresRemoteLearningStore(pool)
+    assert store.record_page_view(owner, key, 2) is None
+    assert store.get(owner, key) is None
+    store.start(owner, key)
+    saved = store.record_page_view(owner, key, 2)
+    assert saved['last_pdf_page'] == 2 and saved['revision'] == 2 and saved['status'] == 'reading'
+    assert store.record_page_view(owner, key, 2)['revision'] == 2
+    store.set_status(owner, key, status='completed', expected_revision=2)
+    moved = store.record_page_view(owner, key, 3)
+    assert moved['status'] == 'completed' and moved['last_pdf_page'] == 3 and moved['revision'] == 4
+    assert store.record_page_view('other', key, 1) is None
+    with pytest.raises(ValueError):
+        store.record_page_view(owner, key, 0)
+    db('UPDATE server_papers SET deleted_at=CURRENT_TIMESTAMP WHERE owner_user_id=%s', (owner,))
+    assert store.record_page_view(owner, key, 1) is None
+
+
+def test_page_view_hook_requires_write_scope(pool, db, context, monkeypatch):
+    from types import SimpleNamespace
+    from mcp.server.fastmcp import FastMCP
+    from solo_leveling.interfaces.mcp import remote_annotations as tools
+    from tests.unit.test_remote_annotation_tools import token
+
+    store, owner, key = setup(pool, db, context)
+    current = token(['annotations:read'])
+    monkeypatch.setattr(tools, 'get_access_token', lambda: current)
+    queries = SimpleNamespace(owner=lambda: owner, page_viewed=None)
+    tools.register_annotation_tools(FastMCP('위치 자동 저장'), queries,
+                                    SimpleNamespace(learning=store, service_id='remote-paper'))
+    assert queries.page_viewed(owner, key, 2) is False
+    assert store.get(owner, key)['last_pdf_page'] is None
+    current.scopes.append('annotations:write')
+    assert queries.page_viewed(owner, key, 2) is True
+    assert store.get(owner, key)['last_pdf_page'] == 2

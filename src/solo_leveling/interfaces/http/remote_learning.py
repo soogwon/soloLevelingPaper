@@ -157,6 +157,27 @@ class PostgresRemoteLearningStore:
                  binding['publication_id'], binding['parse_revision_id']))
             return self._read(conn, owner, context)
 
+    def record_page_view(self, owner, context, pdf_page):
+        """이미 시작한 학습 기록에만 방금 읽은 페이지를 최근 위치로 남긴다.
+
+        학습 시작·완료 상태는 바꾸지 않고, 같은 페이지 재열람은 revision을 올리지 않는다.
+        페이지 범위는 본문을 실제로 읽어 온 호출자가 이미 확인했다.
+        """
+        context = self._scope(owner, context)
+        if type(pdf_page) is not int or pdf_page < 1:
+            raise ValueError('remote_learning_page_invalid')
+        with self._pool.connection() as conn:
+            if self._lock(conn, owner, context) is None:
+                return None
+            current = self._read(conn, owner, context)
+            if current is None or current['last_pdf_page'] == pdf_page:
+                return current
+            conn.execute("""UPDATE server_remote_learning_records
+                SET last_pdf_page=%s,revision=revision+1,updated_at=CURRENT_TIMESTAMP
+                WHERE owner_user_id=%s AND context_id=%s AND revision=%s""",
+                (pdf_page, owner, context, current['revision']))
+            return self._read(conn, owner, context)
+
     def set_status(self, owner, context, *, status, expected_revision):
         """완료·재열기는 기록이나 메모를 지우지 않으며 현재 revision을 요구한다."""
         context = self._scope(owner, context)

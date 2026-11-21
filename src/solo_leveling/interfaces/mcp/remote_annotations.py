@@ -103,6 +103,16 @@ def register_annotation_tools(server, queries, service, *, latest_summary=None):
     def context(value):
         return str(UUID(value))
 
+    def record_page_view(owner, context_id, pdf_page):
+        # 쓰기 권한이 있는 연결에서만 읽은 페이지를 시작된 학습 기록의 최근 위치로 남긴다.
+        token = get_access_token()
+        if (not isinstance(token, RemoteIdentityAccessToken)
+                or 'annotations:write' not in token.scopes):
+            return False
+        return service.learning.record_page_view(owner, context(context_id), pdf_page) is not None
+
+    queries.page_viewed = record_page_view
+
     @server.tool()
     def start_remote_learning(context_id: str) -> dict:
         """사용자가 학습 시작을 명시적으로 요청할 때만 호출한다. 기존 맥락의 기록을 재사용하며 동의나 AI 실행을 시작하지 않는다."""
@@ -133,6 +143,7 @@ def register_annotation_tools(server, queries, service, *, latest_summary=None):
     def set_remote_reading_progress(context_id: str, request_key: str, status: str,
                                     pdf_page: StrictInt | None, expected_revision: StrictInt) -> dict[str, Any]:
         """명시적으로 요청한 완료·재열기와 최근 PDF 페이지를 저장한다. 학습 시작을 대신하지 않는다.
+        읽은 페이지는 read_remote_paper_page가 자동 저장하므로 위치만을 위해 따로 부르지 않아도 된다.
         pdf_page null은 위치 지우기다. 같은 입력 재전송에는 같은 UUID 키를 쓰고 충돌하면 먼저 현재 상태를 조회한다.
         재전송 응답은 현재 상태와 최초 applied_revision을 구분한다. 동의·AI 호출·메모 삭제는 없다.
         """

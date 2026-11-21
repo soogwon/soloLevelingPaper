@@ -217,7 +217,7 @@ export default async function paperDetailPage({ view, params, query }) {
           <button type="button" class="btn" data-dialog-close>닫기</button>
           <button type="button" class="btn btn-primary" data-copy>요청 복사</button>
         </div>
-        <p class="hint">학습 위치는 Claude에게 "지금 페이지 위치 저장해 줘"라고 요청하면 저장돼요.</p>`,
+        <p class="hint">Claude가 페이지를 읽을 때마다 마지막 학습 위치가 자동으로 저장돼요.</p>`,
     });
     const copyButton = dialog.querySelector('[data-copy]');
     copyButton.addEventListener('click', async () => {
