@@ -43,7 +43,7 @@ export default async function accountPage({ view }) {
 
     <section class="card panel" aria-labelledby="remote-mcp-h">
       <h2 id="remote-mcp-h" class="panel-title">원격 MCP 연결</h2>
-      <div data-slot="remote-connections">${loadingBlock()}</div>
+      <div data-slot="remote-connections" class="stack">${loadingBlock()}</div>
       <div data-slot="remote-check" aria-live="polite"></div>
     </section>
 
@@ -79,7 +79,7 @@ export default async function accountPage({ view }) {
               <div class="meta">연결됨 · ${formatDateTime(connection.linked_at)}</div>
             </div>
           </li>`)}</ul>
-          <button type="button" class="btn" data-action="issue-remote-check">이 Claude 연결 확인</button>`
+          <div class="actions"><button type="button" class="btn" data-action="issue-remote-check">이 Claude 연결 확인</button></div>`
         : emptyBlock('원격 MCP 연결이 없어요', 'Claude에서 원격 MCP에 연결하고 첫 논문 조회를 실행해 주세요.'));
     } catch (error) {
       setHTML(remoteEl, errorBlock(error, 'reload-remote-connections'));
