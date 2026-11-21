@@ -139,6 +139,45 @@ window.addEventListener('hashchange', () => {
   renderRoute();
 });
 
+// ---------- ... 메뉴 ----------
+// 메뉴는 열 때 버튼 위치를 재서 화면 기준(position: fixed)으로 띄운다.
+// 그래야 가로 스크롤 때문에 overflow가 걸린 표 카드 안에서도 메뉴가 잘리지 않는다.
+// 아래 공간이 모자라면 버튼 위로 펼친다.
+const MENU_GAP = 2;
+const MENU_MARGIN = 8;
+
+function placeMenu(details) {
+  const trigger = details.querySelector(':scope > summary');
+  const menu = details.querySelector(':scope > .menu');
+  if (!trigger || !menu) return;
+  menu.classList.add('floating');
+  const t = trigger.getBoundingClientRect();
+  const m = menu.getBoundingClientRect();
+  const left = Math.max(MENU_MARGIN, Math.min(t.right - m.width, window.innerWidth - m.width - MENU_MARGIN));
+  const below = t.bottom + MENU_GAP;
+  const above = t.top - MENU_GAP - m.height;
+  const fitsBelow = below + m.height <= window.innerHeight - MENU_MARGIN;
+  const top = fitsBelow || above < MENU_MARGIN ? below : above;
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+}
+
+function closeMenus() {
+  document.querySelectorAll('details.menu-wrap[open]').forEach((d) => d.removeAttribute('open'));
+}
+
+// summary의 기본 열기 동작 대신 직접 열고 같은 순간에 위치를 잡아, 제자리에 잠깐 그려지는 깜빡임을 막는다.
+document.addEventListener('click', (e) => {
+  const trigger = e.target.closest('details.menu-wrap > summary');
+  if (!trigger || trigger.parentElement.open) return;
+  e.preventDefault();
+  trigger.parentElement.open = true;
+  placeMenu(trigger.parentElement);
+});
+// 화면 기준으로 띄운 메뉴는 스크롤을 따라가지 않으므로, 스크롤하거나 창 크기가 바뀌면 닫는다.
+document.addEventListener('scroll', closeMenus, true);
+window.addEventListener('resize', closeMenus);
+
 // 전역 클릭 처리: 오류 화면의 '다시 시도', 열린 메뉴 닫기
 document.addEventListener('click', (e) => {
   if (e.target.closest('[data-action="reload-route"]')) renderRoute();
