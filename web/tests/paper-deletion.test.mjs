@@ -4,8 +4,6 @@ import test from 'node:test';
 
 globalThis.window = { location: { search: '?mock=1' } };
 
-const { CONFIG } = await import('../js/config.js');
-CONFIG.MOCK_LATENCY_MS = 0;
 const { ApiError } = await import('../js/api/client.js');
 const { api, PAPER_DELETION_NOTICE_VERSION } = await import('../js/api/index.js');
 const { submitPaperDeletion, isUncertainDeletionError, deletionAcceptedMessage } = await import('../js/lib/paper-deletion.js');
