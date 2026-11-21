@@ -53,11 +53,12 @@ def test_product_tools_auth_owner_pin_replay_and_revocation(db,stores,pool,monke
         with pool.connection() as conn:
             challenge = issue_check(conn, remote.owner)
         verify_args = {'code': challenge['code']}
-        assert result(client, 'verify_remote_connection', verify_args, token='account-b') == {'status': 'not_found'}
+        assert result(client, 'verify_remote_connection', verify_args, token='account-b')['status'] == 'different_account'
         with pool.connection() as conn:
             assert check_status(conn, remote.owner, challenge['check_id'])['status'] == 'pending'
-        assert result(client, 'verify_remote_connection', verify_args) == {'status': 'ok'}
-        assert result(client, 'verify_remote_connection', verify_args) == {'status': 'not_found'}
+        assert result(client, 'verify_remote_connection', verify_args)['status'] == 'ok'
+        assert result(client, 'verify_remote_connection', verify_args)['status'] == 'already_used'
+        assert result(client, 'verify_remote_connection', {'code': 'A' * 32})['status'] == 'not_found'
         with pool.connection() as conn:
             verified = check_status(conn, remote.owner, challenge['check_id'])
         assert verified['status'] == 'verified' and verified['verified_at'] is not None
