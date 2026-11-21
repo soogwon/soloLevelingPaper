@@ -2,7 +2,8 @@
 import { api } from '../api/index.js';
 import { html, setHTML } from '../lib/html.js';
 import { buildHash, replaceQuery } from '../router.js';
-import { icons, statusBadge, loadingBlock, emptyBlock, errorBlock, pagination } from '../lib/ui.js';
+import { icons, statusBadge, loadingBlock, emptyBlock, errorBlock, pagination, toast, errorMessage } from '../lib/ui.js';
+import { runPaperDeletionFlow, deletionAcceptedMessage } from '../lib/paper-deletion.js';
 import { formatAuthorsYear, formatPosition, readingStatusUpdatedLabel, formatDate, paperTitle } from '../lib/format.js';
 
 const FILTERS = [['', '전체'], ['reading', '읽는 중'], ['completed', '읽기 완료']];
@@ -38,6 +39,20 @@ export function paperRow(p) {
     ${statusBadge(p.reading_status)}
     <span>상태 근거: ${source}${p.reading_basis_version_id ? ` · 기준 버전: ${p.reading_basis_version_id}` : ''} · ${readingStatusUpdatedLabel(p.reading_status_updated_at)}</span>
   </a>`;
+}
+
+/** 목록 화면 전용 행: 링크 옆에 행별 메뉴(삭제)를 둔다. 검색 화면은 메뉴 없는 paperRow를 그대로 쓴다. */
+export function paperRowWithMenu(p) {
+  const title = paperTitle(p);
+  return html`<div class="row-item" data-paper-id="${p.paper_id}">
+    ${paperRow(p)}
+    <details class="menu-wrap row-menu">
+      <summary class="icon-btn" aria-label="${title} 메뉴">${icons.more()}</summary>
+      <div class="menu">
+        <button type="button" class="menu-item danger" data-action="delete-paper" data-paper-id="${p.paper_id}" data-title="${title}">서버에서 논문 삭제</button>
+      </div>
+    </details>
+  </div>`;
 }
 
 export function pageFromQuery(value) {
@@ -96,7 +111,7 @@ export default async function papersPage({ view, query }) {
           ? emptyBlock('조건에 맞는 논문이 없어요', '다른 상태를 선택하거나 검색어를 바꿔보세요.')
           : emptyBlock('아직 저장된 논문이 없어요', 'Claude에서 논문을 학습하고 서버 저장에 동의하면 여기에 보여요.'));
       } else {
-        setHTML(listEl, html`${res.items.map(paperRow)}`);
+        setHTML(listEl, html`${res.items.map((p) => paperRowWithMenu(p))}`);
       }
       countEl.textContent = `총 ${res.total_count}편 · 최근 학습순`;
       setHTML(pagerEl, pagination({ page: res.page, totalPages: res.total_pages, totalCount: res.total_count, pageSize: res.page_size, label: '논문 목록 페이지' }));
@@ -121,8 +136,27 @@ export default async function papersPage({ view, query }) {
     }
     const pageBtn = e.target.closest('[data-page]');
     if (pageBtn && !pageBtn.disabled) { load(Number(pageBtn.dataset.page), { moveFocus: true }); return; }
-    if (e.target.closest('[data-action="reload-list"]')) load(state.page);
+    if (e.target.closest('[data-action="reload-list"]')) { load(state.page); return; }
+    const del = e.target.closest('[data-action="delete-paper"]');
+    if (del) deletePaper(del);
   });
+
+  // 여러 논문을 차례로 정리할 수 있게 목록에 머문 채 현재 페이지만 다시 불러온다.
+  async function deletePaper(button) {
+    const row = button.closest('.row-item');
+    button.closest('details')?.removeAttribute('open');
+    row?.setAttribute('aria-busy', 'true');
+    try {
+      const result = await runPaperDeletionFlow({ paperId: button.dataset.paperId, title: button.dataset.title });
+      if (!result) return;
+      toast(deletionAcceptedMessage(result));
+      await load(state.page);
+    } catch (error) {
+      toast(errorMessage(error));
+    } finally {
+      if (row?.isConnected) row.removeAttribute('aria-busy');
+    }
+  }
 
   await load(state.page);
 }

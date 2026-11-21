@@ -18,6 +18,9 @@ async function send(method, path, options) {
 
 const id = (value) => encodeURIComponent(value);
 
+/** 서버 deletion_routes.NOTICE_VERSION과 같아야 한다. 안내 문구를 바꾸면 서버와 함께 올린다. */
+export const PAPER_DELETION_NOTICE_VERSION = 'server-paper-deletion-v1';
+
 // 목록은 페이지 번호 방식: page(1부터), limit
 const page = (params = {}) => ({ page: Math.max(1, Number(params.page) || 1), limit: params.limit ?? CONFIG.PAGE_SIZE });
 
@@ -153,6 +156,14 @@ export const api = {
    * PDF가 없으면 url 없이 status: 'not_uploaded'
    */
   getFileAccess: (paperId, versionId) => send('GET', `/papers/${id(paperId)}/versions/${id(versionId)}/file-access`),
+  /**
+   * PUT /v1/papers/{논문 ID}/deletion-requests/{요청 키} — 서버 논문 삭제 접수 (#368)
+   * → { request_id, paper_id, status: 'blocking'|'cleaning'|'failed'|'complete', backup_erasure_confirmed: false }
+   * 응답 유실 뒤 재전송은 같은 요청 키를 써야 한다. 새 키를 만들면 409가 될 수 있다.
+   */
+  requestPaperDeletion: (paperId, requestKey) => send('PUT', `/papers/${id(paperId)}/deletion-requests/${id(requestKey)}`, {
+    body: { notice_version: PAPER_DELETION_NOTICE_VERSION, confirmed: true },
+  }),
 
   // ---------- 3·4. 메모·하이라이트 ----------
   /**

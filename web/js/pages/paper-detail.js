@@ -1,6 +1,7 @@
 // 3. 논문 상세 페이지 — GET /v1/papers/{id}, GET /v1/annotations, GET /v1/annotations/{id}, POST /v1/resume-requests
 import { hasFirstLearningSource } from '../lib/remote-first-learning.js';
-import { buildHash } from '../router.js';
+import { buildHash, navigate } from '../router.js';
+import { runPaperDeletionFlow, deletionAcceptedMessage } from '../lib/paper-deletion.js';
 import { remotePaperJobs } from '../lib/remote-paper-jobs.js';
 import { remotePaperDetail } from '../lib/remote-paper-detail.js';
 import { CONFIG } from '../config.js';
@@ -99,6 +100,10 @@ export default async function paperDetailPage({ view, params, query }) {
           : actionButton({label:'Claude에서 학습 시작', action:'start-learning', primary:true,
             available:false, message:'서버에서 검증을 마친 PDF가 필요해요.'}))
           : actionButton({ label: 'Claude에서 이어서 학습', action: remoteResume ? 'remote-resume' : 'resume', available: remoteResume || paper.resume?.available, primary: true, message: paper.resume?.message ?? '이어하기를 할 수 없어요' })}
+        <details class="menu-wrap">
+          <summary class="icon-btn" aria-label="논문 메뉴">${icons.more()}</summary>
+          <div class="menu"><button type="button" class="menu-item danger" data-action="delete-paper">서버에서 논문 삭제</button></div>
+        </details>
       </div>
     </div>
 
@@ -226,6 +231,22 @@ export default async function paperDetailPage({ view, params, query }) {
     });
   }
 
+  async function deletePaper(button) {
+    button.closest('details')?.removeAttribute('open');
+    button.disabled = true;
+    try {
+      const result = await runPaperDeletionFlow({ paperId: paper.paper_id, title });
+      if (!result) return;
+      toast(deletionAcceptedMessage(result));
+      // 서버가 접수 즉시 논문을 숨기므로, 삭제한 상세 화면으로 '뒤로' 돌아오지 않게 기록을 바꾼다.
+      navigate('/papers', undefined, { replace: true });
+    } catch (error) {
+      toast(errorMessage(error));
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   view.addEventListener('click', (e) => {
     const el = e.target.closest('[data-action]');
     if (!el) return;
@@ -233,6 +254,7 @@ export default async function paperDetailPage({ view, params, query }) {
       case 'open-pdf': openPdf(el); break;
       case 'resume': openResume(el); break;
       case 'remote-resume': openRemoteResume(); break;
+      case 'delete-paper': deletePaper(el); break;
       case 'toggle-evidence': {
         const panel = view.querySelector(`#${el.getAttribute('aria-controls')}`);
         const open = el.getAttribute('aria-expanded') !== 'true';
