@@ -22,6 +22,20 @@ from solo_leveling.workers.processing_queue import QueueRunResult, run_processin
 from solo_leveling.workers.verification_bootstrap import _client, _pool, preflight, read_json, validate_plan
 
 
+# 같은 버킷 읽기 키와 OpenAI 키는 재처리 worker와 공유할 수 있다. 전용 이름이 우선이다.
+# DB 주소는 역할 권한이 달라 공유하지 않는다. 다른 역할로 게시하다 실패하면 작업이 재시도 없이 끝난다.
+SHARED_SECRETS = {
+    'SLP_DEMO_R2_ACCESS_KEY_ID': 'REPROCESSING_R2_ACCESS_KEY_ID',
+    'SLP_DEMO_R2_SECRET_ACCESS_KEY': 'REPROCESSING_R2_SECRET_ACCESS_KEY',
+    'SLP_DEMO_OPENAI_API_KEY': 'REPROCESSING_OPENAI_API_KEY',
+}
+
+
+def shared_secret(source, name):
+    value = source.get(name, '')
+    return value if value.strip() else source.get(SHARED_SECRETS[name], '')
+
+
 class DemoBudget:
     """전송 단가·입력 상한과 선택적 기간·건수.
 
@@ -204,10 +218,8 @@ def run(config_path, stop, *, environment=None, pool_factory=_pool, client_facto
         raise ValueError('demo_processing_disabled')
     verify(plan)
     # 누락된 자격도 형식 오류와 같은 고정 사유로 보고한다.
-    dsn, key, secret, api_key = (source.get(name, '') for name in (
-        'SLP_DEMO_DATABASE_URL', 'SLP_DEMO_R2_ACCESS_KEY_ID',
-        'SLP_DEMO_R2_SECRET_ACCESS_KEY', 'SLP_DEMO_OPENAI_API_KEY',
-    ))
+    dsn = source.get('SLP_DEMO_DATABASE_URL', '')
+    key, secret, api_key = (shared_secret(source, name) for name in SHARED_SECRETS)
     url = urlsplit(dsn)
     if (url.scheme not in ('postgresql', 'postgres') or not url.hostname or not url.username or not url.password
             or url.path != '/' + database or url.query != 'sslmode=verify-full' or url.fragment

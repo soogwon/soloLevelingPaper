@@ -191,10 +191,10 @@ Render → `solo-leveling-worker-staging` → Settings의 Docker Command와 Envi
 | Docker Command | `--mode demo-pdf-worker` | 직접 입력. 인자만 넣고 `python` 등은 붙이지 않습니다. |
 | `SLP_DEMO_PROCESSING_ENABLED` | `true` | 직접 입력 |
 | `SLP_AUTOMATIC_PDF_PROCESSING_ENABLED` | `true` | 직접 입력. 설정 JSON의 `policy_version`이 `pdf-auto-`로 시작해야 합니다. |
-| `SLP_DEMO_DATABASE_URL` | `postgresql://slp_staging_worker:비밀번호@호스트/DB이름?sslmode=verify-full` | 호스트·DB 이름: Render → staging Postgres → Connect → External의 URL에서 `@` 뒤 호스트와 `/` 뒤 DB 이름만 사용. 비밀번호: worker 역할을 만들 때 정한 값이며 Render에 표시되지 않습니다. 모르면 관리자 psql에서 `ALTER ROLE slp_staging_worker PASSWORD '새 비밀번호';`로 다시 정합니다. 끝에는 `?sslmode=verify-full`만 둡니다. |
+| `SLP_DEMO_DATABASE_URL` | `postgresql://slp_staging_worker:비밀번호@호스트/DB이름?sslmode=verify-full` | 호스트·DB 이름: Render → staging Postgres → Connect → External의 URL에서 `@` 뒤 호스트와 `/` 뒤 DB 이름만 사용. 비밀번호: worker 역할을 만들 때 정한 값이며 Render에 표시되지 않습니다. 모르면 관리자 psql에서 `ALTER ROLE slp_staging_worker PASSWORD '새 비밀번호';`로 다시 정합니다. 끝에는 `?sslmode=verify-full`만 둡니다. 재처리 worker 주소를 대신 읽지 않습니다. 역할 권한이 다르면 게시 단계에서 실패하고 작업이 재시도 없이 끝나기 때문입니다. |
 | `PGSSLROOTCERT` | 이미지의 CA 묶음 경로 | 기존 값이 있으면 유지합니다. 없고 DB 연결이 실패하면 `/etc/ssl/certs/ca-certificates.crt`를 시도합니다. |
-| `SLP_DEMO_R2_ACCESS_KEY_ID` / `SLP_DEMO_R2_SECRET_ACCESS_KEY` | R2 S3 호환 키 한 쌍 | Cloudflare 대시보드 → R2 Object Storage → API 토큰 관리 → Create API token. 권한 Object Read only, 대상 버킷 `solo-leveling-staging-pdfs`만 지정 → 생성 화면의 Access Key ID와 Secret Access Key를 각각 입력합니다. Secret은 이 화면에서만 보입니다. |
-| `SLP_DEMO_OPENAI_API_KEY` | `sk-...` | platform.openai.com → API keys → Create new secret key. worker 전용 키를 만들고 프로젝트 사용 한도를 걸어 두기를 권장합니다. 생성 직후에만 전체 값이 보입니다. |
+| `SLP_DEMO_R2_ACCESS_KEY_ID` / `SLP_DEMO_R2_SECRET_ACCESS_KEY` | R2 S3 호환 키 한 쌍 | 재처리 worker의 `REPROCESSING_R2_ACCESS_KEY_ID`·`REPROCESSING_R2_SECRET_ACCESS_KEY`가 이미 있으면 따로 넣지 않아도 그 값을 씁니다. 새로 만들 때: Cloudflare 대시보드 → R2 Object Storage → API 토큰 관리 → Create API token. 권한 Object Read only, 대상 버킷 `solo-leveling-staging-pdfs`만 지정 → 생성 화면의 Access Key ID와 Secret Access Key를 각각 입력합니다. Secret은 이 화면에서만 보입니다. |
+| `SLP_DEMO_OPENAI_API_KEY` | `sk-...` | `REPROCESSING_OPENAI_API_KEY`가 있으면 따로 넣지 않아도 그 값을 씁니다. 새로 만들 때: platform.openai.com → API keys → Create new secret key. worker 전용 키를 만들고 프로젝트 사용 한도를 걸어 두기를 권장합니다. 생성 직후에만 전체 값이 보입니다. |
 | `SLP_DEMO_PROCESSING_CONFIG_JSON` | 처리 설정 JSON | 기존 값을 유지하고 아래 항목만 확인합니다. |
 | `WORKER_BASE_REFERENCE` | 설정하지 않음 | 이미지에 포함된 값입니다. |
 

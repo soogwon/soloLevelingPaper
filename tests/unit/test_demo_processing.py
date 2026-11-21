@@ -115,3 +115,13 @@ def test_exit_code_names_reason_without_details(error, code):
     from solo_leveling.workers.demo_processing import exit_code
     assert exit_code(error) == code
 
+
+
+def test_bucket_and_openai_keys_fall_back_to_reprocessing_names():
+    from solo_leveling.workers.demo_processing import shared_secret
+
+    env = {'REPROCESSING_R2_ACCESS_KEY_ID': 'shared-id', 'SLP_DEMO_R2_SECRET_ACCESS_KEY': 'own',
+           'REPROCESSING_R2_SECRET_ACCESS_KEY': 'shared-secret', 'SLP_DEMO_OPENAI_API_KEY': ' '}
+    assert shared_secret(env, 'SLP_DEMO_R2_ACCESS_KEY_ID') == 'shared-id'
+    assert shared_secret(env, 'SLP_DEMO_R2_SECRET_ACCESS_KEY') == 'own'
+    assert shared_secret(env, 'SLP_DEMO_OPENAI_API_KEY') == ''
