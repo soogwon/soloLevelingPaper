@@ -32,3 +32,34 @@ for (const localCount of [0, 1]) {
     }
   });
 }
+
+test('동의 관리 항목을 HTML로 그리고 고지 문구만 이스케이프한다', async (t) => {
+  const slots = {};
+  const view = Object.assign(new EventTarget(), {
+    querySelector: selector => (slots[selector] ??= { querySelector: () => null }),
+  });
+  const item = (purpose, state) => ({ purpose, required: purpose === 'storage', notice: `<b>${purpose}</b>`,
+    state, revision: 1, granted_at: null, revoked_at: null });
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    const path = new URL(url).pathname;
+    const body = path.endsWith('/me') ? { display_name: '검증' }
+      : path.endsWith('/account/consents') ? { notice_version: 'account-consent-v1', complete: true,
+        items: [item('storage', 'current'), item('ai_provider', 'missing')] }
+      : [];
+    return { ok: true, status: 200, json: async () => body };
+  });
+  await accountPage({ view });
+  const consents = slots['[data-slot="consents"]'].innerHTML;
+  assert.equal(consents.match(/<div class="consent-item">/g)?.length, 2);
+  assert.doesNotMatch(consents, /&lt;div|<\/div>,/);
+  assert.match(consents, /&lt;b&gt;storage&lt;\/b&gt;/);
+  assert.match(consents, /data-action="revoke-consent" data-purpose="storage"/);
+  assert.match(consents, /data-action="grant-consent" data-purpose="ai_provider"/);
+});
+
+test('setHTML은 배열 항목을 쉼표 없이 잇고 문자열은 이스케이프한다', async () => {
+  const { html, setHTML } = await import('../js/lib/html.js');
+  const el = {};
+  setHTML(el, [html`<i>a</i>`, '<b>']);
+  assert.equal(el.innerHTML, '<i>a</i>&lt;b&gt;');
+});
