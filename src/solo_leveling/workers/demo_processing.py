@@ -18,32 +18,54 @@ from solo_leveling.interfaces.cli.processing_verification import _unique
 from solo_leveling.interfaces.http.object_storage import S3ObjectStorage
 from solo_leveling.interfaces.http.processing_jobs import PostgresProcessingJobStore, ProcessingJobLeaseLost, _job
 from solo_leveling.workers.processing_composition import create_processing_worker
-from solo_leveling.workers.processing_queue import run_processing_queue
+from solo_leveling.workers.processing_queue import QueueRunResult, run_processing_queue
 from solo_leveling.workers.verification_bootstrap import _client, _pool, preflight, read_json, validate_plan
 
 
 class DemoBudget:
+    """전송 단가·입력 상한과 선택적 기간·건수.
+
+    starts_at/expires_at는 둘 다 지정하거나 둘 다 비운다. 비우면 만료 없이 동작한다.
+    max_jobs를 비우면 프로세스 건수 제한 없이 계속 대기열을 소비한다.
+    """
+
+    REQUIRED = {
+        'input_token_limit', 'input_overhead_tokens',
+        'input_microusd_per_million_tokens', 'output_microusd_per_million_tokens',
+        'owner_budget_microusd', 'service_budget_microusd',
+    }
+    OPTIONAL = {'starts_at', 'expires_at', 'max_jobs'}
+
     def __init__(self, settings, model, output_limit):
-        fields = {
-            'starts_at', 'expires_at', 'max_jobs', 'input_token_limit', 'input_overhead_tokens',
-            'input_microusd_per_million_tokens', 'output_microusd_per_million_tokens',
-            'owner_budget_microusd', 'service_budget_microusd',
-        }
-        if type(settings) is not dict or set(settings) != fields:
+        if (type(settings) is not dict or not self.REQUIRED <= set(settings)
+                or not set(settings) <= self.REQUIRED | self.OPTIONAL
+                or ('starts_at' in settings) != ('expires_at' in settings)):
             raise ValueError('demo_budget_invalid')
-        amounts = {key: settings[key] for key in fields - {'starts_at', 'expires_at'}}
+        amounts = {key: settings[key] for key in self.REQUIRED}
+        if 'max_jobs' in settings:
+            amounts['max_jobs'] = settings['max_jobs']
         if any(type(value) is not int or value <= 0 for value in amounts.values()):
             raise ValueError('demo_budget_invalid')
-        self.starts_at = datetime.fromisoformat(settings['starts_at'])
-        self.expires_at = datetime.fromisoformat(settings['expires_at'])
-        if (self.starts_at.tzinfo is None or self.expires_at.tzinfo is None
-                or not self.starts_at < self.expires_at or not 1 <= settings['max_jobs'] <= 10000
+        if 'starts_at' in settings:
+            if type(settings['starts_at']) is not str or type(settings['expires_at']) is not str:
+                raise ValueError('demo_budget_invalid')
+            self.starts_at = datetime.fromisoformat(settings['starts_at'])
+            self.expires_at = datetime.fromisoformat(settings['expires_at'])
+            if (self.starts_at.tzinfo is None or self.expires_at.tzinfo is None
+                    or not self.starts_at < self.expires_at):
+                raise ValueError('demo_budget_invalid')
+        else:
+            self.starts_at = self.expires_at = None
+        self.max_jobs = settings.get('max_jobs')
+        if ((self.max_jobs is not None and not 1 <= self.max_jobs <= 10000)
                 or settings['owner_budget_microusd'] > settings['service_budget_microusd']
                 or settings['input_overhead_tokens'] >= settings['input_token_limit']):
             raise ValueError('demo_budget_invalid')
         self.settings, self.model, self.output_limit = dict(settings), model, output_limit
 
     def active(self):
+        if self.starts_at is None:
+            return True
         return self.starts_at <= datetime.now(timezone.utc) < self.expires_at
 
     def upper_bound(self, model, payload):
@@ -88,7 +110,8 @@ class DemoJobs(PostgresProcessingJobStore):
                          ON a.owner_user_id=j.owner_user_id AND a.job_id=j.job_id
                        JOIN server_papers p ON p.owner_user_id=j.owner_user_id AND p.paper_id=j.paper_id
                        WHERE j.status='queued' AND j.attempt=0 AND j.job_kind='full_processing'
-                         AND j.created_at >= %s AND j.created_at < %s AND CURRENT_TIMESTAMP < %s
+                         AND (%s::timestamptz IS NULL OR (j.created_at >= %s AND j.created_at < %s
+                                                          AND CURRENT_TIMESTAMP < %s))
                          AND ((%s AND a.processing_policy_version=%s AND a.processing_window_key=%s)
                               OR (NOT %s AND a.processing_policy_version IS NULL))
                          AND p.deleted_at IS NULL
@@ -110,7 +133,7 @@ class DemoJobs(PostgresProcessingJobStore):
                        updated_at=CURRENT_TIMESTAMP
                    FROM candidate c WHERE j.owner_user_id=c.owner_user_id AND j.job_id=c.job_id
                    RETURNING j.*""",
-                (self.budget.starts_at, self.budget.expires_at, self.budget.expires_at,
+                (self.budget.starts_at, self.budget.starts_at, self.budget.expires_at, self.budget.expires_at,
                  self.automatic_only, self.policy, self.window, self.automatic_only,
                  self.policy, self.window, self.policy, self.window, worker_id, str(uuid4()), lease_seconds),
             ).fetchone()
@@ -144,6 +167,8 @@ class DemoStop:
         return self.event.is_set() or not self.budget.active()
 
     def wait(self, seconds):
+        if self.budget.expires_at is None:
+            return self.event.wait(seconds) or self.is_set()
         remaining = (self.budget.expires_at - datetime.now(timezone.utc)).total_seconds()
         return self.event.wait(max(0, min(remaining, seconds))) or self.is_set()
 
@@ -171,11 +196,15 @@ def run(config_path, stop, *, environment=None, pool_factory=_pool, client_facto
     plan = validate_plan(None, raw, demo=True)
     translation = raw['translation']
     budget = DemoBudget(budget_settings, plan.translation.model, translation['max_output_tokens'])
+    if budget.starts_at is None and not automatic_only:
+        # 데모 정책은 접수 정책이 없는 과거 작업까지 가져갈 수 있어 기간을 반드시 둔다.
+        raise ValueError('demo_budget_invalid')
     if (source.get('SLP_DEMO_PROCESSING_ENABLED') != 'true' or not budget.active()
             or source.get('WORKER_BASE_REFERENCE') != raw['runtime_image']):
         raise ValueError('demo_processing_disabled')
     verify(plan)
-    dsn, key, secret, api_key = (source[name] for name in (
+    # 누락된 자격도 형식 오류와 같은 고정 사유로 보고한다.
+    dsn, key, secret, api_key = (source.get(name, '') for name in (
         'SLP_DEMO_DATABASE_URL', 'SLP_DEMO_R2_ACCESS_KEY_ID',
         'SLP_DEMO_R2_SECRET_ACCESS_KEY', 'SLP_DEMO_OPENAI_API_KEY',
     ))
@@ -214,8 +243,43 @@ def run(config_path, stop, *, environment=None, pool_factory=_pool, client_facto
             validate_limits=lambda limits: not stop.is_set() and budget.allows_limits(limits),
             allow_partial=automatic_only, batch_size=raw['batch_size'], fragment_policy=fragment_policy,
         )
-        return run_processing_queue(worker, DemoStop(stop, budget), max_jobs=budget.settings['max_jobs'],
-                                    settle_failed=jobs.settle_failed)
+        guard = DemoStop(stop, budget)
+        if budget.max_jobs is not None:
+            return run_processing_queue(worker, guard, max_jobs=budget.max_jobs, settle_failed=jobs.settle_failed)
+        return run_continuously(worker, guard, settle_failed=jobs.settle_failed)
+
+
+def run_continuously(worker, stop, *, settle_failed, batch=10000, failure_pause_seconds=30.0,
+                     queue=run_processing_queue):
+    """건수 제한 없이 대기열을 계속 소비한다.
+
+    실패한 작업은 queue가 재시도 없이 종결하고 attempt=0 조건으로 다시 가져가지 않으므로,
+    잠시 쉰 뒤 다음 작업을 확인해도 같은 작업의 외부 호출이 반복되지 않는다.
+    """
+    processed = 0
+    while True:
+        result = queue(worker, stop, max_jobs=batch, settle_failed=settle_failed)
+        processed += result.processed
+        if result.status == 'stopped' or stop.is_set():
+            return QueueRunResult('stopped', processed)
+        if result.status in ('failed', 'not_published') and stop.wait(failure_pause_seconds):
+            return QueueRunResult('stopped', processed)
+
+
+# 자식 출력은 버려지므로 종료 코드로만 원인을 구분한다. 원문·자격·예외 내용은 담지 않는다.
+EXIT_CODES = {
+    'demo_config_invalid': 3, 'demo_budget_invalid': 3, 'demo_database_invalid': 3,
+    'automatic_pdf_policy_mismatch': 3, 'demo_processing_disabled': 4, 'demo_credentials_invalid': 5,
+}
+EXIT_QUEUE_FAILED = 6
+
+
+def exit_code(error):
+    if isinstance(error, ValueError) and len(error.args) == 1 and error.args[0] in EXIT_CODES:
+        return EXIT_CODES[error.args[0]]
+    if isinstance(error, (KeyError, json.JSONDecodeError)):
+        return EXIT_CODES['demo_config_invalid']
+    return 1
 
 
 def main():
@@ -224,9 +288,9 @@ def main():
         signal.signal(sig, lambda *_: stop.set())
     try:
         result = run(os.environ.get('SLP_DEMO_PROCESSING_CONFIG', ''), stop)
-        return 0 if result.status in ('stopped', 'limit_reached') else 1
-    except Exception:
-        return 1
+        return 0 if result.status in ('stopped', 'limit_reached') else EXIT_QUEUE_FAILED
+    except Exception as error:
+        return exit_code(error)
 
 
 if __name__ == '__main__':

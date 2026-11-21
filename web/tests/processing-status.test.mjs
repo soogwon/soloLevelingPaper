@@ -84,6 +84,13 @@ for(const code of [401,403,404])test(`${code}를 미접수로 단정하지 않�
   const c=createProcessingStatus({api:{getRemoteProcessing:async()=>{throw {status:code};}}});
   c.bind(target);await c.refresh();assert.equal(c.snapshot().status,'unavailable');
 });
+test('계정당 처리 한도 도달은 대기와 구분해 안내한다',async()=>{
+  const c=createProcessingStatus({api:{getRemoteProcessing:async()=>{
+    throw {status:409,code:'remote_processing_quota_exceeded'};}}});
+  c.bind(target);await c.refresh();
+  assert.equal(c.snapshot().status,'quota');assert.equal(c.snapshot().job,null);
+  assert.equal(c.snapshot().message,processingMessages.quota);assert.equal(c.snapshot().canRead,true);
+});
 test('중복 클릭은 조회를 한 번만 보내며 같은 출처 재바인딩은 응답을 버리지 않는다',async()=>{
   let resolve,calls=0;const pending=new Promise(r=>resolve=r);
   const c=createProcessingStatus({api:{getRemoteProcessing:()=>{calls++;return pending;}}});
