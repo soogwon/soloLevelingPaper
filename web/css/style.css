@@ -258,6 +258,8 @@ body.bare .view { max-width: none; padding: 0; }
 .menu-wrap > summary { list-style: none; }
 .menu-wrap > summary::-webkit-details-marker { display: none; }
 .menu { position: absolute; right: 0; top: 46px; z-index: 5; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 30px rgba(22, 22, 29, 0.12); padding: 6px; min-width: 180px; }
+/* 열 때 JS가 화면 기준으로 위치를 잡는다(main.js placeMenu). 표 카드의 overflow에 잘리지 않게 한다. */
+.menu.floating { position: fixed; right: auto; z-index: 50; }
 .menu-item { display: flex; width: 100%; align-items: center; min-height: 44px; padding: 0 12px; border: 0; background: none; border-radius: 8px; font-size: 14px; color: var(--text); cursor: pointer; text-align: left; }
 .menu-item:hover { background: var(--bg); color: var(--text); }
 .menu-item.danger { color: var(--danger); }
