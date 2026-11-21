@@ -11,6 +11,7 @@ from solo_leveling.domain.learning_progress import LEARNING_STEPS
 from .remote_reflection import digest, encoded
 from .remote_retrieval import PostgresRemoteContextResolver
 from .remote_executions import RemoteExecutionConflict
+from .account_consents import account_consent_id
 
 NOTICE = 'remote-quiz-attempt-v1'
 
@@ -90,9 +91,10 @@ class PostgresRemoteQuiz:
             current = conn.execute("""SELECT consent_id FROM server_remote_consents WHERE owner_user_id=%s
                 AND purpose='storage' AND notice_version=%s AND input_hash=%s AND revoked_at IS NULL
                 ORDER BY consent_id LIMIT 1""",(owner,NOTICE,NOTICE+':'+row['snapshot_hash'])).fetchone()
+            account = None if current else _account_storage(conn,owner,row['snapshot_hash'])
             return dict(context_id=str(UUID(context)),quiz_id=str(UUID(quiz_id)),quiz_revision=row['snapshot_hash'],
-                        notice_version=NOTICE,storage='current' if current else 'missing',
-                        consent_id=current['consent_id'] if current else None,
+                        notice_version=NOTICE,storage='current' if current or account else 'missing',
+                        consent_id=current['consent_id'] if current else account,account=account is not None,
                         notice='이 학습 맥락의 고정 퀴즈에 제출한 답안·점수·오답 근거를 저장합니다. AI 생성·전송 동의는 포함하지 않습니다.')
 
     def grant_storage(self,owner,context,quiz_id,notice,quiz_revision):
@@ -117,9 +119,15 @@ class PostgresRemoteQuiz:
             row = self._quiz(conn,owner,context,quiz_id,write=True)
             if row is None:
                 return None
-            conn.execute("""UPDATE server_remote_consents SET revoked_at=clock_timestamp() WHERE owner_user_id=%s
+            revoked = conn.execute("""UPDATE server_remote_consents SET revoked_at=clock_timestamp() WHERE owner_user_id=%s
                 AND purpose='storage' AND notice_version=%s AND input_hash=%s AND revoked_at IS NULL""",
-                (owner,NOTICE,NOTICE+':'+row['snapshot_hash']))
+                (owner,NOTICE,NOTICE+':'+row['snapshot_hash'])).rowcount
+            if not revoked and _account_storage(conn,owner,row['snapshot_hash']):
+                # 계정 동의로만 저장하던 퀴즈도 이 퀴즈에서만 철회한 기록을 남긴다.
+                conn.execute("""INSERT INTO server_remote_consents
+                    (consent_id,owner_user_id,purpose,input_hash,notice_version,revoked_at)
+                    VALUES (%s,%s,'storage',%s,%s,clock_timestamp())""",
+                    (str(uuid4()),owner,NOTICE+':'+row['snapshot_hash'],NOTICE))
         return self.consent(owner,context,quiz_id)
 
     def submit(self,owner,context,quiz_id,key,answers,storage_consent_id):
@@ -142,7 +150,8 @@ class PostgresRemoteQuiz:
             consent = conn.execute('''SELECT 1 FROM server_remote_consents WHERE owner_user_id=%s
                 AND consent_id=%s AND purpose='storage' AND notice_version=%s AND input_hash=%s
                 AND revoked_at IS NULL FOR SHARE''',(owner,storage_consent_id,NOTICE,NOTICE+':'+row['snapshot_hash'])).fetchone()
-            if consent is None:
+            if consent is None and (storage_consent_id is None
+                                    or _account_storage(conn,owner,row['snapshot_hash']) != str(storage_consent_id)):
                 raise ValueError('remote_quiz_storage_consent_required')
             quiz = Quiz(quiz_id,context,row['step'],tuple(QuizQuestion(**q) for q in row['snapshot']['questions']),row['created_at'].isoformat())
             attempt = QuizAttemptService('')._make_attempt(quiz,answers)
@@ -224,3 +233,11 @@ class PostgresRemoteQuiz:
                 WHERE a.owner_user_id=%s AND a.context_id=%s GROUP BY q.step''',(owner,context)).fetchall()
             by_step = {r['step']:r for r in rows}
             return [by_step.get(step,dict(step=step,attempts=0,best_score=None,latest_score=None)) for step in LEARNING_STEPS]
+
+
+def _account_storage(conn,owner,quiz_revision):
+    """이 퀴즈에서 따로 철회한 적이 없으면 계정 저장 동의 ID를 대신 사용한다."""
+    revoked = conn.execute('''SELECT 1 FROM server_remote_consents WHERE owner_user_id=%s
+        AND purpose='storage' AND input_hash=%s AND notice_version=%s AND revoked_at IS NOT NULL
+        LIMIT 1''',(owner,NOTICE+':'+quiz_revision,NOTICE)).fetchone()
+    return None if revoked else account_consent_id(conn,owner,'storage')

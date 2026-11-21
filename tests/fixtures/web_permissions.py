@@ -21,6 +21,7 @@ WRITE = (
     "server_remote_consents",
     "server_remote_upload_consent_bindings",
     "server_remote_upload_consent_requests",
+    "server_account_consents",
 )
 INSERT_ONLY = (
     "server_processing_versions",

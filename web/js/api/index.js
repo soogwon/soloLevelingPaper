@@ -90,6 +90,13 @@ export const api = {
   loginUrl: (returnTo) => `${CONFIG.API_BASE_URL}/auth/login?provider=google&return_to=${encodeURIComponent(returnTo)}`,
   /** 예시 데이터 전용 로그인 */
   mockLogin: () => send('POST', '/auth/mock-login'),
+  /** GET /v1/account/consents → { notice_version, complete, items: [{ purpose, required, notice, state, revision }] } */
+  getAccountConsents: () => send('GET', '/account/consents'),
+  /** POST /v1/account/consents { notice_version, purposes } */
+  grantAccountConsents: (purposes, noticeVersion) => send('POST', '/account/consents',
+    { body: { notice_version: noticeVersion, purposes } }),
+  /** POST /v1/account/consents/{목적}/revoke */
+  revokeAccountConsent: (purpose) => send('POST', `/account/consents/${id(purpose)}/revoke`),
 
   /** GET /v1/devices → 배열 또는 { items }; 화면용 필드로 정규화한다. */
   createRemoteConnectionCheck: () => send('POST', '/devices/remote-mcp/checks'),

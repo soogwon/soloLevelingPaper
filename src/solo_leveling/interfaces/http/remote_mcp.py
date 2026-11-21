@@ -113,12 +113,13 @@ def create_remote_mcp(
             "‘요약해줘’, ‘요약 생성’, ‘이 논문 요약’은 기본적으로 Claude 채팅에서 답한다. "
             "현재 학습 맥락의 고정 판본을 read_remote_paper_page로 읽고, "
             "연구 질문·핵심 접근·주요 결과를 각 한 문장과 확인한 PDF 쪽으로 보여준다. "
-            "근거가 확인되면 별도 저장 요청을 기다리지 않고 prepare_remote_chat_summary로 검토를 준비한다. "
-            "도구 승인과 검토 준비가 성공하면 같은 답변에 ‘인용 확인하고 저장’ 링크를 붙인다. "
-            "준비가 거절되거나 실패하면 채팅 요약을 그대로 보여주고 링크가 준비되지 않았다고 알린다. "
-            "확정 저장은 사용자가 인증 웹에서 확인 버튼을 누를 때만 이루어진다. "
-            "prepare_remote_summary와 submit_remote_summary는 사용자가 유료 서버 생성을 명시적으로 "
-            "요청했을 때만 사용한다. ‘동의했어’나 ‘요약 확인해줘’는 새 접수 요청이 아니다. "
+            "근거가 확인되면 별도 저장 요청을 기다리지 않고 prepare_remote_chat_summary를 호출한다. "
+            "결과가 saved이면 가입 때 받은 저장 동의로 이미 저장된 것이므로 같은 답변에 ‘저장됨’과 "
+            "인용·저장 취소 링크를 붙인다. review_required이면 ‘인용 확인하고 저장’ 링크를 붙인다. "
+            "준비가 거절되거나 실패하면 채팅 요약을 그대로 보여주고 저장되지 않았다고 알린다. "
+            "prepare_remote_summary는 사용자가 서버 생성을 명시적으로 요청했을 때만 사용한다. "
+            "가입 때 두 동의를 받은 계정이면 준비와 동시에 접수되며 비용은 운영자가 부담한다. "
+            "‘동의했어’나 ‘요약 확인해줘’는 새 접수 요청이 아니다. "
             "기존 요청의 상태나 저장된 결과를 조회하고, 예산 거절이면 자동 재제출하지 않는다. "
             if summary_service is not None else ""
         ) + WEB_LINK_INSTRUCTIONS if settings.product_reads_enabled else None,
@@ -176,10 +177,10 @@ def create_remote_mcp(
                      annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                                  idempotentHint=True, openWorldHint=False))
         def open_remote_pdf_registration() -> dict[str, str]:
-            """웹 PDF 등록 화면을 안내합니다. 파일 선택과 보관 동의는 웹에서 진행합니다."""
+            """웹 PDF 등록 화면을 안내합니다. 파일 선택은 웹에서 하며 가입 때 받은 동의로 보관·처리합니다."""
             return {
                 "upload_url": upload_url,
-                "message": f"웹에서 PDF를 선택하고 보관에 동의하세요. {upload_url}",
+                "message": f"웹에서 PDF를 선택해 업로드하세요. 가입 동의를 아직 하지 않았다면 동의 화면이 먼저 나옵니다. {upload_url}",
             }
 
         @server.resource(PDF_REGISTRATION_URI, mime_type="text/html;profile=mcp-app",

@@ -2,6 +2,7 @@ import { api } from '../api/index.js';
 import { html, setHTML } from './html.js';
 import { copyText } from './ui.js';
 import { consentMessages, createUploadConsents } from './upload-consents.js';
+import { accountConsentCurrent } from './account-consents.js';
 
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 export function hasFirstLearningSource(paper) {
@@ -31,11 +32,18 @@ export async function remoteFirstLearning(view, paper, version, client = api) {
   };
   events.forEach(event => window.addEventListener(event, close));
 
+  function isEligible() {
+    const consent = consents.snapshot();
+    return checkedJob && !job && consent.status === 'ready'
+      && consent.values.storage?.state === 'current' && consent.values.ai_provider?.state === 'current';
+  }
+
   function draw() {
     if (!current()) return;
     const consent = consents.snapshot();
-    const eligible = checkedJob && !job && consent.status === 'ready'
-      && consent.values.storage?.state === 'current' && consent.values.ai_provider?.state === 'current';
+    const eligible = isEligible();
+    // 가입 때 두 동의를 받은 계정은 목적별 동의 안내 없이 접수 상태만 보여준다.
+    const byAccount = eligible && accountConsentCurrent('storage') && accountConsentCurrent('ai_provider');
     const prompt = `연결된 Solo Leveling 원격 MCP에서 논문 ID ${paper}, PDF 판본 ID ${version}을 열고 이 판본으로 원격 학습을 시작해 줘. open_remote_paper로 연 학습 맥락에 start_remote_learning을 호출해 줘.`;
     setHTML(view, html`
       <h2 class="panel-title">학습 처리</h2>
@@ -47,7 +55,8 @@ export async function remoteFirstLearning(view, paper, version, client = api) {
       ` : source ? html`
         ${!job ? html`
           <p>등록된 PDF를 사용합니다. 별도 접수 후 worker가 PDF를 처리하고 학습 자료를 게시해요.</p>
-          ${consent.notice ? html`<p>고지 버전: ${consent.notice.version}</p><p>${consent.notice.ai_provider}</p>
+          ${byAccount ? html`<p>가입 때 동의한 내용으로 학습 자료 만들기를 접수해요.</p>`
+          : consent.notice ? html`<p>고지 버전: ${consent.notice.version}</p><p>${consent.notice.ai_provider}</p>
             <p>${consentMessages[consent.busy ? 'busy' : consent.status]}</p>
             ${consent.values.storage?.state !== 'current' ? html`<p>현재 PDF 보관 동의가 필요해요.</p><p>${consent.notice.storage}</p>
               <label><input type="checkbox" data-storage-check ${busy || !consent.canGrant.storage ? 'disabled' : ''}> PDF 보관에 동의해요.</label>
@@ -182,4 +191,7 @@ export async function remoteFirstLearning(view, paper, version, client = api) {
   }
 
   await refresh();
+  // 가입 때 두 동의를 받았으면 접수 버튼을 누르지 않아도 바로 접수한다. 실패하면 버튼이 남는다.
+  if (current() && !pendingRequest && isEligible()
+      && accountConsentCurrent('storage') && accountConsentCurrent('ai_provider')) await submit(true);
 }

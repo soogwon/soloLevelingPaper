@@ -102,3 +102,13 @@ def test_context_cleanup_returns_reservation_once(db,stores,pool):
     db('DELETE FROM server_execution_contexts WHERE owner_user_id=%s AND context_id=%s',(remote.owner,v.context))
     assert not db('SELECT 1 FROM server_reprocessing_reviews WHERE request_key=%s',(key,))
     assert all(r['n']==0 for r in db('SELECT reserved_input_tokens n FROM server_dispatch_budget_limits WHERE window_key=%s',(service.contract['window_key'],)))
+
+
+def test_account_consents_skip_consent_step_but_wait_for_start(db,stores,pool):
+    from solo_leveling.interfaces.http.account_consents import NOTICE_VERSION,PostgresAccountConsents
+    remote,v,service,key=setup(db,stores,pool);owner=remote.owner
+    PostgresAccountConsents(pool).grant(owner,['storage','ai_provider'],NOTICE_VERSION)
+    prepared=service.prepare(owner,key,v.context,'reparse')
+    assert prepared['storage']==prepared['ai_provider']=='current'
+    assert prepared['state']=='review' and prepared['job_id'] is None
+    assert service.submit(owner,key)['state']=='queued'

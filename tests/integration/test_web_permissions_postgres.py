@@ -66,6 +66,7 @@ def web(web_pool, monkeypatch):
     from solo_leveling.interfaces.http.remote_upload_consents import PostgresRemoteUploadConsentStore
     from solo_leveling.interfaces.http.remote_processing_intake import PostgresRemoteProcessingIntake
     from solo_leveling.interfaces.http.remote_deletions import PostgresRemoteDeletionStore
+    from solo_leveling.interfaces.http.account_consents import PostgresAccountConsents
     from solo_leveling.interfaces.http.web_auth import PostgresWebSessionStore, WebIdentity, OidcWebAuthFlow
     from tests.unit.test_http_web_auth import SETTINGS, Http, Verifier
     from solo_leveling.interfaces.http.object_storage import StoredObject
@@ -111,6 +112,7 @@ def web(web_pool, monkeypatch):
         remote_upload_store=PostgresRemoteUploadIntentStore(web_pool),
         remote_consent_store=PostgresRemoteUploadConsentStore(web_pool),
         remote_processing_intake=PostgresRemoteProcessingIntake(web_pool),
+        account_consents=PostgresAccountConsents(web_pool),
         deletion_store=PostgresRemoteDeletionStore(web_pool),
         web_session_store=sessions,
         web_auth_flow=OidcWebAuthFlow(SETTINGS, sessions, Verifier(), Http()),
@@ -369,6 +371,62 @@ def test_web_remote_upload_consent_admission_deletion(web, db):
     assert call(client, "GET", collection_path)["paper_count"] == 0
     collections = call(client, "GET", "/v1/collections")["items"]
     assert next(item for item in collections if item["collection_id"] == collection)["paper_count"] == 0
+
+
+def test_account_consent_binds_upload_consents_and_admits_processing(web, db):
+    client, sessions, _ = web
+    from solo_leveling.interfaces.http.account_consents import NOTICE_VERSION as ACCOUNT_NOTICE
+    from solo_leveling.interfaces.http.web_auth import WebIdentity
+
+    db(
+        "INSERT INTO server_dispatch_controls(control_id,generation,dispatch_enabled,intake_enabled) VALUES ('provider_dispatch',1,true,true) ON CONFLICT(control_id) DO UPDATE SET intake_enabled=true,dispatch_enabled=true"
+    )
+    original = (client.cookies.get("slp_session"), client.cookies.get("csrf_token"))
+    user = sessions.create_session(WebIdentity(new_id(), "계정 동의 합성", None), datetime.now(timezone.utc))
+    client.cookies.set("slp_session", user.token)
+    client.cookies.set("csrf_token", user.csrf_token)
+    client.headers["X-CSRF-Token"] = user.csrf_token
+    try:
+        first = call(client, "GET", "/v1/account/consents")
+        assert first["complete"] is False
+        call(client, "POST", "/v1/account/consents", {"notice_version": "old", "purposes": ["storage"]}, 409)
+        granted = call(client, "POST", "/v1/account/consents",
+                       {"notice_version": ACCOUNT_NOTICE, "purposes": ["storage", "ai_provider"]})
+        assert granted["complete"] is True
+        assert {item["purpose"]: item["state"] for item in granted["items"]} == {
+            "storage": "current", "ai_provider": "current"}
+
+        intent = call(client, "POST", "/v1/remote-uploads/intents",
+                      dict(file_name="account.pdf", file_size=10, content_type="application/pdf", sha256="d" * 64), 201)
+        path = "/v1/remote-uploads/intents/" + intent["intent_id"]
+        before = call(client, "GET", path + "/consents")
+        assert before["storage"]["state"] == "current" and before["ai_provider"] is None
+        # 별도 보관 동의 없이 업로드하고, 검증이 끝나면 AI 동의와 학습 처리 접수까지 서버가 마친다.
+        call(client, "POST", path + "/prepare")
+        call(client, "POST", path + "/complete")
+        after = call(client, "GET", path + "/consents")
+        assert after["ai_provider"]["state"] == "current"
+        job = call(client, "GET", path + "/processing")
+        assert job["status"] == "queued"
+
+        # 이 업로드의 AI 동의를 철회하면 같은 의도에서 다시 자동 기록하지 않는다.
+        call(client, "POST", path + "/consents/ai_provider/revoke",
+             {"expected_revision": after["ai_provider"]["revision"]})
+        assert call(client, "GET", path + "/consents")["ai_provider"]["state"] == "revoked"
+
+        # OpenAI 전송을 철회하면 새 업로드는 보관 동의만 자동 기록하고 처리는 접수하지 않는다.
+        call(client, "POST", "/v1/account/consents/ai_provider/revoke")
+        second = call(client, "POST", "/v1/remote-uploads/intents",
+                      dict(file_name="second.pdf", file_size=10, content_type="application/pdf", sha256="e" * 64), 201)
+        second_path = "/v1/remote-uploads/intents/" + second["intent_id"]
+        call(client, "POST", second_path + "/prepare")
+        call(client, "POST", second_path + "/complete")
+        assert call(client, "GET", second_path + "/consents")["ai_provider"] is None
+        call(client, "GET", second_path + "/processing", expected=404)
+    finally:
+        client.cookies.set("slp_session", original[0])
+        client.cookies.set("csrf_token", original[1])
+        client.headers["X-CSRF-Token"] = original[1]
 
 
 def test_web_role_cannot_change_worker_outputs_budget_or_schema(web_pool):

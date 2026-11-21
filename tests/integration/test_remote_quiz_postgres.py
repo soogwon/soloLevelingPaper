@@ -146,3 +146,25 @@ def test_saved_quiz_card_links_submission_score_and_exact_source(pool, db, store
     assert review(context, str(uuid4()), saved['attempt_id'], bound)['status'] == 'invalid_argument'
     owner = 'bob'
     assert review(context, quiz, saved['attempt_id'], bound)['status'] == 'invalid_argument'
+
+
+def test_account_storage_consent_submits_until_revoked_for_this_quiz(pool,db,stores):
+    from solo_leveling.interfaces.http.account_consents import NOTICE_VERSION,PostgresAccountConsents
+    service,context,quiz,_,consent=setup(pool,db,stores)
+    db("DELETE FROM server_remote_consents WHERE consent_id=%s",(consent,))
+    assert service.consent('alice',context,quiz)['storage']=='missing'
+    db("INSERT INTO server_users(owner_user_id,display_name) VALUES ('alice','합성') ON CONFLICT DO NOTHING")
+    account=PostgresAccountConsents(pool)
+    account.grant('alice',['storage'],NOTICE_VERSION)
+    try:
+        view=service.consent('alice',context,quiz)
+        assert view['storage']=='current' and view['account'] is True
+        assert service.submit('alice',context,quiz,str(uuid4()),{0:0},view['consent_id'])['score']==1
+        with pytest.raises(ValueError,match='consent_required'):
+            service.submit('alice',context,quiz,str(uuid4()),{0:0},str(uuid4()))
+        revoked=service.revoke_storage('alice',context,quiz)
+        assert revoked['storage']=='missing' and revoked['account'] is False
+        with pytest.raises(ValueError,match='consent_required'):
+            service.submit('alice',context,quiz,str(uuid4()),{0:0},view['consent_id'])
+    finally:
+        account.revoke('alice','storage')

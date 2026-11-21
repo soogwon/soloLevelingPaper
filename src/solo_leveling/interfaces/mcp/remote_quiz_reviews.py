@@ -28,7 +28,7 @@ def register_quiz_review_tools(server, queries, reviews):
     @server.tool()
     def prepare_remote_quiz_generation(request_key: str, context_id: str, evidence_ids: list[str],
                                       step: str, question_count: int, question_type: str) -> dict:
-        """저장된 인용으로 검토 링크를 준비한다. 생성이나 동의는 하지 않으며 웹에서 두 목적을 각각 확인해야 한다."""
+        """저장된 인용으로 퀴즈 생성을 준비한다. 가입 때 저장·OpenAI 전송에 동의한 계정이면 바로 접수하고(status submitted), 아니면 웹 검토 링크를 준다."""
         return call('prepare', request_key, context_id, tuple(evidence_ids), step=step,
                     question_count=question_count, question_type=question_type)
 

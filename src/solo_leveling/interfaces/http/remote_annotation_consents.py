@@ -1,5 +1,6 @@
 """사용자가 인증 웹에서 선택한 학습 맥락별 서버 저장 동의."""
 from uuid import uuid4
+from .account_consents import account_consent_current
 from .remote_learning import PostgresRemoteLearningStore
 
 NOTICE_VERSION = 'remote-annotation-storage-v1'
@@ -18,7 +19,12 @@ def require_annotation_consent(conn, owner, context):
     row = conn.execute('''SELECT notice_version,revoked_at FROM server_annotation_consents
         WHERE owner_user_id=%s AND context_id=%s ORDER BY revision DESC LIMIT 1''',
         (owner, context)).fetchone()
-    if row is None or row['notice_version'] != NOTICE_VERSION or row['revoked_at'] is not None:
+    if row is not None and row['revoked_at'] is not None:
+        raise AnnotationStorageConsentRequired('annotation_storage_consent_required')
+    if row is not None and row['notice_version'] == NOTICE_VERSION:
+        return
+    # 이 학습 맥락에서 따로 철회하지 않았으면 계정 단위 저장 동의로 충분하다.
+    if not account_consent_current(conn, owner, 'storage'):
         raise AnnotationStorageConsentRequired('annotation_storage_consent_required')
 
 
@@ -30,11 +36,13 @@ class PostgresAnnotationConsentStore(PostgresRemoteLearningStore):
             (owner, context)).fetchone()
 
     @staticmethod
-    def _view(row):
+    def _view(row, account=False):
+        own = bool(row and row['revoked_at'] is None and row['notice_version'] == NOTICE_VERSION)
+        by_account = not own and account and not (row and row['revoked_at'] is not None)
         return {'notice_version': NOTICE_VERSION, 'notice': NOTICE,
                 'consent_id': str(row['consent_id']) if row else None,
                 'revision': row['revision'] if row else 0,
-                'granted': bool(row and row['revoked_at'] is None and row['notice_version'] == NOTICE_VERSION),
+                'granted': own or by_account, 'account': by_account,
                 'granted_at': row['granted_at'] if row else None,
                 'revoked_at': row['revoked_at'] if row else None}
 
@@ -43,7 +51,7 @@ class PostgresAnnotationConsentStore(PostgresRemoteLearningStore):
         with self._pool.connection() as conn:
             if self._read(conn, owner, context) is None:
                 return None
-            return self._view(self._latest(conn, owner, context))
+            return self._view(self._latest(conn, owner, context), account_consent_current(conn, owner, 'storage'))
 
     def grant(self, owner, context, notice_version):
         if notice_version != NOTICE_VERSION:

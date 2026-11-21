@@ -27,10 +27,10 @@ export default async function reflectionConsent({ view, params }) {
       <p>작성한 읽기 전후 답변과 변경 이력을 이 학습 맥락에 저장합니다. AI 전송이나 자동 평가는 하지 않습니다.</p>
       <p>동의 철회는 이후 새 저장을 막습니다. 기존 답변 삭제는 별도로 요청해야 합니다.</p>
       ${valid(value) ? html`<section class="card panel"><p>${value.notice}</p>
-        <p>저장 동의: ${value.storage === 'current' ? '동의됨' : '없음'}</p>
+        <p>저장 동의: ${value.storage === 'current' ? (value.account ? '가입 때 동의함' : '동의됨') : '없음'}</p>
         <label><input type="checkbox" data-check ${busy || value.storage === 'current' ? 'disabled' : ''}> 저장 범위를 확인하고 동의합니다.</label>
         <button type="button" data-grant disabled>저장 동의</button>
-        <button type="button" data-revoke ${busy || value.storage !== 'current' ? 'disabled' : ''}>동의 철회</button></section>` : ''}
+        <button type="button" data-revoke ${busy || value.storage !== 'current' ? 'disabled' : ''}>${value.account ? '여기서만 저장 중지' : '동의 철회'}</button></section>` : ''}
       <button type="button" data-refresh ${busy ? 'disabled' : ''}>현재 상태 다시 조회</button>`);
     view.querySelector('[data-refresh]').onclick = () => run('GET');
     const checkbox = view.querySelector('[data-check]');

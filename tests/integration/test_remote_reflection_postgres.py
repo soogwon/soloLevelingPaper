@@ -105,3 +105,28 @@ def test_web_storage_consent_is_context_scoped_and_revocable(pool,db,stores):
     service.revoke_storage('alice',context)
     with pytest.raises(ValueError):
         service.save('alice',context,str(uuid4()),**dict(args,expected_revision=1))
+
+
+def test_account_storage_consent_saves_until_revoked_for_this_revision(pool,db,stores):
+    from solo_leveling.interfaces.http.account_consents import NOTICE_VERSION,PostgresAccountConsents
+    service,binding,args=setup(pool,db,stores);context=binding.context_id
+    service.revoke_storage('alice',context)
+    assert service.consent('alice',context)['storage']=='missing'
+    db("DELETE FROM server_remote_consents WHERE owner_user_id='alice' AND input_hash=%s",
+       (NOTICE+':'+args['question_revision'],))
+    account=PostgresAccountConsents(pool)
+    account.grant('alice',['storage'],NOTICE_VERSION)
+    try:
+        view=service.consent('alice',context)
+        assert view['storage']=='current' and view['account'] is True
+        saved=service.save('alice',context,str(uuid4()),**dict(args,storage_consent_id=view['consent_id']))
+        assert saved['revision']==1
+        with pytest.raises(ValueError,match='consent_required'):
+            service.save('alice',context,str(uuid4()),**dict(args,expected_revision=1,storage_consent_id=str(uuid4())))
+        # 이 판에서 철회하면 계정 동의가 남아 있어도 저장하지 않는다.
+        revoked=service.revoke_storage('alice',context)
+        assert revoked['storage']=='missing' and revoked['account'] is False
+        with pytest.raises(ValueError,match='consent_required'):
+            service.save('alice',context,str(uuid4()),**dict(args,expected_revision=1,storage_consent_id=view['consent_id']))
+    finally:
+        account.revoke('alice','storage')

@@ -56,3 +56,28 @@ def test_chat_summary_requires_web_confirmation_and_keeps_pinned_citations(pool,
     assert service.latest('alice', context) is None
     assert service.evidence('alice', key, chunk) is None
     assert db('SELECT count(*) AS count FROM server_remote_executions')[0]['count'] == 0
+
+
+def test_account_storage_consent_saves_chat_summary_and_can_be_unsaved(pool, db, stores):
+    from solo_leveling.interfaces.http.account_consents import NOTICE_VERSION, PostgresAccountConsents
+    _, revision, binding = seed(db, stores, pool, 'alice')
+    policy = RemoteExecutionPolicy('test', 120, 60, 1, 4000, 1024)
+    service = PostgresSummaryReviews(pool, settings=dict(provider='openai', model='synthetic',
+        prompt_version='remote-summary-v2', language='ko', budget_policy_version=policy.version),
+        policy=policy, window_key='test', review_seconds=60, web_origin='https://example.invalid')
+    db("INSERT INTO server_users(owner_user_id,display_name) VALUES ('alice','합성') ON CONFLICT DO NOTHING")
+    store = PostgresAccountConsents(pool)
+    store.grant('alice', ['storage'], NOTICE_VERSION)
+    try:
+        key, context, chunk = str(uuid4()), binding.context_id, str(revision[3][0])
+        item = dict(kind='result', text='합성 결과 문장이다.', chunk_ids=[chunk])
+        prepared = service.prepare_chat('alice', key, context, [item])
+        assert prepared['status'] == 'saved' and prepared['review_url'].endswith(key)
+        assert service.review_chat('alice', key)['saved'] is True
+        assert service.latest('alice', context)['request_key'] == key
+        assert service.unsave_chat('bob', key) is None
+        assert service.unsave_chat('alice', key)['saved'] is False
+        assert service.latest('alice', context) is None
+        assert service.save_chat('alice', key)['saved'] is True
+    finally:
+        store.revoke('alice', 'storage')

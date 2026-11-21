@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
+from .account_consents import account_consent_current
+
 
 NOTICE_VERSION = "remote-pdf-processing-v1"
 PURPOSES = ("storage", "ai_provider")
@@ -43,13 +45,64 @@ class UnavailableRemoteUploadConsentStore:
     def revoke(self, *args, **kwargs):
         raise RuntimeError("remote_upload_consent_unavailable")
 
+    def bind_account_consents(self, *args, **kwargs):
+        raise RuntimeError("remote_upload_consent_unavailable")
+
 
 class PostgresRemoteUploadConsentStore:
     def __init__(self, pool):
         self._pool = pool
 
+    def bind_account_consents(self, owner_user_id: str, intent_id: str) -> dict[str, RemoteUploadConsent]:
+        """계정 동의가 현재이면 이 업로드 의도의 목적별 동의를 서버가 대신 기록한다.
+
+        요청 키를 의도마다 고정해 사용자가 이 의도의 동의를 철회한 뒤에는 다시 만들지 않는다.
+        계정 동의로 기록했고 아직 유효한 목적별 동의를 돌려준다.
+        """
+        _validate_identity(owner_user_id, intent_id)
+        with self._pool.connection() as conn:
+            status = conn.execute(
+                """SELECT i.status FROM server_remote_upload_intents i
+                   WHERE i.owner_user_id=%s AND i.intent_id=%s
+                     AND (i.status='verified' OR
+                          (i.status IN ('created','uploading') AND i.expires_at>CURRENT_TIMESTAMP))""",
+                (owner_user_id, intent_id),
+            ).fetchone()
+            if status is None:
+                return {}
+            wanted = [p for p in PURPOSES
+                      if (p == "storage" or status["status"] == "verified")
+                      and account_consent_current(conn, owner_user_id, p)]
+            bound = {row["purpose"] for row in conn.execute(
+                """SELECT purpose FROM server_remote_upload_consent_requests
+                   WHERE owner_user_id=%s AND upload_intent_id=%s AND request_key=%s""",
+                (owner_user_id, intent_id, _account_key(intent_id)),
+            ).fetchall()}
+        result = {}
+        for purpose in wanted:
+            if purpose not in bound:
+                value = self.grant(owner_user_id, intent_id, purpose, _account_key(intent_id))
+            else:
+                value = self._account_binding(owner_user_id, intent_id, purpose)
+            if value is not None and value.revoked_at is None and value.notice_version == NOTICE_VERSION:
+                result[purpose] = value
+        return result
+
+    def _account_binding(self, owner_user_id, intent_id, purpose):
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                """SELECT b.consent_id,b.purpose,b.revision,b.notice_version,b.granted_at,b.revoked_at
+                   FROM server_remote_upload_consent_requests r
+                   JOIN server_remote_upload_consent_bindings b
+                     ON b.owner_user_id=r.owner_user_id AND b.consent_id=r.consent_id
+                   WHERE r.owner_user_id=%s AND r.purpose=%s AND r.request_key=%s""",
+                (owner_user_id, purpose, _account_key(intent_id)),
+            ).fetchone()
+        return _view(row) if row is not None else None
+
     def list(self, owner_user_id: str, intent_id: str) -> tuple[RemoteUploadConsent, ...] | None:
         _validate_identity(owner_user_id, intent_id)
+        self.bind_account_consents(owner_user_id, intent_id)
         with self._pool.connection() as conn:
             if not _owned_intent(conn, owner_user_id, intent_id):
                 return None
@@ -199,6 +252,10 @@ class PostgresRemoteUploadConsentStore:
                 (row["revoked_at"], owner_user_id, row["consent_id"]),
             )
         return _view(row)
+
+
+def _account_key(intent_id):
+    return f"account:{intent_id}"
 
 
 def _owned_intent(conn, owner_user_id, intent_id, *, for_update=False):

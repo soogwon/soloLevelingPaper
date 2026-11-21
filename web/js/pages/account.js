@@ -4,6 +4,7 @@ import { html, setHTML } from '../lib/html.js';
 import { navigate } from '../router.js';
 import { icons, loadingBlock, emptyBlock, errorBlock, errorMessage, confirmDialog, toast } from '../lib/ui.js';
 import { formatDate, formatDateTime } from '../lib/format.js';
+import { announceConsents, checkedConsents, consentItem } from '../lib/account-consents.js';
 
 /** 'a@b.c' 형태인지 확인한다 (display_name에 이메일이 들어온 경우를 가려내는 용도). */
 function isEmail(value) {
@@ -41,6 +42,12 @@ export default async function accountPage({ view }) {
       <button type="button" class="btn" data-action="logout">로그아웃</button>
     </section>
 
+    <section class="card panel" aria-labelledby="consents-h">
+      <h2 id="consents-h" class="panel-title">동의 관리</h2>
+      <p class="meta">가입할 때 받은 동의예요. 바꾸면 이후 업로드와 저장부터 적용돼요. 이미 보낸 요청은 되돌리지 않아요.</p>
+      <div data-slot="consents" class="stack">${loadingBlock()}</div>
+    </section>
+
     <section class="card panel" aria-labelledby="remote-mcp-h">
       <h2 id="remote-mcp-h" class="panel-title">원격 MCP 연결</h2>
       <div data-slot="remote-connections" class="stack">${loadingBlock()}</div>
@@ -65,6 +72,56 @@ export default async function accountPage({ view }) {
         </div>
       </div>
     </section>`);
+
+  const consentsEl = view.querySelector('[data-slot="consents"]');
+  let consents = null;
+
+  function renderConsents() {
+    setHTML(consentsEl, consents.items.map((item) => consentItem(item, html`<div class="actions">
+      ${item.state === 'current'
+        ? html`<button type="button" class="btn ${item.required ? 'btn-outline-danger' : ''}" data-action="revoke-consent" data-purpose="${item.purpose}">동의 철회</button>`
+        : html`<button type="button" class="btn btn-primary" data-action="grant-consent" data-purpose="${item.purpose}">동의하기</button>`}
+    </div>`)));
+  }
+
+  async function loadConsents() {
+    setHTML(consentsEl, loadingBlock());
+    try {
+      consents = checkedConsents(await api.getAccountConsents());
+      renderConsents();
+    } catch (error) {
+      setHTML(consentsEl, errorBlock(error, 'reload-consents'));
+    }
+  }
+
+  async function changeConsent(button, grant) {
+    const purpose = button.dataset.purpose;
+    const item = consents.items.find((entry) => entry.purpose === purpose);
+    if (!grant) {
+      const ok = await confirmDialog({
+        title: item.required ? '필수 저장 동의를 철회할까요?' : 'OpenAI 전송 동의를 철회할까요?',
+        message: item.required
+          ? '새 업로드와 메모·답변·퀴즈·요약 저장이 멈추고, 다시 동의할 때까지 동의 화면이 먼저 나타나요. 저장된 기록은 지워지지 않아요.'
+          : '새로 올린 PDF의 학습 자료 생성과 서버 생성 기능을 쓸 수 없어요. 이미 보낸 요청은 되돌리지 않아요.',
+        confirmLabel: '철회',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    button.disabled = true;
+    try {
+      consents = checkedConsents(grant
+        ? await api.grantAccountConsents([purpose], consents.notice_version)
+        : await api.revokeAccountConsent(purpose));
+      announceConsents(consents);
+      renderConsents();
+      toast(grant ? '동의했어요.' : '동의를 철회했어요.');
+    } catch (error) {
+      button.disabled = false;
+      toast(errorMessage(error));
+      if (error?.status === 409) loadConsents();
+    }
+  }
 
   const remoteEl = view.querySelector('[data-slot="remote-connections"]');
 
@@ -179,6 +236,9 @@ export default async function accountPage({ view }) {
     if (el.dataset.action === 'remote-check-status') await refreshRemoteCheck(el);
     if (el.dataset.action === 'reload-remote-connections') loadRemoteConnections();
     if (el.dataset.action === 'reload-devices') loadDevices();
+    if (el.dataset.action === 'reload-consents') loadConsents();
+    if (el.dataset.action === 'grant-consent') await changeConsent(el, true);
+    if (el.dataset.action === 'revoke-consent') await changeConsent(el, false);
     if (el.dataset.action === 'disconnect') {
       const ok = await confirmDialog({
         title: `‘${el.dataset.deviceName}’ 연결을 해제할까요?`,
@@ -209,5 +269,5 @@ export default async function accountPage({ view }) {
     }
   });
 
-  await Promise.all([loadRemoteConnections(), loadDevices()]);
+  await Promise.all([loadConsents(), loadRemoteConnections(), loadDevices()]);
 }

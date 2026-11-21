@@ -42,7 +42,8 @@ export default async function remoteLearning({ view, params }) {
             <button data-progress-retry ${busy ? 'disabled' : ''}>같은 요청으로 결과 확인</button>` : ''}
         </section>`
       : html`<button data-start ${busy ? 'disabled' : ''}>이 맥락에서 학습 시작</button>`}
-      ${consent ? html`<section class="card panel"><h2>메모·하이라이트 서버 저장</h2><p>${consent.notice}</p>
+      ${consent?.account ? html`<p class="hint">메모·하이라이트는 가입 때 동의한 저장 동의로 저장해요. <a href="#/account">계정 화면</a>에서 바꿀 수 있어요.</p>`
+      : consent ? html`<section class="card panel"><h2>메모·하이라이트 서버 저장</h2><p>${consent.notice}</p>
         <p>${consent.granted ? '동의됨' : '동의되지 않음'}</p>
         <label><input type="checkbox" data-check ${busy ? 'disabled' : ''}> 안내를 확인하고 이 학습 맥락의 저장에 동의합니다.</label>
         <button data-grant disabled>동의 저장</button>

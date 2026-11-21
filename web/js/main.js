@@ -3,8 +3,9 @@ import { api, ApiError } from './api/index.js';
 import { parseHash, matchRoute, navigate } from './router.js';
 import { setHTML } from './lib/html.js';
 import { loadingBlock, errorBlock } from './lib/ui.js';
+import { accountConsents, checkedConsents } from './lib/account-consents.js';
 
-export const session = { user: null };
+export const session = { user: null, consents: null };
 
 let renderSeq = 0;
 let currentRoute = null;
@@ -61,6 +62,19 @@ async function ensureSession() {
   }
 }
 
+/** 계정 동의 상태를 한 번 읽어 둔다. 서버가 아직 지원하지 않거나 조회에 실패하면 화면을 막지 않는다. */
+async function consentsComplete() {
+  if (CONFIG.USE_MOCK) return true;
+  if (session.consents) return session.consents.complete;
+  try {
+    session.consents = checkedConsents(await api.getAccountConsents());
+    accountConsents.value = session.consents;
+    return session.consents.complete;
+  } catch {
+    return true;
+  }
+}
+
 /** 화면 종류(로그인처럼 메뉴 없는 화면인지)를 반영하고, 첫 로딩 때 숨겨 둔 화면을 보여준다. */
 function showShell(route) {
   document.body.classList.toggle('bare', !!route.bare);
@@ -98,6 +112,13 @@ async function renderRoute() {
       navigate('/login', undefined, { replace: true });
       return;
     }
+    // 첫 로그인(또는 필수 동의 철회·고지 변경) 뒤에는 동의 화면을 먼저 보여준다.
+    if (path !== '/consent' && !(await consentsComplete())) {
+      if (seq !== renderSeq) return;
+      navigate('/consent', { return_to: path === '/papers' ? undefined : path }, { replace: true });
+      return;
+    }
+    if (seq !== renderSeq) return;
   }
   currentRoute = route;
   showShell(route);
@@ -130,9 +151,11 @@ async function renderRoute() {
 window.addEventListener('auth:expired', () => {
   const wasSignedIn = !!session.user;
   session.user = null;
+  session.consents = accountConsents.value = null;
   if (parseHash().path !== '/login') navigate('/login', wasSignedIn ? { expired: '1' } : undefined, { replace: true });
 });
-window.addEventListener('auth:logout', () => { session.user = null; });
+window.addEventListener('auth:logout', () => { session.user = null; session.consents = accountConsents.value = null; });
+window.addEventListener('consents:changed', (event) => { session.consents = event.detail ?? null; });
 
 window.addEventListener('hashchange', () => {
   window.scrollTo(0, 0);

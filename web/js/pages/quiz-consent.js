@@ -27,10 +27,10 @@ export default async function quizConsent({ view, params }) {
       <p>제출한 답안·점수·오답 근거를 이 학습 맥락의 고정 퀴즈에 저장합니다. AI 생성·전송 동의는 포함하지 않습니다.</p>
       <p>동의 철회는 새 제출 저장을 막습니다. 기존 제출 기록은 삭제되지 않으며 같은 요청 결과는 다시 조회할 수 있습니다.</p>
       ${valid(value) ? html`<section class="card panel"><p>${value.notice}</p>
-        <p>저장 동의: ${value.storage === 'current' ? '동의됨' : '없음'}</p>
+        <p>저장 동의: ${value.storage === 'current' ? (value.account ? '가입 때 동의함' : '동의됨') : '없음'}</p>
         <label><input type="checkbox" data-check ${busy || value.storage === 'current' ? 'disabled' : ''}> 저장 범위를 확인하고 동의합니다.</label>
         <button type="button" data-grant disabled>저장 동의</button>
-        <button type="button" data-revoke ${busy || value.storage !== 'current' ? 'disabled' : ''}>동의 철회</button></section>` : ''}
+        <button type="button" data-revoke ${busy || value.storage !== 'current' ? 'disabled' : ''}>${value.account ? '여기서만 저장 중지' : '동의 철회'}</button></section>` : ''}
       <button type="button" data-refresh ${busy ? 'disabled' : ''}>현재 상태 다시 조회</button>`);
     view.querySelector('[data-refresh]').onclick = () => run('GET');
     const checkbox = view.querySelector('[data-check]');

@@ -54,4 +54,7 @@ def create_summary_review_router(require_principal:Any,service):
     @router.post('/chat-reviews/{key}/save')
     def save_chat(key:UUID,principal:Principal,response:Response):
         return call(principal,response,'save_chat',str(key))
+    @router.post('/chat-reviews/{key}/unsave')
+    def unsave_chat(key:UUID,principal:Principal,response:Response):
+        return call(principal,response,'unsave_chat',str(key))
     return router

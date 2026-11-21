@@ -1,4 +1,4 @@
-"""요약 준비·기존 결과 조회 도구. 동의는 인증 웹에서만 기록한다."""
+"""요약 준비·기존 결과 조회 도구. 동의는 인증 웹(가입 동의 포함)에서만 기록한다."""
 import time
 from typing import Literal
 from typing_extensions import TypedDict
@@ -52,14 +52,16 @@ def register_summary_tools(server, queries, reviews):
         """근거를 확인해 작성한 채팅 요약을 웹 저장 검토용으로 준비한다. 별도 저장 요청을 기다리지 않는다.
         PDF 페이지 본문 조회에서 받은 chunk_id로 각 항목의 근거를 지정한다. claim은 연구 질문, method는 핵심 접근, result는 주요 결과다.
         항목별 한국어 한 문장을 전달하고 근거가 없는 항목은 생략한다. 같은 요청에는 같은 UUID를 쓴다.
-        성공하면 같은 요약 답변에 ‘인용 확인하고 저장’ 링크를 보여준다. 확정 저장은 인증 웹에서만 가능하며 외부 AI 호출은 없다."""
+        status가 saved이면 계정 저장 동의로 이미 저장됐으니 review_url을 인용 확인·저장 취소 링크로 보여준다.
+        review_required이면 같은 답변에 ‘인용 확인하고 저장’ 링크를 보여준다. 외부 AI 호출은 없다."""
         return call('prepare_chat', request_key, context_id, items)
 
     @server.tool()
     def prepare_remote_summary(request_key: str, context_id: str, scope: str = 'paper', section_id: str | None = None) -> dict:
-        """유료 서버 생성 전용이다. 사용자가 서버 생성과 외부 AI 전송을 명시적으로 요청한 경우에만 검토를 준비한다.
-        일반 요약 요청은 Claude 채팅에서 답하고 prepare_remote_chat_summary로 웹 검토 링크를 준비한다.
-        서버 생성에는 별도의 저장·AI 전송 동의와 서버 예산이 필요하다."""
+        """서버 생성 전용이다. 사용자가 서버 생성을 명시적으로 요청한 경우에만 쓴다.
+        일반 요약 요청은 Claude 채팅에서 답하고 prepare_remote_chat_summary로 저장한다.
+        가입 때 저장·OpenAI 전송에 동의한 계정이면 바로 접수하고(status submitted) 아니면 웹 검토 링크를 준다.
+        비용은 운영자가 부담하며 서버 예산 한도를 넘으면 거절된다."""
         return call('prepare', request_key, context_id, scope=scope, section_id=section_id)
 
     @server.tool()
@@ -69,7 +71,7 @@ def register_summary_tools(server, queries, reviews):
 
     @server.tool()
     def submit_remote_summary(request_key: str) -> dict:
-        """사용자가 유료 서버 실행을 명시적으로 요청하고 웹에서 두 목적에 동의한 기존 요청만 접수한다.
+        """웹 검토에서 두 목적에 동의한 기존 요청만 접수한다. 계정 동의로 이미 접수된 요청은 기존 상태를 돌려준다.
         동의 완료 알림이나 요약 상태 확인만 요청받으면 조회 도구를 쓰고 제출하지 않는다."""
         return call('submit', request_key)
 

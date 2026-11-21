@@ -7,6 +7,7 @@ import json
 
 from solo_leveling.application.remote_execution_policy import RemoteExecutionPolicy
 from solo_leveling.application.summary.remote_contract import NOTICE_VERSION, OPERATION, RemoteSummaryInput
+from .account_consent_execution import grant_and_submit
 from .remote_executions import PostgresRemoteExecutionStore, RemoteExecutionConflict
 from .remote_chat_summaries import PostgresChatSummaries
 from .remote_summary_sources import PostgresSummaryPreparation
@@ -30,6 +31,13 @@ class PostgresSummaryReviews:
         self.chat = PostgresChatSummaries(pool, web_origin=self.origin, review_seconds=review_seconds)
 
     def prepare(self, owner, key, context, *, scope='paper', section_id=None):
+        prepared = self._prepare(owner, key, context, scope=scope, section_id=section_id)
+        key = str(UUID(key))
+        return grant_and_submit(self.pool, owner, prepared,
+                                grant=lambda purpose: self.grant(owner, key, purpose, NOTICE_VERSION),
+                                submit=lambda: self.submit(owner, key))
+
+    def _prepare(self, owner, key, context, *, scope='paper', section_id=None):
         key, context = str(UUID(key)), str(UUID(context))
         with self.pool.connection() as conn:
             conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
@@ -167,6 +175,9 @@ class PostgresSummaryReviews:
 
     def save_chat(self, owner, key):
         return self.chat.save(owner, key)
+
+    def unsave_chat(self, owner, key):
+        return self.chat.unsave(owner, key)
 
     def cancel(self, owner, key):
         with self.pool.connection() as conn:

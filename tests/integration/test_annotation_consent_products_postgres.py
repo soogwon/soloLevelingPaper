@@ -90,3 +90,31 @@ def test_consent_never_carries_to_another_context(pool, db, context):
         service.create(owner, other, 'separate', annotation((owner, other, revisions)))
     assert service.consents.grant('other-owner', key, NOTICE_VERSION) is None
     assert db('SELECT count(*) n FROM server_annotation_consents WHERE context_id=%s', (other,))[0]['n'] == 0
+
+
+def test_account_storage_consent_allows_saving_until_context_revocation(pool, db, context):
+    from solo_leveling.interfaces.http.account_consents import (
+        NOTICE_VERSION as ACCOUNT_NOTICE, PostgresAccountConsents)
+    owner, key, _ = context
+    db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'합성') ON CONFLICT DO NOTHING", (owner,))
+    service = RemoteAnnotationProducts(pool, 'product')
+    service.learning.start(owner, key)
+    value = annotation(context)
+    with pytest.raises(AnnotationStorageConsentRequired):
+        service.create(owner, key, 'account-before', value)
+    PostgresAccountConsents(pool).grant(owner, ['storage'], ACCOUNT_NOTICE)
+    view = service.consents.view(owner, key)
+    assert view['granted'] and view['account'] and view['consent_id'] is None
+    saved = service.create(owner, key, 'account-key', value)
+    assert saved.annotation.body == value.body
+
+    # 이 맥락에서 따로 동의한 뒤 철회하면 계정 동의가 있어도 새 저장을 막는다.
+    own = service.consents.grant(owner, key, NOTICE_VERSION)
+    assert own['granted'] and not own['account']
+    revoked = service.consents.revoke(owner, key, own['consent_id'])
+    assert not revoked['granted'] and not revoked['account']
+    with pytest.raises(AnnotationStorageConsentRequired):
+        service.create(owner, key, 'account-after-revoke', value)
+
+    PostgresAccountConsents(pool).revoke(owner, 'storage')
+    assert not service.consents.view(owner, key)['account']

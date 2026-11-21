@@ -7,6 +7,7 @@ import json
 
 from solo_leveling.application.remote_execution_policy import RemoteExecutionPolicy
 from solo_leveling.application.quiz.remote_contract import NOTICE as NOTICE_VERSION, RemoteQuizGenerationInput
+from .account_consent_execution import grant_and_submit
 from .remote_executions import PostgresRemoteExecutionStore, RemoteExecutionConflict
 from .remote_quiz_preparation import PostgresQuizPreparation
 from .remote_quiz_intake import PostgresQuizIntake, OPERATION
@@ -28,6 +29,18 @@ class PostgresQuizGenerationReviews:
         self.window, self.seconds, self.origin = window_key, review_seconds, web_origin.rstrip('/')
 
     def prepare(self, owner, key, context, evidence_ids, *, step, question_count, question_type):
+        prepared = self._prepare(owner, key, context, evidence_ids, step=step,
+                                 question_count=question_count, question_type=question_type)
+        key = str(UUID(key))
+
+        def grant(purpose):
+            with self.pool.connection() as conn:
+                row = conn.execute('SELECT input_hash FROM server_quiz_generation_reviews WHERE owner_user_id=%s AND request_key=%s',
+                                   (owner, key)).fetchone()
+            return self.grant(owner, key, purpose, NOTICE_VERSION, row['input_hash'])
+        return grant_and_submit(self.pool, owner, prepared, grant=grant, submit=lambda: self.submit(owner, key))
+
+    def _prepare(self, owner, key, context, evidence_ids, *, step, question_count, question_type):
         key, context = str(UUID(key)), str(UUID(context))
         with self.pool.connection() as conn:
             conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',

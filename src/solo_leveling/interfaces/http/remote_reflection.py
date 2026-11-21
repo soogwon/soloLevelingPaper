@@ -9,6 +9,7 @@ import json
 from solo_leveling.domain.reflection import TEMPLATES, COMPARISON_GROUPS, ANSWER_STATUSES, MAX_ANSWER_LENGTH
 from .remote_retrieval import PostgresRemoteContextResolver
 from .remote_executions import RemoteExecutionConflict
+from .account_consents import account_consent_id
 
 NOTICE = 'remote-reflection-v1'
 
@@ -75,8 +76,10 @@ class PostgresRemoteReflection:
             row = conn.execute('''SELECT consent_id FROM server_remote_consents WHERE owner_user_id=%s
                 AND purpose='storage' AND input_hash=%s AND notice_version=%s AND revoked_at IS NULL
                 ORDER BY consent_id LIMIT 1''',(owner,NOTICE+':'+revision,NOTICE)).fetchone()
+            account = None if row else _account_storage(conn,owner,revision)
             return dict(context_id=str(UUID(context)),question_revision=revision,notice_version=NOTICE,
-                        storage='current' if row else 'missing',consent_id=row['consent_id'] if row else None,
+                        storage='current' if row or account else 'missing',
+                        consent_id=row['consent_id'] if row else account,account=account is not None,
                         notice='성찰 답변과 변경 이력을 이 학습 맥락에 저장합니다. AI 전송은 없으며 철회·삭제할 수 있습니다.')
 
     def grant_storage(self,owner,context,notice,question_revision):
@@ -101,9 +104,15 @@ class PostgresRemoteReflection:
             resolved = self._context(conn,owner,context,lock=True)
             if resolved is None:
                 return None
-            conn.execute('''UPDATE server_remote_consents SET revoked_at=clock_timestamp()
+            revoked = conn.execute('''UPDATE server_remote_consents SET revoked_at=clock_timestamp()
                 WHERE owner_user_id=%s AND purpose='storage' AND input_hash=%s
-                AND notice_version=%s AND revoked_at IS NULL''',(owner,NOTICE+':'+resolved[1],NOTICE))
+                AND notice_version=%s AND revoked_at IS NULL''',(owner,NOTICE+':'+resolved[1],NOTICE)).rowcount
+            if not revoked and _account_storage(conn,owner,resolved[1]):
+                # 계정 동의로만 저장하던 판도 이 판에서만 철회한 기록을 남긴다.
+                conn.execute('''INSERT INTO server_remote_consents
+                    (consent_id,owner_user_id,purpose,input_hash,notice_version,revoked_at)
+                    VALUES (%s,%s,'storage',%s,%s,clock_timestamp())''',
+                    (str(uuid4()),owner,NOTICE+':'+resolved[1],NOTICE))
         return self.consent(owner,context)
 
     def save(self,owner,context,key,*,question_revision,template_id,body,status,expected_revision,storage_consent_id):
@@ -130,7 +139,8 @@ class PostgresRemoteReflection:
             consent = conn.execute('''SELECT 1 FROM server_remote_consents WHERE owner_user_id=%s
                 AND consent_id=%s AND purpose='storage' AND notice_version=%s AND input_hash=%s
                 AND revoked_at IS NULL FOR SHARE''',(owner,storage_consent_id,NOTICE,NOTICE+':'+revision)).fetchone()
-            if consent is None:
+            if consent is None and (storage_consent_id is None
+                                    or _account_storage(conn,owner,revision) != str(storage_consent_id)):
                 raise ValueError('reflection_storage_consent_required')
             if not exists:
                 conn.execute('''INSERT INTO server_reflection_contexts(owner_user_id,context_id,question_revision,snapshot)
@@ -194,3 +204,11 @@ class PostgresRemoteReflection:
             rows = conn.execute('''SELECT result FROM server_reflection_requests WHERE owner_user_id=%s
                 AND context_id=%s ORDER BY created_at,request_key''',(owner,context)).fetchall()
             return dict(current=view,request_history=[r['result'] for r in rows])
+
+
+def _account_storage(conn,owner,revision):
+    """이 질문 판에서 따로 철회한 적이 없으면 계정 저장 동의 ID를 대신 사용한다."""
+    revoked = conn.execute('''SELECT 1 FROM server_remote_consents WHERE owner_user_id=%s
+        AND purpose='storage' AND input_hash=%s AND notice_version=%s AND revoked_at IS NOT NULL
+        LIMIT 1''',(owner,NOTICE+':'+revision,NOTICE)).fetchone()
+    return None if revoked else account_consent_id(conn,owner,'storage')
