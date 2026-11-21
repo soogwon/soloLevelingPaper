@@ -3,9 +3,15 @@
 from dataclasses import dataclass
 from uuid import uuid4
 
+from .automatic_pdf_budgets import AutomaticPdfQuotaExceeded
+
 
 class RemoteProcessingConflict(ValueError):
     pass
+
+
+class RemoteProcessingQuotaExceeded(Exception):
+    """계정당 처리 접수 건수 한도에 도달했다."""
 
 
 @dataclass(frozen=True)
@@ -20,6 +26,14 @@ class PostgresRemoteProcessingIntake:
     def __init__(self, pool, *, automatic_pdf_budget=None):
         self._pool = pool
         self._automatic_pdf_budget = automatic_pdf_budget
+
+    def quota_reached(self, owner_user_id: str) -> bool:
+        """새 처리 접수가 계정당 건수 한도에 막히는지 읽기만 한다."""
+        budget = self._automatic_pdf_budget
+        if budget is None or budget.max_jobs_per_owner is None:
+            return False
+        with self._pool.connection() as conn:
+            return budget.quota_reached(conn, owner_user_id)
 
     def find_source(self, owner_user_id: str, paper_id: str, version_id: str):
         with self._pool.connection() as conn:
@@ -121,8 +135,13 @@ class PostgresRemoteProcessingIntake:
             ):
                 return None
             budget = self._automatic_pdf_budget
-            if budget is not None and not budget.allows_admission(conn, owner_user_id):
-                return None
+            if budget is not None:
+                try:
+                    allowed = budget.allows_admission(conn, owner_user_id)
+                except AutomaticPdfQuotaExceeded:
+                    raise RemoteProcessingQuotaExceeded('remote_processing_quota_exceeded') from None
+                if not allowed:
+                    return None
             row = conn.execute(
                 """INSERT INTO server_processing_jobs
                        (job_id,owner_user_id,paper_id,server_version_id,job_kind,

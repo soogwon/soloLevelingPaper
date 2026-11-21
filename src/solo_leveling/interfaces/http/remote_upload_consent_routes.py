@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from .auth import AuthenticatedPrincipal
-from .remote_processing_intake import RemoteProcessingConflict
+from .remote_processing_intake import RemoteProcessingConflict, RemoteProcessingQuotaExceeded
 from .remote_upload_consents import (
     AI_NOTICE,
     NOTICE_VERSION,
@@ -167,6 +167,8 @@ def create_remote_upload_consent_router(require_principal: Any, consents: Any, p
         except RemoteProcessingConflict:
             raise HTTPException(
                 status_code=409, detail={"code": "remote_processing_request_conflict"}) from None
+        except RemoteProcessingQuotaExceeded:
+            raise _quota_exceeded(HTTPException) from None
         except ValueError:
             raise HTTPException(
                 status_code=422, detail={"code": "remote_processing_input_invalid"}) from None
@@ -188,10 +190,27 @@ def create_remote_upload_consent_router(require_principal: Any, consents: Any, p
             raise HTTPException(
                 status_code=503, detail={"code": "remote_processing_unavailable"}) from None
         if value is None:
+            if _quota_reached(processing, principal.user_id):
+                raise _quota_exceeded(HTTPException)
             raise HTTPException(status_code=404, detail={"code": "remote_processing_not_found"})
         return _processing_view(ProcessingView, value)
 
     return router
+
+
+def _quota_exceeded(http_exception):
+    return http_exception(status_code=409, detail={"code": "remote_processing_quota_exceeded"})
+
+
+def _quota_reached(processing, owner_user_id):
+    """작업이 없을 때 한도 때문인지 알려 준다. 확인 실패는 기존 404 안내를 유지한다."""
+    check = getattr(processing, "quota_reached", None)
+    if check is None:
+        return False
+    try:
+        return bool(check(owner_user_id))
+    except Exception:
+        return False
 
 
 def _consent_view(view_type, value):

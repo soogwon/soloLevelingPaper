@@ -15,6 +15,7 @@ export const processingMessages = {
   uncertain: '현재 처리 상태를 확인하지 못했어요. 같은 작업을 다시 조회해 주세요.',
   invalid: '서버 작업 응답을 확인할 수 없어요. 완료로 판단하지 않고 다시 조회해 주세요.',
   closed: '로그인 또는 화면이 바뀌었어요. 다시 열어 주세요.',
+  quota: '이 계정이 만들 수 있는 학습 자료 수에 도달했어요. PDF는 보관됐지만 번역·검색 색인은 만들지 않아요.',
 };
 // 서버가 확정한 공개 코드만 표시한다. 내부 오류나 재시도 가능성을 추정하지 않는다.
 const restrictionMessages = new Map([
@@ -64,7 +65,10 @@ export function createProcessingStatus({api, changed = () => {}}) {
           status = value.status;
         }
       } catch (error) {
-        if (!closed && g === generation) status = [401,403,404].includes(error?.status) ? 'unavailable' : 'uncertain';
+        if (!closed && g === generation) {
+          status = error?.code === 'remote_processing_quota_exceeded' ? 'quota'
+            : [401,403,404].includes(error?.status) ? 'unavailable' : 'uncertain';
+        }
       } finally {
         if (!closed && g === generation) {busy = false; publish();}
       }

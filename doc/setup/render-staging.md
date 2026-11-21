@@ -55,6 +55,10 @@ OIDC 공급자에는 `https://solo-leveling-staging.soogyung.com/v1/auth/callbac
 Auth0를 사용할 때 `OIDC_AUDIENCE`에는 Custom API의 Identifier를 입력하고, 해당 API는 RS256과
 RFC 9068 access-token profile을 사용해야 합니다. 자세한 설정은 [Auth0 설정](auth0.md)을 따릅니다.
 
+아래 예시의 `"실제_웹_연결_역할"`은 자리표시자입니다. 그대로 실행하면 역할이 없어
+`SQLSTATE 42704`(undefined object)로 실패합니다. 웹 `DATABASE_URL`의 사용자 이름
+(스테이징은 `slp_staging_web`)으로 바꿔 실행합니다.
+
 ### 원격 읽기 상태와 전역 메모 조회 권한
 
 마이그레이션 `0065` 적용 후 새 웹 버전을 시작하기 전에, 실제 웹 연결 역할에

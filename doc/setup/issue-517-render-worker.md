@@ -107,6 +107,8 @@ Render에는 배포한 이미지와 모델 지문을 고정한 JSON을
 
 - `database_name`, `database_schema`와 데모 전용 `policy_version`, `window_key`.
 - `demo_budget`에 시간대가 포함된 `starts_at`, `expires_at`, 프로세스당 `max_jobs`를 지정합니다.
+  데모 정책(`pdf-auto-`가 아닌 정책)은 기간이 필수입니다. 일반 계정 자동 처리는 아래
+  [일반 계정의 자동 게시 준비](#일반-계정의-자동-게시-준비)처럼 세 항목을 모두 비울 수 있습니다.
 - 같은 객체에서 `input_token_limit`, `input_overhead_tokens`, 입력·출력 각각의
   `*_microusd_per_million_tokens`, `owner_budget_microusd`, `service_budget_microusd`를 지정합니다.
   실제 활성화 전에 고정 번역 모델의 요율과 전체 요청 기준 입력 상한을 검증합니다.
@@ -147,18 +149,92 @@ ON slp_staging.server_embedding_fragments TO slp_staging_worker;
 
 ## 일반 계정의 자동 게시 준비
 
-웹의 `REMOTE_AUTOMATIC_PDF_BUDGET_JSON`에 `policy_version`(`pdf-auto-` 접두사),
-`window_key`, 시간대가 포함된 `starts_at`·`expires_at`, 계정별 `input_tokens`·`output_tokens`를 설정합니다.
-제한 검증에서는 `allowed_owner_ids`와 `max_jobs_per_owner`로 검증 대상을 고정합니다.
-같은 정책·기간의 서비스 예산 행은 운영자가 미리 설정합니다. 인증된 첫 웹 로그인에서
-계정 예산이 생성되고, 이미 로그인한 계정은 접수 시 생성됩니다. 로그인·재접수는 기존
-한도와 사용량을 초기화하지 않습니다.
+사용자가 PDF를 올리면 자동으로 처리되게 하려면 웹, DB, worker가 같은
+`policy_version`·`window_key`(이하 정책 키)를 사용해야 합니다. 하나라도 다르면 업로드는
+성공하지만 작업이 `queued`에 남습니다.
 
-worker의 기존 처리 설정에 동일한 정책·기간·시간 범위를 사용하고
-`SLP_AUTOMATIC_PDF_PROCESSING_ENABLED=true`로 설정합니다.
-worker는 해당 정책과 기간으로 명시 접수된 작업만 소비합니다.
+### 1. 웹 — 접수와 계정당 건수 한도
+
+웹의 `REMOTE_AUTOMATIC_PDF_BUDGET_JSON`에 다음을 설정합니다.
+
+| 항목 | 필수 | 의미 |
+|---|---|---|
+| `policy_version` | 필수 | `pdf-auto-` 접두사 |
+| `window_key` | 필수 | 예산 원장 행을 묶는 이름 |
+| `input_tokens`, `output_tokens` | 필수 | 로그인 시 만드는 계정별 토큰 예산 |
+| `max_jobs_per_owner` | 선택 | 계정당 처리 접수 건수 한도. 비우면 제한 없음 |
+| `starts_at`, `expires_at` | 선택 | 시간대가 포함된 접수 기간. 둘 다 비우면 만료 없음, 하나만 지정할 수 없음 |
+| `allowed_owner_ids` | 선택 | 제한 검증용 허용 계정. 모든 사용자에게 열려면 비움 |
+
+평소 운영 안전장치는 `max_jobs_per_owner` 하나입니다. 이 값은 정책 키 단위로 실패·취소·삭제된
+접수까지 셉니다. 이미 외부 호출 비용이 났을 수 있기 때문입니다. 한도에 도달한 계정의 새 업로드는
+PDF 보관까지만 하고 처리 작업을 만들지 않으며, 웹은 `remote_processing_quota_exceeded`로
+"학습 자료 수 한도에 도달했다"고 안내합니다. 이미 접수한 같은 요청의 재조회는 한도와 무관합니다.
+값을 바꾸려면 JSON을 고친 뒤 웹을 재배포합니다. 새 정책 키로 바꾸면 건수도 새로 셉니다.
+
+인증된 첫 웹 로그인에서 계정 예산이 생성되고, 이미 로그인한 계정은 접수 시 생성됩니다.
+로그인·재접수는 기존 한도와 사용량을 초기화하지 않습니다.
+
+### 2. DB — 서비스 예산과 전송 스위치 (관리자, 한 번)
+
+- `server_dispatch_budget_limits`에 같은 정책 키의 `scope_type='service'`, `scope_id='service'` 행.
+  전체 토큰 비상 한도이며 이 행이 없으면 계정 예산도 생기지 않습니다.
+- `server_dispatch_controls`의 `provider_dispatch` 행이 `intake_enabled`, `dispatch_enabled` 모두 true.
+
+### 3. worker — 상시 처리
+
+Render → `solo-leveling-worker-staging` → Settings의 Docker Command와 Environment에 설정합니다.
+비밀 값은 채팅·Git·이슈에 붙이지 않습니다.
+
+| 항목 | 넣을 값 | 얻는 곳과 방법 |
+|---|---|---|
+| Docker Command | `--mode demo-pdf-worker` | 직접 입력. 인자만 넣고 `python` 등은 붙이지 않습니다. |
+| `SLP_DEMO_PROCESSING_ENABLED` | `true` | 직접 입력 |
+| `SLP_AUTOMATIC_PDF_PROCESSING_ENABLED` | `true` | 직접 입력. 설정 JSON의 `policy_version`이 `pdf-auto-`로 시작해야 합니다. |
+| `SLP_DEMO_DATABASE_URL` | `postgresql://slp_staging_worker:비밀번호@호스트/DB이름?sslmode=verify-full` | 호스트·DB 이름: Render → staging Postgres → Connect → External의 URL에서 `@` 뒤 호스트와 `/` 뒤 DB 이름만 사용. 비밀번호: worker 역할을 만들 때 정한 값이며 Render에 표시되지 않습니다. 모르면 관리자 psql에서 `ALTER ROLE slp_staging_worker PASSWORD '새 비밀번호';`로 다시 정합니다. 끝에는 `?sslmode=verify-full`만 둡니다. 검증·재처리 worker 주소를 대신 읽지 않습니다. 역할 권한이 다르면 게시 단계에서 실패하고 작업이 재시도 없이 끝나기 때문입니다. |
+| `PGSSLROOTCERT` | 이미지의 CA 묶음 경로 | 기존 값이 있으면 유지합니다. 없고 DB 연결이 실패하면 `/etc/ssl/certs/ca-certificates.crt`를 시도합니다. |
+| `SLP_DEMO_R2_ACCESS_KEY_ID` / `SLP_DEMO_R2_SECRET_ACCESS_KEY` | R2 S3 호환 키 한 쌍 | 비어 있으면 `SLP_VERIFY_R2_*`, 그다음 `REPROCESSING_R2_*` 값을 씁니다. 새로 만들 때: Cloudflare 대시보드 → R2 Object Storage → API 토큰 관리 → Create API token. 권한 Object Read only, 대상 버킷 `solo-leveling-staging-pdfs`만 지정 → 생성 화면의 Access Key ID와 Secret Access Key를 각각 입력합니다. Secret은 이 화면에서만 보입니다. |
+| `SLP_DEMO_OPENAI_API_KEY` | `sk-...` | 비어 있으면 `SLP_VERIFY_OPENAI_API_KEY`, 그다음 `REPROCESSING_OPENAI_API_KEY` 값을 씁니다. 새로 만들 때: platform.openai.com → API keys → Create new secret key. worker 전용 키를 만들고 프로젝트 사용 한도를 걸어 두기를 권장합니다. 생성 직후에만 전체 값이 보입니다. |
+| `SLP_DEMO_PROCESSING_CONFIG_JSON` | 처리 설정 JSON | 기존 값을 유지하고 아래 항목만 확인합니다. |
+| `WORKER_BASE_REFERENCE` | 설정하지 않음 | 이미지에 포함된 값입니다. |
+
+`SLP_DEMO_PROCESSING_CONFIG_JSON`에서 운영자가 맞추는 항목은 다음과 같습니다.
+
+| 키 | 값 | 얻는 곳 |
+|---|---|---|
+| `policy_version`, `window_key` | 웹과 동일 | 웹 서비스 Environment의 `REMOTE_AUTOMATIC_PDF_BUDGET_JSON` |
+| `database_name` | DB 이름 | `SLP_DEMO_DATABASE_URL`의 `/` 뒤와 같아야 합니다. |
+| `database_schema` | `slp_staging` | 고정 |
+| `r2.endpoint` | `https://계정ID.r2.cloudflarestorage.com` | Cloudflare → R2 Overview의 Account ID |
+| `r2.bucket`, `r2.region` | `solo-leveling-staging-pdfs`, `auto` | 고정 |
+| `demo_budget.starts_at`·`expires_at`·`max_jobs` | 비우면 상시 처리 | 제한이 필요할 때만 지정합니다. |
+
+`runtime_image`, `runtime_lock_path`, `model_lock_path`, `model_dir`, `embedding_spec`, `limits`,
+`translation`, `batch_size`, `demo_budget`의 단가·금액 항목은 게시한 이미지와 검증한 요율에 묶인 값입니다.
+임의로 바꾸지 말고 이미지 게시 기록(#517)의 값을 그대로 둡니다. 경로는
+`/opt/worker/runtime-lock.json`, `/opt/worker/model-lock.json`,
+`/opt/models/e8f8c211226b894fcb81acc59f3b34ba3efd5f42`입니다.
+
+상시 모드에서 한 작업이 실패하면 그 작업만 재시도 없이 종결하고, 30초 뒤 다음 작업을 확인합니다.
+`attempt=0` 조건 때문에 실패한 작업을 다시 가져가 외부 호출을 반복하지 않습니다.
 비용 제한은 전송 시 계정과 서비스 원장 행을 모두 잠근 뒤 각각 적용합니다.
-기간이 끝나면 다음 승인 기간·서비스 예산을 준비하고 웹과 worker를 함께 전환합니다.
+
+### 멈췄을 때 로그 읽기
+
+자식 출력은 버리므로 Render 로그에는 고정 상태와 종료 코드만 남습니다.
+
+| 로그 | 의미 |
+|---|---|
+| `render_ready` 다음 바로 `render_standby` | Docker Command가 비어 있어 대기 모드로 시작함 |
+| `render_verification_failed`, `exit_code: 3` | 설정 JSON 형식·정책 키·`demo_budget` 오류 |
+| `exit_code: 4` | 처리 플래그가 꺼졌거나, 설정 기간 밖이거나, 이미지 참조 불일치 |
+| `exit_code: 5` | DB URL 형식(`sslmode=verify-full`, DB 이름)이나 R2·OpenAI 자격 누락 |
+| `exit_code: 6` | 기간·건수를 지정한 실행에서 작업 실패를 종결하지 못함 |
+| `exit_code: 1` | 그 밖의 오류(DB 연결, 이미지 사전 검사 이후 실패 등) |
+| `render_preflight_failed` | 이미지·모델 사전 검사 실패 |
+
+기간·건수를 지정한 경우 `render_verification_finished` 뒤 standby는 정상 종료이며,
+다시 처리하려면 서비스를 재시작합니다.
 
 스테이징 적용은 migration 0068을 먼저 반영한 뒤 두 서비스를 배포합니다.
 웹 역할은 예산 조회·계정 예산 삽입만 필요하며 사용량 갱신은 worker 역할에서 수행합니다.

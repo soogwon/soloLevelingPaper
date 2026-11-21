@@ -200,3 +200,39 @@ def test_automatic_signup_concurrent_admission_service_cap_and_owner_isolation(p
         {'scope_type':'owner','scope_id':winner,'consumed_input_tokens':100,'consumed_output_tokens':50},
         {'scope_type':'service','scope_id':'service','consumed_input_tokens':100,'consumed_output_tokens':50},
     ]
+
+
+def test_open_ended_automatic_policy_claims_without_window_and_caps_owner_admissions(pool, db):
+    from solo_leveling.interfaces.http.automatic_pdf_budgets import AutomaticPdfBudget
+    from solo_leveling.interfaces.http.remote_processing_intake import RemoteProcessingQuotaExceeded
+    from solo_leveling.workers.demo_processing import DemoBudget, DemoJobs
+    from tests.unit.test_demo_processing import unbounded_settings
+
+    policy, window = 'pdf-auto-open', 'always'
+    budget = AutomaticPdfBudget(policy, window, None, None, 100, 50, max_jobs_per_owner=1)
+    intake = PostgresRemoteProcessingIntake(pool, automatic_pdf_budget=budget)
+    first = admitted_source(pool, db)
+    owner = first[0]
+    db("""INSERT INTO server_dispatch_budget_limits
+          (scope_type,scope_id,policy_version,window_key,max_input_tokens,max_output_tokens)
+          VALUES ('service','service',%s,%s,1000,500)""", (policy, window))
+    # 작업 접수 시각이 오래돼도 기간 없는 정책은 가져간다.
+    admitted = intake.admit(*first[:2], new_id(), *first[2:], NOTICE_VERSION)
+    db('UPDATE server_processing_jobs SET created_at=created_at-%s::interval WHERE job_id=%s',
+       ('30 days', admitted.job_id))
+    assert not intake.quota_reached(new_id())
+    assert intake.quota_reached(owner)
+
+    # 같은 계정의 두 번째 PDF는 건수 한도로 거절되고 작업을 만들지 않는다.
+    second = admitted_source(pool, db, owner=owner)
+    with pytest.raises(RemoteProcessingQuotaExceeded):
+        intake.admit(*second[:2], new_id(), *second[2:], NOTICE_VERSION)
+    assert intake.get(owner, second[1]) is None
+    # 이미 접수한 같은 요청은 한도와 무관하게 기존 작업을 돌려준다.
+    assert intake.admit(*first[:2], new_id(), *first[2:], NOTICE_VERSION).job_id == admitted.job_id
+
+    jobs = DemoJobs(pool, DemoBudget(unbounded_settings(), 'fixed-model', 50), policy, window,
+                    automatic_only=True)
+    claimed = jobs.claim('open-worker')
+    assert claimed is not None and claimed.job_id == admitted.job_id
+    assert jobs.claim('open-worker') is None

@@ -7,12 +7,17 @@ import os
 import re
 
 
+class AutomaticPdfQuotaExceeded(Exception):
+    """계정당 처리 접수 건수 한도에 도달했다. 공개 코드만 담는다."""
+
+
 @dataclass(frozen=True)
 class AutomaticPdfBudget:
     policy_version: str
     window_key: str
-    starts_at: datetime
-    expires_at: datetime
+    # 기간은 선택이다. 둘 다 비우면 만료 없이 접수하고, 지정하려면 둘 다 지정한다.
+    starts_at: datetime | None
+    expires_at: datetime | None
     input_tokens: int
     output_tokens: int
     allowed_owner_ids: tuple[str, ...] | None = None
@@ -21,8 +26,10 @@ class AutomaticPdfBudget:
     def __post_init__(self):
         if (not re.fullmatch(r'pdf-auto-[a-z0-9-]{1,80}', self.policy_version)
                 or not re.fullmatch(r'[a-zA-Z0-9_-]{1,100}', self.window_key)
-                or self.starts_at.utcoffset() is None or self.expires_at.utcoffset() is None
-                or self.starts_at >= self.expires_at
+                or (self.starts_at is None) != (self.expires_at is None)
+                or (self.starts_at is not None and (
+                    self.starts_at.utcoffset() is None or self.expires_at.utcoffset() is None
+                    or self.starts_at >= self.expires_at))
                 or (self.allowed_owner_ids is not None and (
                     type(self.allowed_owner_ids) is not tuple
                     or any(type(owner) is not str or not owner or len(owner) > 512
@@ -34,6 +41,8 @@ class AutomaticPdfBudget:
             raise ValueError('automatic_pdf_budget_invalid')
 
     def active(self):
+        if self.starts_at is None:
+            return True
         return self.starts_at <= datetime.now(timezone.utc) < self.expires_at
 
     def _eligible(self, owner):
@@ -51,16 +60,21 @@ class AutomaticPdfBudget:
                 (owner,self.policy_version,self.window_key,self.input_tokens,self.output_tokens,
                  self.policy_version,self.window_key))
 
+    def quota_reached(self, conn, owner):
+        """계정당 접수 건수 한도. 실패·취소·삭제한 논문의 접수도 비용이 났을 수 있어 센다."""
+        if self.max_jobs_per_owner is None:
+            return False
+        count = conn.execute("""SELECT count(*) AS total FROM server_processing_job_authorizations
+            WHERE owner_user_id=%s AND processing_policy_version=%s AND processing_window_key=%s""",
+            (owner,self.policy_version,self.window_key)).fetchone()['total']
+        return count >= self.max_jobs_per_owner
+
     def allows_admission(self, conn, owner):
         if not self._eligible(owner):
             return False
-        if self.max_jobs_per_owner is not None:
-            # 접수 transaction은 공통 제어 행을 잠가 동시 접수를 직렬화한다.
-            count = conn.execute("""SELECT count(*) AS total FROM server_processing_job_authorizations
-                WHERE owner_user_id=%s AND processing_policy_version=%s AND processing_window_key=%s""",
-                (owner,self.policy_version,self.window_key)).fetchone()['total']
-            if count >= self.max_jobs_per_owner:
-                return False
+        # 접수 transaction은 공통 제어 행을 잠가 동시 접수를 직렬화한다.
+        if self.quota_reached(conn, owner):
+            raise AutomaticPdfQuotaExceeded('remote_processing_quota_exceeded')
         self.provision(conn, owner)
         rows = conn.execute("""SELECT scope_type,max_input_tokens,max_output_tokens,
                       reserved_input_tokens,reserved_output_tokens,consumed_input_tokens,consumed_output_tokens
@@ -83,5 +97,6 @@ def load_automatic_pdf_budget():
             raise ValueError('automatic_pdf_budget_invalid')
         data['allowed_owner_ids'] = tuple(data['allowed_owner_ids'])
     for field in ('starts_at', 'expires_at'):
-        data[field] = datetime.fromisoformat(data[field])
+        value = data.get(field)
+        data[field] = None if value is None else datetime.fromisoformat(value)
     return AutomaticPdfBudget(**data)
