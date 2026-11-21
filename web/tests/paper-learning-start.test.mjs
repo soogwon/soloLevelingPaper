@@ -63,3 +63,36 @@ test('별도 학습 시작 경로와 논문 상세 복귀 링크가 같은 판�
   assert.match(panel.innerHTML, /Claude 요청 복사/);
   window.dispatchEvent(new Event('pagehide'));
 });
+
+test('원격 학습 중인 논문은 로컬 기록 없이도 원격 MCP 요청으로 이어서 학습할 수 있다', async t => {
+  const view = node();
+  view.querySelector = () => null;
+  const remotePaper = {
+    ...paper, reading_status:'reading', reading_status_source:'remote_learning',
+    reading_basis_version_id:version,
+    resume:{available:false, reason:'learning_record_missing', message:'저장된 학습 기록이 없어요.'},
+  };
+  t.mock.method(globalThis, 'fetch', async () => response(remotePaper));
+  await paperDetailPage({view, params:{paperId}, query:{version}});
+  assert.match(view.innerHTML, /data-action="remote-resume"/);
+  assert.doesNotMatch(view.innerHTML, /data-action="remote-resume"[^>]*disabled/);
+  assert.doesNotMatch(view.innerHTML, /저장된 학습 기록이 없어요/);
+  const { remoteResumePrompt } = await import('../js/pages/paper-detail.js');
+  const prompt = remoteResumePrompt(paperId, version);
+  assert.ok(prompt.includes(paperId) && prompt.includes(version));
+  assert.match(prompt, /open_remote_paper/);
+  window.dispatchEvent(new Event('pagehide'));
+});
+
+test('원격 학습 근거가 없으면 기존 이어하기 버튼은 그대로 비활성이다', async t => {
+  const view = node();
+  view.querySelector = () => null;
+  const localPaper = {
+    ...paper, reading_status:'reading', reading_status_source:'explicit',
+    resume:{available:false, reason:'learning_record_missing', message:'저장된 학습 기록이 없어요.'},
+  };
+  t.mock.method(globalThis, 'fetch', async () => response(localPaper));
+  await paperDetailPage({view, params:{paperId}, query:{version}});
+  assert.match(view.innerHTML, /data-action="resume"[^>]*disabled/);
+  window.dispatchEvent(new Event('pagehide'));
+});
