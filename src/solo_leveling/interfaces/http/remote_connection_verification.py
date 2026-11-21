@@ -31,9 +31,11 @@ def check_status(conn, owner_user_id: str, check_id) -> dict | None:
     ).fetchone()
 
 
-def confirm_check(conn, issuer: str, subject: str, code: str) -> datetime | None:
+def confirm_check(conn, issuer: str, subject: str, code: str) -> dict:
+    """코드를 한 번 소비하고, 실패하면 사용자가 고칠 수 있는 이유만 구분해 돌려준다."""
     if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32}", code):
-        return None
+        return {"status": "not_found"}
+    code_hash = sha256(code.encode()).hexdigest()
     row = conn.execute(
         """UPDATE server_remote_connection_checks AS c SET verified_at=clock_timestamp()
            WHERE code_hash=%s AND verified_at IS NULL AND expires_at > clock_timestamp()
@@ -43,6 +45,23 @@ def confirm_check(conn, issuer: str, subject: str, code: str) -> datetime | None
                    AND i.revoked_at IS NULL
              )
            RETURNING verified_at""",
-        (sha256(code.encode()).hexdigest(), issuer, subject),
+        (code_hash, issuer, subject),
     ).fetchone()
-    return row["verified_at"] if row else None
+    if row:
+        return {"status": "ok", "verified_at": row["verified_at"]}
+    # 코드는 192비트 난수라 다른 계정의 유효 코드임을 알려도 추측 공격에 쓸 정보가 없다.
+    row = conn.execute(
+        """SELECT verified_at IS NOT NULL AS used, expires_at <= clock_timestamp() AS expired,
+                  EXISTS (
+                      SELECT 1 FROM server_remote_identities AS i
+                      WHERE i.owner_user_id=c.owner_user_id AND i.issuer=%s AND i.subject=%s
+                        AND i.revoked_at IS NULL
+                  ) AS same_account
+           FROM server_remote_connection_checks AS c WHERE code_hash=%s""",
+        (issuer, subject, code_hash),
+    ).fetchone()
+    if row is None:
+        return {"status": "not_found"}
+    if not row["same_account"]:
+        return {"status": "different_account"}
+    return {"status": "already_used" if row["used"] else "expired"}
