@@ -183,14 +183,37 @@ PDF 보관까지만 하고 처리 작업을 만들지 않으며, 웹은 `remote_
 
 ### 3. worker — 상시 처리
 
-- Docker Command(인자만): `--mode demo-pdf-worker`
-- `SLP_DEMO_PROCESSING_ENABLED=true`, `SLP_AUTOMATIC_PDF_PROCESSING_ENABLED=true`
-- `SLP_DEMO_PROCESSING_CONFIG_JSON`: 정책 키를 웹과 같게 둡니다. `demo_budget`에서
-  `starts_at`·`expires_at`·`max_jobs`를 모두 비우면 기간·건수 제한 없이 계속 대기열을 확인합니다.
-  지정하면 기존처럼 그 범위에서만 처리하고 standby로 돌아갑니다.
-- `SLP_DEMO_DATABASE_URL`(제한 worker 역할, `?sslmode=verify-full`만 허용), `PGSSLROOTCERT`,
-  `SLP_DEMO_R2_ACCESS_KEY_ID`·`SLP_DEMO_R2_SECRET_ACCESS_KEY`(PDF bucket 읽기),
-  `SLP_DEMO_OPENAI_API_KEY`. `WORKER_BASE_REFERENCE`는 이미지 값이므로 설정하지 않습니다.
+Render → `solo-leveling-worker-staging` → Settings의 Docker Command와 Environment에 설정합니다.
+비밀 값은 채팅·Git·이슈에 붙이지 않습니다.
+
+| 항목 | 넣을 값 | 얻는 곳과 방법 |
+|---|---|---|
+| Docker Command | `--mode demo-pdf-worker` | 직접 입력. 인자만 넣고 `python` 등은 붙이지 않습니다. |
+| `SLP_DEMO_PROCESSING_ENABLED` | `true` | 직접 입력 |
+| `SLP_AUTOMATIC_PDF_PROCESSING_ENABLED` | `true` | 직접 입력. 설정 JSON의 `policy_version`이 `pdf-auto-`로 시작해야 합니다. |
+| `SLP_DEMO_DATABASE_URL` | `postgresql://slp_staging_worker:비밀번호@호스트/DB이름?sslmode=verify-full` | 호스트·DB 이름: Render → staging Postgres → Connect → External의 URL에서 `@` 뒤 호스트와 `/` 뒤 DB 이름만 사용. 비밀번호: worker 역할을 만들 때 정한 값이며 Render에 표시되지 않습니다. 모르면 관리자 psql에서 `ALTER ROLE slp_staging_worker PASSWORD '새 비밀번호';`로 다시 정합니다. 끝에는 `?sslmode=verify-full`만 둡니다. |
+| `PGSSLROOTCERT` | 이미지의 CA 묶음 경로 | 기존 값이 있으면 유지합니다. 없고 DB 연결이 실패하면 `/etc/ssl/certs/ca-certificates.crt`를 시도합니다. |
+| `SLP_DEMO_R2_ACCESS_KEY_ID` / `SLP_DEMO_R2_SECRET_ACCESS_KEY` | R2 S3 호환 키 한 쌍 | Cloudflare 대시보드 → R2 Object Storage → API 토큰 관리 → Create API token. 권한 Object Read only, 대상 버킷 `solo-leveling-staging-pdfs`만 지정 → 생성 화면의 Access Key ID와 Secret Access Key를 각각 입력합니다. Secret은 이 화면에서만 보입니다. |
+| `SLP_DEMO_OPENAI_API_KEY` | `sk-...` | platform.openai.com → API keys → Create new secret key. worker 전용 키를 만들고 프로젝트 사용 한도를 걸어 두기를 권장합니다. 생성 직후에만 전체 값이 보입니다. |
+| `SLP_DEMO_PROCESSING_CONFIG_JSON` | 처리 설정 JSON | 기존 값을 유지하고 아래 항목만 확인합니다. |
+| `WORKER_BASE_REFERENCE` | 설정하지 않음 | 이미지에 포함된 값입니다. |
+
+`SLP_DEMO_PROCESSING_CONFIG_JSON`에서 운영자가 맞추는 항목은 다음과 같습니다.
+
+| 키 | 값 | 얻는 곳 |
+|---|---|---|
+| `policy_version`, `window_key` | 웹과 동일 | 웹 서비스 Environment의 `REMOTE_AUTOMATIC_PDF_BUDGET_JSON` |
+| `database_name` | DB 이름 | `SLP_DEMO_DATABASE_URL`의 `/` 뒤와 같아야 합니다. |
+| `database_schema` | `slp_staging` | 고정 |
+| `r2.endpoint` | `https://계정ID.r2.cloudflarestorage.com` | Cloudflare → R2 Overview의 Account ID |
+| `r2.bucket`, `r2.region` | `solo-leveling-staging-pdfs`, `auto` | 고정 |
+| `demo_budget.starts_at`·`expires_at`·`max_jobs` | 비우면 상시 처리 | 제한이 필요할 때만 지정합니다. |
+
+`runtime_image`, `runtime_lock_path`, `model_lock_path`, `model_dir`, `embedding_spec`, `limits`,
+`translation`, `batch_size`, `demo_budget`의 단가·금액 항목은 게시한 이미지와 검증한 요율에 묶인 값입니다.
+임의로 바꾸지 말고 이미지 게시 기록(#517)의 값을 그대로 둡니다. 경로는
+`/opt/worker/runtime-lock.json`, `/opt/worker/model-lock.json`,
+`/opt/models/e8f8c211226b894fcb81acc59f3b34ba3efd5f42`입니다.
 
 상시 모드에서 한 작업이 실패하면 그 작업만 재시도 없이 종결하고, 30초 뒤 다음 작업을 확인합니다.
 `attempt=0` 조건 때문에 실패한 작업을 다시 가져가 외부 호출을 반복하지 않습니다.
