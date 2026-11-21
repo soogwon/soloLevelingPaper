@@ -1,6 +1,5 @@
 """웹 계정과 현재 원격 MCP 요청을 한 번 대조한다."""
 
-from datetime import datetime
 from hashlib import sha256
 import re
 from secrets import token_urlsafe
