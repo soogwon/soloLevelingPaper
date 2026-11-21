@@ -143,3 +143,21 @@ def test_count_notice_is_pinned_and_legacy_consent_cannot_admit(db,stores,pool):
     assert general.submit('alice',key)['execution_id']==saved['execution_id']
     assert not db('SELECT * FROM server_question_token_counts WHERE execution_id=%s',(saved['execution_id'],))
     assert not db('SELECT * FROM server_provider_attempts WHERE execution_id=%s',(saved['execution_id'],))
+
+
+def test_account_consents_submit_question_without_web_review(db,stores,pool):
+    from solo_leveling.interfaces.http.account_consents import NOTICE_VERSION,PostgresAccountConsents
+    service,_,binding=review(db,stores,pool)
+    db("INSERT INTO server_users(owner_user_id,display_name) VALUES ('alice','합성') ON CONFLICT DO NOTHING")
+    store=PostgresAccountConsents(pool);store.grant('alice',['storage','ai_provider'],NOTICE_VERSION)
+    try:
+        key=new_id()
+        submitted=service.prepare('alice',key,binding.context_id,'계정 동의 합성 질문')
+        assert submitted['status']=='submitted' and submitted['request_key']==key
+        view=service.view('alice',key)
+        assert view['storage']==view['ai_provider']=='current' and view['execution_id']==submitted['execution_id']
+        store.revoke('alice','ai_provider')
+        later=service.prepare('alice',new_id(),binding.context_id,'철회 후 합성 질문')
+        assert later['status']=='review_required'
+    finally:
+        store.revoke('alice','storage');store.revoke('alice','ai_provider')

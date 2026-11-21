@@ -245,6 +245,19 @@ function withIdempotency(key, fn) {
   return result;
 }
 
+// 예시 모드는 가입 동의를 마친 계정으로 시작한다.
+const mockConsents = { storage: 'current', ai_provider: 'current' };
+function mockAccountConsents(method, seg, body) {
+  if (method === 'POST' && seg.length === 2) for (const p of body?.purposes ?? []) mockConsents[p] = 'current';
+  if (method === 'POST' && seg[3] === 'revoke' && seg[2] in mockConsents) mockConsents[seg[2]] = 'revoked';
+  return {
+    notice_version: 'account-consent-v1', complete: mockConsents.storage === 'current',
+    items: [['storage', true, '예시: PDF와 학습 기록을 서버에 보관해요.'], ['ai_provider', false, '예시: 원문과 질문을 OpenAI에 보내요.']]
+      .map(([purpose, required, notice]) => ({ purpose, required, notice, state: mockConsents[purpose],
+        revision: 1, granted_at: '2026-01-12T09:00:00Z', revoked_at: null })),
+  };
+}
+
 export async function mockRequest(method, path, { query = {}, body, idempotencyKey } = {}) {
   await sleep(CONFIG.MOCK_LATENCY_MS);
   const clean = Object.fromEntries(Object.entries(query).filter(([, v]) => v !== undefined && v !== null && v !== ''));
@@ -254,6 +267,7 @@ export async function mockRequest(method, path, { query = {}, body, idempotencyK
   if (method === 'POST' && path === '/auth/mock-login') { setLoggedIn(true); return null; }
   if (method === 'POST' && path === '/auth/logout') { setLoggedIn(false); return null; }
   if (!isLoggedIn()) throw fail(401, 'unauthenticated', '로그인이 필요해요.');
+  if (path.startsWith('/account/consents')) return mockAccountConsents(method, seg, body);
 
   switch (route) {
     case 'GET /me': return { ...db.me };

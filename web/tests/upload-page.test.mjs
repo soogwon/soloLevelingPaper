@@ -201,3 +201,26 @@ for(const event of ['auth:logout','auth:expired','hashchange','pagehide'])test(`
   assert.match(node('[data-processing-status]').textContent,/다시 열어/);
   assert.equal(node('[data-processing-read]').disabled,true);
 });
+test('가입 때 저장 동의한 계정은 동의 단계 없이 버튼 하나로 업로드하고 처리 상태를 조회한다',async(t)=>{
+  const {accountConsents}=await import('../js/lib/account-consents.js');
+  const item=(purpose,state)=>({purpose,required:purpose==='storage',notice:'합성',state,revision:1});
+  accountConsents.value={notice_version:'account-consent-v1',complete:true,items:[item('storage','current'),item('ai_provider','current')]};
+  t.after(()=>{accountConsents.value=null;});
+  const order=[];const record={consent_id:id,purpose:'storage',revision:1,state:'current',notice_version:'v1',granted_at:'2026-01-01T00:00:00Z',revoked_at:null};
+  t.mock.method(api,'createRemoteUploadIntent',async()=>{order.push('create');return response;});
+  t.mock.method(api,'getRemoteUploadConsents',async()=>{order.push('consents');return {intent_id:id,notice_version:'v1',storage_notice:'보관',ai_provider_notice:'AI',storage:record,ai_provider:null};});
+  t.mock.method(api,'grantRemoteUploadConsent',async()=>{throw new Error('동의를 직접 기록하면 안 됨');});
+  t.mock.method(api,'prepareRemoteUpload',async()=>{order.push('prepare');return {intent_id:id,method:'PUT',url:'https://objects.test/put',headers:{},expires_at:'2099-01-01T00:00:00Z'};});
+  t.mock.method(api,'putRemoteUpload',async()=>{order.push('put');});
+  t.mock.method(api,'completeRemoteUpload',async()=>{order.push('complete');return {...response,status:'verified',file_name:'sample.pdf',file_size:8,content_type:'application/pdf'};});
+  t.mock.method(api,'getRemoteProcessing',async()=>{order.push('processing');return {job_id:id,paper_id:id,version_id:id,status:'queued'};});
+  const v=view();page({view:v});const node=s=>v.querySelector(s);
+  assert.match(v.innerHTML,/새 PDF 업로드/);assert.match(v.innerHTML,/data-quick disabled>업로드/);
+  assert.match(v.innerHTML,/<label hidden><input type="checkbox" data-agree>/);
+  node('[data-file]').files=[file];await node('[data-file]').events.change();
+  assert.equal(node('[data-quick]').disabled,false);
+  await node('[data-quick]').events.click();
+  assert.deepEqual(order.filter((s,i)=>order.indexOf(s)===i),['create','consents','prepare','put','complete','processing']);
+  assert.match(node('[data-status]').textContent,/업로드를 마쳤어요. 학습 자료 만들기를 접수했어요/);
+  listeners.get('auth:logout')();
+});

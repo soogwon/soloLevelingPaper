@@ -49,6 +49,7 @@ def create_app(
     remote_annotation_products=None,
     remote_mcp_annotations=None,
     remote_job_cancellations=None,
+    account_consents=None,
 ) -> "FastAPI":
     """명시적 설정 또는 환경 설정으로 독립적인 API 앱을 만든다."""
 
@@ -135,6 +136,12 @@ def create_app(
         remote_consent_store = PostgresRemoteUploadConsentStore(managed_store.connection_pool)
     selected_remote_consent_store = (remote_consent_store if remote_consent_store is not None
                                      else UnavailableRemoteUploadConsentStore())
+    if account_consents is None and managed_store is not None:
+        from .account_consents import PostgresAccountConsents
+        account_consents = PostgresAccountConsents(managed_store.connection_pool)
+    if account_consents is None:
+        from .account_consents import UnavailableAccountConsents
+        account_consents = UnavailableAccountConsents()
     if remote_processing_intake is None and managed_store is not None:
         remote_processing_intake = PostgresRemoteProcessingIntake(managed_store.connection_pool, automatic_pdf_budget=automatic_pdf_budget)
     selected_remote_processing_intake = (
@@ -373,7 +380,10 @@ def create_app(
     app.include_router(create_file_router(require_principal, selected_file_upload_store, object_storage))
     app.include_router(create_remote_upload_router(
         require_principal, selected_remote_upload_store,
-        RemoteUploadVerificationService(selected_remote_upload_store, object_storage)))
+        RemoteUploadVerificationService(selected_remote_upload_store, object_storage),
+        selected_remote_consent_store, selected_remote_processing_intake))
+    from .account_consent_routes import create_account_consent_router
+    app.include_router(create_account_consent_router(require_principal, account_consents))
     app.include_router(create_remote_upload_consent_router(
         require_principal, selected_remote_consent_store, selected_remote_processing_intake))
     from .remote_question_routes import create_question_review_router

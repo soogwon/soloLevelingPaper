@@ -219,3 +219,19 @@ def test_existing_execution_with_same_key_cannot_be_misbound_or_cancelled(pool,d
     for action in (service.view,service.submit,service.cancel):
         with pytest.raises(RemoteExecutionConflict):action('alice',key)
     assert db('SELECT state FROM server_remote_executions WHERE execution_id=%s',(saved.execution_id,))[0]['state']=='queued'
+
+
+def test_account_consents_submit_quiz_generation_without_web_review(pool,db,stores):
+    from solo_leveling.interfaces.http.account_consents import NOTICE_VERSION,PostgresAccountConsents
+    service,_,request = review(pool,db,stores)
+    db("INSERT INTO server_users(owner_user_id,display_name) VALUES ('alice','합성') ON CONFLICT DO NOTHING")
+    store = PostgresAccountConsents(pool)
+    store.grant('alice',['storage','ai_provider'],NOTICE_VERSION)
+    try:
+        key = str(uuid4())
+        submitted = prepare(service,key,request)
+        assert submitted['status'] == 'submitted' and submitted['state'] == 'queued'
+        view = service.view('alice',key)
+        assert view['storage'] == view['ai_provider'] == 'current'
+    finally:
+        store.revoke('alice','storage');store.revoke('alice','ai_provider')

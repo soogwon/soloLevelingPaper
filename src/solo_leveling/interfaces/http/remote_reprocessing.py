@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 
+from .account_consent_execution import grant_and_submit
 from .remote_recovery_preview import RemoteRecoveryPreview
 from .remote_retrieval import PostgresRemoteContextResolver
 
@@ -72,6 +73,15 @@ class PostgresReprocessingReviews:
                     active=True, storage='missing', ai_provider='missing', job_id=None)
 
     def prepare(self, owner, key, context, operation):
+        # 재처리는 웹에서 사용자가 시작 버튼을 누를 때만 접수한다. 동의 단계만 계정 동의로 대신한다.
+        prepared = self._prepare(owner, key, context, operation)
+        key = str(UUID(key))
+        if prepared is None or prepared.get('state') != 'review':
+            return prepared
+        granted = grant_and_submit(self.pool, owner, prepared, grant=lambda purpose: self.grant(owner, key, purpose, NOTICE))
+        return self.view(owner, key) if granted is not None else None
+
+    def _prepare(self, owner, key, context, operation):
         key,context = str(UUID(key)),str(UUID(context))
         with self.pool.connection() as conn:
             conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(f'{owner}\x1freprocessing\x1f{key}',))

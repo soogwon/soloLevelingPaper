@@ -10,6 +10,7 @@ from solo_leveling.application.remote_execution_policy import RemoteExecutionPol
 from .remote_retrieval import PostgresRemoteContextResolver
 from .remote_question_intake import PostgresQuestionIntake
 from .remote_executions import PostgresRemoteExecutionStore,RemoteExecutionConflict
+from .account_consent_execution import grant_and_submit
 
 NOTICE='remote-question-v1'
 COUNT_NOTICE='question-count-and-generation-v1'
@@ -47,6 +48,13 @@ class PostgresQuestionReviews:
         self.window,self.seconds=window_key,review_seconds
 
     def prepare(self,owner,key,context,question,*,pages=(),sections=(),strict=False,top_k=5):
+        prepared=self._prepare(owner,key,context,question,pages=pages,sections=sections,strict=strict,top_k=top_k)
+        key=str(UUID(key))
+        return grant_and_submit(self.pool,owner,prepared,
+                                grant=lambda purpose:self.grant(owner,key,purpose,self.notice),
+                                submit=lambda:self.submit(owner,key))
+
+    def _prepare(self,owner,key,context,question,*,pages=(),sections=(),strict=False,top_k=5):
         key=str(UUID(key))
         with self.pool.connection() as conn:
             scoped=SimpleNamespace(connection=lambda:nullcontext(conn))

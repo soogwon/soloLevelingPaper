@@ -28,9 +28,26 @@ export default async function chatSummaryReview({ view, params }) {
           return html`<section><h2>${label}</h2><p>${item?.text ?? '요약에 포함된 근거가 없어요.'}</p>
             ${pages.length ? html`<p>PDF ${pages.join(', ')}쪽</p>` : ''}</section>`;
         })}
-        ${review.saved ? html`<a href="#/papers/${encodeURIComponent(review.binding.paper_id)}?version=${encodeURIComponent(review.binding.server_version_id)}">논문 상세 보기</a>`
+        ${review.saved ? html`<a href="#/papers/${encodeURIComponent(review.binding.paper_id)}?version=${encodeURIComponent(review.binding.server_version_id)}">논문 상세 보기</a>
+            <button type="button" class="btn" data-unsave ${busy ? 'disabled' : ''}>저장 취소</button>`
           : html`<button type="button" data-save ${busy || !review.active ? 'disabled' : ''}>확인하고 요약 저장</button>`}
       </section>` : ''}`);
+    const unsave = view.querySelector('[data-unsave]');
+    if (unsave) unsave.onclick = async () => {
+      if (busy || closed || !review?.saved) return;
+      busy = true;
+      draw('저장을 취소하는 중이에요.');
+      try {
+        review = await request('POST', `${path}/unsave`);
+        if (closed) return;
+        busy = false;
+        draw(review.active ? '저장을 취소했어요. 필요하면 다시 저장할 수 있어요.' : '저장을 취소했어요.');
+      } catch {
+        if (closed) return;
+        busy = false;
+        draw('저장 취소 여부를 확인하지 못했어요. 이 페이지를 새로고침해 확인해 주세요.');
+      }
+    };
     const save = view.querySelector('[data-save]');
     if (save) save.onclick = async () => {
       if (busy || closed || !review?.active || review.saved) return;
@@ -57,7 +74,8 @@ export default async function chatSummaryReview({ view, params }) {
   try {
     review = await request('GET', path);
     if (closed) return;
-    draw(review.saved ? '이미 저장된 요약이에요.' : review.active ? '' : '검토 시간이 지났어요.');
+    draw(review.saved ? '저장된 요약이에요. 인용을 확인하고, 원하지 않으면 저장을 취소할 수 있어요.'
+      : review.active ? '' : '검토 시간이 지났어요.');
   } catch {
     draw('이 계정에서 요약 검토를 열 수 없어요.');
   }

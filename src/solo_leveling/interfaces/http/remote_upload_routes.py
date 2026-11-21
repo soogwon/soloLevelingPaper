@@ -12,7 +12,8 @@ from .remote_uploads import RemoteUploadConflict
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
-def create_remote_upload_router(require_principal: Any, store: Any, verification: Any):
+def create_remote_upload_router(require_principal: Any, store: Any, verification: Any, consents: Any = None,
+                                processing: Any = None):
     from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
     from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -70,6 +71,28 @@ def create_remote_upload_router(require_principal: Any, store: Any, verification
         if principal.credential_type != "web_session":
             raise HTTPException(status_code=403, detail={"code": "web_session_required"})
 
+    def bind_account(principal, intent_id):
+        """계정 동의로 목적별 동의를 미리 기록한다. 실패하면 웹의 기존 동의 단계가 남는다."""
+        if consents is None:
+            return
+        try:
+            return consents.bind_account_consents(principal.user_id, intent_id)
+        except Exception:
+            return {}
+
+    def admit_account(principal, intent_id):
+        """계정 동의로 기록한 보관·AI 동의가 모두 있으면 학습 처리를 바로 접수한다."""
+        bound = bind_account(principal, intent_id) or {}
+        if processing is None or not {"storage", "ai_provider"} <= set(bound):
+            return
+        try:
+            if processing.get(principal.user_id, intent_id) is None:
+                processing.admit(principal.user_id, intent_id, f"account:{intent_id}",
+                                 bound["storage"].consent_id, bound["ai_provider"].consent_id,
+                                 bound["ai_provider"].notice_version)
+        except Exception:
+            pass
+
     @router.post("/intents", response_model=IntentView, status_code=status.HTTP_201_CREATED)
     def create_intent(
         payload: IntentCreate,
@@ -91,6 +114,7 @@ def create_remote_upload_router(require_principal: Any, store: Any, verification
                 status_code=422, detail={"code": "remote_upload_input_invalid"}) from None
         except Exception:
             raise _unavailable(HTTPException) from None
+        bind_account(principal, intent.intent_id)
         return _intent_view(IntentView, intent)
 
     @router.get("/intents/{intent_id}", response_model=IntentView)
@@ -109,6 +133,7 @@ def create_remote_upload_router(require_principal: Any, store: Any, verification
     def prepare_upload(intent_id: UUID, principal: Principal, response: Response):
         require_web(principal)
         response.headers["Cache-Control"] = "no-store"
+        bind_account(principal, str(intent_id))
         try:
             reservation, prepared = verification.prepare(principal.user_id, str(intent_id))
         except ValueError as exc:
@@ -129,6 +154,7 @@ def create_remote_upload_router(require_principal: Any, store: Any, verification
             raise _known_error(HTTPException, exc) from None
         except Exception:
             raise _unavailable(HTTPException) from None
+        admit_account(principal, str(intent_id))
         return UploadCompleteView(
             intent_id=intent_id, paper_id=UUID(completed.paper_id),
             version_id=UUID(completed.server_version_id), status="verified",

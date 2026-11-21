@@ -121,3 +121,34 @@ def test_current_consents_with_insufficient_budget_explain_denial_and_rollback(p
             service.submit('alice', key)
     finally:
         db("UPDATE server_dispatch_controls SET intake_enabled=true WHERE control_id='provider_dispatch'")
+
+
+def account(pool, db, owner, purposes):
+    from solo_leveling.interfaces.http.account_consents import NOTICE_VERSION, PostgresAccountConsents
+    db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'합성') ON CONFLICT DO NOTHING", (owner,))
+    store = PostgresAccountConsents(pool)
+    store.grant(owner, purposes, NOTICE_VERSION)
+    return store
+
+
+def test_account_consents_submit_server_summary_without_web_review(pool, db, stores):
+    service, key, context = review(pool, db, stores)
+    store = account(pool, db, 'alice', ['storage'])
+    try:
+        # OpenAI 전송 동의가 없으면 기존처럼 웹 검토가 필요하다.
+        assert service.prepare('alice', key, context)['status'] == 'review_required'
+        assert service.view('alice', key)['storage'] == 'missing'
+        store.grant('alice', ['ai_provider'], 'account-consent-v1')
+        other = str(uuid4())
+        submitted = service.prepare('alice', other, context)
+        assert submitted['status'] == 'submitted' and submitted['consent'] == 'account'
+        assert submitted['state'] == 'queued' and submitted['review_url'].endswith(other)
+        view = service.view('alice', other)
+        assert view['storage'] == view['ai_provider'] == 'current'
+        assert view['execution_id'] == submitted['execution_id']
+        # 같은 요청을 다시 준비해도 새 접수를 만들지 않는다.
+        assert service.prepare('alice', other, context)['execution_id'] == submitted['execution_id']
+        assert db('SELECT count(*) n FROM server_provider_attempts')[0]['n'] == 0
+    finally:
+        store.revoke('alice', 'storage')
+        store.revoke('alice', 'ai_provider')

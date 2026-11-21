@@ -21,6 +21,7 @@ const ROUTES = [
   { pattern: /^\/concepts$/, nav: 'concepts', parent: '/papers', load: () => import('./pages/concepts.js') },
   { pattern: /^\/concepts\/([^/]+)$/, keys: ['paperKey'], nav: 'concepts', parent: '/concepts', load: () => import('./pages/concepts.js') },
   { pattern: /^\/search$/, nav: null, parent: '/papers', load: () => import('./pages/search.js') },
+  { pattern: /^\/consent$/, nav: null, parent: null, load: () => import('./pages/consent.js') },
   { pattern: /^\/account$/, nav: 'account', parent: '/papers', load: () => import('./pages/account.js') },
   { pattern: /^\/login$/, nav: null, parent: null, public: true, bare: true, load: () => import('./pages/login.js') },
 ];

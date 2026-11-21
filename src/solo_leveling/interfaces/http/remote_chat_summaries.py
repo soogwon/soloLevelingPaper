@@ -8,6 +8,7 @@ import json
 from types import SimpleNamespace
 from uuid import UUID
 
+from .account_consents import account_consent_current
 from .remote_executions import RemoteExecutionConflict
 from .remote_retrieval import PostgresRemoteContextResolver
 
@@ -60,8 +61,18 @@ class PostgresChatSummaries:
                 return None
             if row['snapshot'] != snapshot:
                 raise RemoteExecutionConflict('chat_summary_conflict')
+        review_url = f'{self.origin}/#/chat-summaries/{key}'
+        if self._account_storage(owner):
+            # 계정 저장 동의가 있으면 웹 확인 없이 저장하고, 웹에서 인용을 보고 저장을 취소할 수 있다.
+            self.save(owner, key)
+            return dict(status='saved', request_key=key, review_url=review_url,
+                        items=normalized, evidence_pages=pages)
         return dict(status='review_required', request_key=key,
-                    review_url=f'{self.origin}/#/chat-summaries/{key}', items=normalized, evidence_pages=pages)
+                    review_url=review_url, items=normalized, evidence_pages=pages)
+
+    def _account_storage(self, owner):
+        with self.pool.connection() as conn:
+            return account_consent_current(conn, owner, 'storage')
 
     def _row(self, conn, owner, key, *, save_lock=False, paper_lock=False):
         return conn.execute("""SELECT s.*, clock_timestamp() < s.created_at + make_interval(secs=>%s) AS active
@@ -94,6 +105,18 @@ class PostgresChatSummaries:
                     (owner, str(UUID(key)), self.seconds)).fetchone()
                 if row is None:
                     raise RemoteExecutionConflict('chat_summary_expired')
+            return self._view(row)
+
+    def unsave(self, owner, key):
+        """저장을 취소해 최신 요약과 내보내기에서 뺀다. 검토 시간 안에는 다시 저장할 수 있다."""
+        with self.pool.connection() as conn:
+            row = self._row(conn, owner, key, save_lock=True)
+            if row is None:
+                return None
+            if row['saved_at'] is not None:
+                conn.execute("""UPDATE server_chat_summaries SET saved_at=NULL
+                    WHERE owner_user_id=%s AND request_key=%s""", (owner, str(UUID(key))))
+                row = self._row(conn, owner, key)
             return self._view(row)
 
     def _completed(self, row):

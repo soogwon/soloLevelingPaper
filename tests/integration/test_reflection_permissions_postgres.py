@@ -68,3 +68,46 @@ def test_web_and_mcp_roles_are_separate_and_fail_closed(pool,db,stores):
                     conn.execute(sql.SQL('DROP TRIGGER {} ON {}.{}').format(sql.Identifier(trigger),sql.Identifier(schema),sql.Identifier(table)))
                 conn.execute(sql.SQL('DROP OWNED BY {}').format(sql.Identifier(role)))
                 conn.execute(sql.SQL('DROP ROLE {}').format(sql.Identifier(role)))
+
+
+def test_mcp_role_uses_account_consent_without_reading_consent_table(pool,db,stores):
+    from psycopg import sql
+    from psycopg.conninfo import make_conninfo
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+    from solo_leveling.interfaces.http.account_consents import NOTICE_VERSION,PostgresAccountConsents
+    _,binding,args=setup(pool,db,stores)
+    context=binding.context_id
+    db("DELETE FROM server_remote_consents WHERE owner_user_id='alice' AND input_hash=%s",
+       (NOTICE+':'+args['question_revision'],))
+    roles=['reflection_web_'+uuid4().hex[:10],'reflection_mcp_'+uuid4().hex[:10]]
+    pools=[]
+    account=PostgresAccountConsents(pool)
+    account.grant('alice',['storage'],NOTICE_VERSION)
+    with pool.connection() as conn:
+        schema=conn.execute('SELECT current_schema() s').fetchone()['s']
+        for role,web in zip(roles,(True,False)):
+            conn.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD 'local-reflection-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS").format(sql.Identifier(role)))
+            grant_reflection_role(conn,schema,role,web=web)
+    try:
+        for role in roles:
+            pools.append(ConnectionPool(make_conninfo(DSN,user=role,password='local-reflection-only'),
+                kwargs={'row_factory':dict_row,'options':f'-c search_path={schema}'},open=True))
+        web,mcp=map(PostgresRemoteReflection,pools)
+        view=mcp.consent('alice',context)
+        assert view['account'] is True
+        saved=mcp.save('alice',context,str(uuid4()),**(args|{'storage_consent_id':view['consent_id']}))
+        assert saved['revision']==1
+        web.revoke_storage('alice',context)
+        with pytest.raises(ValueError,match='consent_required'):
+            mcp.save('alice',context,str(uuid4()),**(args|{'expected_revision':1,'storage_consent_id':view['consent_id']}))
+    finally:
+        account.revoke('alice','storage')
+        for restricted in pools:restricted.close()
+        with pool.connection() as conn:
+            for role in roles:
+                trigger='reflection_role_'+hashlib.sha256(role.encode()).hexdigest()[:12]
+                for table in ('server_papers','server_remote_consents'):
+                    conn.execute(sql.SQL('DROP TRIGGER {} ON {}.{}').format(sql.Identifier(trigger),sql.Identifier(schema),sql.Identifier(table)))
+                conn.execute(sql.SQL('DROP OWNED BY {}').format(sql.Identifier(role)))
+                conn.execute(sql.SQL('DROP ROLE {}').format(sql.Identifier(role)))
