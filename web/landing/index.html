@@ -25,7 +25,7 @@
         <a class="nav-link" href="#how">사용 방법</a>
         <a class="nav-link" href="#start">시작하기</a>
         <a class="nav-link" href="skills.html">Skill</a>
-        <a class="nav-link" href="mcp.html">MCP 설치</a>
+        <a class="nav-link" href="mcp.html">MCP 연결</a>
         <a class="btn btn-outline" href="../#/papers">
           내 기록 보기
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
@@ -44,9 +44,9 @@
           <p class="hero-desc">PDF를 올리고 Claude에게 물어보세요. 답변마다 원문 몇 페이지의 어떤 문장이 근거인지 함께 보여줘요. 공부한 논문과 메모는 웹 아카이브에서 언제든 다시 볼 수 있어요.</p>
           <div class="actions">
             <a class="btn btn-primary btn-lg" href="mcp.html">MCP로 시작하기</a>
-            <a class="btn btn-outline btn-lg" href="skills.html">설치 없이 Skill로 체험</a>
+            <a class="btn btn-outline btn-lg" href="skills.html">Skill로 가볍게 체험</a>
           </div>
-          <p class="hint">설치가 어렵다면 Skill로 먼저 써 보고, 기록을 남기고 싶을 때 MCP로 옮겨 오세요.</p>
+          <p class="hint">계정 없이 가볍게 써 보려면 Skill로 시작하고, 기록을 남기고 싶을 때 MCP로 옮겨 오세요.</p>
         </div>
 
         <figure class="chat" aria-label="Claude 대화 예시">
@@ -146,14 +146,14 @@
         <div class="section-head">
           <span class="eyebrow">시작하기</span>
           <h2 id="start-h" class="section-title">나에게 맞는 방법으로 시작하세요</h2>
-          <p class="section-desc">MCP 설치가 어렵다면 Skill로 바로 체험할 수 있어요. 기록을 남기고 웹에서 다시 보려면 MCP가 필요해요.</p>
+          <p class="section-desc">계정 없이 바로 써 보려면 Skill로 체험할 수 있어요. 기록을 남기고 웹에서 다시 보려면 MCP가 필요해요.</p>
         </div>
 
         <div class="plans">
           <!-- Skill -->
           <article id="skill" class="plan plan-light" aria-labelledby="skill-h">
             <div class="plan-head">
-              <span class="badge badge-ok">설치 없이 · 가볍게 체험</span>
+              <span class="badge badge-ok">계정 없이 · 가볍게 체험</span>
               <h3 id="skill-h">Skill</h3>
               <p>Claude에 Skill을 올려 두면 그 대화 안에서 논문을 공부할 수 있어요. 학습 안내, 퀴즈, HTML 교재 Skill 3개가 있어요.</p>
             </div>
@@ -187,11 +187,11 @@
             <div class="plan-head">
               <span class="badge badge-dark">전체 기능 · 기록까지 남기기</span>
               <h3 id="mcp-h">MCP</h3>
-              <p>주소만 추가하는 원격 방식과 내 PC에 설치하는 로컬 방식이 있어요. 근거를 검증한 답변을 받고, 기록을 저장해 웹에서 다시 봐요.</p>
+              <p>설치 없이 Claude에 주소 하나만 추가하면 돼요. 근거를 검증한 답변을 받고, 기록을 저장해 웹에서 다시 봐요.</p>
             </div>
             <ol class="plan-steps">
-              <li>원격: Claude 설정에 MCP 주소를 추가하고 로그인해요.</li>
-              <li>로컬: 설치 가이드를 따라 내 PC에 설치하고 Claude Desktop에 연결해요.</li>
+              <li>Claude 설정에 MCP 주소를 추가하고 로그인해요.</li>
+              <li>웹 아카이브에서 논문 PDF를 올려요.</li>
               <li>공부한 기록이 웹 아카이브에 쌓여요.</li>
             </ol>
             <ul class="checks">
@@ -201,7 +201,7 @@
               <li><span class="mark mark-ok" aria-hidden="true">✓</span>이어하기 코드로 다른 대화에서 이어서 공부</li>
             </ul>
             <div class="actions plan-actions">
-              <a class="btn btn-light" href="mcp.html">MCP 설치 가이드</a>
+              <a class="btn btn-light" href="mcp.html">MCP 연결 가이드</a>
               <a class="btn btn-dark-outline" href="https://github.com/soogwon/soloLevelingPaper" target="_blank" rel="noopener">GitHub</a>
             </div>
           </article>
@@ -214,7 +214,7 @@
               <tr><th scope="col">기능</th><th scope="col">Skill</th><th scope="col">MCP</th></tr>
             </thead>
             <tbody>
-              <tr><th scope="row">설치</th><td>Skill 업로드만</td><td>MCP 서버 설치</td></tr>
+              <tr><th scope="row">시작하기</th><td>Skill 업로드만</td><td>MCP 주소 추가 + 로그인</td></tr>
               <tr><th scope="row">질문·요약·퀴즈</th><td class="ok">가능</td><td class="ok">가능</td></tr>
               <tr><th scope="row">원문 근거</th><td class="part">기본</td><td class="ok">검증된 근거</td></tr>
               <tr><th scope="row">기록 저장·웹 아카이브</th><td class="no">불가</td><td class="ok">가능</td></tr>
@@ -269,15 +269,15 @@
         <div class="faq">
           <details>
             <summary>Skill로 시작했다가 나중에 MCP로 옮길 수 있나요?</summary>
-            <p>네. 다만 Skill은 기록을 저장하지 않아서, Skill로 공부한 내용은 웹 아카이브로 옮겨지지 않아요. MCP를 설치한 뒤 공부한 기록부터 저장돼요.</p>
+            <p>네. 다만 Skill은 기록을 저장하지 않아서, Skill로 공부한 내용은 웹 아카이브로 옮겨지지 않아요. MCP를 연결한 뒤 공부한 기록부터 저장돼요.</p>
           </details>
           <details>
             <summary>서버에는 어떤 기록이 올라가나요?</summary>
-            <p>동의한 논문의 정보, 학습 위치와 읽기 상태, 저장된 요약, 메모와 하이라이트가 올라가요. PDF 원본은 논문마다 따로 동의해야 올라가요. 추출한 원문 전체, 검색용 데이터, 내 PC의 파일 경로, API 키는 올라가지 않아요.</p>
+            <p>웹에서 올린 논문 PDF와 처리 결과, 학습 위치와 읽기 상태, 저장된 요약, 메모와 하이라이트가 서버에 저장돼요. PDF 보관과 AI 전송은 업로드할 때 단계마다 따로 동의를 받아요.</p>
           </details>
           <details>
             <summary>사용하려면 무엇이 필요한가요?</summary>
-            <p>Skill은 Claude 설정에서 코드 실행 기능을 켜고 Skill을 업로드할 수 있어야 해요. MCP는 Claude Desktop과 설치 가이드의 준비물(Python 등)이 필요해요.</p>
+            <p>Skill은 Claude 설정에서 코드 실행 기능을 켜고 Skill을 업로드할 수 있어야 해요. MCP는 커넥터를 추가할 수 있는 Claude와 Solo Leveling 계정만 있으면 돼요. 따로 설치할 프로그램이나 API 키는 필요 없어요.</p>
           </details>
         </div>
       </div>
@@ -293,7 +293,7 @@
       <nav class="footer-nav" aria-label="푸터 링크">
         <a href="../#/papers">웹 아카이브</a>
         <a href="skills.html">Skill</a>
-        <a href="mcp.html">MCP 설치</a>
+        <a href="mcp.html">MCP 연결</a>
         <a href="https://github.com/soogwon/soloLevelingPaper" target="_blank" rel="noopener">GitHub</a>
       </nav>
     </div>

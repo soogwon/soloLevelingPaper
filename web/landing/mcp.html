@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Solo Leveling MCP 설치 가이드</title>
-  <meta name="description" content="Solo Leveling MCP를 원격(URL 연결) 또는 로컬(내 PC 설치)로 Claude에 연결하는 방법">
+  <title>Solo Leveling MCP 연결 가이드</title>
+  <meta name="description" content="설치 없이 주소 하나로 Solo Leveling MCP를 Claude에 연결하는 방법">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
@@ -22,12 +22,11 @@
       <div class="header-left">
         <a class="brand" href="index.html">
           <span class="brand-name">Solo Leveling<span>.</span></span>
-          <span class="brand-sub">MCP 설치 가이드</span>
+          <span class="brand-sub">MCP 연결 가이드</span>
         </a>
         <nav class="skill-nav" aria-label="MCP 가이드 메뉴">
-          <a class="nav-link" href="#choose">방법 고르기</a>
-          <a class="nav-link" href="#remote" data-tab-link="remote">원격 MCP</a>
-          <a class="nav-link" href="#local" data-tab-link="local">로컬 MCP</a>
+          <a class="nav-link" href="#about">특징</a>
+          <a class="nav-link" href="#guide">연결 방법</a>
           <a class="nav-link" href="#help">문제 해결</a>
         </nav>
       </div>
@@ -45,89 +44,52 @@
         <div class="hero-copy">
           <span class="pill">기록까지 남기는 전체 기능</span>
           <h1 class="hero-title">Claude에 <span class="hl">Solo Leveling MCP</span>를<br>연결하는 방법</h1>
-          <p class="hero-desc">MCP를 연결하면 원문 근거를 검증한 답변을 받고, 공부한 논문과 메모를 저장해 웹 아카이브에서 다시 볼 수 있어요. 연결 방법은 두 가지예요.</p>
+          <p class="hero-desc">MCP를 연결하면 원문 근거를 검증한 답변을 받고, 공부한 논문과 메모를 저장해 웹 아카이브에서 다시 볼 수 있어요. 설치 없이 주소 하나만 추가하면 돼요.</p>
           <div class="actions">
-            <a class="btn btn-primary btn-lg" href="#remote" data-tab-link="remote">원격으로 바로 연결</a>
-            <a class="btn btn-outline btn-lg" href="#local" data-tab-link="local">내 PC에 설치</a>
+            <a class="btn btn-primary btn-lg" href="#guide">바로 연결하기</a>
+            <a class="btn btn-outline btn-lg" href="../#/login">웹에서 로그인하기</a>
           </div>
-          <p class="hint">설치가 부담스럽다면 <a href="skills.html">Skill</a>로 먼저 체험해 볼 수도 있어요.</p>
+          <p class="hint">계정 없이 가볍게 써 보고 싶다면 <a href="skills.html">Skill</a>로 먼저 체험해 볼 수도 있어요.</p>
         </div>
       </div>
     </section>
 
-    <!-- 방법 고르기 -->
-    <section id="choose" class="band" aria-labelledby="choose-h">
+    <!-- 특징 -->
+    <section id="about" class="band" aria-labelledby="about-h">
       <div class="wrap section">
         <div class="section-head">
-          <span class="eyebrow">방법 고르기</span>
-          <h2 id="choose-h" class="section-title">원격과 로컬, 무엇이 다른가요?</h2>
-          <p class="section-desc">처음이라면 원격을 추천해요. 설치 없이 주소 하나만 추가하면 돼요.</p>
+          <span class="eyebrow">특징</span>
+          <h2 id="about-h" class="section-title">설치 없이 주소 하나로 연결해요</h2>
+          <p class="section-desc">Claude 설정에 주소를 추가하고 로그인하면 끝나요. 논문은 웹에서 올리고, 처리와 저장은 서버가 해요.</p>
         </div>
 
         <div class="plans">
           <article class="plan plan-light choose-card">
             <div class="plan-head">
-              <span class="badge badge-ok">추천 · 설치 없음</span>
-              <h3>원격 MCP</h3>
-              <p>Claude 설정에 주소 하나를 추가하고 로그인하면 끝나요. 논문은 웹에서 올리고, 처리와 저장은 서버가 해요.</p>
+              <span class="badge badge-ok">설치 없음</span>
+              <h3>Solo Leveling MCP</h3>
+              <p>커넥터를 추가할 수 있는 Claude라면 어디서든 쓸 수 있어요.</p>
             </div>
             <ul class="checks">
               <li><span class="mark mark-ok" aria-hidden="true">✓</span>설치·설정 파일 없음</li>
               <li><span class="mark mark-ok" aria-hidden="true">✓</span>OpenAI API 키가 필요 없음</li>
               <li><span class="mark mark-ok" aria-hidden="true">✓</span>웹 아카이브와 자동으로 연결</li>
             </ul>
-            <a class="btn btn-primary plan-actions" href="#remote" data-tab-link="remote">원격 연결 방법 보기</a>
+            <a class="btn btn-primary plan-actions" href="#guide">연결 방법 보기</a>
           </article>
-
-          <article class="plan plan-dark choose-card">
-            <div class="plan-head">
-              <span class="badge badge-dark">개발자 · 내 PC에서 처리</span>
-              <h3>로컬 MCP</h3>
-              <p>내 PC에 MCP 서버를 설치해 Claude Desktop과 연결해요. 논문 처리와 저장이 내 PC에서 이뤄지고, 원하면 웹으로 동기화해요.</p>
-            </div>
-            <ul class="checks">
-              <li><span class="mark mark-ok" aria-hidden="true">✓</span>논문과 기록을 내 PC에 보관</li>
-              <li><span class="mark mark-ok" aria-hidden="true">✓</span>본인 OpenAI API 키로 처리</li>
-              <li><span class="mark mark-ok" aria-hidden="true">✓</span>원하는 논문만 골라서 웹으로 동기화</li>
-            </ul>
-            <a class="btn btn-light plan-actions" href="#local" data-tab-link="local">로컬 설치 방법 보기</a>
-          </article>
-        </div>
-
-        <div class="table-box">
-          <table class="compare">
-            <caption>한눈에 비교</caption>
-            <thead>
-              <tr><th scope="col">항목</th><th scope="col">원격 MCP</th><th scope="col">로컬 MCP</th></tr>
-            </thead>
-            <tbody>
-              <tr><th scope="row">설치</th><td>없음 (주소 추가)</td><td>Python 3.12 + 프로그램 설치</td></tr>
-              <tr><th scope="row">쓸 수 있는 Claude</th><td>커넥터를 추가할 수 있는 Claude</td><td>Claude Desktop</td></tr>
-              <tr><th scope="row">논문 올리기</th><td>웹 아카이브에서 업로드</td><td>내 PC 폴더에 넣고 Claude에서 등록</td></tr>
-              <tr><th scope="row">처리·저장 위치</th><td>서버</td><td>내 PC (선택해서 동기화)</td></tr>
-              <tr><th scope="row">OpenAI API 키</th><td class="ok">필요 없음</td><td class="part">본인 키 필요</td></tr>
-              <tr><th scope="row">웹 아카이브</th><td class="ok">자동 연결</td><td class="part">계정 연결 후 동기화</td></tr>
-            </tbody>
-          </table>
         </div>
       </div>
     </section>
 
-    <!-- 설치 방법: 탭 -->
+    <!-- 연결 방법 -->
     <section id="guide" class="band band-white band-lined" aria-labelledby="guide-h">
       <div class="wrap section">
         <div class="section-head">
-          <span class="eyebrow">설치 방법</span>
+          <span class="eyebrow">연결 방법</span>
           <h2 id="guide-h" class="section-title">단계별로 따라 하기</h2>
         </div>
 
-        <div class="tabs" role="tablist" aria-label="연결 방법">
-          <button class="tab" role="tab" id="tab-remote" aria-controls="remote" aria-selected="true" data-tab="remote">원격 MCP <span class="tab-sub">추천</span></button>
-          <button class="tab" role="tab" id="tab-local" aria-controls="local" aria-selected="false" data-tab="local" tabindex="-1">로컬 MCP</button>
-        </div>
-
-        <!-- 원격 -->
-        <div id="remote" class="panel" role="tabpanel" aria-labelledby="tab-remote">
+        <div id="remote" class="panel">
           <div class="url-box">
             <span class="url-label">MCP 서버 주소</span>
             <div class="code-row">
@@ -185,128 +147,6 @@
             </li>
           </ol>
         </div>
-
-        <!-- 로컬 -->
-        <div id="local" class="panel" role="tabpanel" aria-labelledby="tab-local" hidden>
-          <div class="os-switch" role="group" aria-label="운영체제">
-            <span class="os-label">내 컴퓨터</span>
-            <button type="button" class="os-btn" data-os="mac" aria-pressed="true">macOS</button>
-            <button type="button" class="os-btn" data-os="win" aria-pressed="false">Windows</button>
-          </div>
-
-          <ol class="guide-steps">
-            <li class="g-step">
-              <div class="g-head"><span class="g-no">1</span><h3>준비물 확인</h3></div>
-              <ul class="ready">
-                <li><b>Claude Desktop</b> 앱</li>
-                <li><b>Python 3.12</b> (<a href="https://www.python.org/downloads/" target="_blank" rel="noopener">python.org</a>에서 설치)</li>
-                <li><b>Git</b>: GitHub에서 프로그램을 받을 때 필요해요. macOS는 처음 실행할 때 개발자 도구 설치 창이 뜨면 설치를 누르고, Windows는 <a href="https://git-scm.com/downloads" target="_blank" rel="noopener">git-scm.com</a>에서 설치해요.</li>
-                <li><b>OpenAI API 키</b>: 논문 번역과 답변 생성에 써요. 사용량만큼 비용이 들어요.</li>
-                <li>여유 디스크 공간: 검색용 모델과 의존성 때문에 수 GB가 필요할 수 있어요.</li>
-              </ul>
-            </li>
-
-            <li class="g-step">
-              <div class="g-head"><span class="g-no">2</span><h3>프로그램 설치</h3></div>
-              <p>전용 폴더에 파이썬 가상환경을 만들고 Solo Leveling MCP를 설치해요. 터미널(Windows는 PowerShell)에 한 줄씩 붙여 넣어요.</p>
-              <div class="os-only" data-for="mac">
-                <div class="code-block"><pre id="mac-install"><code>mkdir -p ~/SoloLevelingPaper
-python3.12 -m venv ~/SoloLevelingPaper/venv
-~/SoloLevelingPaper/venv/bin/pip install "solo-leveling-paper[local] @ git+https://github.com/soogwon/soloLevelingPaper.git"</code></pre><button type="button" class="copy" data-copy="#mac-install">복사</button></div>
-              </div>
-              <div class="os-only" data-for="win" hidden>
-                <div class="code-block"><pre id="win-install"><code>$root = Join-Path $env:LOCALAPPDATA 'SoloLevelingPaper'
-py -3.12 -m venv "$root\venv"
-&amp; "$root\venv\Scripts\python.exe" -m pip install "solo-leveling-paper[local] @ git+https://github.com/soogwon/soloLevelingPaper.git"</code></pre><button type="button" class="copy" data-copy="#win-install">복사</button></div>
-              </div>
-              <p class="tip">설치에 몇 분이 걸려요. 마지막에 <code>Successfully installed</code>가 나오면 성공이에요.</p>
-            </li>
-
-            <li class="g-step">
-              <div class="g-head"><span class="g-no">3</span><h3>설정 파일 만들기</h3></div>
-              <p>설치 폴더에 <code>settings.env</code> 파일을 만들고 아래 내용을 넣어요. <b>경로는 내 사용자 이름에 맞는 절대 경로</b>로 바꾸고, API 키를 넣어요.</p>
-              <div class="os-only" data-for="mac">
-                <p class="file-path">~/SoloLevelingPaper/settings.env</p>
-                <div class="code-block"><pre id="mac-env"><code>DATA_ROOT=/Users/내사용자이름/SoloLevelingPaper/data
-HF_HOME=/Users/내사용자이름/SoloLevelingPaper/models
-OPENAI_API_KEY=본인의_API_키
-GENERATION_MODEL=gpt-5.4-mini
-TRANSLATION_MODEL=gpt-5.4-mini
-LOCAL_ONLY=false
-ALLOW_EXTERNAL_API=true</code></pre><button type="button" class="copy" data-copy="#mac-env">복사</button></div>
-              </div>
-              <div class="os-only" data-for="win" hidden>
-                <p class="file-path">%LOCALAPPDATA%\SoloLevelingPaper\settings.env</p>
-                <div class="code-block"><pre id="win-env"><code>DATA_ROOT=C:/Users/내사용자이름/AppData/Local/SoloLevelingPaper/data
-HF_HOME=C:/Users/내사용자이름/AppData/Local/SoloLevelingPaper/models
-OPENAI_API_KEY=본인의_API_키
-GENERATION_MODEL=gpt-5.4-mini
-TRANSLATION_MODEL=gpt-5.4-mini
-LOCAL_ONLY=false
-ALLOW_EXTERNAL_API=true</code></pre><button type="button" class="copy" data-copy="#win-env">복사</button></div>
-              </div>
-              <p class="tip warn-tip"><b>ALLOW_EXTERNAL_API=true</b>로 두면 논문 등록 때 번역을 위해, 질문할 때 답변 생성을 위해 논문 일부가 OpenAI로 전송돼요. 비공개 논문이라면 전송해도 되는지 먼저 확인해 주세요. 이 파일에는 API 키가 들어 있으니 다른 사람과 공유하거나 GitHub에 올리지 마세요.</p>
-            </li>
-
-            <li class="g-step">
-              <div class="g-head"><span class="g-no">4</span><h3>점검하고 검색 모델 준비하기</h3></div>
-              <p>설정이 맞는지 점검하고, 논문 검색에 쓰는 모델을 미리 내려받아요.</p>
-              <div class="os-only" data-for="mac">
-                <div class="code-block"><pre id="mac-check"><code>cd ~/SoloLevelingPaper
-venv/bin/python -m solo_leveling.interfaces.cli.desktop check --env-file "$PWD/settings.env"
-venv/bin/python -m solo_leveling.interfaces.cli.desktop prepare-model --env-file "$PWD/settings.env"</code></pre><button type="button" class="copy" data-copy="#mac-check">복사</button></div>
-              </div>
-              <div class="os-only" data-for="win" hidden>
-                <div class="code-block"><pre id="win-check"><code>$root = Join-Path $env:LOCALAPPDATA 'SoloLevelingPaper'
-&amp; "$root\venv\Scripts\python.exe" -m solo_leveling.interfaces.cli.desktop check --env-file "$root\settings.env"
-&amp; "$root\venv\Scripts\python.exe" -m solo_leveling.interfaces.cli.desktop prepare-model --env-file "$root\settings.env"</code></pre><button type="button" class="copy" data-copy="#win-check">복사</button></div>
-              </div>
-              <p class="tip"><code>check</code>가 “점검 완료”를 출력하면 정상이에요. 오류가 나오면 설정 파일의 경로와 값을 다시 확인해요.</p>
-            </li>
-
-            <li class="g-step">
-              <div class="g-head"><span class="g-no">5</span><h3>Claude Desktop에 연결하기</h3></div>
-              <p>아래 명령이 Claude Desktop 설정에 넣을 내용을 출력해요. 출력된 <code>mcpServers</code> 항목을 Claude Desktop 설정 파일에 합쳐 넣어요.</p>
-              <div class="os-only" data-for="mac">
-                <div class="code-block"><pre id="mac-config"><code>cd ~/SoloLevelingPaper
-venv/bin/python -m solo_leveling.interfaces.cli.desktop config --env-file "$PWD/settings.env"</code></pre><button type="button" class="copy" data-copy="#mac-config">복사</button></div>
-                <p class="file-path">설정 파일: ~/Library/Application Support/Claude/claude_desktop_config.json</p>
-              </div>
-              <div class="os-only" data-for="win" hidden>
-                <div class="code-block"><pre id="win-config"><code>$root = Join-Path $env:LOCALAPPDATA 'SoloLevelingPaper'
-&amp; "$root\venv\Scripts\python.exe" -m solo_leveling.interfaces.cli.desktop config --env-file "$root\settings.env"</code></pre><button type="button" class="copy" data-copy="#win-config">복사</button></div>
-                <p class="file-path">설정 파일: %APPDATA%\Claude\claude_desktop_config.json</p>
-              </div>
-              <p class="tip">Claude Desktop의 <b>설정 → 개발자 → 설정 편집</b>으로도 이 파일을 열 수 있어요. 이미 있는 다른 항목은 지우지 말고 <code>mcpServers</code> 안에 추가만 해요. 저장한 뒤 Claude Desktop을 <b>완전히 종료했다가</b> 다시 열어요.</p>
-            </li>
-
-            <li class="g-step">
-              <div class="g-head"><span class="g-no">6</span><h3>논문 등록하고 공부하기</h3></div>
-              <ol class="sub-steps">
-                <li>공부할 PDF를 데이터 폴더의 <code>imports</code> 폴더(<code>DATA_ROOT/imports</code>)에 복사해요.</li>
-                <li>Claude Desktop 새 대화에서 도구 목록에 <b>solo-leveling-paper</b>가 켜져 있는지 확인해요.</li>
-                <li>“imports 폴더의 attention.pdf 등록해 줘”라고 말하면 등록 안내 카드가 나와요. 외부 전송 안내를 읽고 동의하면 등록이 시작돼요.</li>
-                <li>처리가 끝나면 학습을 시작하고 질문해요.</li>
-              </ol>
-              <ul class="say-list">
-                <li class="say">“방금 등록한 논문 처리 상태 알려줘.”</li>
-                <li class="say">“학습 시작해 줘. 목적은 이해, 아는 개념은 RNN이야.”</li>
-              </ul>
-              <p class="tip">처리 중에는 Claude Desktop을 끄지 마세요. 처리가 중단될 수 있어요.</p>
-            </li>
-
-            <li class="g-step">
-              <div class="g-head"><span class="g-no">7</span><h3>(선택) 웹 아카이브와 연결하기</h3></div>
-              <p>로컬에서 공부한 기록을 웹에서도 보고 싶을 때만 해요. 내 PC를 Solo Leveling 계정에 한 번 연결하면, 이후 Claude 대화에서 <b>동기화 카드</b>로 원하는 논문만 골라 서버에 올릴 수 있어요.</p>
-              <ol class="sub-steps">
-                <li>설정 파일에 서버 주소 <code>SERVER_API_URL=https://solo-leveling-staging.soogyung.com</code>을 추가하고 Claude Desktop을 다시 시작해요.</li>
-                <li>계정 연결 명령(<code>solo-leveling-connect --device-name "내 PC"</code>)을 실행하면 브라우저에서 로그인 화면이 열려요. 웹 아카이브와 같은 계정으로 로그인해요.</li>
-                <li>웹 아카이브의 <b>계정 → 연결된 PC</b>에 내 PC가 보이면 연결된 거예요.</li>
-              </ol>
-              <p class="tip">계정 연결에 필요한 인증 설정 값은 팀에 문의해 주세요. 로그인 정보는 내 컴퓨터의 자격 증명 저장소(macOS 키체인, Windows 자격 증명 관리자)에 안전하게 보관돼요.</p>
-            </li>
-          </ol>
-        </div>
       </div>
     </section>
 
@@ -317,23 +157,19 @@ venv/bin/python -m solo_leveling.interfaces.cli.desktop config --env-file "$PWD/
         <div class="faq">
           <details>
             <summary>도구 목록에 Solo Leveling이 보이지 않아요.</summary>
-            <p>원격은 Claude 설정의 커넥터 목록에서 Solo Leveling이 <b>연결됨</b> 상태인지 확인해요. 로컬은 설정 파일의 <code>mcpServers</code> 항목 경로가 맞는지 확인하고, Claude Desktop을 창만 닫지 말고 완전히 종료했다가 다시 열어요.</p>
+            <p>Claude 설정의 커넥터 목록에서 Solo Leveling이 <b>연결됨</b> 상태인지 확인해요. 새 대화의 도구 목록에서 Solo Leveling이 켜져 있는지도 확인해요.</p>
           </details>
           <details>
             <summary>로그인했는데 웹에 기록이 안 보여요.</summary>
-            <p>Claude 커넥터(또는 로컬 계정 연결)와 웹 아카이브에 <b>같은 계정</b>으로 로그인했는지 확인해요. 로컬 MCP는 계정을 연결한 뒤 동기화 카드에서 승인한 논문만 웹에 보여요.</p>
+            <p>Claude 커넥터와 웹 아카이브에 <b>같은 계정</b>으로 로그인했는지 확인해요.</p>
           </details>
           <details>
-            <summary>원격에서 내 논문이 목록에 없어요.</summary>
+            <summary>내 논문이 목록에 없어요.</summary>
             <p>웹에서 PDF 업로드와 <b>AI 전송 동의</b>까지 마쳤는지, 서버 처리가 끝났는지 확인해요. 처리 중인 논문은 완료된 뒤에 Claude에서 공부할 수 있어요.</p>
           </details>
           <details>
-            <summary>로컬 설치에서 check 명령이 실패해요.</summary>
-            <p>설정 파일의 <code>DATA_ROOT</code>, <code>HF_HOME</code>이 <b>절대 경로</b>인지 확인해요. <code>~</code>나 <code>%LOCALAPPDATA%</code> 같은 줄임 표현은 설정 파일 안에서 풀리지 않아요. 같은 데이터 폴더로 MCP를 여러 개 동시에 실행하지 않아요.</p>
-          </details>
-          <details>
             <summary>비용이 드나요?</summary>
-            <p>원격 MCP는 서버가 처리해서 사용자의 OpenAI 키가 필요 없어요. 로컬 MCP는 논문 번역과 답변 생성에 본인의 OpenAI API 키를 쓰므로 사용량만큼 비용이 들어요.</p>
+            <p>논문 처리와 답변 생성은 서버가 해서 사용자의 OpenAI API 키가 필요 없어요.</p>
           </details>
         </div>
       </div>
