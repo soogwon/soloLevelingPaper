@@ -32,5 +32,6 @@ export function html(strings, ...values) {
 }
 
 export function setHTML(element, content) {
-  element.innerHTML = content instanceof SafeHtml ? content.value : esc(content);
+  // 배열은 html`` 안과 같이 항목별로 처리한다. 쉼표로 이어 붙은 이스케이프 문자열이 되지 않게 한다.
+  element.innerHTML = renderValue(content);
 }

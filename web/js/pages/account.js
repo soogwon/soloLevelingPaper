@@ -77,11 +77,11 @@ export default async function accountPage({ view }) {
   let consents = null;
 
   function renderConsents() {
-    setHTML(consentsEl, consents.items.map((item) => consentItem(item, html`<div class="actions">
+    setHTML(consentsEl, html`${consents.items.map((item) => consentItem(item, html`<div class="actions">
       ${item.state === 'current'
         ? html`<button type="button" class="btn ${item.required ? 'btn-outline-danger' : ''}" data-action="revoke-consent" data-purpose="${item.purpose}">동의 철회</button>`
         : html`<button type="button" class="btn btn-primary" data-action="grant-consent" data-purpose="${item.purpose}">동의하기</button>`}
-    </div>`)));
+    </div>`))}`);
   }
 
   async function loadConsents() {
