@@ -63,9 +63,12 @@ export function paperRow(p) {
   if (!line) {
     if (date) line = '학습 위치가 저장되지 않았어요';
     else if (p.selected_learning_record_id) line = '아직 저장된 학습 위치가 없어요';
+    else if (p.reading_status_source === 'remote_learning') line = 'Claude 원격 학습 기록이 있어요';
     else line = '아직 저장된 학습 기록이 없어요';
   }
-  if (date) line += ` · 마지막 학습 ${date}`;
+  // 로컬 학습 기록이 없으면 원격 학습 기록의 마지막 갱신 시각을 마지막 학습으로 보여 준다(최근 학습순 정렬과 같은 기준).
+  const remoteDate = !date && p.reading_status_source === 'remote_learning' ? formatDate(p.reading_status_updated_at) : '';
+  if (date || remoteDate) line += ` · 마지막 학습 ${date || remoteDate}`;
   const source = {
     explicit: '연결 PC에서 저장한 상태',
     remote_learning: '원격 학습 기록',

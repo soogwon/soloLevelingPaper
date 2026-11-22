@@ -127,3 +127,19 @@ test('제목을 찾지 못하면 파일 이름을 제목으로 쓰고 보조 정
   assert.match(output, /<span class="row-title">1706\.03762v7\.pdf<\/span>/);
   assert.equal(output.split('1706.03762v7.pdf').length - 1, 1);
 });
+
+test('로컬 기록 없이 원격 학습만 했으면 원격 학습 기록과 마지막 학습 날짜를 표시한다', () => {
+  const output = String(paperRow({...paper, selected_learning_record_id: null, last_position: null,
+    last_studied_at: null, reading_status: 'reading', reading_status_source: 'remote_learning',
+    reading_status_updated_at: '2026-11-21T05:39:00Z'}));
+  assert.match(output, /Claude 원격 학습 기록이 있어요 · 마지막 학습 2026\.11\.21/);
+  assert.doesNotMatch(output, /아직 저장된 학습 기록이 없어요/);
+});
+
+test('원격 원문만 등록된 논문은 학습 기록 없음으로 표시한다', () => {
+  const output = String(paperRow({...paper, selected_learning_record_id: null, last_position: null,
+    last_studied_at: null, reading_status_source: 'remote_file',
+    reading_status_updated_at: '2026-11-21T05:39:00Z'}));
+  assert.match(output, /아직 저장된 학습 기록이 없어요/);
+  assert.doesNotMatch(output, /마지막 학습/);
+});
