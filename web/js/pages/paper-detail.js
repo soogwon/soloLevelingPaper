@@ -50,6 +50,11 @@ export function remoteResumePrompt(paperId, versionId) {
   return `연결된 Solo Leveling 원격 MCP에서 논문 ID ${paperId}, PDF 판본 ID ${versionId}의 기존 학습 맥락을 open_remote_paper로 열어 이어서 학습해 줘. 새 학습 맥락은 만들지 말고, get_remote_learning으로 마지막 학습 위치를 확인해서 저장된 페이지가 있으면 그 페이지부터 read_remote_paper_page로 읽어 줘.`;
 }
 
+// 아직 학습을 시작하지 않은 판본은 Claude 대화에 붙여넣을 첫 요청을 바로 준다.
+export function remoteStartPrompt(paperId, versionId) {
+  return `연결된 Solo Leveling 원격 MCP에서 논문 ID ${paperId}, PDF 판본 ID ${versionId}을 열고 이 판본으로 원격 학습을 시작해 줘. open_remote_paper로 연 학습 맥락에 start_remote_learning을 호출해 줘.`;
+}
+
 function actionButton({ label, primary, available, message, action, iconHtml }) {
   return html`<div class="action">
     <button type="button" class="btn ${primary ? 'btn-primary' : ''}" data-action="${action}" ${available ? '' : html`disabled aria-describedby="${action}-why"`}>${label}${iconHtml ?? ''}</button>
@@ -96,7 +101,7 @@ export default async function paperDetailPage({ view, params, query }) {
       <div class="actions">
         ${actionButton({ label: '원문 보기', action: 'open-pdf', iconHtml: icons.external(), available: paper.file_access?.available, message: paper.file_access?.message ?? '원문을 열 수 없어요' })}
         ${starting ? (canStart
-          ? html`<div class="action"><a class="btn btn-primary" href="${startHref}">Claude에서 학습 시작</a></div>`
+          ? actionButton({label:'Claude에서 학습 시작', action:'remote-start', primary:true, available:true})
           : actionButton({label:'Claude에서 학습 시작', action:'start-learning', primary:true,
             available:false, message:'서버에서 검증을 마친 PDF가 필요해요.'}))
           : actionButton({ label: 'Claude에서 이어서 학습', action: remoteResume ? 'remote-resume' : 'resume', available: remoteResume || paper.resume?.available, primary: true, message: paper.resume?.message ?? '이어하기를 할 수 없어요' })}
@@ -231,6 +236,27 @@ export default async function paperDetailPage({ view, params, query }) {
     });
   }
 
+  function openRemoteStart() {
+    const prompt = remoteStartPrompt(paper.paper_id, versionId);
+    const dialog = openDialog({
+      title: 'Claude에서 학습 시작하기',
+      body: html`
+        <p class="dialog-text">아래 요청을 복사해서 Solo Leveling 원격 MCP가 연결된 Claude 대화에 붙여넣으세요. 이 판본으로 학습을 시작해요.</p>
+        <div class="codebox"><p>${prompt}</p></div>
+        <div class="dialog-actions">
+          <button type="button" class="btn" data-dialog-close>닫기</button>
+          <button type="button" class="btn btn-primary" data-copy>요청 복사</button>
+        </div>
+        <p class="hint">업로드하면 학습 자료 만들기가 자동으로 접수돼요. 처리가 끝나기 전이면 Claude가 아직 논문을 열지 못할 수 있으니 아래 ‘처리 작업’에서 상태를 확인해 주세요.
+        처리 작업이 없다면 <a href="${startHref}">학습 처리 접수 화면</a>에서 접수할 수 있어요.</p>`,
+    });
+    const copyButton = dialog.querySelector('[data-copy]');
+    copyButton.addEventListener('click', async () => {
+      const ok = await copyText(prompt);
+      copyButton.textContent = ok ? '복사됨' : '복사하지 못했어요';
+    });
+  }
+
   async function deletePaper(button) {
     button.closest('details')?.removeAttribute('open');
     button.disabled = true;
@@ -254,6 +280,7 @@ export default async function paperDetailPage({ view, params, query }) {
       case 'open-pdf': openPdf(el); break;
       case 'resume': openResume(el); break;
       case 'remote-resume': openRemoteResume(); break;
+      case 'remote-start': openRemoteStart(); break;
       case 'delete-paper': deletePaper(el); break;
       case 'toggle-evidence': {
         const panel = view.querySelector(`#${el.getAttribute('aria-controls')}`);
