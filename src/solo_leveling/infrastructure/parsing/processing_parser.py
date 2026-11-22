@@ -5,7 +5,7 @@ from itertools import count
 from uuid import NAMESPACE_URL, uuid5
 from dataclasses import dataclass
 
-from solo_leveling.domain.remote_processing import ParsedDocument, ProcessingChunk, ProcessingError
+from solo_leveling.domain.remote_processing import PaperFrontMatter, ParsedDocument, ProcessingChunk, ProcessingError
 from solo_leveling.infrastructure.parsing.pdf_extractor import extract_pages, PdfExtractionError
 from solo_leveling.infrastructure.parsing.chunker import chunk_pages_with_sections, CHUNK_SIZE, CHUNK_OVERLAP
 
@@ -32,6 +32,8 @@ class ProcessingPdfParser:
         chunks, sections = chunk_pages_with_sections(parse_revision_id, pages,
             chunk_size=self.chunk_size, overlap=self.overlap,
             id_factory=lambda: str(uuid5(NAMESPACE_URL, f'remote-parse:{parse_revision_id}:{next(indices)}')))
+        front_matter = pages[0].front_matter if pages else None
         return ParsedDocument(len(pages), tuple(ProcessingChunk(
             c.chunk_id, c.parse_revision_id, c.chunk_index, c.original_text,
-            c.pdf_page, c.section_id, c.printed_page_label) for c in chunks), tuple(sections))
+            c.pdf_page, c.section_id, c.printed_page_label) for c in chunks), tuple(sections),
+            front_matter if isinstance(front_matter, PaperFrontMatter) else None)

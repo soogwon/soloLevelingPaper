@@ -4,12 +4,14 @@ from dataclasses import asdict
 import hashlib
 import json
 import re
+import sys
 
 from solo_leveling.interfaces.http.processing_publications import PostgresProcessingPublicationStore
 from solo_leveling.interfaces.http.remote_vectors import EmbeddingWriteScope, PostgresEmbeddingVectorWriter
 from solo_leveling.interfaces.http.remote_fragment_vectors import PostgresEmbeddingFragmentWriter
 from solo_leveling.workers.processing_authorization import _AUTH_SOURCE, _IDENTITY, _USAGE_BLOCKED, _params
 from solo_leveling.workers.processing_staging import _source, _uuid, _encode
+from solo_leveling.workers.paper_front_matter import fill_missing_paper_metadata
 
 
 class ProcessingPublishError(RuntimeError):
@@ -90,6 +92,7 @@ class PostgresStagedProcessingPublisher:
                     if replay is None: raise ProcessingPublishError('processing_publication_conflict')
                     return replay
                 self._materialize(conn, tx, result)
+                self._apply_front_matter(conn, source, result.document.front_matter)
                 self.staging._live(conn, source)
                 publication = publications.publish(*args, policy=policy)
                 self._record_provenance(conn, source, publication.publication_id, payload_sha256)
@@ -113,6 +116,22 @@ class PostgresStagedProcessingPublisher:
         return dict(row)
 
     @staticmethod
+    def _apply_front_matter(conn, source, front_matter):
+        """PDF 첫 페이지에서 찾은 제목(이후 저자·연도)을 비어 있는 논문 열에만 채운다.
+
+        사용자·로컬 기기가 넣은 값은 덮어쓰지 않는다. 서지 정보는 보조 정보이므로
+        권한 부족 등으로 실패해도 savepoint만 되돌리고 게시는 계속한다.
+        """
+        if front_matter is None:
+            return
+        try:
+            with conn.transaction():
+                fill_missing_paper_metadata(conn, source.owner_user_id, source.paper_id, front_matter)
+        except Exception:
+            # 본문·SQL·자격 증명은 남기지 않는다. 게시는 파일 이름 표시로 계속한다.
+            print(json.dumps({'event': 'processing_front_matter_not_applied'}), file=sys.stderr, flush=True)
+
+    @staticmethod
     def _record_provenance(conn, source, publication_id, digest):
         conn.execute('''UPDATE server_processing_publications SET staging_payload_sha256=%s
             WHERE owner_user_id=%s AND publication_id=%s''', (digest, source.owner_user_id, publication_id))
@@ -131,6 +150,9 @@ class PostgresStagedProcessingPublisher:
             fingerprint['split_policy'] = result.embeddings.split_policy
         metadata = dict(page_count=result.document.page_count, empty_pages=result.empty_pages,
                         sections=[asdict(s) for s in result.document.sections])
+        if result.document.front_matter is not None:
+            # 판본별 추출 근거. 논문 열이 이미 채워져 있어도 이 판본에서 찾은 값을 남긴다.
+            metadata['front_matter'] = asdict(result.document.front_matter)
         metadata['translation_status_counts'] = {
             status:sum(t.status.value == status for t in result.translations)
             for status in sorted({t.status.value for t in result.translations})}

@@ -111,8 +111,20 @@ export function formatAuthorsYear(paper) {
   return items.length ? items.join(' · ') : null;
 }
 
+/** 상세 화면용: 저자 전체 이름과 출판 연도. 저자 목록이 없으면 요약 표시를 쓴다. */
+export function formatAllAuthorsYear(paper) {
+  const names = Array.isArray(paper.authors) ? paper.authors.map((a) => String(a).trim()).filter(Boolean) : [];
+  const items = [names.length ? names.join(', ') : formatAuthors(paper), formatPublished(paper.published)].filter(Boolean);
+  return items.length ? items.join(' · ') : null;
+}
+
 export function paperTitle(paper) {
   return paper.title || paper.file_name || '제목 없음';
+}
+
+/** 제목이 PDF에서 찾은 논문 제목일 때만 파일 이름을 보조 정보로 돌려준다. 제목 자리에 이미 파일 이름이 있으면 반복하지 않는다. */
+export function paperFileNameHint(paper) {
+  return paper.title && paper.file_name && paper.title !== paper.file_name ? paper.file_name : null;
 }
 
 /** 위치 정보 → 'PDF 5페이지 · 3.2절 Multi-Head Attention'. 저장되지 않은 값은 만들지 않는다 (요청서 1.4). */

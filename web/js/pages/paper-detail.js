@@ -12,7 +12,7 @@ import {
   openDialog, toast, copyText, newRequestKey,
 } from '../lib/ui.js';
 import {
-  formatAuthorsYear, formatPosition, readingStatusUpdatedLabel, formatTime, paperTitle, SUMMARY_KINDS,
+  formatAllAuthorsYear, formatPosition, readingStatusUpdatedLabel, formatTime, paperTitle, paperFileNameHint, SUMMARY_KINDS,
 } from '../lib/format.js';
 
 export function summarySection(summary) {
@@ -91,7 +91,7 @@ export default async function paperDetailPage({ view, params, query }) {
         ${statusBadge(paper.reading_status)}
         <span>상태 근거: ${readingSource}${paper.reading_basis_version_id ? ` · 기준 원문 버전: ${paper.reading_basis_version_id}` : ' · 기준 원문 버전 미확인'} · ${readingStatusUpdatedLabel(paper.reading_status_updated_at)} · 다른 판본의 학습 완료를 뜻하지 않습니다.</span>
         <h1 class="detail-title">${title}</h1>
-        <p class="meta">${[formatAuthorsYear(paper), paper.file_name].filter(Boolean).join(' · ')}</p>
+        <p class="meta">${[formatAllAuthorsYear(paper), paperFileNameHint(paper)].filter(Boolean).join(' · ')}</p>
       </div>
       <div class="actions">
         ${actionButton({ label: '원문 보기', action: 'open-pdf', iconHtml: icons.external(), available: paper.file_access?.available, message: paper.file_access?.message ?? '원문을 열 수 없어요' })}
