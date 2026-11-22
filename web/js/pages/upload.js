@@ -13,6 +13,23 @@ const quickMessages = {
   verified: 'PDF 업로드를 마쳤어요.',
 };
 
+// 화면을 떠나도 되는지 상태별로 알려 준다. 업로드 확인 전 이동하면 이 화면의 요청 키가 지워져 같은 요청을 다시 확인할 수 없다.
+const stayStatuses = ['hashing','checking','created','uploading','preparing','sending','completing','consentRequired'];
+export function leaveHint({status, busy, quick, withAi}) {
+  if (status === 'verified') {
+    return {tone:'notice', text: quick && withAi
+      ? '업로드가 끝났어요. 이제 다른 페이지로 이동하거나 창을 닫아도 돼요. 학습 자료 만들기는 서버에서 계속 진행되고, 논문 아카이브에서 이 논문을 열면 ‘처리 작업’에서 진행 상황을 볼 수 있어요.'
+      : '업로드가 끝났어요. 다른 페이지로 이동해도 서버에 보관된 PDF는 그대로 남아요.'};
+  }
+  if (['uncertain','uploadUncertain'].includes(status)) {
+    return {tone:'alert', text:'업로드 결과를 아직 확인하지 못했어요. 이 화면을 떠나지 말고 위 버튼으로 결과를 다시 확인해 주세요. 새로고침하거나 다른 페이지로 이동하면 이 요청을 다시 확인할 수 없어요.'};
+  }
+  if (busy || stayStatuses.includes(status)) {
+    return {tone:'alert', text:'아직 업로드가 끝나지 않았어요. ‘업로드를 마쳤어요’가 보일 때까지 이 화면에 머물러 주세요. 새로고침하거나 다른 페이지로 이동하면 진행 중인 업로드를 이어서 확인할 수 없어요.'};
+  }
+  return {tone:'hint', text:'업로드 중에는 이 화면을 떠나지 마세요. ‘업로드를 마쳤어요’가 보이면 이동해도 돼요.'};
+}
+
 export default function uploadPage({ view }) {
   const quick = !CONFIG.USE_MOCK && accountConsentCurrent('storage');
   const withAi = quick && accountConsentCurrent('ai_provider');
@@ -35,6 +52,7 @@ export default function uploadPage({ view }) {
       <button class="btn" type="button" data-read disabled>기존 요청 상태 확인</button></div>
       ${quick ? html`<div class="actions"><button class="btn btn-primary" type="button" data-quick disabled>업로드</button></div>` : ''}
       <p role="status" aria-live="polite" data-status></p><p data-intent></p>
+      <p class="hint" data-leave-hint></p>
       <section aria-label="PDF 보관 및 AI 전송 동의" ${hidden}>
         <h2>PDF 보관 및 AI 전송 동의</h2>
         <p>파일 정보 전송 확인과 별개의 동의예요. 서버의 고지를 읽고 목적별로 선택해 주세요.</p>
@@ -60,8 +78,6 @@ export default function uploadPage({ view }) {
         <p role="status" aria-live="polite" data-processing-status></p>
         <p data-processing-job></p>
       </section>
-      <p class="hint">새로고침·화면 이동·로그아웃 시 이 화면의 요청 키는 지워져요. 결과가 미확정이면
-      화면을 유지하고 같은 요청을 확인하세요. 새로 파일을 선택하면 별도 등록 준비가 생길 수 있어요.</p>
     </section>`);
   const input = view.querySelector('[data-file]'), agree = view.querySelector('[data-agree]');
   const create = view.querySelector('[data-create]'), read = view.querySelector('[data-read]');
@@ -74,7 +90,16 @@ export default function uploadPage({ view }) {
   }
   const consents = createUploadConsents({api, changed:drawConsents});
   const controller = createUploadIntent({ api, changed: draw });
+  function drawLeaveHint() {
+    const node = view.querySelector('[data-leave-hint]');
+    if (CONFIG.USE_MOCK) { node.textContent = ''; return; }
+    const state = controller.snapshot();
+    const hint = leaveHint({status:state.status, busy:state.busy || quickBusy, quick, withAi});
+    node.className = hint.tone;
+    node.textContent = hint.text;
+  }
   function drawUpload() {
+    drawLeaveHint();
     const state = controller.snapshot(), consent = consents.snapshot();
     const button = view.querySelector('[data-upload]');
     button.disabled = CONFIG.USE_MOCK || !state.canUpload || consent.busy || consent.status !== 'ready'
@@ -114,6 +139,7 @@ export default function uploadPage({ view }) {
         : ' OpenAI 전송 동의가 없어 학습 자료는 만들지 않았어요.')
       : (quick && quickMessages[state.status]) || uploadMessages[state.status];
     view.querySelector('[data-intent]').textContent = state.intent ? `업로드 의도 ID: ${state.intent.intent_id}` : '';
+    drawLeaveHint();
     create.disabled = CONFIG.USE_MOCK || !state.canCreate || !agree.checked;
     create.textContent = state.status === 'uncertain' && !state.intent ? '같은 등록 준비 요청 확인' : '등록 준비 저장';
     read.disabled = CONFIG.USE_MOCK || !state.canRead;

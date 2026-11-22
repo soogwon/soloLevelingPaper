@@ -224,3 +224,32 @@ test('가입 때 저장 동의한 계정은 동의 단계 없이 버튼 하나�
   assert.match(node('[data-status]').textContent,/업로드를 마쳤어요. 학습 자료 만들기를 접수했어요/);
   listeners.get('auth:logout')();
 });
+test('화면 이탈 안내는 업로드 확인 전에는 머물라고, 완료 뒤에는 이동해도 된다고 알린다',async()=>{
+  const {leaveHint}=await import('../js/pages/upload.js');
+  for(const status of ['hashing','checking','created','uploading','preparing','sending','completing']){
+    const hint=leaveHint({status,busy:false,quick:true,withAi:true});
+    assert.equal(hint.tone,'alert');assert.match(hint.text,/머물러 주세요/);
+  }
+  for(const status of ['uncertain','uploadUncertain']){
+    const hint=leaveHint({status,busy:false,quick:true,withAi:true});
+    assert.equal(hint.tone,'alert');assert.match(hint.text,/떠나지 말고/);
+  }
+  const done=leaveHint({status:'verified',busy:true,quick:true,withAi:true});
+  assert.equal(done.tone,'notice');assert.match(done.text,/이동하거나 창을 닫아도 돼요/);assert.match(done.text,/서버에서 계속 진행/);
+  assert.doesNotMatch(leaveHint({status:'verified',busy:false,quick:true,withAi:false}).text,/학습 자료/);
+  assert.equal(leaveHint({status:'selected',busy:true,quick:true,withAi:true}).tone,'alert');
+  for(const status of ['empty','selected','failed','expired']){
+    const hint=leaveHint({status,busy:false,quick:true,withAi:true});
+    assert.equal(hint.tone,'hint');assert.doesNotMatch(hint.text,/미확정|미확인/);
+  }
+});
+test('제품 화면은 등록 준비 중에는 머물라는 안내를, 선택 전에는 일반 안내를 보인다',async(t)=>{
+  t.mock.method(api,'createRemoteUploadIntent',async()=>response);
+  const v=view();page({view:v});const node=s=>v.querySelector(s);
+  assert.equal(node('[data-leave-hint]').className,'hint');
+  node('[data-file]').files=[file];await node('[data-file]').events.change();
+  node('[data-agree]').checked=true;await node('[data-create]').events.click();
+  assert.equal(node('[data-leave-hint]').className,'alert');
+  assert.match(node('[data-leave-hint]').textContent,/머물러 주세요/);
+  listeners.get('auth:logout')();
+});
