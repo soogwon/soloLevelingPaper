@@ -4,7 +4,7 @@ import { html, setHTML } from '../lib/html.js';
 import { buildHash, replaceQuery } from '../router.js';
 import { icons, statusBadge, loadingBlock, emptyBlock, errorBlock, pagination, toast, errorMessage } from '../lib/ui.js';
 import { runPaperDeletionFlow, deletionAcceptedMessage } from '../lib/paper-deletion.js';
-import { formatAuthorsYear, formatPosition, readingStatusUpdatedLabel, formatDate, paperTitle } from '../lib/format.js';
+import { formatAuthorsYear, formatPosition, readingStatusUpdatedLabel, formatDate, paperTitle, paperFileNameHint } from '../lib/format.js';
 
 const FILTERS = [['', '전체'], ['reading', '읽는 중'], ['completed', '읽기 완료']];
 
@@ -33,7 +33,7 @@ export function paperRow(p) {
     <span class="row-icon">${icons.file()}</span>
     <span class="row-main">
       <span class="row-title">${paperTitle(p)}</span>
-      <span class="row-sub">${formatAuthorsYear(p) ?? '저자·출판 연도 정보 없음'}</span>
+      <span class="row-sub">${[formatAuthorsYear(p) ?? '저자·출판 연도 정보 없음', paperFileNameHint(p)].filter(Boolean).join(' · ')}</span>
       <span class="row-line">${line}</span>
     </span>
     ${statusBadge(p.reading_status)}

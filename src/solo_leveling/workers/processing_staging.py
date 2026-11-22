@@ -8,7 +8,7 @@ from uuid import UUID
 from solo_leveling.application.remote_processing import RemoteProcessingStages, validate_processing_configuration
 from solo_leveling.domain.remote_processing import (
     EmbeddingBatch, EmbeddingFragment, EmbeddingSpec, ProcessingError, ProcessingLimits, ProcessingResult,
-    ProcessingSource, ProcessedTranslation, ProcessingChunk, ParsedDocument,
+    ProcessingSource, ProcessedTranslation, ProcessingChunk, ParsedDocument, PaperFrontMatter,
 )
 from solo_leveling.domain.translation import (
     TranslationSettings, TranslationStatus, TranslationFailureCode, TranslationRequest, ChunkTranslationResult,
@@ -48,6 +48,15 @@ def _source(source):
 
 def _encode(payload):
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')
+
+
+def _front_matter(raw):
+    if raw is None:
+        return None
+    _require(type(raw) is dict and set(raw) == {'title', 'authors', 'publication_year'})
+    authors = raw['authors']
+    _require(authors is None or type(authors) is list)
+    return PaperFrontMatter(raw['title'], None if authors is None else tuple(authors), raw['publication_year'])
 
 
 class PostgresProcessingResultStaging:
@@ -95,6 +104,9 @@ class PostgresProcessingResultStaging:
             _require(type(result.empty_pages) is tuple and all(type(p) is int for p in result.empty_pages)
                      and result.empty_pages == tuple(p for p in range(1, result.document.page_count + 1) if p not in present))
             payload = {'schema_version': 3 if batch.fragments else 2, 'result': asdict(result)}
+            if result.document.front_matter is None:
+                # 서지 정보가 없으면 이전 payload의 바이트 지문을 그대로 유지한다.
+                payload['result']['document'].pop('front_matter')
             if not batch.fragments:
                 # 이전 payload의 바이트 지문을 그대로 유지한다.
                 payload['result']['embeddings'].pop('fragments')
@@ -289,7 +301,8 @@ class PostgresProcessingResultStaging:
             result = ProcessingResult(
                 ProcessingSource(**raw['source']),
                 ParsedDocument(document['page_count'], tuple(ProcessingChunk(**c) for c in document['chunks']),
-                               tuple(PaperSection(**s) for s in document['sections'])),
+                               tuple(PaperSection(**s) for s in document['sections']),
+                               _front_matter(document.get('front_matter'))),
                 TranslationSettings(**raw['translation_settings']),
                 tuple(ProcessedTranslation(
                     t['chunk_id'], t['text'], None if t['failure_code'] is None else TranslationFailureCode(t['failure_code']),

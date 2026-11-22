@@ -9,7 +9,7 @@ from solo_leveling.domain.models import PaperSection
 from solo_leveling.domain.translation import TranslationBatchResult, TranslationSettings
 from solo_leveling.domain.remote_processing import (
     EmbeddingBatch, EmbeddingSpec, ParsedDocument, ProcessingChunk, ProcessingError,
-    ProcessingLimits, ProcessingResult, ProcessingSource, ProcessedTranslation,
+    ProcessingLimits, ProcessingResult, ProcessingSource, ProcessedTranslation, front_matter_valid,
 )
 
 
@@ -91,6 +91,7 @@ class RemoteProcessingStages:
         _require(isinstance(document, ParsedDocument) and _positive(document.page_count), 'PROCESSING_PARSE_INVALID')
         _require(document.page_count <= limits.max_pages, 'PROCESSING_LIMIT_EXCEEDED')
         _require(isinstance(document.chunks, tuple) and isinstance(document.sections, tuple), 'PROCESSING_PARSE_INVALID')
+        _require(front_matter_valid(document.front_matter), 'PROCESSING_PARSE_INVALID')
         _require(bool(document.chunks), 'PROCESSING_EMPTY_DOCUMENT')
         _require(len(document.chunks) <= limits.max_chunks, 'PROCESSING_LIMIT_EXCEEDED')
         ids, last_page = set(), 0

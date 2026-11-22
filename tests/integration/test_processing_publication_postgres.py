@@ -148,3 +148,63 @@ def test_expiry_during_materialization_rolls_back(pool, db, monkeypatch):
     with pytest.raises(ProcessingPublishError): publish(publisher, source, digest)
     assert_private(db, source)
     assert publisher.current(source) is None
+
+
+def prepared_with_front_matter(pool, db, front_matter):
+    from dataclasses import replace
+    stage, value = setup(pool, db)
+    value = replace(value, document=replace(value.document, front_matter=front_matter))
+    receipt = stage.save(value)
+    return PostgresStagedProcessingPublisher(stage), value.source, receipt.payload_sha256
+
+
+def paper_row(db, source):
+    return db('SELECT title,authors,publication_year,revision FROM server_papers WHERE paper_id=%s',
+              (source.paper_id,))[0]
+
+
+def test_publish_fills_empty_paper_title_from_front_matter(pool, db):
+    from solo_leveling.domain.remote_processing import PaperFrontMatter
+    publisher, source, digest = prepared_with_front_matter(
+        pool, db, PaperFrontMatter(title='Synthetic Paper Title'))
+    db('UPDATE server_papers SET title=NULL WHERE paper_id=%s', (source.paper_id,))
+    before = paper_row(db, source)
+    first = publish(publisher, source, digest)
+    row = paper_row(db, source)
+    assert row['title'] == 'Synthetic Paper Title'
+    assert row['authors'] is None and row['publication_year'] is None
+    assert row['revision'] == before['revision'] + 1
+    metadata = db('SELECT document_metadata FROM server_parse_revisions WHERE parse_revision_id=%s',
+                  (source.parse_revision_id,))[0]['document_metadata']
+    assert metadata['front_matter'] == {'title': 'Synthetic Paper Title', 'authors': None, 'publication_year': None}
+    # 같은 게시 재실행은 제목을 다시 바꾸거나 revision을 올리지 않는다.
+    assert publish(publisher, source, digest) == first
+    assert paper_row(db, source) == row
+
+
+def test_publish_keeps_existing_title_and_fills_only_missing_fields(pool, db):
+    from solo_leveling.domain.remote_processing import PaperFrontMatter
+    publisher, source, digest = prepared_with_front_matter(
+        pool, db, PaperFrontMatter(title='Extracted', authors=('A. Author',), publication_year=2017))
+    db("UPDATE server_papers SET title='사용자 제목',authors=NULL,publication_year=NULL WHERE paper_id=%s",
+       (source.paper_id,))
+    publish(publisher, source, digest)
+    row = paper_row(db, source)
+    assert row['title'] == '사용자 제목'
+    assert row['authors'] == ['A. Author'] and row['publication_year'] == 2017
+
+
+def test_front_matter_update_failure_does_not_block_publication(pool, db, capsys):
+    from solo_leveling.domain.remote_processing import PaperFrontMatter
+    publisher, source, digest = prepared_with_front_matter(pool, db, PaperFrontMatter(title='Blocked'))
+    db('UPDATE server_papers SET title=NULL WHERE paper_id=%s', (source.paper_id,))
+    db('''CREATE FUNCTION reject_paper_title() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN RAISE EXCEPTION USING ERRCODE='42501'; END $$''')
+    db('''CREATE TRIGGER reject_paper_title BEFORE UPDATE OF title ON server_papers
+          FOR EACH ROW EXECUTE FUNCTION reject_paper_title()''')
+    first = publish(publisher, source, digest)
+    assert publisher.current(source) == first.publication_id
+    assert paper_row(db, source)['title'] is None
+    assert db('SELECT status FROM server_processing_jobs WHERE job_id=%s', (source.job_id,))[0]['status'] == 'succeeded'
+    err = capsys.readouterr().err
+    assert 'processing_front_matter_not_applied' in err and 'Blocked' not in err

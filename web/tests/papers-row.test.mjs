@@ -82,3 +82,19 @@ test('읽기 상태 갱신 시각을 한국 시간으로 표시하고 누락을 
   assert.match(updated, /갱신 시각: 2026\.11\.20 01:05/);
   assert.match(String(paperRow(paper)), /갱신 시각 미확인/);
 });
+
+
+test('PDF에서 찾은 논문 제목을 표시하고 파일 이름은 보조 정보로 남긴다', () => {
+  const output = String(paperRow({
+    ...paper, title: 'Attention Is All You Need', file_name: '1706.03762v7.pdf',
+  }));
+  assert.match(output, /<span class="row-title">Attention Is All You Need<\/span>/);
+  assert.match(output, /저자·출판 연도 정보 없음 · 1706\.03762v7\.pdf/);
+});
+
+
+test('제목을 찾지 못하면 파일 이름을 제목으로 쓰고 보조 정보에 반복하지 않는다', () => {
+  const output = String(paperRow({ ...paper, title: null, file_name: '1706.03762v7.pdf' }));
+  assert.match(output, /<span class="row-title">1706\.03762v7\.pdf<\/span>/);
+  assert.equal(output.split('1706.03762v7.pdf').length - 1, 1);
+});

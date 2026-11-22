@@ -115,6 +115,11 @@ export function paperTitle(paper) {
   return paper.title || paper.file_name || '제목 없음';
 }
 
+/** 제목이 PDF에서 찾은 논문 제목일 때만 파일 이름을 보조 정보로 돌려준다. 제목 자리에 이미 파일 이름이 있으면 반복하지 않는다. */
+export function paperFileNameHint(paper) {
+  return paper.title && paper.file_name && paper.title !== paper.file_name ? paper.file_name : null;
+}
+
 /** 위치 정보 → 'PDF 5페이지 · 3.2절 Multi-Head Attention'. 저장되지 않은 값은 만들지 않는다 (요청서 1.4). */
 export function formatPosition(position) {
   if (!position) return null;

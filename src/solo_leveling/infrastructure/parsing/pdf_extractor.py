@@ -39,6 +39,7 @@ from solo_leveling.infrastructure.parsing.reading_order import reading_regions
 from solo_leveling.infrastructure.parsing.sections import (
     LineStyle, REPEATED_MARGIN_RATIO, detect_headings, find_body_size,
 )
+from solo_leveling.infrastructure.parsing.front_matter import detect_front_matter
 
 PDF_ENCRYPTED = "pdf_encrypted"
 PDF_UNREADABLE = "pdf_unreadable"
@@ -124,6 +125,8 @@ class ExtractedPage:
     page_number_candidate: str | None = None
     # 추출 시점의 집계. None은 미집계이며 0개 제외와 구분한다. DB에는 저장하지 않는다.
     rotation_metrics: RotationMetrics | None = None
+    # 첫 페이지에서만 채우는 서지 정보(PaperFrontMatter). 못 찾으면 None이다.
+    front_matter: object | None = None
 
 
 def _is_upright(obj: dict) -> bool:
@@ -197,6 +200,7 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
     """
     pages: List[ExtractedPage] = []
     page_styles: list[list[LineStyle]] = []
+    first_page_styles: list[LineStyle] = []
     size_counts: list[tuple[float, int]] = []
     parse_id = uuid4().hex
     with _open_pdf(pdf_path) as pdf:
@@ -228,6 +232,12 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
             except Exception:
                 styles = []
             page_styles.append(styles)
+            if i == 1:
+                # 제목은 단 나누기와 무관하게 페이지 전체 폭의 줄로 읽는다.
+                try:
+                    first_page_styles = _line_styles(upright_only)
+                except Exception:
+                    first_page_styles = []
             size_counts.extend((line.size, len(line.text.strip())) for line in styles)
     body_size = find_body_size(size_counts)
     page_occurrences: Counter = Counter()
@@ -247,6 +257,13 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
             allow_unnumbered=extracted.pdf_page > 1,
             excluded_texts=repeated_lines,
         )
+    if pages:
+        try:
+            pages[0].front_matter = detect_front_matter(
+                first_page_styles, body_size, excluded_texts=repeated_lines)
+        except Exception:
+            # 서지 정보는 보조 정보다. 실패해도 본문 추출은 그대로 진행한다.
+            pages[0].front_matter = None
     return pages
 
 

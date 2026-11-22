@@ -62,11 +62,51 @@ class ProcessingChunk:
     printed_page_label: str | None = None
 
 
+@dataclass(frozen=True)
+class PaperFrontMatter:
+    """PDF 첫 페이지에서 찾은 서지 정보. 찾지 못한 항목은 None이다.
+
+    지금은 title만 채운다. authors·publication_year는 추출기를 붙일 때 채우며,
+    게시 단계는 이미 세 항목을 server_papers의 같은 이름 열로 옮길 수 있다.
+    """
+    title: str | None = None
+    authors: tuple[str, ...] | None = None
+    publication_year: int | None = None
+
+    def is_empty(self) -> bool:
+        return self.title is None and self.authors is None and self.publication_year is None
+
+
+FRONT_MATTER_MAX_TEXT = 300
+FRONT_MATTER_MAX_AUTHORS = 100
+
+
+def _front_matter_text(value) -> bool:
+    return (type(value) is str and value == value.strip() and 1 <= len(value) <= FRONT_MATTER_MAX_TEXT
+            and not any(ord(char) < 32 for char in value))
+
+
+def front_matter_valid(value) -> bool:
+    """None(못 찾음) 또는 server_papers 열에 그대로 넣을 수 있는 값인지 확인한다."""
+    if value is None:
+        return True
+    if type(value) is not PaperFrontMatter or value.is_empty():
+        return False
+    return ((value.title is None or _front_matter_text(value.title))
+            and (value.authors is None or (type(value.authors) is tuple
+                                           and 1 <= len(value.authors) <= FRONT_MATTER_MAX_AUTHORS
+                                           and all(_front_matter_text(a) for a in value.authors)))
+            and (value.publication_year is None
+                 or (type(value.publication_year) is int and 1000 <= value.publication_year <= 2100)))
+
+
 @dataclass(frozen=True, repr=False)
 class ParsedDocument:
     page_count: int
     chunks: tuple[ProcessingChunk, ...]
     sections: tuple[PaperSection, ...] = ()
+    # 이전 staging payload와 바이트 지문을 맞추려고 None일 때는 직렬화하지 않는다.
+    front_matter: PaperFrontMatter | None = None
 
 
 @dataclass(frozen=True, repr=False)
