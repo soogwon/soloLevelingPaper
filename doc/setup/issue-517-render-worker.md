@@ -68,15 +68,16 @@ C: 합성 검증과 실제 성공 표시 구분, 상태 로그, 이후 웹/근�
 
 ## 퀴즈 단발 실행과 시작 명령 (#593)
 
-Render Existing Image의 Docker Command는 이미지의 CMD를 교체한다.
-이 이미지의 ENTRYPOINT는 이미 `python -m solo_leveling.workers.render_service`다.
-따라서 `env ... python -c ...` 또는 `python -m ...`를 Docker Command에 넣지 않는다.
-실패한 긴 명령은 ENTRYPOINT의 잘못된 인자가 되어 종료 코드 2로 재현됐다.
+Render Existing Image의 Docker Command는 이미지의 **CMD와 ENTRYPOINT를 모두** 교체한다
+(Render 설정 화면 설명: "override your Dockerfile's CMD and ENTRYPOINT").
+따라서 인자만 넣으면 `--mode`를 실행 파일로 찾다가 출력 없이 `Exited with status 128`로 끝난다
+(2026-11-22 스테이징에서 확인). Docker Command에는 실행할 **전체 명령**을 넣는다.
+`env ...`나 셸 구문은 넣지 않는다.
 
-퀴즈 실행 시 Docker Command에는 아래 **인자만** 지정한다.
+퀴즈 실행 시 Docker Command:
 
 ```text
---mode quiz-worker --max-jobs 1 --shutdown-grace-seconds 30
+python -m solo_leveling.workers.render_service --mode quiz-worker --max-jobs 1 --shutdown-grace-seconds 30
 ```
 
 환경 변수 `QUIZ_WORKER_CONFIG`(검토한 설정 파일의 절대 경로),
@@ -181,6 +182,32 @@ PDF 보관까지만 하고 처리 작업을 만들지 않으며, 웹은 `remote_
   전체 토큰 비상 한도이며 이 행이 없으면 계정 예산도 생기지 않습니다.
 - `server_dispatch_controls`의 `provider_dispatch` 행이 `intake_enabled`, `dispatch_enabled` 모두 true.
 
+원장 한도는 토큰 단위입니다. 논문 한 편은 입력 약 1만~2.5만 토큰을 씁니다(2026-11 스테이징 실측).
+처음 값(서비스 입력 784,000, 계정 392,000)이면 전체 30편 안팎에서 처리가 멈춥니다.
+자유 업로드를 운영할 때는 원장을 한 번 넉넉하게 올리고, 실제 지출은 OpenAI 콘솔의 월 사용 한도와
+`max_jobs_per_owner`로 막습니다. 원장을 바꾸는 명령·화면은 아직 없으므로 관리자 psql로 갱신합니다.
+
+```sql
+-- 남은 예산 확인
+SELECT scope_type, scope_id, max_input_tokens, consumed_input_tokens,
+       max_output_tokens, consumed_output_tokens
+FROM slp_staging.server_dispatch_budget_limits
+WHERE policy_version='정책' AND window_key='창';
+
+-- 한 번 올리기(2026-11-22 스테이징 적용 값)
+BEGIN;
+UPDATE slp_staging.server_dispatch_budget_limits
+   SET max_input_tokens=100000000, max_output_tokens=50000000, updated_at=now()
+ WHERE policy_version='정책' AND window_key='창' AND scope_type='service';
+UPDATE slp_staging.server_dispatch_budget_limits
+   SET max_input_tokens=20000000, max_output_tokens=10000000, updated_at=now()
+ WHERE policy_version='정책' AND window_key='창' AND scope_type='owner';
+COMMIT;
+```
+
+이미 있는 계정 행만 바뀝니다. 새 계정 행은 웹 JSON의 `input_tokens`·`output_tokens`로 만들어지므로
+그 값도 같은 계정 한도로 맞춥니다. worker 설정의 금액 상한은 아래 조건을 만족해야 작업을 가져갑니다.
+
 ### 3. worker — 상시 처리
 
 Render → `solo-leveling-worker-staging` → Settings의 Docker Command와 Environment에 설정합니다.
@@ -188,14 +215,14 @@ Render → `solo-leveling-worker-staging` → Settings의 Docker Command와 Envi
 
 | 항목 | 넣을 값 | 얻는 곳과 방법 |
 |---|---|---|
-| Docker Command | `--mode demo-pdf-worker` | 직접 입력. 인자만 넣고 `python` 등은 붙이지 않습니다. |
+| Docker Command | `python -m solo_leveling.workers.render_service --mode demo-pdf-worker` | 직접 입력. Render는 이미지의 ENTRYPOINT까지 바꾸므로 `python -m ...`부터 전체를 넣습니다. 인자만 넣으면 종료 상태 128로 시작하지 못합니다. |
 | `SLP_DEMO_PROCESSING_ENABLED` | `true` | 직접 입력 |
 | `SLP_AUTOMATIC_PDF_PROCESSING_ENABLED` | `true` | 직접 입력. 설정 JSON의 `policy_version`이 `pdf-auto-`로 시작해야 합니다. |
 | `SLP_DEMO_DATABASE_URL` | `postgresql://slp_staging_worker:비밀번호@호스트/DB이름?sslmode=verify-full` | 호스트·DB 이름: Render → staging Postgres → Connect → External의 URL에서 `@` 뒤 호스트와 `/` 뒤 DB 이름만 사용. 비밀번호: worker 역할을 만들 때 정한 값이며 Render에 표시되지 않습니다. 모르면 관리자 psql에서 `ALTER ROLE slp_staging_worker PASSWORD '새 비밀번호';`로 다시 정합니다. 끝에는 `?sslmode=verify-full`만 둡니다. 검증·재처리 worker 주소를 대신 읽지 않습니다. 역할 권한이 다르면 게시 단계에서 실패하고 작업이 재시도 없이 끝나기 때문입니다. |
 | `PGSSLROOTCERT` | 이미지의 CA 묶음 경로 | 기존 값이 있으면 유지합니다. 없고 DB 연결이 실패하면 `/etc/ssl/certs/ca-certificates.crt`를 시도합니다. |
 | `SLP_DEMO_R2_ACCESS_KEY_ID` / `SLP_DEMO_R2_SECRET_ACCESS_KEY` | R2 S3 호환 키 한 쌍 | 비어 있으면 `SLP_VERIFY_R2_*`, 그다음 `REPROCESSING_R2_*` 값을 씁니다. 새로 만들 때: Cloudflare 대시보드 → R2 Object Storage → API 토큰 관리 → Create API token. 권한 Object Read only, 대상 버킷 `solo-leveling-staging-pdfs`만 지정 → 생성 화면의 Access Key ID와 Secret Access Key를 각각 입력합니다. Secret은 이 화면에서만 보입니다. |
 | `SLP_DEMO_OPENAI_API_KEY` | `sk-...` | 비어 있으면 `SLP_VERIFY_OPENAI_API_KEY`, 그다음 `REPROCESSING_OPENAI_API_KEY` 값을 씁니다. 새로 만들 때: platform.openai.com → API keys → Create new secret key. worker 전용 키를 만들고 프로젝트 사용 한도를 걸어 두기를 권장합니다. 생성 직후에만 전체 값이 보입니다. |
-| `SLP_DEMO_PROCESSING_CONFIG_JSON` | 처리 설정 JSON | 기존 값을 유지하고 아래 항목만 확인합니다. |
+| `SLP_DEMO_PROCESSING_CONFIG_JSON` | 처리 설정 JSON 한 줄 | 아래 항목을 확인합니다. worker 이미지를 새로 게시하면 runtime digest도 바뀌므로 `runtime_image`를 게시 기록 `published.json`의 `runtime` 값으로 바꿔야 합니다. 다르면 종료 코드 4로 멈춥니다. |
 | `WORKER_BASE_REFERENCE` | 설정하지 않음 | 이미지에 포함된 값입니다. |
 
 `SLP_DEMO_PROCESSING_CONFIG_JSON`에서 운영자가 맞추는 항목은 다음과 같습니다.
@@ -205,12 +232,14 @@ Render → `solo-leveling-worker-staging` → Settings의 Docker Command와 Envi
 | `policy_version`, `window_key` | 웹과 동일 | 웹 서비스 Environment의 `REMOTE_AUTOMATIC_PDF_BUDGET_JSON` |
 | `database_name` | DB 이름 | `SLP_DEMO_DATABASE_URL`의 `/` 뒤와 같아야 합니다. |
 | `database_schema` | `slp_staging` | 고정 |
-| `r2.endpoint` | `https://계정ID.r2.cloudflarestorage.com` | Cloudflare → R2 Overview의 Account ID |
+| `r2.endpoint` | `https://계정ID.r2.cloudflarestorage.com` | Cloudflare → R2 Overview의 Account ID. 버킷 설정의 S3 API 주소에서 끝의 `/버킷이름`을 뺀 값과 같습니다. |
 | `r2.bucket`, `r2.region` | `solo-leveling-staging-pdfs`, `auto` | 고정 |
 | `demo_budget.starts_at`·`expires_at`·`max_jobs` | 비우면 상시 처리 | 제한이 필요할 때만 지정합니다. |
+| `demo_budget.*_microusd_per_million_tokens` | 100만 토큰당 단가(마이크로달러, 1달러=1,000,000) | 번역 모델 요금표. 비용 계산이 아니라 원장과의 일관성 검사에만 씁니다. |
+| `demo_budget.owner_budget_microusd`, `service_budget_microusd` | 금액 상한 | `max_input_tokens × 입력 단가 + max_output_tokens × 출력 단가 ≤ 상한 × 1,000,000`을 계정·서비스 행 각각 만족해야 합니다. 원장을 올리면 같이 올립니다. 서비스 상한은 계정 상한 이상이어야 합니다. |
 
-`runtime_image`, `runtime_lock_path`, `model_lock_path`, `model_dir`, `embedding_spec`, `limits`,
-`translation`, `batch_size`, `demo_budget`의 단가·금액 항목은 게시한 이미지와 검증한 요율에 묶인 값입니다.
+`runtime_lock_path`, `model_lock_path`, `model_dir`, `embedding_spec`, `limits`,
+`translation`, `batch_size`는 게시한 이미지에 묶인 값입니다.
 임의로 바꾸지 말고 이미지 게시 기록(#517)의 값을 그대로 둡니다. 경로는
 `/opt/worker/runtime-lock.json`, `/opt/worker/model-lock.json`,
 `/opt/models/e8f8c211226b894fcb81acc59f3b34ba3efd5f42`입니다.
@@ -226,6 +255,7 @@ Render → `solo-leveling-worker-staging` → Settings의 Docker Command와 Envi
 | 로그 | 의미 |
 |---|---|
 | `render_ready` 다음 바로 `render_standby` | Docker Command가 비어 있어 대기 모드로 시작함 |
+| 앱 로그 없이 `Exited with status 128` | Docker Command에 인자만 넣어 시작 프로그램을 찾지 못함. 전체 명령으로 바꿉니다. |
 | `render_verification_failed`, `exit_code: 3` | 설정 JSON 형식·정책 키·`demo_budget` 오류 |
 | `exit_code: 4` | 처리 플래그가 꺼졌거나, 설정 기간 밖이거나, 이미지 참조 불일치 |
 | `exit_code: 5` | DB URL 형식(`sslmode=verify-full`, DB 이름)이나 R2·OpenAI 자격 누락 |
