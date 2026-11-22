@@ -62,17 +62,11 @@ for (const [status, badge, position, expected] of [
 }
 
 
-test('완료 기준 원문 버전을 선택 버전과 별도로 표시하고 이스케이프한다', () => {
-  const output = String(paperRow({...paper, reading_status: 'completed',
-    reading_basis_version_id: '<old-version>'}));
-  assert.match(output, /&lt;old-version&gt;/);
-  assert.doesNotMatch(output, /<old-version>/);
-});
-
-test('원격 학습 상태의 근거와 기준 판본을 함께 표시한다', () => {
+test('목록에는 상태 근거와 기준 버전 열을 두지 않는다', () => {
   const output = String(paperRow({...paper, reading_status: 'reading',
     reading_status_source: 'remote_learning', reading_basis_version_id: 'version-1'}));
-  assert.match(output, /상태 근거: <\/span>원격 학습 기록 · 기준 버전: version-1/);
+  assert.doesNotMatch(output, /상태 근거|기준 버전|row-basis/);
+  assert.doesNotMatch(String(paperListHead({ sort: 'recent', order: 'desc' })), /상태 근거|기준 버전/);
 });
 
 test('읽기 상태 갱신 시각은 이름 아래 줄에 한국 시간으로 표시한다', () => {
@@ -82,14 +76,6 @@ test('읽기 상태 갱신 시각은 이름 아래 줄에 한국 시간으로 �
   assert.match(updated, /<span class="row-line">[^<]* · <span class="nowrap">갱신 시각 2026\.11\.20 01:05<\/span><\/span>/);
   assert.doesNotMatch(String(paperRow(paper)), /갱신 시각/);
   assert.match(String(paperRow(paper)), /<span class="cell-label">학습 시각: <\/span>기록 없음<\/span>/);
-});
-
-test('갱신 시각은 상태 근거 칸과 분리된 칸에 표시한다', () => {
-  const output = String(paperRow({...paper, reading_status_source: 'remote_file',
-    reading_basis_version_id: 'version-1', reading_status_updated_at: '2026-11-19T16:05:00Z'}));
-  const basis = output.match(/<span class="row-basis">(.*?)<\/span>\s*<span class="row-updated">/s)?.[1];
-  assert.ok(basis);
-  assert.doesNotMatch(basis, /갱신 시각|2026\.11\.20/);
 });
 
 test('주소의 정렬 값이 올바르지 않으면 최근 학습순 기본 방향으로 돌아간다', () => {
@@ -111,7 +97,6 @@ test('열 머리에 정렬 버튼과 현재 정렬 방향을 표시한다', () =
   assert.match(head, /class="col-sort is-active" data-sort="recent"/);
   assert.match(head, /학습 시각 오름차순 정렬 \(현재 내림차순\)/);
   assert.match(head, /처리 상태/);
-  assert.match(head, /상태 근거 · 기준 버전/);
 });
 
 

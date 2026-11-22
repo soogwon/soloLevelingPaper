@@ -46,7 +46,6 @@ export function paperListHead(state) {
       <span class="row-main">${sortHeader(state, 'title', '논문')}</span>
       <span class="row-status">${sortHeader(state, 'status', '읽기 상태')}</span>
       <span class="row-processing col-label">처리 상태</span>
-      <span class="row-basis col-label">상태 근거 · 기준 버전</span>
       <span class="row-updated">${sortHeader(state, 'recent', '학습 시각')}</span>
     </div>
     <span class="row-menu head-spacer menu-spacer" aria-hidden="true"></span>
@@ -84,12 +83,6 @@ export function paperRow(p) {
   // 이름 아래에는 읽기 상태 갱신 시각을, 오른쪽 열에는 학습 시각(최근 학습순 정렬 기준)을 둔다.
   const updated = formatDateTime(p.reading_status_updated_at);
   const learnedAt = formatDateTime(p.last_learning_at ?? p.last_studied_at);
-  const source = {
-    explicit: '연결 PC에서 저장한 상태',
-    remote_learning: '원격 학습 기록',
-    remote_file: '등록된 원격 원문',
-    unknown: '상태 근거 미확인',
-  }[p.reading_status_source] ?? '상태 근거 미확인';
 
   return html`<a class="row" href="${href}">
     <span class="row-icon">${icons.file()}</span>
@@ -100,7 +93,6 @@ export function paperRow(p) {
     </span>
     <span class="row-status">${statusBadge(p.reading_status)}</span>
     <span class="row-processing"><span class="cell-label">처리 상태: </span>${processingBadge(p.processing_status)}</span>
-    <span class="row-basis"><span class="cell-label">상태 근거: </span>${source}${p.reading_basis_version_id ? ` · 기준 버전: ${p.reading_basis_version_id}` : ''}</span>
     <span class="row-updated"><span class="cell-label">학습 시각: </span>${learnedAt || '기록 없음'}</span>
   </a>`;
 }
