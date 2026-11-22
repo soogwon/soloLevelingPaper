@@ -152,6 +152,8 @@ class PaperListItem:
     reading_status_source: str = "unknown"
     reading_context_id: str | None = None
     reading_status_updated_at: datetime | None = None
+    last_learning_at: datetime | None = None
+    processing_status: str = "none"
 
 
 @dataclass(frozen=True)
@@ -193,12 +195,36 @@ class PaperNotFound(Exception):
     pass
 
 
+# 선택 판본의 서버 처리 상태. 진행 중인 작업이 있으면 그것을, 없으면 게시 결과, 그다음 마지막 실패·취소를 보여 준다.
+# 로컬에서만 학습한 논문처럼 서버 처리 판본이 없으면 'none'이다.
+PROCESSING_STATUS_JOIN = """LEFT JOIN LATERAL (
+            SELECT j.status FROM server_processing_jobs j
+            WHERE j.owner_user_id=p.owner_user_id AND j.paper_id=p.paper_id
+              AND j.server_version_id=COALESCE(r.selected_version_id, remote_file.server_version_id)
+            ORDER BY j.created_at DESC, j.job_id DESC LIMIT 1
+          ) last_job ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT CASE
+              WHEN last_job.status IN ('queued', 'running') THEN last_job.status
+              WHEN EXISTS (
+                SELECT 1 FROM server_processing_publications pub
+                WHERE pub.owner_user_id=p.owner_user_id AND pub.paper_id=p.paper_id
+                  AND pub.server_version_id=COALESCE(r.selected_version_id, remote_file.server_version_id)
+              ) THEN 'completed'
+              WHEN last_job.status IN ('failed', 'cancelled') THEN last_job.status
+              WHEN last_job.status = 'succeeded' THEN 'completed'
+              ELSE 'none'
+            END AS status
+          ) processing ON TRUE"""
+
+# 로컬 학습 기록과 원격 학습 기록 중 더 최근 학습 시각. 목록의 학습 시각 열과 최근 학습순 정렬이 같은 값을 쓴다.
+LAST_LEARNING_AT = "GREATEST(r.last_studied_at, remote_learning.updated_at)"
 PAPER_SORT_DEFAULT_ORDER = {"recent": "desc", "title": "asc", "status": "asc", "updated": "desc"}
 # 정렬 식은 고정 목록에서만 고르므로 SQL에 사용자 입력이 섞이지 않는다.
 _PAPER_SORT_EXPRESSIONS = {
     # 로컬 학습 기록이 없는 원격 학습 논문도 Claude에서 마지막으로 학습한 시각으로 정렬한다.
     # GREATEST는 NULL을 건너뛰므로 둘 중 있는 값, 둘 다 있으면 더 최근 값을 쓴다.
-    "recent": "GREATEST(r.last_studied_at, remote_learning.updated_at)",
+    "recent": LAST_LEARNING_AT,
     "title": ("lower(COALESCE(p.title, CASE WHEN r.learning_record_id IS NULL "
               "THEN remote_file.file_name ELSE r.file_name END))"),
     # 학습 진행 순서(읽기 전 → 읽는 중 → 읽기 완료), 상태 미확인은 방향과 관계없이 맨 뒤.
@@ -469,8 +495,10 @@ class PostgresPaperStore:
                            reading.source AS reading_status_source,
                            reading.context_id AS reading_context_id,
                            reading.status_updated_at AS reading_status_updated_at,
+                           {LAST_LEARNING_AT} AS last_learning_at,
+                           processing.status AS processing_status,
                            cp.collection_id
-                    FROM server_papers p {latest} WHERE {where}
+                    FROM server_papers p {latest} {PROCESSING_STATUS_JOIN} WHERE {where}
                     ORDER BY {order_by}, p.paper_id ASC LIMIT %s OFFSET %s""",
                 (*params, limit, (page - 1) * limit),
             ).fetchall()
@@ -490,6 +518,8 @@ class PostgresPaperStore:
             reading_context_id=(str(row.get("reading_context_id"))
                                 if row.get("reading_context_id") is not None else None),
             reading_status_updated_at=row.get("reading_status_updated_at"),
+            last_learning_at=row.get("last_learning_at"),
+            processing_status=row.get("processing_status") or "none",
         ) for row in rows)
         return PaperPage(items, page, limit, total, total_pages)
 

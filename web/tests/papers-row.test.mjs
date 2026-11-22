@@ -33,14 +33,14 @@ test('학습 기록 자체가 없을 때만 기록 없음으로 표시한다', (
 });
 
 
-test('위치 없이 마지막 학습 시각만 있으면 위치 미저장과 날짜를 표시한다', () => {
+test('위치 없이 마지막 학습 시각만 있으면 위치 미저장과 학습 시각 열을 표시한다', () => {
   const output = String(paperRow({
     ...paper, selected_learning_record_id: 'record-1', last_position: null,
     last_studied_at: '2026-11-13T12:00:00Z',
   }));
 
   assert.match(output, /학습 위치가 저장되지 않았어요/);
-  assert.match(output, /마지막 학습 2026\.11\.13/);
+  assert.match(output, /<span class="cell-label">학습 시각: <\/span>2026\.11\.13 21:00<\/span>/);
 });
 
 for (const [status, badge, position, expected] of [
@@ -75,12 +75,13 @@ test('원격 학습 상태의 근거와 기준 판본을 함께 표시한다', (
   assert.match(output, /상태 근거: <\/span>원격 학습 기록 · 기준 버전: version-1/);
 });
 
-test('읽기 상태 갱신 시각을 한국 시간으로 표시하고 누락을 구분한다', () => {
+test('읽기 상태 갱신 시각은 이름 아래 줄에 한국 시간으로 표시한다', () => {
   const updated = String(paperRow({
     ...paper, reading_status_updated_at: '2026-11-19T16:05:00Z',
   }));
-  assert.match(updated, /<span class="row-updated"><span class="cell-label">갱신 시각: <\/span>2026\.11\.20 01:05<\/span>/);
-  assert.match(String(paperRow(paper)), /<span class="row-updated"><span class="cell-label">갱신 시각: <\/span>미확인<\/span>/);
+  assert.match(updated, /<span class="row-line">[^<]* · <span class="nowrap">갱신 시각 2026\.11\.20 01:05<\/span><\/span>/);
+  assert.doesNotMatch(String(paperRow(paper)), /갱신 시각/);
+  assert.match(String(paperRow(paper)), /<span class="cell-label">학습 시각: <\/span>기록 없음<\/span>/);
 });
 
 test('갱신 시각은 상태 근거 칸과 분리된 칸에 표시한다', () => {
@@ -105,10 +106,11 @@ test('같은 열을 다시 누르면 방향을 뒤집고 다른 열은 그 열�
 });
 
 test('열 머리에 정렬 버튼과 현재 정렬 방향을 표시한다', () => {
-  const head = String(paperListHead({ sort: 'updated', order: 'desc' }));
-  for (const sort of ['title', 'status', 'updated']) assert.match(head, new RegExp(`data-sort="${sort}"`));
-  assert.match(head, /class="col-sort is-active" data-sort="updated"/);
-  assert.match(head, /갱신 시각 오름차순 정렬 \(현재 내림차순\)/);
+  const head = String(paperListHead({ sort: 'recent', order: 'desc' }));
+  for (const sort of ['title', 'status', 'recent']) assert.match(head, new RegExp(`data-sort="${sort}"`));
+  assert.match(head, /class="col-sort is-active" data-sort="recent"/);
+  assert.match(head, /학습 시각 오름차순 정렬 \(현재 내림차순\)/);
+  assert.match(head, /처리 상태/);
   assert.match(head, /상태 근거 · 기준 버전/);
 });
 
@@ -132,7 +134,7 @@ test('로컬 기록 없이 원격 학습만 했으면 원격 학습 기록과 �
   const output = String(paperRow({...paper, selected_learning_record_id: null, last_position: null,
     last_studied_at: null, reading_status: 'reading', reading_status_source: 'remote_learning',
     reading_status_updated_at: '2026-11-21T05:39:00Z'}));
-  assert.match(output, /Claude 원격 학습 기록이 있어요 · 마지막 학습 2026\.11\.21/);
+  assert.match(output, /Claude 원격 학습 기록이 있어요 · <span class="nowrap">갱신 시각 2026\.11\.21 14:39/);
   assert.doesNotMatch(output, /아직 저장된 학습 기록이 없어요/);
 });
 
@@ -141,5 +143,19 @@ test('원격 원문만 등록된 논문은 학습 기록 없음으로 표시한�
     last_studied_at: null, reading_status_source: 'remote_file',
     reading_status_updated_at: '2026-11-21T05:39:00Z'}));
   assert.match(output, /아직 저장된 학습 기록이 없어요/);
-  assert.doesNotMatch(output, /마지막 학습/);
+  assert.match(output, /기록 없음/);
 });
+
+test('원격 학습 시각을 학습 시각 열에 표시한다', () => {
+  const output = String(paperRow({...paper, last_studied_at: null, reading_status_source: 'remote_learning',
+    last_learning_at: '2026-11-21T05:41:00Z', reading_status_updated_at: '2026-11-21T05:39:00Z'}));
+  assert.match(output, /<span class="cell-label">학습 시각: <\/span>2026\.11\.21 14:41<\/span>/);
+});
+
+for (const [status, label] of [['none', '처리 작업 없음'], ['queued', '처리 대기'], ['running', '처리 중'],
+  ['completed', '처리 완료'], ['failed', '처리 실패'], ['cancelled', '처리 취소'], [undefined, '처리 작업 없음']]) {
+  test(`처리 상태 ${status}를 ${label}로 표시한다`, () => {
+    const output = String(paperRow({...paper, processing_status: status}));
+    assert.match(output, new RegExp(`<span class="row-processing">.*${label}</span></span>`, 's'));
+  });
+}

@@ -1,6 +1,7 @@
 """학습 기록 없는 원격 PDF의 웹 표시와 판본·소유자 경계를 검증한다."""
 # ruff: noqa: F811
 import os
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import pytest
@@ -100,3 +101,45 @@ def test_list_sorts_run_on_real_postgres(pool, db, sort, order):
         titles = [item.title for item in page.items]
         # 대소문자 구분 없이 정렬하고 제목·파일명이 모두 없는 논문은 방향과 관계없이 뒤로 보낸다.
         assert titles == (['beta', 'Alpha', None] if order == 'desc' else ['Alpha', 'beta', None])
+
+
+def test_list_shows_processing_status_of_selected_remote_version(pool, db):
+    owner = 'paper-processing-' + str(uuid4())
+    db('INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,%s)', (owner, '합성'))
+    uploads = PostgresRemoteUploadIntentStore(pool)
+    intent = uploads.create(owner, 'key', 'synthetic.pdf', 10, 'application/pdf', 'a' * 64)
+    PostgresRemoteUploadConsentStore(pool).grant(owner, intent.intent_id, 'storage', 'consent')
+    uploads.reserve_upload(owner, intent.intent_id)
+    uploads.mark_verified(owner, intent.intent_id, f'private/files/{uuid4()}.pdf')
+    papers = PostgresPaperStore(pool)
+
+    def status():
+        item, = papers.list_papers(owner, query=None, reading_status=None, page=1, limit=20).items
+        return item.processing_status
+
+    def add_job(job_status, offset):
+        finished = job_status in ('succeeded', 'failed', 'cancelled')
+        running = job_status == 'running'
+        db("""INSERT INTO server_processing_jobs
+              (job_id, owner_user_id, paper_id, server_version_id, job_kind, request_key, payload_hash,
+               status, lease_owner, lease_token, lease_expires_at, heartbeat_at, created_at, finished_at)
+              VALUES (%s,%s,%s,%s,'full_processing',%s,%s,%s,%s,%s,%s,%s,
+                      CURRENT_TIMESTAMP + %s * interval '1 second', %s)""",
+           (str(uuid4()), owner, intent.paper_id, intent.server_version_id, str(uuid4()), 'b' * 64,
+            job_status, 'worker' if running else None, str(uuid4()) if running else None,
+            datetime.now(timezone.utc) if running else None, datetime.now(timezone.utc) if running else None,
+            offset, datetime.now(timezone.utc) if finished else None))
+
+    # 업로드 확인이 처리 작업을 자동 접수했다면 그 상태를, 아니면 작업 없음을 보여 준다.
+    automatic = db('SELECT status FROM server_processing_jobs WHERE owner_user_id=%s', (owner,))
+    assert status() == ({'queued': 'queued', 'running': 'running'}[automatic[0]['status']] if automatic else 'none')
+    db('DELETE FROM server_processing_jobs WHERE owner_user_id=%s', (owner,))
+    assert status() == 'none'
+    add_job('failed', 10)
+    assert status() == 'failed'
+    add_job('queued', 20)
+    assert status() == 'queued'
+    add_job('running', 30)
+    assert status() == 'running'
+    add_job('succeeded', 40)
+    assert status() == 'completed'

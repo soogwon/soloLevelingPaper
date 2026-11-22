@@ -113,6 +113,7 @@ body.bare .view { max-width: none; padding: 0; }
 .b-reading { background: var(--accent-soft); color: var(--accent-ink); }
 .b-completed, .b-ok { background: var(--ok-soft); color: var(--ok-ink); }
 .b-not_started, .b-gray { background: var(--gray-soft); color: var(--gray-ink); }
+.b-failed { background: var(--danger-soft); color: var(--danger); }
 .b-unknown { background: #fff; color: #55556A; border: 1px dashed #A9A9BA; }
 .b-note { background: var(--accent-soft); color: var(--accent-ink); }
 .b-highlight { background: var(--hl-soft); color: var(--hl-ink); }
@@ -171,6 +172,7 @@ body.bare .view { max-width: none; padding: 0; }
 .row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .row-title { font-size: 16px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
 .row-sub { font-size: 13.5px; color: var(--muted); }
+.row-line .nowrap { white-space: nowrap; }
 .row-line { font-size: 13.5px; color: var(--text-2); margin-top: 6px; }
 @media (max-width: 600px) { .row { padding: 16px; flex-wrap: wrap; } .row-icon { display: none; } }
 /* 논문 목록 행: 링크 안에 버튼을 넣을 수 없어서 링크와 메뉴를 형제로 둔다. */
@@ -183,7 +185,7 @@ body.bare .view { max-width: none; padding: 0; }
 .row-item[aria-busy="true"] { opacity: 0.5; pointer-events: none; }
 
 /* 논문 목록 열: 논문 · 읽기 상태 · 상태 근거 · 갱신 시각 */
-.row-status { flex: 0 0 112px; display: flex; padding-top: 2px; }
+.row-status, .row-processing { flex: 0 0 112px; display: flex; align-items: center; gap: 4px; padding-top: 2px; }
 .row-basis { flex: 1 1 0; min-width: 0; font-size: 13.5px; color: var(--text-2); line-height: 1.5; overflow-wrap: anywhere; padding-top: 4px; }
 .row-updated { flex: 0 0 132px; font-size: 13.5px; color: var(--text-2); line-height: 1.5; white-space: nowrap; padding-top: 4px; }
 .row > .row-main { flex: 2 1 0; }
@@ -206,10 +208,10 @@ body.bare .view { max-width: none; padding: 0; }
   .list-head + .row-item { border-top: 0; }
   .row { flex-wrap: wrap; }
   .row > .row-main { flex: 1 1 calc(100% - 56px); }
-  .row-status, .row-basis, .row-updated { flex: 1 1 100%; padding-left: 56px; }
+  .row-status, .row-processing, .row-basis, .row-updated { flex: 1 1 100%; padding-left: 56px; }
   .list .row-item:not(.list-head) .cell-label { position: static; width: auto; height: auto; overflow: visible; clip: auto; color: var(--muted); }
 }
-@media (max-width: 600px) { .row-status, .row-basis, .row-updated { padding-left: 0; } }
+@media (max-width: 600px) { .row-status, .row-processing, .row-basis, .row-updated { padding-left: 0; } }
 
 /* ---------- 논문 상세 ---------- */
 .detail-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 20px; }
