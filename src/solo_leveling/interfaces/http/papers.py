@@ -196,7 +196,9 @@ class PaperNotFound(Exception):
 PAPER_SORT_DEFAULT_ORDER = {"recent": "desc", "title": "asc", "status": "asc", "updated": "desc"}
 # 정렬 식은 고정 목록에서만 고르므로 SQL에 사용자 입력이 섞이지 않는다.
 _PAPER_SORT_EXPRESSIONS = {
-    "recent": "r.last_studied_at",
+    # 로컬 학습 기록이 없는 원격 학습 논문도 Claude에서 마지막으로 학습한 시각으로 정렬한다.
+    # GREATEST는 NULL을 건너뛰므로 둘 중 있는 값, 둘 다 있으면 더 최근 값을 쓴다.
+    "recent": "GREATEST(r.last_studied_at, remote_learning.updated_at)",
     "title": ("lower(COALESCE(p.title, CASE WHEN r.learning_record_id IS NULL "
               "THEN remote_file.file_name ELSE r.file_name END))"),
     # 학습 진행 순서(읽기 전 → 읽는 중 → 읽기 완료), 상태 미확인은 방향과 관계없이 맨 뒤.
