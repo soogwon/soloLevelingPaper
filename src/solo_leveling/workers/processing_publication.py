@@ -11,6 +11,7 @@ from solo_leveling.interfaces.http.remote_vectors import EmbeddingWriteScope, Po
 from solo_leveling.interfaces.http.remote_fragment_vectors import PostgresEmbeddingFragmentWriter
 from solo_leveling.workers.processing_authorization import _AUTH_SOURCE, _IDENTITY, _USAGE_BLOCKED, _params
 from solo_leveling.workers.processing_staging import _source, _uuid, _encode
+from solo_leveling.workers.paper_front_matter import fill_missing_paper_metadata
 
 
 class ProcessingPublishError(RuntimeError):
@@ -123,20 +124,9 @@ class PostgresStagedProcessingPublisher:
         """
         if front_matter is None:
             return
-        authors = (None if front_matter.authors is None
-                   else json.dumps(list(front_matter.authors), ensure_ascii=False))
-        values = (front_matter.title, authors, front_matter.publication_year)
         try:
             with conn.transaction():
-                conn.execute('''UPDATE server_papers SET
-                        title=COALESCE(title,%s), authors=COALESCE(authors,%s::jsonb),
-                        publication_year=COALESCE(publication_year,%s::integer),
-                        revision=revision+1, updated_at=CURRENT_TIMESTAMP
-                    WHERE owner_user_id=%s AND paper_id=%s AND deleted_at IS NULL
-                      AND ((title IS NULL AND %s::text IS NOT NULL)
-                        OR (authors IS NULL AND %s::jsonb IS NOT NULL)
-                        OR (publication_year IS NULL AND %s::integer IS NOT NULL))''',
-                    (*values, source.owner_user_id, source.paper_id, *values))
+                fill_missing_paper_metadata(conn, source.owner_user_id, source.paper_id, front_matter)
         except Exception:
             # 본문·SQL·자격 증명은 남기지 않는다. 게시는 파일 이름 표시로 계속한다.
             print(json.dumps({'event': 'processing_front_matter_not_applied'}), file=sys.stderr, flush=True)

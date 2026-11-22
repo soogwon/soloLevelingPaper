@@ -6,7 +6,9 @@ from unittest.mock import Mock
 import pytest
 
 from solo_leveling.domain.remote_processing import PaperFrontMatter, front_matter_valid
-from solo_leveling.infrastructure.parsing.front_matter import detect_front_matter, detect_title
+from solo_leveling.infrastructure.parsing.front_matter import (
+    detect_authors, detect_front_matter, detect_publication_year, detect_title,
+)
 from solo_leveling.infrastructure.parsing.processing_parser import ProcessingPdfParser
 from solo_leveling.infrastructure.parsing.sections import LineStyle
 from solo_leveling.workers.processing_staging import PostgresProcessingResultStaging, ProcessingStagingError
@@ -16,8 +18,8 @@ from tests.fixtures.processing_result import result, LIMITS, SETTINGS, SPEC
 ATTENTION_PDF = Path(__file__).resolve().parents[1] / 'test_data' / 'tmp_pdfs' / 'c30732f1-f6af-45b0-b8f7-38e5c0869588.pdf'
 
 
-def line(text, size, top, bold=False):
-    return LineStyle(text=text, size=size, bold=bold, top_ratio=top)
+def line(text, size, top, bold=False, segments=None):
+    return LineStyle(text=text, size=size, bold=bold, top_ratio=top, segments=segments)
 
 
 def test_largest_top_lines_become_title_and_footnote_marks_are_removed():
@@ -29,6 +31,7 @@ def test_largest_top_lines_become_title_and_footnote_marks_are_removed():
         line('Abstract', 12, 0.4),
     ]
     assert detect_title(lines, 10.0) == 'Deep Residual Learning for Image Recognition'
+    # 간격 정보 없이 한 칸 띄어쓰기로 붙은 저자 줄은 나누지 않는다.
     assert detect_front_matter(lines, 10.0) == PaperFrontMatter(title='Deep Residual Learning for Image Recognition')
 
 
@@ -44,7 +47,8 @@ def test_largest_top_lines_become_title_and_footnote_marks_are_removed():
 ])
 def test_uncertain_candidates_are_not_guessed(lines, body):
     assert detect_title(lines, body) is None
-    assert detect_front_matter(lines, body) is None
+    found = detect_front_matter(lines, body)
+    assert found is None or found.title is None
 
 
 def test_repeated_header_is_excluded():
@@ -54,7 +58,11 @@ def test_repeated_header_is_excluded():
 
 def test_parser_reads_attention_title_from_first_page():
     document = ProcessingPdfParser().parse(ATTENTION_PDF.read_bytes(), '00000000-0000-0000-0000-000000000001')
-    assert document.front_matter == PaperFrontMatter(title='Attention Is All You Need')
+    assert document.front_matter == PaperFrontMatter(
+        title='Attention Is All You Need',
+        authors=('Ashish Vaswani', 'Noam Shazeer', 'Niki Parmar', 'Jakob Uszkoreit',
+                 'Llion Jones', 'Aidan N. Gomez', 'Łukasz Kaiser', 'Illia Polosukhin'),
+        publication_year=2017)
 
 
 def test_single_font_pdf_has_no_front_matter():
@@ -115,3 +123,68 @@ def test_invalid_front_matter_is_rejected_before_database():
     with pytest.raises(ProcessingStagingError, match='^processing_staging_invalid$'):
         store.save(value)
     pool.connection.assert_not_called()
+
+
+def test_authors_from_gap_segments_skip_affiliations_and_emails():
+    lines = [
+        line('Attention Is All You Need', 17.2, 0.19),
+        line('x', 10, 0.30, segments=('Ashish Vaswani∗', 'Noam Shazeer∗')),
+        line('x', 10, 0.31, segments=('Google Brain', 'Google Research')),
+        line('x', 10, 0.32, segments=('avaswani@google.com', 'noam@google.com')),
+        line('x', 10, 0.36, segments=('Aidan N. Gomez∗ †', 'Łukasz Kaiser∗')),
+        line('x', 10, 0.37, segments=('University of Toronto',)),
+        line('Abstract', 12, 0.49),
+        line('Jane Doe', 10, 0.52),
+    ]
+    assert detect_authors(lines, 'Attention Is All You Need') == (
+        'Ashish Vaswani', 'Noam Shazeer', 'Aidan N. Gomez', 'Łukasz Kaiser')
+
+
+def test_comma_separated_authors_with_superscripts():
+    lines = [
+        line('An Image is Worth 16x16 Words', 17, 0.1),
+        line('Alexey Dosovitskiy∗,†, Lucas Beyer∗, Alexander Kolesnikov∗, Dirk Weissenborn∗,', 10, 0.18),
+        line('Xiaohua Zhai∗, and Neil Houlsby∗,†', 10, 0.2),
+        line('Google Research, Brain Team', 10, 0.22),
+        line('BERT: Pre-training of Deep Bidirectional Transformers', 17, 0.3),
+    ]
+    assert detect_authors(lines, 'An Image is Worth 16x16 Words') == (
+        'Alexey Dosovitskiy', 'Lucas Beyer', 'Alexander Kolesnikov', 'Dirk Weissenborn', 'Xiaohua Zhai',
+        'Neil Houlsby')
+
+
+def test_numbered_affiliation_marks_and_particles():
+    lines = [line('Title Here', 17, 0.1),
+             line('Jacob Devlin1, Ming-Wei Chang2, Ludwig van Beethoven1,2, 홍길동', 10, 0.15)]
+    assert detect_authors(lines, 'Title Here') == (
+        'Jacob Devlin', 'Ming-Wei Chang', 'Ludwig van Beethoven', '홍길동')
+
+
+@pytest.mark.parametrize('text', [
+    'Department of Computer Science', 'GOOGLE BRAIN', 'Equal contribution', 'Kaiming He Xiangyu Zhang',
+    'Single', 'deep learning is fun', 'Work done while at Google',
+])
+def test_non_author_text_is_rejected(text):
+    lines = [line('Title Here', 17, 0.1), line(text, 10, 0.15)]
+    assert detect_authors(lines, 'Title Here') is None
+
+
+def test_authors_need_a_title():
+    assert detect_authors([line('Jane Doe', 10, 0.2)], None) is None
+
+
+@pytest.mark.parametrize('lines, margin, year', [
+    ([line('31st Conference on Neural Information Processing Systems (NIPS 2017), Long Beach, CA, USA.', 9, 0.92)],
+     'arXiv:1706.03762v7 [cs.CL] 2 Aug 2023', 2017),
+    ([line('Published as a conference paper at ICLR 2021', 10, 0.05)], 'arXiv:2010.11929v2 [cs.CV] 3 Jun 2021', 2021),
+    ([], 'arXiv:1810.04805v2 [cs.CL] 24 May 2019', 2018),
+    ([line('Proceedings of NAACL-HLT 2019, pages 4171–4186', 9, 0.95)], '', 2019),
+    # 본문 가운데의 인용 문장은 학회 표기로 보지 않는다.
+    ([line('as shown in Proceedings of ACL 2015', 10, 0.5)], '', None),
+    # arXiv 첫 제출보다 이른 연도는 버리고 arXiv 연도를 쓴다.
+    ([line('Workshop on Something 2012', 9, 0.95)], 'arXiv:1706.03762v7', 2017),
+    ([], 'arXiv:1713.00001', None),
+    ([], '', None),
+])
+def test_publication_year(lines, margin, year):
+    assert detect_publication_year(lines, margin) == year

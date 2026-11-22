@@ -111,6 +111,13 @@ export function formatAuthorsYear(paper) {
   return items.length ? items.join(' · ') : null;
 }
 
+/** 상세 화면용: 저자 전체 이름과 출판 연도. 저자 목록이 없으면 요약 표시를 쓴다. */
+export function formatAllAuthorsYear(paper) {
+  const names = Array.isArray(paper.authors) ? paper.authors.map((a) => String(a).trim()).filter(Boolean) : [];
+  const items = [names.length ? names.join(', ') : formatAuthors(paper), formatPublished(paper.published)].filter(Boolean);
+  return items.length ? items.join(' · ') : null;
+}
+
 export function paperTitle(paper) {
   return paper.title || paper.file_name || '제목 없음';
 }

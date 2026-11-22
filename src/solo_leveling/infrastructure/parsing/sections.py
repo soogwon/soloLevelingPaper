@@ -33,6 +33,8 @@ class LineStyle:
     bold: bool
     # 페이지 위쪽부터의 상대 위치. 합성/과거 호출처럼 모르면 None이다.
     top_ratio: Optional[float] = None
+    # 글자 사이가 크게 벌어진 곳에서 나눈 조각(저자 나열 등). 모르면 None이다.
+    segments: Optional[tuple] = None
 
 
 # 번호 없는 제목으로 인정하는 표준 이름. 소문자로 비교한다.

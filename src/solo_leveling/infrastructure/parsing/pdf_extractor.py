@@ -151,13 +151,38 @@ def _line_styles(page, *, page_height=None) -> list[LineStyle]:
         height = page.height if page_height is None else page_height
         top_ratio = (float(top) / float(height)
                      if isinstance(top, (int, float)) and height else None)
+        size = max(c["size"] for c in chars)
         styles.append(LineStyle(
             text=line["text"],
-            size=max(c["size"] for c in chars),
+            size=size,
             bold=all("bold" in str(c.get("fontname", "")).lower() for c in chars),
             top_ratio=top_ratio,
+            segments=_gap_segments(line["chars"], size),
         ))
     return styles
+
+
+# 한 줄 안에서 글자 크기만큼 이상 벌어진 간격은 단어 사이가 아니라 항목(저자 등) 사이로 본다.
+SEGMENT_GAP_RATIO = 1.0
+
+
+def _gap_segments(chars, size) -> tuple[str, ...]:
+    parts: list[str] = []
+    current = ""
+    previous = None
+    for char in chars:
+        if previous is not None:
+            gap = float(char.get("x0", 0)) - float(previous.get("x1", 0))
+            if gap >= size * SEGMENT_GAP_RATIO and current.strip():
+                parts.append(current)
+                current = ""
+            elif gap > size * 0.15 and not current.endswith(" "):
+                current += " "
+        current += char["text"]
+        previous = char
+    if current.strip():
+        parts.append(current)
+    return tuple(re.sub(r"\s+", " ", part).strip() for part in parts)
 
 
 def split_page_number(page, text: str) -> tuple[str, str | None]:
@@ -201,6 +226,7 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
     pages: List[ExtractedPage] = []
     page_styles: list[list[LineStyle]] = []
     first_page_styles: list[LineStyle] = []
+    first_page_margin = ""
     size_counts: list[tuple[float, int]] = []
     parse_id = uuid4().hex
     with _open_pdf(pdf_path) as pdf:
@@ -238,6 +264,9 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
                     first_page_styles = _line_styles(upright_only)
                 except Exception:
                     first_page_styles = []
+                # 왼쪽 여백의 세로 arXiv 표기(예: arXiv:1706.03762v7)는 출판 연도 근거로만 쓴다.
+                first_page_margin = "".join(
+                    str(c.get("text", "")) for c in chars if not _is_upright(c))
             size_counts.extend((line.size, len(line.text.strip())) for line in styles)
     body_size = find_body_size(size_counts)
     page_occurrences: Counter = Counter()
@@ -260,7 +289,8 @@ def extract_pages(pdf_path: str) -> List[ExtractedPage]:
     if pages:
         try:
             pages[0].front_matter = detect_front_matter(
-                first_page_styles, body_size, excluded_texts=repeated_lines)
+                first_page_styles, body_size, excluded_texts=repeated_lines,
+                margin_text=first_page_margin)
         except Exception:
             # 서지 정보는 보조 정보다. 실패해도 본문 추출은 그대로 진행한다.
             pages[0].front_matter = None
