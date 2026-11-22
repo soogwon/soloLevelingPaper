@@ -523,7 +523,8 @@ def create_web_paper_router(require_principal: Any, store: PaperStore, file_stor
         reading_status: Literal["not_started", "reading", "completed", "unknown"] | None = None,
         collection_id: UUID | None = None,
         unassigned: bool = False,
-        sort: Literal["recent"] = "recent",
+        sort: Literal["recent", "title", "status", "updated"] = "recent",
+        order: Literal["asc", "desc"] | None = None,
         page: Annotated[int, Query(ge=1)] = 1,
         limit: Annotated[int, Query(ge=1, le=100)] = 20,
     ):
@@ -545,7 +546,7 @@ def create_web_paper_router(require_principal: Any, store: PaperStore, file_stor
                 collection_filters["unassigned"] = True
             result = store.list_papers(
                 principal.user_id, query=normalized_query, reading_status=reading_status,
-                page=page, limit=limit,
+                page=page, limit=limit, sort=sort, order=order,
                 **collection_filters,
             )
         except PaperStoreUnavailable:

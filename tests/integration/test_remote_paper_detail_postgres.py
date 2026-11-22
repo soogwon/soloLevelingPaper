@@ -81,3 +81,22 @@ def test_remote_pdf_without_learning_record_is_visible_and_owned(pool, db):
     with pytest.raises(UploadTargetNotFound):
         files.get_file_access(owner, intent.paper_id, intent.server_version_id)
     assert papers.list_papers(owner, query=None, reading_status=None, page=1, limit=20).total_count == 0
+
+
+@pytest.mark.parametrize('sort', ['recent', 'title', 'status', 'updated'])
+@pytest.mark.parametrize('order', [None, 'asc', 'desc'])
+def test_list_sorts_run_on_real_postgres(pool, db, sort, order):
+    owner = 'paper-sort-' + str(uuid4())
+    db('INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,%s)', (owner, '합성'))
+    for title in ('beta', 'Alpha', None):
+        db("""INSERT INTO server_papers
+                  (paper_id, owner_user_id, source_instance_id, local_paper_id, title, original_created_at)
+              VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
+           (str(uuid4()), owner, str(uuid4()), str(uuid4()), title))
+    page = PostgresPaperStore(pool).list_papers(
+        owner, query=None, reading_status=None, page=1, limit=20, sort=sort, order=order)
+    assert page.total_count == 3
+    if sort == 'title':
+        titles = [item.title for item in page.items]
+        # 대소문자 구분 없이 정렬하고 제목·파일명이 모두 없는 논문은 방향과 관계없이 뒤로 보낸다.
+        assert titles == (['beta', 'Alpha', None] if order == 'desc' else ['Alpha', 'beta', None])

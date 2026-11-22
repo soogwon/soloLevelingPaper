@@ -58,15 +58,35 @@ function toPaperListItem(p) {
     last_position: p.record?.last_position ?? null,
     last_studied_at: p.record?.last_studied_at ?? null,
     reading_status: p.reading_status,
+    reading_status_source: p.record ? 'remote_learning' : 'unknown',
+    reading_status_updated_at: p.record?.last_studied_at ?? null,
     collection_id: db.membership.get(p.paper_id)?.collection_id ?? null,
   };
 }
 
-function byRecentStudy(a, b) {
-  const ta = a.record?.last_studied_at ?? '';
-  const tb = b.record?.last_studied_at ?? '';
-  if (ta !== tb) return ta < tb ? 1 : -1; // 최근 학습순, 학습일 없는 논문은 뒤로
-  return a.paper_id < b.paper_id ? -1 : 1;
+// 서버(papers.py)와 같은 정렬 규칙: 값이 없는 논문은 방향과 관계없이 뒤로, 같으면 논문 ID 순.
+const STATUS_RANK = { not_started: 0, reading: 1, completed: 2 };
+const SORT_KEYS = {
+  recent: (p) => p.record?.last_studied_at ?? null,
+  title: (p) => paperTitleOf(p)?.toLowerCase() ?? null,
+  status: (p) => STATUS_RANK[p.reading_status] ?? null,
+  updated: (p) => p.record?.last_studied_at ?? null,
+};
+const DEFAULT_ORDER = { recent: 'desc', title: 'asc', status: 'asc', updated: 'desc' };
+
+function paperComparator(sort, order) {
+  const key = SORT_KEYS[sort];
+  const sign = order === 'asc' ? 1 : -1;
+  return (a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    if (ka !== kb) {
+      if (ka === null) return 1;
+      if (kb === null) return -1;
+      return (ka < kb ? -1 : 1) * sign;
+    }
+    return a.paper_id < b.paper_id ? -1 : 1;
+  };
 }
 
 function listPapers(query) {
@@ -79,7 +99,11 @@ function listPapers(query) {
   }
   if (query.collection_id) list = list.filter((p) => db.membership.get(p.paper_id)?.collection_id === query.collection_id);
   if (query.unassigned === 'true') list = list.filter((p) => !db.membership.has(p.paper_id));
-  list.sort(byRecentStudy);
+  const sort = query.sort ?? 'recent';
+  if (!Object.hasOwn(SORT_KEYS, sort)) throw fail(422, 'invalid_argument', '정렬 기준이 올바르지 않아요.', 'sort');
+  const order = query.order ?? DEFAULT_ORDER[sort];
+  if (order !== 'asc' && order !== 'desc') throw fail(422, 'invalid_argument', '정렬 방향이 올바르지 않아요.', 'order');
+  list.sort(paperComparator(sort, order));
   return paginate(list.map(toPaperListItem), query);
 }
 

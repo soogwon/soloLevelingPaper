@@ -193,6 +193,28 @@ class PaperNotFound(Exception):
     pass
 
 
+PAPER_SORT_DEFAULT_ORDER = {"recent": "desc", "title": "asc", "status": "asc", "updated": "desc"}
+# 정렬 식은 고정 목록에서만 고르므로 SQL에 사용자 입력이 섞이지 않는다.
+_PAPER_SORT_EXPRESSIONS = {
+    "recent": "r.last_studied_at",
+    "title": ("lower(COALESCE(p.title, CASE WHEN r.learning_record_id IS NULL "
+              "THEN remote_file.file_name ELSE r.file_name END))"),
+    # 학습 진행 순서(읽기 전 → 읽는 중 → 읽기 완료), 상태 미확인은 방향과 관계없이 맨 뒤.
+    "status": ("CASE reading.status WHEN 'not_started' THEN 0 WHEN 'reading' THEN 1 "
+               "WHEN 'completed' THEN 2 END"),
+    "updated": "reading.status_updated_at",
+}
+
+
+def _paper_order_by(sort: str, order: str | None) -> str:
+    if sort not in _PAPER_SORT_EXPRESSIONS:
+        raise ValueError(f"unsupported paper sort: {sort}")
+    direction = order or PAPER_SORT_DEFAULT_ORDER[sort]
+    if direction not in ("asc", "desc"):
+        raise ValueError(f"unsupported paper order: {order}")
+    return f"{_PAPER_SORT_EXPRESSIONS[sort]} {direction.upper()} NULLS LAST"
+
+
 class PaperStoreUnavailable(Exception):
     pass
 
@@ -206,7 +228,8 @@ class PaperStore(Protocol):
 
     def list_papers(self, owner_user_id: str, *, query: str | None,
                     reading_status: str | None, page: int, limit: int,
-                    collection_id: str | None = None, unassigned: bool = False) -> PaperPage: ...
+                    collection_id: str | None = None, unassigned: bool = False,
+                    sort: str = "recent", order: str | None = None) -> PaperPage: ...
 
     def upsert_learning_record(self, owner_user_id: str, paper_id: str,
                                metadata: LearningRecordMetadata) -> LearningRecordRegistration: ...
@@ -240,7 +263,8 @@ class UnavailablePaperStore:
 
     def list_papers(self, owner_user_id: str, *, query: str | None,
                     reading_status: str | None, page: int, limit: int,
-                    collection_id: str | None = None, unassigned: bool = False) -> PaperPage:
+                    collection_id: str | None = None, unassigned: bool = False,
+                    sort: str = "recent", order: str | None = None) -> PaperPage:
         raise PaperStoreUnavailable
 
     def upsert_learning_record(self, owner_user_id: str, paper_id: str,
@@ -342,8 +366,10 @@ class PostgresPaperStore:
 
     def list_papers(self, owner_user_id: str, *, query: str | None,
                     reading_status: str | None, page: int, limit: int,
-                    collection_id: str | None = None, unassigned: bool = False) -> PaperPage:
+                    collection_id: str | None = None, unassigned: bool = False,
+                    sort: str = "recent", order: str | None = None) -> PaperPage:
         """웹 목록용 offset 페이지를 소유권 범위에서 안정적인 순서로 조회한다."""
+        order_by = _paper_order_by(sort, order)
         filters = ["p.owner_user_id = %s", VISIBLE_PAPER]
         params: list[Any] = [owner_user_id]
         if query is not None:
@@ -443,7 +469,7 @@ class PostgresPaperStore:
                            reading.status_updated_at AS reading_status_updated_at,
                            cp.collection_id
                     FROM server_papers p {latest} WHERE {where}
-                    ORDER BY r.last_studied_at DESC NULLS LAST, p.paper_id ASC LIMIT %s OFFSET %s""",
+                    ORDER BY {order_by}, p.paper_id ASC LIMIT %s OFFSET %s""",
                 (*params, limit, (page - 1) * limit),
             ).fetchall()
         items = tuple(PaperListItem(
