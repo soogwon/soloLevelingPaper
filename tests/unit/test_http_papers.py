@@ -630,7 +630,48 @@ def test_web_list_uses_session_owner_and_preserves_out_of_range_page():
     assert response.status_code == 200
     assert response.json() == {"items": [], "page": 7, "page_size": 10,
                                "total_count": 0, "total_pages": 0}
-    assert store.calls == [("web-user", {"query": "Paper", "reading_status": None, "page": 7, "limit": 10})]
+    assert store.calls == [("web-user", {"query": "Paper", "reading_status": None, "page": 7, "limit": 10,
+                                         "sort": "recent", "order": None})]
+
+
+def test_web_list_passes_sort_column_and_direction_to_store():
+    store = MemoryStore()
+    principal = AuthenticatedPrincipal("web-user", "web_session")
+    app = create_app(token_verifier=SimpleNamespace(verify=lambda _: principal), paper_store=store)
+
+    with TestClient(app) as client:
+        ok = client.get("/v1/papers?sort=title&order=desc", headers={"Authorization": "Bearer web"})
+        bad_sort = client.get("/v1/papers?sort=author", headers={"Authorization": "Bearer web"})
+        bad_order = client.get("/v1/papers?sort=title&order=up", headers={"Authorization": "Bearer web"})
+
+    assert ok.status_code == 200
+    assert (bad_sort.status_code, bad_order.status_code) == (422, 422)
+    assert store.calls == [("web-user", {"query": None, "reading_status": None, "page": 1, "limit": 20,
+                                         "sort": "title", "order": "desc"})]
+
+
+@pytest.mark.parametrize(("sort", "order", "expected"), [
+    ("recent", None, "ORDER BY r.last_studied_at DESC NULLS LAST, p.paper_id ASC"),
+    ("recent", "asc", "ORDER BY r.last_studied_at ASC NULLS LAST, p.paper_id ASC"),
+    ("title", None, "ORDER BY lower(COALESCE(p.title, CASE WHEN r.learning_record_id IS NULL "
+                    "THEN remote_file.file_name ELSE r.file_name END)) ASC NULLS LAST, p.paper_id ASC"),
+    ("status", "desc", "WHEN 'completed' THEN 2 END DESC NULLS LAST, p.paper_id ASC"),
+    ("updated", None, "ORDER BY reading.status_updated_at DESC NULLS LAST, p.paper_id ASC"),
+])
+def test_postgres_list_orders_by_requested_column_with_stable_tiebreak(sort, order, expected):
+    pool = Pool([Result(), Result({"total_count": 1}), Result(many=[])])
+
+    PostgresPaperStore(pool).list_papers(
+        "user-1", query=None, reading_status=None, page=1, limit=20, sort=sort, order=order)
+
+    assert expected in pool.conn.calls[2][0]
+
+
+def test_postgres_list_rejects_unknown_sort_before_database_access():
+    pool = Pool([])
+    with pytest.raises(ValueError):
+        PostgresPaperStore(pool).list_papers(
+            "user-1", query=None, reading_status=None, page=1, limit=20, sort="p.title; DROP")
 
 
 def test_web_list_shape_matches_external_site_without_inventing_learning_data():
@@ -674,7 +715,7 @@ def test_openapi_exposes_protected_web_paper_page_contract():
     assert operation["security"] == [{"ServerAccessToken": []}]
     parameters = {item["name"]: item for item in operation["parameters"]}
     assert set(parameters) == {
-        "q", "reading_status", "collection_id", "unassigned", "sort", "page", "limit"
+        "q", "reading_status", "collection_id", "unassigned", "sort", "order", "page", "limit"
     }
     assert parameters["page"]["schema"]["default"] == 1
     assert parameters["limit"]["schema"]["default"] == 20

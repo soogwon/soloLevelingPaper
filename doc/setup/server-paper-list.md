@@ -16,6 +16,12 @@ Cookie: slp_session=<opaque session token>
 와일드카드가 아니라 검색 문자로 처리한다. `page`는 1부터 시작하고 `limit`은 1~100이며,
 범위를 넘는 페이지도 요청한 페이지 번호와 전체 개수를 유지한 빈 `items`를 반환한다.
 
+`sort`는 `recent`(마지막 학습 시각, 기본), `title`(제목, 없으면 파일 이름, 대소문자 무시),
+`status`(읽기 전 → 읽는 중 → 읽기 완료), `updated`(읽기 상태 갱신 시각) 중 하나다.
+`order`는 `asc` 또는 `desc`이며 생략하면 `recent`·`updated`는 `desc`, `title`·`status`는 `asc`다.
+값이 없는 논문(학습 시각·제목·갱신 시각 없음, 상태 미확인)은 방향과 관계없이 뒤에 두고,
+같은 값끼리는 논문 ID 순으로 고정해 페이지를 넘겨도 순서가 흔들리지 않는다.
+
 ```json
 {
   "items": [

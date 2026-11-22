@@ -33,7 +33,7 @@ python3 -m http.server 5173
 
 | 화면 | 주소 | 사용하는 API (요청서 번호) |
 |---|---|---|
-| 논문 목록 | `#/papers?status=reading&page=2` | `GET /v1/papers` (2) |
+| 논문 목록 | `#/papers?status=reading&sort=title&order=desc&page=2` | `GET /v1/papers` (2) |
 | 논문 상세 | `#/papers/{논문 ID}?record=&version=&annotation=&mpage=` | `GET /v1/papers/{id}`, `GET /v1/annotations`, `GET /v1/annotations/{id}`, `GET …/file-access`, `POST /v1/resume-requests` (3, 9.4, 10.3) |
 | 메모·하이라이트 | `#/notes?kind=&range=&from=&to=&sort=&page=` | `GET /v1/annotations` (4) |
 | 컬렉션 목록 | `#/collections?page=` | `GET·POST /v1/collections` (5) |

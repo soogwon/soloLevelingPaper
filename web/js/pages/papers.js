@@ -4,9 +4,53 @@ import { html, setHTML } from '../lib/html.js';
 import { buildHash, replaceQuery } from '../router.js';
 import { icons, statusBadge, loadingBlock, emptyBlock, errorBlock, pagination, toast, errorMessage } from '../lib/ui.js';
 import { runPaperDeletionFlow, deletionAcceptedMessage } from '../lib/paper-deletion.js';
-import { formatAuthorsYear, formatPosition, readingStatusUpdatedLabel, formatDate, paperTitle, paperFileNameHint } from '../lib/format.js';
+import { formatAuthorsYear, formatPosition, formatDate, formatDateTime, paperTitle, paperFileNameHint } from '../lib/format.js';
 
 const FILTERS = [['', '전체'], ['reading', '읽는 중'], ['completed', '읽기 완료']];
+
+// 정렬 기준과 처음 고를 때의 방향. 서버도 같은 기본 방향을 쓴다.
+export const SORTS = {
+  recent: { label: '최근 학습순', defaultOrder: 'desc' },
+  title: { label: '제목순', defaultOrder: 'asc' },
+  status: { label: '읽기 상태순', defaultOrder: 'asc' },
+  updated: { label: '갱신 시각순', defaultOrder: 'desc' },
+};
+const ORDER_LABEL = { asc: '오름차순', desc: '내림차순' };
+
+export function sortFromQuery(query) {
+  const sort = Object.hasOwn(SORTS, query.sort ?? '') ? query.sort : 'recent';
+  const order = query.order === 'asc' || query.order === 'desc' ? query.order : SORTS[sort].defaultOrder;
+  return { sort, order };
+}
+
+/** 같은 열을 다시 누르면 방향만 뒤집고, 다른 열을 누르면 그 열의 기본 방향으로 시작한다. */
+export function nextSort(current, sort) {
+  if (current.sort === sort) return { sort, order: current.order === 'asc' ? 'desc' : 'asc' };
+  return { sort, order: SORTS[sort].defaultOrder };
+}
+
+function sortHeader(state, sort, label) {
+  const active = state.sort === sort;
+  const arrow = active ? (state.order === 'asc' ? '↑' : '↓') : '↕';
+  const next = nextSort(state, sort);
+  return html`<button type="button" class="col-sort${active ? ' is-active' : ''}" data-sort="${sort}"
+    aria-label="${label} ${ORDER_LABEL[next.order]} 정렬${active ? ` (현재 ${ORDER_LABEL[state.order]})` : ''}">
+    ${label}<span class="sort-arrow" aria-hidden="true">${arrow}</span></button>`;
+}
+
+/** 목록 위 열 이름. 행과 같은 칸 구성을 써서 열이 맞는다. */
+export function paperListHead(state) {
+  return html`<div class="row-item list-head">
+    <div class="row head-row">
+      <span class="row-icon head-spacer" aria-hidden="true"></span>
+      <span class="row-main">${sortHeader(state, 'title', '논문')}</span>
+      <span class="row-status">${sortHeader(state, 'status', '읽기 상태')}</span>
+      <span class="row-basis col-label">상태 근거 · 기준 버전</span>
+      <span class="row-updated">${sortHeader(state, 'updated', '갱신 시각')}</span>
+    </div>
+    <span class="row-menu head-spacer menu-spacer" aria-hidden="true"></span>
+  </div>`;
+}
 
 export function paperRow(p) {
   const href = buildHash(`/papers/${encodeURIComponent(p.paper_id)}`, {
@@ -36,8 +80,9 @@ export function paperRow(p) {
       <span class="row-sub">${[formatAuthorsYear(p) ?? '저자·출판 연도 정보 없음', paperFileNameHint(p)].filter(Boolean).join(' · ')}</span>
       <span class="row-line">${line}</span>
     </span>
-    ${statusBadge(p.reading_status)}
-    <span>상태 근거: ${source}${p.reading_basis_version_id ? ` · 기준 버전: ${p.reading_basis_version_id}` : ''} · ${readingStatusUpdatedLabel(p.reading_status_updated_at)}</span>
+    <span class="row-status">${statusBadge(p.reading_status)}</span>
+    <span class="row-basis"><span class="cell-label">상태 근거: </span>${source}${p.reading_basis_version_id ? ` · 기준 버전: ${p.reading_basis_version_id}` : ''}</span>
+    <span class="row-updated"><span class="cell-label">갱신 시각: </span>${formatDateTime(p.reading_status_updated_at) || '미확인'}</span>
   </a>`;
 }
 
@@ -66,6 +111,7 @@ export default async function papersPage({ view, query }) {
     status: FILTERS.some(([v]) => v === query.status) ? query.status : '',
     q: (query.q ?? '').trim(),
     page: pageFromQuery(query.page),
+    ...sortFromQuery(query),
     seq: 0,
   };
 
@@ -86,7 +132,14 @@ export default async function papersPage({ view, query }) {
       <div class="pills" role="group" aria-label="읽기 상태 필터">
         ${FILTERS.map(([value, label]) => html`<button type="button" class="pill" data-status="${value}" aria-pressed="${String(state.status === value)}">${label}</button>`)}
       </div>
-      <p class="meta" data-slot="count" aria-live="polite"></p>
+      <span class="toolbar-end">
+        <p class="meta" data-slot="count" aria-live="polite"></p>
+        <label for="paper-sort" class="sr-only">정렬 기준</label>
+        <select id="paper-sort" class="select">
+          ${Object.entries(SORTS).map(([value, { label }]) => html`<option value="${value}">${label}</option>`)}
+        </select>
+        <button type="button" class="ghost-btn" data-action="toggle-order" aria-label="정렬 방향 바꾸기"></button>
+      </span>
     </div>
     <section class="card list" aria-label="논문 목록" tabindex="-1" data-slot="list"></section>
     <div data-slot="pager"></div>`);
@@ -94,14 +147,34 @@ export default async function papersPage({ view, query }) {
   const listEl = view.querySelector('[data-slot="list"]');
   const pagerEl = view.querySelector('[data-slot="pager"]');
   const countEl = view.querySelector('[data-slot="count"]');
+  const sortSelect = view.querySelector('#paper-sort');
+  const orderBtn = view.querySelector('[data-action="toggle-order"]');
+
+  function syncSortControls() {
+    sortSelect.value = state.sort;
+    orderBtn.textContent = state.order === 'asc' ? '↑ 오름차순' : '↓ 내림차순';
+  }
+  syncSortControls();
+
+  function applySort(next) {
+    state.sort = next.sort;
+    state.order = next.order;
+    syncSortControls();
+    load(1);
+  }
 
   async function load(page, { moveFocus = false } = {}) {
     const seq = ++state.seq;
     state.page = page;
-    replaceQuery({ status: state.status, q: state.q, page: page > 1 ? page : '' });
+    replaceQuery({
+      status: state.status, q: state.q,
+      sort: state.sort === 'recent' ? '' : state.sort,
+      order: state.order === SORTS[state.sort].defaultOrder ? '' : state.order,
+      page: page > 1 ? page : '',
+    });
     setHTML(listEl, loadingBlock());
     try {
-      const res = await api.listPapers({ reading_status: state.status, q: state.q, page });
+      const res = await api.listPapers({ reading_status: state.status, q: state.q, sort: state.sort, order: state.order, page });
       if (seq !== state.seq) return;
       // 필터가 바뀌어 페이지 수가 줄었으면 마지막 페이지로 다시 요청한다.
       if (res.items.length === 0 && page > 1 && res.total_count > 0) { load(res.total_pages, { moveFocus }); return; }
@@ -111,9 +184,9 @@ export default async function papersPage({ view, query }) {
           ? emptyBlock('조건에 맞는 논문이 없어요', '다른 상태를 선택하거나 검색어를 바꿔보세요.')
           : emptyBlock('아직 저장된 논문이 없어요', 'Claude에서 논문을 학습하고 서버 저장에 동의하면 여기에 보여요.'));
       } else {
-        setHTML(listEl, html`${res.items.map((p) => paperRowWithMenu(p))}`);
+        setHTML(listEl, html`${paperListHead(state)}${res.items.map((p) => paperRowWithMenu(p))}`);
       }
-      countEl.textContent = `총 ${res.total_count}편 · 최근 학습순`;
+      countEl.textContent = `총 ${res.total_count}편`;
       setHTML(pagerEl, pagination({ page: res.page, totalPages: res.total_pages, totalCount: res.total_count, pageSize: res.page_size, label: '논문 목록 페이지' }));
       if (moveFocus) {
         view.querySelector('[data-slot="top"]').scrollIntoView({ block: 'start' });
@@ -134,11 +207,21 @@ export default async function papersPage({ view, query }) {
       load(1);
       return;
     }
+    const sortBtn = e.target.closest('[data-sort]');
+    if (sortBtn) { applySort(nextSort(state, sortBtn.dataset.sort)); return; }
+    if (e.target.closest('[data-action="toggle-order"]')) {
+      applySort({ sort: state.sort, order: state.order === 'asc' ? 'desc' : 'asc' });
+      return;
+    }
     const pageBtn = e.target.closest('[data-page]');
     if (pageBtn && !pageBtn.disabled) { load(Number(pageBtn.dataset.page), { moveFocus: true }); return; }
     if (e.target.closest('[data-action="reload-list"]')) { load(state.page); return; }
     const del = e.target.closest('[data-action="delete-paper"]');
     if (del) deletePaper(del);
+  });
+
+  sortSelect.addEventListener('change', () => {
+    applySort({ sort: sortSelect.value, order: SORTS[sortSelect.value].defaultOrder });
   });
 
   // 여러 논문을 차례로 정리할 수 있게 목록에 머문 채 현재 페이지만 다시 불러온다.
