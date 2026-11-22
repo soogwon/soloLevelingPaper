@@ -68,15 +68,16 @@ C: 합성 검증과 실제 성공 표시 구분, 상태 로그, 이후 웹/근�
 
 ## 퀴즈 단발 실행과 시작 명령 (#593)
 
-Render Existing Image의 Docker Command는 이미지의 CMD를 교체한다.
-이 이미지의 ENTRYPOINT는 이미 `python -m solo_leveling.workers.render_service`다.
-따라서 `env ... python -c ...` 또는 `python -m ...`를 Docker Command에 넣지 않는다.
-실패한 긴 명령은 ENTRYPOINT의 잘못된 인자가 되어 종료 코드 2로 재현됐다.
+Render Existing Image의 Docker Command는 이미지의 **CMD와 ENTRYPOINT를 모두** 교체한다
+(Render 설정 화면 설명: "override your Dockerfile's CMD and ENTRYPOINT").
+따라서 인자만 넣으면 `--mode`를 실행 파일로 찾다가 출력 없이 `Exited with status 128`로 끝난다
+(2026-11-22 스테이징에서 확인). Docker Command에는 실행할 **전체 명령**을 넣는다.
+`env ...`나 셸 구문은 넣지 않는다.
 
-퀴즈 실행 시 Docker Command에는 아래 **인자만** 지정한다.
+퀴즈 실행 시 Docker Command:
 
 ```text
---mode quiz-worker --max-jobs 1 --shutdown-grace-seconds 30
+python -m solo_leveling.workers.render_service --mode quiz-worker --max-jobs 1 --shutdown-grace-seconds 30
 ```
 
 환경 변수 `QUIZ_WORKER_CONFIG`(검토한 설정 파일의 절대 경로),
@@ -188,7 +189,7 @@ Render → `solo-leveling-worker-staging` → Settings의 Docker Command와 Envi
 
 | 항목 | 넣을 값 | 얻는 곳과 방법 |
 |---|---|---|
-| Docker Command | `--mode demo-pdf-worker` | 직접 입력. 인자만 넣고 `python` 등은 붙이지 않습니다. |
+| Docker Command | `python -m solo_leveling.workers.render_service --mode demo-pdf-worker` | 직접 입력. Render는 이미지의 ENTRYPOINT까지 바꾸므로 `python -m ...`부터 전체를 넣습니다. 인자만 넣으면 종료 상태 128로 시작하지 못합니다. |
 | `SLP_DEMO_PROCESSING_ENABLED` | `true` | 직접 입력 |
 | `SLP_AUTOMATIC_PDF_PROCESSING_ENABLED` | `true` | 직접 입력. 설정 JSON의 `policy_version`이 `pdf-auto-`로 시작해야 합니다. |
 | `SLP_DEMO_DATABASE_URL` | `postgresql://slp_staging_worker:비밀번호@호스트/DB이름?sslmode=verify-full` | 호스트·DB 이름: Render → staging Postgres → Connect → External의 URL에서 `@` 뒤 호스트와 `/` 뒤 DB 이름만 사용. 비밀번호: worker 역할을 만들 때 정한 값이며 Render에 표시되지 않습니다. 모르면 관리자 psql에서 `ALTER ROLE slp_staging_worker PASSWORD '새 비밀번호';`로 다시 정합니다. 끝에는 `?sslmode=verify-full`만 둡니다. 검증·재처리 worker 주소를 대신 읽지 않습니다. 역할 권한이 다르면 게시 단계에서 실패하고 작업이 재시도 없이 끝나기 때문입니다. |
@@ -226,6 +227,7 @@ Render → `solo-leveling-worker-staging` → Settings의 Docker Command와 Envi
 | 로그 | 의미 |
 |---|---|
 | `render_ready` 다음 바로 `render_standby` | Docker Command가 비어 있어 대기 모드로 시작함 |
+| 앱 로그 없이 `Exited with status 128` | Docker Command에 인자만 넣어 시작 프로그램을 찾지 못함. 전체 명령으로 바꿉니다. |
 | `render_verification_failed`, `exit_code: 3` | 설정 JSON 형식·정책 키·`demo_budget` 오류 |
 | `exit_code: 4` | 처리 플래그가 꺼졌거나, 설정 기간 밖이거나, 이미지 참조 불일치 |
 | `exit_code: 5` | DB URL 형식(`sslmode=verify-full`, DB 이름)이나 R2·OpenAI 자격 누락 |
