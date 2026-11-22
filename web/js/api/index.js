@@ -131,7 +131,7 @@ export const api = {
   // ---------- 2. 논문 목록 ----------
   /**
    * GET /v1/papers
-   * params: q, reading_status(not_started|reading|completed|unknown), sort(recent), collection_id, unassigned, page, limit
+   * params: q, reading_status(not_started|reading|completed|unknown), sort(recent|title|status|updated), order(asc|desc), collection_id, unassigned, page, limit
    * → { items: PaperListItem[], total_count, page, page_size, total_pages }
    */
   listPapers: (params = {}) => paged(send('GET', '/papers', {
@@ -139,6 +139,7 @@ export const api = {
       q: params.q?.trim() || undefined,
       reading_status: params.reading_status || undefined,
       sort: params.sort ?? 'recent',
+      order: params.order || undefined,
       collection_id: params.collection_id,
       unassigned: params.unassigned ? 'true' : undefined,
       ...page(params),

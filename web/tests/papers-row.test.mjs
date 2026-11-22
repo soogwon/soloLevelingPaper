@@ -4,7 +4,7 @@ import test from 'node:test';
 
 globalThis.window = { location: { search: '' } };
 
-const { paperRow } = await import('../js/pages/papers.js');
+const { paperRow, paperListHead, sortFromQuery, nextSort } = await import('../js/pages/papers.js');
 
 const paper = {
   paper_id: 'paper-1', title: 'Paper', authors: null, published: null,
@@ -72,13 +72,42 @@ test('완료 기준 원문 버전을 선택 버전과 별도로 표시하고 이
 test('원격 학습 상태의 근거와 기준 판본을 함께 표시한다', () => {
   const output = String(paperRow({...paper, reading_status: 'reading',
     reading_status_source: 'remote_learning', reading_basis_version_id: 'version-1'}));
-  assert.match(output, /상태 근거: 원격 학습 기록 · 기준 버전: version-1/);
+  assert.match(output, /상태 근거: <\/span>원격 학습 기록 · 기준 버전: version-1/);
 });
 
 test('읽기 상태 갱신 시각을 한국 시간으로 표시하고 누락을 구분한다', () => {
   const updated = String(paperRow({
     ...paper, reading_status_updated_at: '2026-11-19T16:05:00Z',
   }));
-  assert.match(updated, /갱신 시각: 2026\.11\.20 01:05/);
-  assert.match(String(paperRow(paper)), /갱신 시각 미확인/);
+  assert.match(updated, /<span class="row-updated"><span class="cell-label">갱신 시각: <\/span>2026\.11\.20 01:05<\/span>/);
+  assert.match(String(paperRow(paper)), /<span class="row-updated"><span class="cell-label">갱신 시각: <\/span>미확인<\/span>/);
+});
+
+test('갱신 시각은 상태 근거 칸과 분리된 칸에 표시한다', () => {
+  const output = String(paperRow({...paper, reading_status_source: 'remote_file',
+    reading_basis_version_id: 'version-1', reading_status_updated_at: '2026-11-19T16:05:00Z'}));
+  const basis = output.match(/<span class="row-basis">(.*?)<\/span>\s*<span class="row-updated">/s)?.[1];
+  assert.ok(basis);
+  assert.doesNotMatch(basis, /갱신 시각|2026\.11\.20/);
+});
+
+test('주소의 정렬 값이 올바르지 않으면 최근 학습순 기본 방향으로 돌아간다', () => {
+  assert.deepEqual(sortFromQuery({}), { sort: 'recent', order: 'desc' });
+  assert.deepEqual(sortFromQuery({ sort: 'title' }), { sort: 'title', order: 'asc' });
+  assert.deepEqual(sortFromQuery({ sort: 'updated', order: 'asc' }), { sort: 'updated', order: 'asc' });
+  assert.deepEqual(sortFromQuery({ sort: 'author', order: 'up' }), { sort: 'recent', order: 'desc' });
+});
+
+test('같은 열을 다시 누르면 방향을 뒤집고 다른 열은 그 열의 기본 방향으로 시작한다', () => {
+  assert.deepEqual(nextSort({ sort: 'title', order: 'asc' }, 'title'), { sort: 'title', order: 'desc' });
+  assert.deepEqual(nextSort({ sort: 'title', order: 'desc' }, 'updated'), { sort: 'updated', order: 'desc' });
+  assert.deepEqual(nextSort({ sort: 'recent', order: 'desc' }, 'status'), { sort: 'status', order: 'asc' });
+});
+
+test('열 머리에 정렬 버튼과 현재 정렬 방향을 표시한다', () => {
+  const head = String(paperListHead({ sort: 'updated', order: 'desc' }));
+  for (const sort of ['title', 'status', 'updated']) assert.match(head, new RegExp(`data-sort="${sort}"`));
+  assert.match(head, /class="col-sort is-active" data-sort="updated"/);
+  assert.match(head, /갱신 시각 오름차순 정렬 \(현재 내림차순\)/);
+  assert.match(head, /상태 근거 · 기준 버전/);
 });
