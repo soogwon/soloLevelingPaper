@@ -8,8 +8,8 @@ import sys
 import threading
 
 
-def emit(status):
-    print(json.dumps({'status': status}), flush=True)
+def emit(status, **fields):
+    print(json.dumps({'status': status, **fields}), flush=True)
 
 
 def supervise(stop, command=None, *, preflight=None, poll_seconds=0.2, grace_seconds=5, monitor_continuous=False, alert_seconds=60):
@@ -36,7 +36,11 @@ def supervise(stop, command=None, *, preflight=None, poll_seconds=0.2, grace_sec
             while child.poll() is None:
                 if stop.wait(poll_seconds): return 0
             # 완료 후 재시작하지 않는다. DB의 attempt 제한도 그대로 유지된다.
-            emit('render_verification_finished' if child.returncode == 0 else 'render_verification_failed')
+            # 자식 출력은 버리므로 종료 코드(정수)만 남겨 원인을 구분한다.
+            if child.returncode == 0:
+                emit('render_verification_finished')
+            else:
+                emit('render_verification_failed', exit_code=child.returncode)
             child = None
             consumer_stopped = monitor_continuous
         emit('render_standby')

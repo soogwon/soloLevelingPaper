@@ -65,6 +65,7 @@ const CODE_MESSAGES = {
   pdf_access_unavailable: 'PDF를 열 수 없어요. 잠시 후 다시 시도해 주세요.',
   pdf_storage_quota_exceeded: 'PDF 저장 공간이 부족해요.',
   pdf_upload_unavailable: 'PDF를 올릴 수 없어요. 잠시 후 다시 시도해 주세요.',
+  remote_processing_quota_exceeded: '이 계정이 만들 수 있는 학습 자료 수에 도달했어요. PDF는 보관됐지만 번역·검색 색인은 만들지 않아요.',
   remote_upload_storage_consent_required: '현재 PDF 보관 동의가 필요해요. 고지와 동의 상태를 다시 확인해 주세요.',
   // 연결 기기
   device_not_found: '연결된 PC를 찾을 수 없어요. 이미 해제됐을 수 있어요.',

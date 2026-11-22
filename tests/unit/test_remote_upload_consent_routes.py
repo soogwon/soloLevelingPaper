@@ -231,3 +231,54 @@ def test_grant_rejects_unseen_or_outdated_notice_before_writing(purpose, payload
     assert consents.calls == []
     if status == 409:
         assert response.json()["detail"]["code"] == "remote_upload_consent_notice_changed"
+
+
+def test_account_quota_is_reported_on_admit_and_status_read():
+    from solo_leveling.interfaces.http.remote_processing_intake import RemoteProcessingQuotaExceeded
+
+    processing = Processing()
+    processing.quota_reached = lambda owner: processing.calls.append(("quota", owner)) or True
+    app, _, _ = app_for(processing=processing)
+    auth = {"Authorization": "Bearer test", "Idempotency-Key": "key"}
+    body = {"storage_consent_id": STORAGE, "ai_consent_id": AI}
+    with TestClient(app) as client:
+        processing.error = RemoteProcessingQuotaExceeded("private")
+        admitted = client.post(
+            f"/v1/remote-uploads/intents/{INTENT}/processing", json=body, headers=auth)
+        processing.error = None
+        processing.missing = True
+        status = client.get(f"/v1/remote-uploads/intents/{INTENT}/processing", headers=auth)
+    for response in (admitted, status):
+        assert response.status_code == 409
+        assert response.json() == {"detail": {"code": "remote_processing_quota_exceeded"}}
+    assert ("quota", "owner") in processing.calls
+
+
+def test_status_read_keeps_not_found_when_quota_check_fails():
+    processing = Processing()
+    processing.missing = True
+    def broken(owner):
+        raise RuntimeError("db")
+    processing.quota_reached = broken
+    app, _, _ = app_for(processing=processing)
+    with TestClient(app) as client:
+        missing = client.get(f"/v1/remote-uploads/intents/{INTENT}/processing",
+                             headers={"Authorization": "Bearer test"})
+    assert missing.status_code == 404
+    assert missing.json() == {"detail": {"code": "remote_processing_not_found"}}
+
+
+def test_automatic_budget_window_is_optional(monkeypatch):
+    import json
+    from solo_leveling.interfaces.http.automatic_pdf_budgets import load_automatic_pdf_budget
+
+    monkeypatch.setenv("REMOTE_AUTOMATIC_PDF_BUDGET_JSON", json.dumps({
+        "policy_version": "pdf-auto-open", "window_key": "always",
+        "input_tokens": 100, "output_tokens": 50, "max_jobs_per_owner": 3}))
+    budget = load_automatic_pdf_budget()
+    assert budget.starts_at is None and budget.active() and budget.max_jobs_per_owner == 3
+    monkeypatch.setenv("REMOTE_AUTOMATIC_PDF_BUDGET_JSON", json.dumps({
+        "policy_version": "pdf-auto-open", "window_key": "always", "input_tokens": 100,
+        "output_tokens": 50, "starts_at": "2026-11-21T00:00:00+09:00"}))
+    with pytest.raises(ValueError, match="automatic_pdf_budget_invalid"):
+        load_automatic_pdf_budget()

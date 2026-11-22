@@ -30,15 +30,16 @@ def test_deleted_paper_hides_recovery_and_same_key_replay(pool, db):
               (first.paper_id,))[0]["n"] == 1
 
 
-def admitted_source(pool, db, *, pdf=None):
+def admitted_source(pool, db, *, pdf=None, owner=None):
     from hashlib import sha256
     size = 10 if pdf is None else len(pdf)
     digest = "a" * 64 if pdf is None else sha256(pdf).hexdigest()
     db("""INSERT INTO server_dispatch_controls(control_id,generation,dispatch_enabled,intake_enabled)
           VALUES ('provider_dispatch',1,true,true)
           ON CONFLICT (control_id) DO UPDATE SET intake_enabled=true,dispatch_enabled=true""")
-    owner = new_id()
-    db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'합성 사용자')", (owner,))
+    if owner is None:
+        owner = new_id()
+        db("INSERT INTO server_users(owner_user_id,display_name) VALUES (%s,'합성 사용자')", (owner,))
     store = PostgresRemoteUploadIntentStore(pool)
     intent = store.create(owner, new_id(), 'paper.pdf', size, 'application/pdf', digest)
     consents = PostgresRemoteUploadConsentStore(pool)
