@@ -265,7 +265,7 @@ def test_postgres_list_is_owner_scoped_searchable_and_stably_paginated():
     page_sql, page_params = pool.conn.calls[2]
     assert "p.owner_user_id = %s" in count_sql and "p.title ILIKE %s" in count_sql
     assert count_params == ("user-1", r"% 100\%\_\\\\test %")
-    assert "ORDER BY r.last_studied_at DESC NULLS LAST, p.paper_id ASC" in page_sql
+    assert "ORDER BY GREATEST(r.last_studied_at, remote_learning.updated_at) DESC NULLS LAST, p.paper_id ASC" in page_sql
     assert page_params == (*count_params, 20, 20)
 
 
@@ -651,8 +651,8 @@ def test_web_list_passes_sort_column_and_direction_to_store():
 
 
 @pytest.mark.parametrize(("sort", "order", "expected"), [
-    ("recent", None, "ORDER BY r.last_studied_at DESC NULLS LAST, p.paper_id ASC"),
-    ("recent", "asc", "ORDER BY r.last_studied_at ASC NULLS LAST, p.paper_id ASC"),
+    ("recent", None, "ORDER BY GREATEST(r.last_studied_at, remote_learning.updated_at) DESC NULLS LAST, p.paper_id ASC"),
+    ("recent", "asc", "ORDER BY GREATEST(r.last_studied_at, remote_learning.updated_at) ASC NULLS LAST, p.paper_id ASC"),
     ("title", None, "ORDER BY lower(COALESCE(p.title, CASE WHEN r.learning_record_id IS NULL "
                     "THEN remote_file.file_name ELSE r.file_name END)) ASC NULLS LAST, p.paper_id ASC"),
     ("status", "desc", "WHEN 'completed' THEN 2 END DESC NULLS LAST, p.paper_id ASC"),
