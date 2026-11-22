@@ -19,7 +19,7 @@ function node() {
   return Object.assign(new EventTarget(), {isConnected:true, innerHTML:'', textContent:''});
 }
 
-test('읽기 전 논문의 시작 링크와 처음 펼칠 때만 실행되는 처리 작업 조회', async t => {
+test('읽기 전 논문의 시작 버튼과 처음 펼칠 때만 실행되는 처리 작업 조회', async t => {
   const calls = [], view = node(), jobs = node(), body = node();
   jobs.open = false;
   jobs.querySelector = () => body;
@@ -30,7 +30,9 @@ test('읽기 전 논문의 시작 링크와 처음 펼칠 때만 실행되는 �
     return response(String(url).includes('processing-jobs') ? {status:'ok',jobs:[]} : paper);
   });
   await paperDetailPage({view, params:{paperId}, query:{version}});
-  assert.ok(view.innerHTML.includes(`#/papers/${paperId}/start-learning?version=${version}`));
+  // 시작 버튼은 별도 화면으로 이동하지 않고 첫 요청 문장 창을 연다.
+  assert.match(view.innerHTML, /data-action="remote-start"/);
+  assert.doesNotMatch(view.innerHTML, /href="#\/papers\/[^"]*\/start-learning/);
   assert.doesNotMatch(view.innerHTML, /Claude에서 이어서 학습|remote-first-learning/);
   assert.match(view.innerHTML, /<details class="card panel processing-jobs">/);
   jobs.dispatchEvent(new Event('toggle'));

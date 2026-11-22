@@ -20,15 +20,15 @@ export default async function paperLearningStartPage({ view, params, query }) {
   if (closed || !view.isConnected) return;
   const title = paperTitle(paper);
   const versionId = paper.selected_version_id;
-  document.title = `Claude에서 학습 시작 · ${title} · Solo Leveling`;
+  document.title = `학습 처리 접수 · ${title} · Solo Leveling`;
   setHTML(view, html`
     <nav class="breadcrumb" aria-label="현재 위치">
       <a href="#/papers">논문 아카이브</a><span aria-hidden="true">/</span>
-      <a href="${back}">논문 상세</a><span aria-hidden="true">/</span><span>학습 시작</span>
+      <a href="${back}">논문 상세</a><span aria-hidden="true">/</span><span>학습 처리 접수</span>
     </nav>
     <div class="detail-head">
       <div class="detail-head-main">
-        <h1 class="detail-title">Claude에서 학습 시작</h1>
+        <h1 class="detail-title">학습 처리 접수</h1>
         <p class="meta">${title}</p>
       </div>
     </div>

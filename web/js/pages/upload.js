@@ -5,6 +5,7 @@ import { html, setHTML } from '../lib/html.js';
 import { createUploadIntent, uploadMessages } from '../lib/upload-intent.js';
 import { createUploadConsents, consentMessages, consentPurposes } from '../lib/upload-consents.js';
 import { accountConsentCurrent } from '../lib/account-consents.js';
+import { admissionMessages, admitAfterUpload } from '../lib/upload-admission.js';
 
 // 가입 때 저장 동의를 받은 계정은 파일 선택 뒤 버튼 하나로 업로드한다. 목적별 동의는 서버가 대신 기록한다.
 const quickMessages = {
@@ -135,7 +136,7 @@ export default function uploadPage({ view }) {
     view.querySelector('[data-file-label]').textContent = state.file ? `${state.file.name} · ${state.file.size} bytes` : '';
     view.querySelector('[data-status]').textContent = CONFIG.USE_MOCK ? '예시 모드에서는 원격 등록 준비를 실행하지 않아요.'
       : quick && state.status === 'verified' ? quickMessages.verified + (withAi
-        ? ' 학습 자료 만들기를 접수했어요. 아래에서 처리 상태를 확인할 수 있어요.'
+        ? admissionMessages[admission] ?? admissionMessages.pending
         : ' OpenAI 전송 동의가 없어 학습 자료는 만들지 않았어요.')
       : (quick && quickMessages[state.status]) || uploadMessages[state.status];
     view.querySelector('[data-intent]').textContent = state.intent ? `업로드 의도 ID: ${state.intent.intent_id}` : '';
@@ -147,7 +148,10 @@ export default function uploadPage({ view }) {
     consents.bind(state.intent ? {...state.intent, status:state.status === 'expired' ? 'expired' : state.intent.status} : null);
     drawConsents(consents.snapshot());
   }
-  const select = () => { agree.checked = false; return controller.select(input.files?.[0] ?? null); };
+  const select = () => {
+    agree.checked = false; admission = null; admissionKey = null;
+    return controller.select(input.files?.[0] ?? null);
+  };
   input.addEventListener('change', select);
   input.addEventListener('cancel', () => { input.value = ''; select(); });
   view.querySelector('[data-clear]').addEventListener('click', () => { input.value = ''; select(); });
@@ -172,7 +176,7 @@ export default function uploadPage({ view }) {
       return controller.upload(consents.snapshot().values.storage);
     }
   });
-  let quickBusy = false;
+  let quickBusy = false, admission = null, admissionKey = null;
   async function quickUpload() {
     if (quickBusy) return;
     quickBusy = true; drawUpload();
@@ -183,7 +187,17 @@ export default function uploadPage({ view }) {
       const storage = consents.snapshot().values.storage;
       if (!view.isConnected || storage?.state !== 'current') return;
       await controller.upload(storage);
-      if (view.isConnected && controller.snapshot().status === 'verified') await processing.refresh();
+      const done = controller.snapshot();
+      if (!view.isConnected || done.status !== 'verified') return;
+      if (withAi && admission !== 'admitted') {
+        // 응답을 잃고 다시 눌러도 같은 접수로 확인되도록 업로드마다 요청 키를 유지한다.
+        admissionKey ??= crypto.randomUUID();
+        admission = 'pending'; draw(done);
+        admission = await admitAfterUpload({api, consents, intentId:done.intent.intent_id, key:admissionKey});
+        if (!view.isConnected) return;
+        draw(controller.snapshot());
+      }
+      await processing.refresh();
     } finally {
       quickBusy = false;
       if (view.isConnected) drawUpload();
