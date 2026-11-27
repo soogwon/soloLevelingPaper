@@ -1,5 +1,7 @@
 """채팅 요약은 고정 근거와 사용자 확인을 거쳐 저장한다."""
+# ruff: noqa: F811
 from concurrent.futures import ThreadPoolExecutor
+import os
 from uuid import uuid4
 
 import pytest
@@ -10,6 +12,12 @@ from solo_leveling.interfaces.http.remote_executions import RemoteExecutionConfl
 from solo_leveling.interfaces.http.remote_summary_reviews import PostgresSummaryReviews
 from tests.integration.test_remote_processing_postgres import db, pool, stores  # noqa: F401
 from tests.integration.test_remote_retrieval_postgres import seed
+
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("SOLO_TEST_POSTGRES_DSN"),
+    reason="실제 PostgreSQL DSN 필요",
+)
 
 
 def test_chat_summary_requires_web_confirmation_and_keeps_pinned_citations(pool, db, stores):
