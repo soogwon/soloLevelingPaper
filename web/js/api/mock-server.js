@@ -60,6 +60,8 @@ function toPaperListItem(p) {
     reading_status: p.reading_status,
     reading_status_source: p.record ? 'remote_learning' : 'unknown',
     reading_status_updated_at: p.record?.last_studied_at ?? null,
+    last_learning_at: p.record?.last_studied_at ?? null,
+    processing_status: p.processing_status ?? (p.version.pdf_status === 'uploaded' ? 'completed' : 'none'),
     collection_id: db.membership.get(p.paper_id)?.collection_id ?? null,
   };
 }

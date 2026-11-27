@@ -19,6 +19,9 @@ Cookie: slp_session=<opaque session token>
 `sort`는 `recent`(로컬 학습 기록과 원격 학습 기록 중 더 최근 학습 시각, 기본), `title`(제목, 없으면 파일 이름, 대소문자 무시),
 `status`(읽기 전 → 읽는 중 → 읽기 완료), `updated`(읽기 상태 갱신 시각) 중 하나다.
 `order`는 `asc` 또는 `desc`이며 생략하면 `recent`·`updated`는 `desc`, `title`·`status`는 `asc`다.
+항목의 `last_learning_at`은 로컬 학습 기록과 원격 학습 기록 중 더 최근 학습 시각(최근 학습순 정렬 기준)이고,
+`processing_status`는 선택 판본의 서버 처리 상태다(`none` 처리 작업 없음, `queued`, `running`, `completed`
+게시 완료, `failed`, `cancelled`). 진행 중인 작업이 있으면 그 상태를, 없으면 게시 결과를, 그다음 마지막 실패·취소를 보여 준다.
 값이 없는 논문(학습 시각·제목·갱신 시각 없음, 상태 미확인)은 방향과 관계없이 뒤에 두고,
 같은 값끼리는 논문 ID 순으로 고정해 페이지를 넘겨도 순서가 흔들리지 않는다.
 

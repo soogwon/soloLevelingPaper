@@ -488,6 +488,8 @@ def create_web_paper_router(require_principal: Any, store: PaperStore, file_stor
         reading_status_source: Literal["explicit", "remote_learning", "remote_file", "unknown"] = "unknown"
         reading_context_id: UUID | None = None
         reading_status_updated_at: datetime | None = None
+        last_learning_at: datetime | None = None
+        processing_status: Literal["none", "queued", "running", "completed", "failed", "cancelled"] = "none"
         collection_id: str | None
 
     class PaperPageView(BaseModel):
@@ -566,6 +568,8 @@ def create_web_paper_router(require_principal: Any, store: PaperStore, file_stor
                 reading_status_source=item.reading_status_source,
                 reading_context_id=item.reading_context_id,
                 reading_status_updated_at=item.reading_status_updated_at,
+                last_learning_at=item.last_learning_at,
+                processing_status=item.processing_status,
                 collection_id=item.collection_id,
             ) for item in result.items],
             page=result.page, page_size=result.page_size,

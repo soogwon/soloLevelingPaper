@@ -4,7 +4,7 @@ import { html, setHTML } from '../lib/html.js';
 import { buildHash, replaceQuery } from '../router.js';
 import { icons, statusBadge, loadingBlock, emptyBlock, errorBlock, pagination, toast, errorMessage } from '../lib/ui.js';
 import { runPaperDeletionFlow, deletionAcceptedMessage } from '../lib/paper-deletion.js';
-import { formatAuthorsYear, formatPosition, formatDate, formatDateTime, paperTitle, paperFileNameHint } from '../lib/format.js';
+import { formatAuthorsYear, formatPosition, formatDateTime, paperTitle, paperFileNameHint } from '../lib/format.js';
 
 const FILTERS = [['', '전체'], ['reading', '읽는 중'], ['completed', '읽기 완료']];
 
@@ -45,11 +45,26 @@ export function paperListHead(state) {
       <span class="row-icon head-spacer" aria-hidden="true"></span>
       <span class="row-main">${sortHeader(state, 'title', '논문')}</span>
       <span class="row-status">${sortHeader(state, 'status', '읽기 상태')}</span>
-      <span class="row-basis col-label">상태 근거 · 기준 버전</span>
-      <span class="row-updated">${sortHeader(state, 'updated', '갱신 시각')}</span>
+      <span class="row-processing col-label">처리 상태</span>
+      <span class="row-updated">${sortHeader(state, 'recent', '학습 시각')}</span>
     </div>
     <span class="row-menu head-spacer menu-spacer" aria-hidden="true"></span>
   </div>`;
+}
+
+// 서버 처리(파싱·번역·색인) 상태. 읽기 상태와 별개로, 학습 자료가 준비됐는지 보여 준다.
+const PROCESSING = {
+  none: ['처리 작업 없음', 'b-unknown'],
+  queued: ['처리 대기', 'b-not_started'],
+  running: ['처리 중', 'b-reading'],
+  completed: ['처리 완료', 'b-completed'],
+  failed: ['처리 실패', 'b-failed'],
+  cancelled: ['처리 취소', 'b-not_started'],
+};
+
+export function processingBadge(status) {
+  const [label, cls] = PROCESSING[status] ?? PROCESSING.none;
+  return html`<span class="badge ${cls}">${label}</span>`;
 }
 
 export function paperRow(p) {
@@ -58,34 +73,27 @@ export function paperRow(p) {
     version: p.selected_version_id,
   });
   const position = formatPosition(p.last_position);
-  const date = formatDate(p.last_studied_at);
   let line = position;
   if (!line) {
-    if (date) line = '학습 위치가 저장되지 않았어요';
+    if (p.last_studied_at) line = '학습 위치가 저장되지 않았어요';
     else if (p.selected_learning_record_id) line = '아직 저장된 학습 위치가 없어요';
     else if (p.reading_status_source === 'remote_learning') line = 'Claude 원격 학습 기록이 있어요';
     else line = '아직 저장된 학습 기록이 없어요';
   }
-  // 로컬 학습 기록이 없으면 원격 학습 기록의 마지막 갱신 시각을 마지막 학습으로 보여 준다(최근 학습순 정렬과 같은 기준).
-  const remoteDate = !date && p.reading_status_source === 'remote_learning' ? formatDate(p.reading_status_updated_at) : '';
-  if (date || remoteDate) line += ` · 마지막 학습 ${date || remoteDate}`;
-  const source = {
-    explicit: '연결 PC에서 저장한 상태',
-    remote_learning: '원격 학습 기록',
-    remote_file: '등록된 원격 원문',
-    unknown: '상태 근거 미확인',
-  }[p.reading_status_source] ?? '상태 근거 미확인';
+  // 이름 아래에는 읽기 상태 갱신 시각을, 오른쪽 열에는 학습 시각(최근 학습순 정렬 기준)을 둔다.
+  const updated = formatDateTime(p.reading_status_updated_at);
+  const learnedAt = formatDateTime(p.last_learning_at ?? p.last_studied_at);
 
   return html`<a class="row" href="${href}">
     <span class="row-icon">${icons.file()}</span>
     <span class="row-main">
       <span class="row-title">${paperTitle(p)}</span>
       <span class="row-sub">${[formatAuthorsYear(p) ?? '저자·출판 연도 정보 없음', paperFileNameHint(p)].filter(Boolean).join(' · ')}</span>
-      <span class="row-line">${line}</span>
+      <span class="row-line">${line}${updated ? html` · <span class="nowrap">갱신 시각 ${updated}</span>` : ''}</span>
     </span>
     <span class="row-status">${statusBadge(p.reading_status)}</span>
-    <span class="row-basis"><span class="cell-label">상태 근거: </span>${source}${p.reading_basis_version_id ? ` · 기준 버전: ${p.reading_basis_version_id}` : ''}</span>
-    <span class="row-updated"><span class="cell-label">갱신 시각: </span>${formatDateTime(p.reading_status_updated_at) || '미확인'}</span>
+    <span class="row-processing"><span class="cell-label">처리 상태: </span>${processingBadge(p.processing_status)}</span>
+    <span class="row-updated"><span class="cell-label">학습 시각: </span>${learnedAt || '기록 없음'}</span>
   </a>`;
 }
 
