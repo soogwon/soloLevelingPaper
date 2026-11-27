@@ -43,7 +43,7 @@ def register_annotation_tools(server, queries, service, *, latest_summary=None):
                 response['web_path'] = '/#/remote-learning/' + str(UUID(result['context_id']))
             return response
         except AnnotationStorageConsentRequired:
-            return {'status': 'consent_required', 'message': '인증된 웹에서 이 학습 맥락의 메모 저장 동의를 확인하세요.'}
+            return {'status': 'consent_required', 'message': '계정의 서버 저장 동의가 철회돼 저장하지 못했습니다. 웹의 계정 설정에서 확인하세요.'}
         except RemoteAnnotationRecoveryAmbiguous:
             return {'status': 'ambiguous', 'message': '복구 후보를 자동 선택하거나 새 키로 재생성하지 마세요.'}
         except (RemoteAnnotationConflict, RemoteLearningConflict):
@@ -191,7 +191,7 @@ def register_annotation_tools(server, queries, service, *, latest_summary=None):
 
     @server.tool()
     def create_remote_annotation(context_id: str, request_key: str, value: dict) -> dict:
-        """명시적 학습 시작과 인증 웹의 맥락 저장 동의 후 메모·하이라이트를 저장한다. 같은 키를 보관하고 응답 유실 시 재생성하지 않는다. value는 kind/body/segments/step/creation_origin이다."""
+        """명시적 학습 시작 후 가입 때 받은 계정 저장 동의로 메모·하이라이트를 저장한다. 따로 동의를 묻지 않는다. 같은 키를 보관하고 응답 유실 시 재생성하지 않는다. value는 kind/body/segments/step/creation_origin이다."""
         return call(True, lambda owner: service.create(owner, context(context_id), request_key, RecoveryInput.model_validate(value).domain()))
 
     @server.tool()
