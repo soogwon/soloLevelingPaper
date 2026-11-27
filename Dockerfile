@@ -35,7 +35,6 @@ COPY src/solo_leveling/interfaces/__init__.py ./src/solo_leveling/interfaces/
 COPY src/solo_leveling/interfaces/http/*.py ./src/solo_leveling/interfaces/http/
 COPY src/solo_leveling/interfaces/cli/__init__.py src/solo_leveling/interfaces/cli/server_migrations.py src/solo_leveling/interfaces/cli/remote_deletion_cleanup.py src/solo_leveling/interfaces/cli/remote_upload_cleanup.py ./src/solo_leveling/interfaces/cli/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-recovery.html src/solo_leveling/interfaces/mcp/assets/remote-annotation-recovery.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
-COPY src/solo_leveling/interfaces/mcp/assets/remote-annotation-compose.html src/solo_leveling/interfaces/mcp/assets/remote-annotation-compose.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-evidence-detail.html src/solo_leveling/interfaces/mcp/assets/remote-evidence-detail.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-pdf-registration.html src/solo_leveling/interfaces/mcp/assets/remote-pdf-registration.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
 COPY src/solo_leveling/interfaces/mcp/assets/remote-reflection.html src/solo_leveling/interfaces/mcp/assets/remote-reflection.LICENSE.txt ./src/solo_leveling/interfaces/mcp/assets/
