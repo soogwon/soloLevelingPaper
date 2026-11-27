@@ -88,8 +88,10 @@ def test_real_mcp_registration_serializes_nested_records(monkeypatch):
         assert 'list_remote_annotations' in names
         assert 'show_remote_paper_detail' in names
         assert {'show_remote_reading_progress', 'save_remote_reading_progress_card'} <= names
-        assert len(names) == 23
-        assert 'prepare_remote_highlight_from_quote' in names
+        assert len(names) == 21
+        assert 'save_remote_highlight_from_quote' in names
+        assert not {'prepare_remote_annotation', 'save_remote_annotation_card'} & names
+        assert not any('compose' in str(r.uri) for r in await server.list_resources())
         result = await server.call_tool('list_remote_annotations', {'context_id': CONTEXT})
         assert '합성 메모' in str(result)
         assert 'annotation_id' in str(result)
@@ -144,79 +146,58 @@ def test_recovery_resource_and_tool_metadata(monkeypatch):
     asyncio.run(check())
 
 
-def test_prepare_card_only_recovers_and_save_requires_current_connection(monkeypatch):
+QUOTE_SEGMENTS = [{'chunk_id': CONTEXT, 'start_offset': 0, 'end_offset': 9, 'quote_snapshot': 'synthetic'}]
+
+
+def candidate(candidate_id='c1', pdf_page=2):
+    return {'candidate_id': candidate_id, 'pdf_page': pdf_page, 'section_title': 'Methods',
+            'excerpt': 'synthetic', 'segments': QUOTE_SEGMENTS}
+
+
+def quote_server(monkeypatch, candidates, learning=True):
     from dataclasses import dataclass
+    from solo_leveling.interfaces.http import remote_highlight_lookup
 
     @dataclass
     class Saved:
-        request_key: str = 'existing'
-
-    current = token(['annotations:read', 'annotations:write'])
-    monkeypatch.setattr(module, 'get_access_token', lambda: current)
-    service = Mock(service_id='remote-paper')
-    service.learning.get.return_value = {'context_id': CONTEXT}
-    service.recover.return_value = Saved()
-    service.create.return_value = Saved()
-    server = Server()
-    module.register_annotation_tools(server, NS(owner=lambda: 'alice'), service)
-    value = {'kind': 'note', 'body': '합성'}
-    result = server.tools['prepare_remote_annotation'](CONTEXT, value)['result']
-    assert result['value'] == value and result['existing']['request_key'] == 'existing'
-    service.create.assert_not_called()
-    bound = result['binding']
-    current.token = 'other-token'
-    assert server.tools['save_remote_annotation_card'](CONTEXT, 'existing', value, bound)['result']['connection_changed']
-    service.create.assert_not_called()
-    current.token = 'synthetic'
-    assert server.tools['save_remote_annotation_card'](CONTEXT, 'existing', value, bound)['status'] == 'ok'
-    service.create.assert_called_once()
-
-
-def test_prepare_card_missing_learning_never_recovers(monkeypatch):
-    monkeypatch.setattr(module, 'get_access_token', lambda: token(['annotations:read']))
-    service = Mock(service_id='remote-paper')
-    service.learning.get.return_value = None
-    server = Server()
-    module.register_annotation_tools(server, NS(owner=lambda: 'alice'), service)
-    assert server.tools['prepare_remote_annotation'](CONTEXT, {'kind':'note', 'body':'합성'})['status'] == 'not_found'
-    service.recover.assert_not_called()
-    service.learning.start.assert_not_called()
-
-
-def test_compose_tools_return_structured_content_in_actual_sdk(monkeypatch):
-    import asyncio
-    from dataclasses import dataclass
-    from mcp.server.fastmcp import FastMCP
-
-    @dataclass
-    class Saved:
-        request_key: str = 'existing'
+        request_key: str = 'key'
+        reused: bool = False
 
     monkeypatch.setattr(module, 'get_access_token', lambda: token(['annotations:read', 'annotations:write']))
+    monkeypatch.setattr(remote_highlight_lookup, 'find_highlight_candidates', lambda *a: candidates)
     service = Mock(service_id='remote-paper')
-    service.learning.get.return_value = {'context_id': CONTEXT}
-    service.recover.return_value = None
+    service.learning.get.return_value = {'context_id': CONTEXT} if learning else None
     service.create.return_value = Saved()
-    server = FastMCP('작성 카드 구조화 응답 검증')
-    module.register_annotation_tools(server, NS(owner=lambda: 'alice'), service)
+    server = Server()
+    module.register_annotation_tools(server, NS(owner=lambda: 'alice', pool=None), service)
+    return server.tools['save_remote_highlight_from_quote'], service
 
-    async def check():
-        value = {'kind': 'note', 'body': '합성 메모'}
-        prepared = await server.call_tool('prepare_remote_annotation', {'context_id': CONTEXT, 'value': value})
-        assert isinstance(prepared, tuple)
-        assert prepared[1]['result']['existing'] is None
-        service.create.assert_not_called()
-        saved = await server.call_tool('save_remote_annotation_card', {
-            'context_id': CONTEXT, 'request_key': 'existing', 'value': value,
-            'expected_binding': prepared[1]['result']['binding']})
-        assert isinstance(saved, tuple)
-        assert saved[1] == {'status': 'ok', 'result': {'request_key': 'existing'}}
-        metadata = {tool.name: tool for tool in await server.list_tools()}
-        assert metadata['prepare_remote_annotation'].outputSchema is not None
-        assert metadata['save_remote_annotation_card'].outputSchema is not None
-        assert metadata['save_remote_annotation_card'].meta['ui']['visibility'] == ['app']
 
-    asyncio.run(check())
+def test_quote_highlight_saves_directly_without_card(monkeypatch):
+    save, service = quote_server(monkeypatch, [candidate()])
+    reply = save(CONTEXT, 'key', 'synthetic', note='메모')
+    assert reply['status'] == 'ok' and reply['result']['outcome'] == 'saved'
+    assert reply['result']['quote_location'] == {'pdf_page': 2, 'section_title': 'Methods'}
+    owner, ctx, key, value = service.create.call_args.args
+    assert (owner, ctx, key, value.kind, value.body) == ('alice', CONTEXT, 'key', 'highlight', '메모')
+
+
+def test_quote_highlight_with_many_or_no_matches_never_saves(monkeypatch):
+    save, service = quote_server(monkeypatch, [candidate('c1'), candidate('c2', 3)])
+    reply = save(CONTEXT, 'key', 'synthetic')['result']
+    assert reply['outcome'] == 'choose_candidate' and 'segments' not in reply['candidates'][0]
+    service.create.assert_not_called()
+    assert save(CONTEXT, 'key', 'synthetic', candidate_id='c2')['result']['quote_location']['pdf_page'] == 3
+    save, service = quote_server(monkeypatch, [])
+    assert save(CONTEXT, 'key', 'missing')['result']['outcome'] == 'quote_not_found'
+    service.create.assert_not_called()
+
+
+def test_quote_highlight_requires_started_learning(monkeypatch):
+    save, service = quote_server(monkeypatch, [candidate()], learning=False)
+    assert save(CONTEXT, 'key', 'synthetic')['status'] == 'not_found'
+    service.create.assert_not_called()
+    service.learning.start.assert_not_called()
 
 
 def test_card_tools_have_actual_structured_mcp_outputs(monkeypatch):
